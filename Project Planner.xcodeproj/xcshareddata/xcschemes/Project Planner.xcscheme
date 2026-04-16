@@ -50,6 +50,18 @@
             ReferencedContainer = "container:Project Planner.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "SENDGRID_API_KEY"
+            value = "SET_IN_LOCAL_SCHEME_ONLY"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "RESEND_API_KEY"
+            value = "SET_IN_LOCAL_SCHEME_ONLY"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"

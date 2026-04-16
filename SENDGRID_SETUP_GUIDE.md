@@ -32,7 +32,7 @@ This guide will help you configure SendGrid to send all emails from your app, in
 
 3. **Copy API Key**:
    - ⚠️ **IMPORTANT**: Copy the API key immediately - you won't be able to see it again!
-   - It looks like: `SG.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
+   - It looks like: `<SENDGRID_API_KEY>`
 
 ---
 

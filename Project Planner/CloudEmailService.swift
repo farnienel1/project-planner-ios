@@ -50,7 +50,7 @@ class CloudEmailService {
     
     // Fallback method using Resend API (free tier available)
     private func sendEmailViaResend(recipient: String, subject: String, body: String) async -> Bool {
-        let resendAPIKey = "re_your_api_key_here" // You'll need to get this from Resend.com
+        let resendAPIKey = "<RESEND_API_KEY>" // Set via runtime config
         let fromEmail = "info@projectplanner.us" // Primary email address
         
         guard let url = URL(string: "https://api.resend.com/emails") else {
@@ -147,7 +147,7 @@ class CloudEmailService {
    secure: false,
    auth: {
      user: 'info@raccordmep.co.uk',
-     pass: 'Raccord50!'
+    pass: '<EMAIL_PASSWORD>'
    }
  });
  

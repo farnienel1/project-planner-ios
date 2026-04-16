@@ -12,9 +12,7 @@ class ResendEmailService: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     
-    // Get your API key from: https://resend.com/api-keys
-    // Free tier: 3,000 emails/month
-    private let apiKey = "re_Ego1WWNt_JdEJ2gep6SKvzWKU2ZB46JV1"
+    private let apiKeyName = "RESEND_API_KEY"
     
     // Using verified domain: info@projectplanner.us
     // Domain has been verified in Resend dashboard
@@ -97,6 +95,14 @@ class ResendEmailService: ObservableObject {
         guard let url = URL(string: baseURL) else {
             await MainActor.run {
                 self.errorMessage = "Invalid URL"
+                self.isLoading = false
+            }
+            return false
+        }
+
+        guard let apiKey = SecureConfig.requiredSecret(named: apiKeyName) else {
+            await MainActor.run {
+                self.errorMessage = "Email service not configured. Add RESEND_API_KEY to your scheme environment variables."
                 self.isLoading = false
             }
             return false
