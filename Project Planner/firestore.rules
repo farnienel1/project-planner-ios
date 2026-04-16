@@ -25,7 +25,7 @@ service cloud.firestore {
     return request.auth != null &&
            exists(/databases/$(database)/documents/organizations/$(organizationId)) &&
            'members' in get(/databases/$(database)/documents/organizations/$(organizationId)).data &&
-           request.auth.uid in get(/databases/$(database)/documents/organizations/$(organizationId)).data.members;
+           get(/databases/$(database)/documents/organizations/$(organizationId)).data.members[request.auth.uid] != null;
   }
   
   // For subcollections under organizations/{organizationId}/… only (parent get is not the resource being read).
@@ -188,7 +188,7 @@ service cloud.firestore {
       // Use resource.data.members for membership; userOrgIdMatchesPath for users/{uid}.organizationId.
       allow read: if request.auth != null && (
         userOrgIdMatchesPath(organizationId) ||
-        ('members' in resource.data && request.auth.uid in resource.data.members)
+        ('members' in resource.data && resource.data.members[request.auth.uid] != null)
       );
       
       allow list: if request.auth != null;
@@ -199,7 +199,7 @@ service cloud.firestore {
       allow update: if isOrganizationAdmin(organizationId) ||
                      (request.auth != null &&
                       'members' in request.resource.data &&
-                      request.auth.uid in request.resource.data.members &&
+                      request.resource.data.members[request.auth.uid] != null &&
                       organizationExists(organizationId));
       
       allow delete: if false;

@@ -90,7 +90,18 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "Organization ID is empty. Please Force Reload in Settings."]
             )
         }
-        _ = try await db.collection("organizations").document(trimmedOrgId).getDocument(source: .server)
+        do {
+            _ = try await db.collection("organizations").document(trimmedOrgId).getDocument(source: .server)
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 {
+                // Some deployments deny org root read while allowing subcollection access.
+                // Do not block projects/smallWorks/clients/operatives reads in that case.
+                print("🔥🔥🔥 DEBUG: ⚠️ Org root read denied for \(trimmedOrgId), continuing with subcollection reads")
+                return trimmedOrgId
+            }
+            throw error
+        }
         return trimmedOrgId
     }
     
