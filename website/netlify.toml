@@ -1,0 +1,28 @@
+# Netlify Configuration for Project Planner Website
+
+[build]
+  # No build process needed - static HTML files
+  publish = "."
+
+[[redirects]]
+  # Only redirect exact root to index.html (so reset-password.html, setup-password.html, etc. still work)
+  from = "/"
+  to = "/index.html"
+  status = 200
+
+# Headers for security and CORS
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+# Allow Firebase SDK to load
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.firebaseio.com https://*.googleapis.com;"
+
+

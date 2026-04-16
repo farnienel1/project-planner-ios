@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Project Planner</title>
+    <link rel="stylesheet" href="app-styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="header-content">
+                <h1>Project Planner</h1>
+                <div class="header-actions">
+                    <button class="icon-btn" onclick="showAccountMenu()" title="Account">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </header>
+        
+        <main class="app-main">
+            <div class="dashboard-content">
+                <div class="welcome-section">
+                    <h2 id="welcomeText">Loading...</h2>
+                    <p id="orgName">Loading organization...</p>
+                </div>
+                
+                <div class="cards-grid">
+                    <div class="card" onclick="navigateTo('projects')" id="projectsCard">
+                        <div class="card-icon">📋</div>
+                        <div class="card-content">
+                            <h3>Projects</h3>
+                            <p id="projectsCount">Loading...</p>
+                        </div>
+                    </div>
+                    
+                    <div class="card" onclick="navigateTo('managers')" id="managersCard" style="display: none;">
+                        <div class="card-icon">👔</div>
+                        <div class="card-content">
+                            <h3>Managers</h3>
+                            <p id="managersCount">Loading...</p>
+                        </div>
+                    </div>
+                    
+                    <div class="card" onclick="navigateTo('operatives')" id="operativesCard" style="display: none;">
+                        <div class="card-icon">👷</div>
+                        <div class="card-content">
+                            <h3>Operatives</h3>
+                            <p id="operativesCount">Loading...</p>
+                        </div>
+                    </div>
+                    
+                    <div class="card" onclick="navigateTo('settings')">
+                        <div class="card-icon">⚙️</div>
+                        <div class="card-content">
+                            <h3>Account Settings</h3>
+                            <p>Manage your account</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+        
+        <div id="accountMenu" class="account-menu" style="display: none;">
+            <div class="menu-overlay" onclick="hideAccountMenu()"></div>
+            <div class="menu-content">
+                <div class="menu-header">
+                    <h3>Account</h3>
+                    <button class="close-btn" onclick="hideAccountMenu()">×</button>
+                </div>
+                <div class="menu-items">
+                    <a href="settings.html" class="menu-item">
+                        <span>Account Settings</span>
+                        <span>→</span>
+                    </a>
+                    <a href="reset-password.html" class="menu-item">
+                        <span>Change Password</span>
+                        <span>→</span>
+                    </a>
+                    <button class="menu-item logout-btn" onclick="logout()">
+                        <span>Sign Out</span>
+                        <span>→</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script type="module" src="app.js"></script>
+</body>
+</html>
+
+
+
+
+
+
+
