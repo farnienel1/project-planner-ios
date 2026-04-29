@@ -24,6 +24,8 @@ struct HolidayBooking: Identifiable, Codable, Hashable {
     var status: HolidayStatus
     var approvedByUserId: String?
     var approvedAt: Date?
+    var cancellationRequestedAt: Date?
+    var cancellationRequestedByUserId: String?
     var createdAt: Date
     var updatedAt: Date
 
@@ -37,6 +39,8 @@ struct HolidayBooking: Identifiable, Codable, Hashable {
         status: HolidayStatus = .approved,
         approvedByUserId: String? = nil,
         approvedAt: Date? = nil,
+        cancellationRequestedAt: Date? = nil,
+        cancellationRequestedByUserId: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -49,6 +53,8 @@ struct HolidayBooking: Identifiable, Codable, Hashable {
         self.status = status
         self.approvedByUserId = approvedByUserId
         self.approvedAt = approvedAt
+        self.cancellationRequestedAt = cancellationRequestedAt
+        self.cancellationRequestedByUserId = cancellationRequestedByUserId
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

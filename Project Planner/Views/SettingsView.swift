@@ -297,9 +297,8 @@ struct SettingsView: View {
                 }
                 
                 // Notification Testing Section
-                if !userStore.isOperativeMode() {
-                    Section("Notification Testing") {
-                    Text("Test notifications will appear 10 seconds after tapping. Exit the app to see them.")
+                Section("Notification Testing") {
+                    Text("Test notifications will appear 3 seconds after tapping.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     
@@ -309,7 +308,7 @@ struct SettingsView: View {
                                 type: .operativeCreated,
                                 details: "John Smith has been added as a new operative."
                             )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 10 seconds. Exit the app to see it."
+                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
                             showingNotificationTestAlert = true
                         }
                     }) {
@@ -326,7 +325,7 @@ struct SettingsView: View {
                                 type: .managerCreated,
                                 details: "Jane Doe has been added as a new manager."
                             )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 10 seconds. Exit the app to see it."
+                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
                             showingNotificationTestAlert = true
                         }
                     }) {
@@ -343,7 +342,7 @@ struct SettingsView: View {
                                 type: .clientCreated,
                                 details: "ABC Company has been added as a new client."
                             )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 10 seconds. Exit the app to see it."
+                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
                             showingNotificationTestAlert = true
                         }
                     }) {
@@ -360,7 +359,7 @@ struct SettingsView: View {
                                 type: .bookingCreated,
                                 details: "A new booking has been created for Project XYZ on December 1, 2025."
                             )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 10 seconds. Exit the app to see it."
+                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
                             showingNotificationTestAlert = true
                         }
                     }) {
@@ -377,7 +376,7 @@ struct SettingsView: View {
                                 type: .taskCreated,
                                 details: "A new task has been assigned: Complete site inspection."
                             )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 10 seconds. Exit the app to see it."
+                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
                             showingNotificationTestAlert = true
                         }
                     }) {
@@ -387,12 +386,78 @@ struct SettingsView: View {
                             Image(systemName: "bell")
                         }
                     }
+                    Button(action: {
+                        Task {
+                            await LocalNotificationService.shared.scheduleTestNotification(
+                                type: .taskCompleted,
+                                details: "Task complete: Site inspection has been marked complete."
+                            )
+                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
+                            showingNotificationTestAlert = true
+                        }
+                    }) {
+                        HStack {
+                            Text("Test: Task Completed")
+                            Spacer()
+                            Image(systemName: "bell")
+                        }
                     }
-                    .alert("Notification Test", isPresented: $showingNotificationTestAlert) {
-                        Button("OK", role: .cancel) { }
-                    } message: {
-                        Text(notificationTestMessage)
+
+                    Button(action: {
+                        Task {
+                            await LocalNotificationService.shared.scheduleTestNotification(
+                                type: .bookingClash,
+                                details: "Booking clash detected for Test Operative."
+                            )
+                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
+                            showingNotificationTestAlert = true
+                        }
+                    }) {
+                        HStack {
+                            Text("Test: Booking Clash")
+                            Spacer()
+                            Image(systemName: "bell")
+                        }
                     }
+
+                    Button(action: {
+                        Task {
+                            await LocalNotificationService.shared.scheduleTestNotification(
+                                type: .holidayRequestSubmitted,
+                                details: "Annual leave request submitted and pending approval."
+                            )
+                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
+                            showingNotificationTestAlert = true
+                        }
+                    }) {
+                        HStack {
+                            Text("Test: Annual Leave Request")
+                            Spacer()
+                            Image(systemName: "bell")
+                        }
+                    }
+
+                    Button(action: {
+                        Task {
+                            await LocalNotificationService.shared.scheduleTestNotification(
+                                type: .holidayRequestApproved,
+                                details: "Your annual leave request has been approved."
+                            )
+                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
+                            showingNotificationTestAlert = true
+                        }
+                    }) {
+                        HStack {
+                            Text("Test: Annual Leave Approved")
+                            Spacer()
+                            Image(systemName: "bell")
+                        }
+                    }
+                }
+                .alert("Notification Test", isPresented: $showingNotificationTestAlert) {
+                    Button("OK", role: .cancel) { }
+                } message: {
+                    Text(notificationTestMessage)
                 }
                 
                 // Admin Tools Section

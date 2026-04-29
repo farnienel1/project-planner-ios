@@ -25,7 +25,7 @@ class LocalNotificationService {
         }
     }
     
-    // Schedule a test notification 10 seconds in the future
+        // Schedule a test notification 3 seconds in the future
     func scheduleTestNotification(type: AppNotification.NotificationType, details: String) async {
         // Request permission first
         let authorized = await requestAuthorization()
@@ -72,6 +72,9 @@ class LocalNotificationService {
         case .holidayRequestApproved:
             content.title = "Holiday Approved"
             content.body = details.isEmpty ? "A holiday request has been approved." : details
+        case .holidayRequestDeclined:
+            content.title = "Holiday Declined"
+            content.body = details.isEmpty ? "A holiday request has been declined." : details
         }
         
         // Set sound
@@ -80,8 +83,8 @@ class LocalNotificationService {
         // Set badge
         content.badge = 1
         
-        // Create trigger for 10 seconds from now
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 10, repeats: false)
+        // Create trigger for 3 seconds from now
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)
         
         // Create request with unique identifier
         let identifier = "test_notification_\(UUID().uuidString)"
@@ -90,7 +93,7 @@ class LocalNotificationService {
         // Schedule the notification
         do {
             try await UNUserNotificationCenter.current().add(request)
-            print("✅ Test notification scheduled: \(content.title) - will appear in 10 seconds")
+            print("✅ Test notification scheduled: \(content.title) - will appear in 3 seconds")
         } catch {
             print("🔥🔥🔥 DEBUG: Error scheduling notification: \(error)")
         }
@@ -112,8 +115,8 @@ class LocalNotificationService {
         content.sound = .default
         content.badge = 1
         
-        // Create trigger for 10 seconds from now
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 10, repeats: false)
+        // Create trigger for 3 seconds from now
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)
         
         // Create request with unique identifier
         let identifier = "test_notification_\(UUID().uuidString)"
@@ -122,7 +125,7 @@ class LocalNotificationService {
         // Schedule the notification
         do {
             try await UNUserNotificationCenter.current().add(request)
-            print("✅ Custom test notification scheduled: \(title) - will appear in 10 seconds")
+            print("✅ Custom test notification scheduled: \(title) - will appear in 3 seconds")
         } catch {
             print("🔥🔥🔥 DEBUG: Error scheduling notification: \(error)")
         }

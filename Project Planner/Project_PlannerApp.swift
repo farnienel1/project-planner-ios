@@ -9,9 +9,30 @@ import SwiftUI
 import Firebase
 import FirebaseAuth
 import UIKit
+import UserNotifications
+
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        // Ensure local notifications are shown as real banners while app is foregrounded.
+        completionHandler([.banner, .sound, .badge, .list])
+    }
+}
 
 @main
 struct Project_PlannerApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var firebaseBackend = FirebaseBackend()
     @StateObject private var smartCache = SmartCacheService()
     @StateObject private var projectStore = ProjectStore()
@@ -113,6 +134,7 @@ struct Project_PlannerApp: App {
                 notificationService.setFirebaseBackend(firebaseBackend)
                 notificationService.setUserStore(userStore)
                 notificationService.setOperativeStore(operativeStore)
+                notificationService.setHolidayStore(holidayStore)
                 
                 // Wait for organization to load, then load all data
                 Task {

@@ -82,6 +82,8 @@ struct HomeView: View {
                 .environmentObject(projectStore)
                 .environmentObject(operativeStore)
                 .environmentObject(userStore)
+                .environmentObject(holidayStore)
+                .environmentObject(notificationService)
         }
         .sheet(isPresented: $showingNotifications) {
             NotificationsView()
@@ -426,8 +428,42 @@ struct HomeView: View {
             return taskCount + operativeQualificationExpiryReminderCount
         } else {
             // For regular users, count all active tasks
-            return taskStore.tasks.filter { !$0.isCompleted }.count
+            return taskStore.tasks.filter { !$0.isCompleted }.count + pendingHolidayApprovalsCount
         }
+    }
+
+    private var pendingHolidayApprovalsCount: Int {
+        guard let me = userStore.currentUser, !me.permissions.operativeMode else { return 0 }
+        let pending = holidayStore.pendingRequests
+        if me.permissions.manager && !me.isSuperAdmin && !me.permissions.adminAccess && me.role != .admin {
+            return pending.filter { request in
+                assignedApproverUserId(for: request) == me.id
+            }.count
+        }
+        if userStore.hasAdminAccess() {
+            return pending.filter { request in
+                let approver = assignedApproverUserId(for: request)
+                return approver == nil || approver == me.id
+            }.count
+        }
+        return 0
+    }
+
+    private func assignedApproverUserId(for request: HolidayBooking) -> String? {
+        if let uid = request.userId,
+           let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
+            let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (managerId?.isEmpty == false) ? managerId : nil
+        }
+        if let oid = request.operativeId,
+           let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
+           let requester = userStore.organizationUsers.first(where: {
+               $0.permissions.operativeMode && $0.email.lowercased() == op.email.lowercased()
+           }) {
+            let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (managerId?.isEmpty == false) ? managerId : nil
+        }
+        return nil
     }
     
     /// Upcoming qualification expiries (next 30 days) — surfaced to operatives under Tasks.
@@ -506,7 +542,7 @@ struct HomeView: View {
     private var navigationTilesGrid: some View {
         VStack(spacing: 16) {
             if userStore.isOperativeMode() {
-                // Operative Mode – Projects, Small Works, Holiday, My Schedule (view-only), Settings
+                // Operative Mode – Projects, Small Works, Annual Leave, My Schedule (view-only), Settings
                 LazyVGrid(columns: [
                     GridItem(.flexible(), spacing: 12),
                     GridItem(.flexible(), spacing: 12)
@@ -527,7 +563,7 @@ struct HomeView: View {
                     )
                     navigationTile(
                         icon: "sun.max.fill",
-                        title: "Holiday",
+                        title: "Annual Leave",
                         action: {
                             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 8])
                         }
@@ -586,11 +622,11 @@ struct HomeView: View {
                             }
                         )
                     }
-                    // Row 3: Holiday + My Schedule
+                    // Row 3: Annual Leave + My Schedule
                     if userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true {
                         navigationTile(
                             icon: "sun.max.fill",
-                            title: "Holiday",
+                            title: "Annual Leave",
                             action: {
                                 NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 8])
                             }

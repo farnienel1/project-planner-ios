@@ -28,7 +28,12 @@ struct HolidayView: View {
     }
     private var isRequestMode: Bool { isOperativeMode || isManagerRequestMode }
     // Admins don't show Requests by default. Requests section becomes available only when opened from a notification.
-    private var canApproveRequests: Bool { userStore.hasAdminAccess() && showRequests }
+    private var canApproveRequests: Bool {
+        guard let u = userStore.displayUser else { return false }
+        if u.permissions.operativeMode { return false }
+        if u.permissions.manager { return true }
+        return userStore.hasAdminAccess() && showRequests
+    }
 
     @State private var displayedMonth: Date = Date()
     @State private var selectedDates: Set<Date> = []
@@ -107,9 +112,13 @@ struct HolidayView: View {
                         }
                         .padding()
                     }
+                    .refreshable {
+                        await holidayStore.loadData()
+                        await notificationService.loadNotifications()
+                    }
                 }
             }
-            .navigationTitle("Holiday")
+            .navigationTitle("Annual Leave")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -376,7 +385,7 @@ struct HolidayView: View {
                             operativeName: operative.firstName + " " + operative.lastName,
                             startDate: startDate,
                             endDate: endDate,
-                            assignedManagerUserId: userStore.currentUser?.assignedManagerUserId
+                            assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser()
                         )
                     }
                     await MainActor.run {
@@ -420,7 +429,7 @@ struct HolidayView: View {
                             requesterName: requesterName,
                             startDate: startDate,
                             endDate: endDate,
-                            assignedManagerUserId: userStore.currentUser?.assignedManagerUserId
+                            assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser()
                         )
                     }
                     await MainActor.run {
@@ -479,16 +488,19 @@ struct HolidayView: View {
     private var myHolidaySection: some View {
         let myBookings = myBookingsList
         return VStack(alignment: .leading, spacing: 12) {
-            Text("My holiday")
+            Text("My annual leave")
                 .font(.headline)
             if myBookings.isEmpty {
-                Text("No holiday booked.")
+                Text("No annual leave booked.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .padding()
             } else {
                 ForEach(myBookings) { b in
-                    HolidayRowView(booking: b)
+                    HolidayRowView(
+                        booking: b,
+                        onRequestCancellation: canRequestCancellation(for: b) ? { requestCancellation(for: b) } : nil
+                    )
                 }
             }
         }
@@ -516,16 +528,18 @@ struct HolidayView: View {
             Text("Pending")
                 .font(.headline)
             if canApproveRequests {
-                if holidayStore.pendingRequests.isEmpty {
+                let requests = approverPendingRequests
+                if requests.isEmpty {
                     Text("No pending requests.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .padding()
                 } else {
-                    ForEach(holidayStore.pendingRequests) { request in
+                    ForEach(requests) { request in
                         HolidayRequestRowView(
                             request: request,
                             requesterName: requesterName(for: request),
+                            conflictingApprovedOperatives: conflictingApprovedOperatives(for: request),
                             canApprove: true,
                             onApprove: { approveRequest(request) },
                             onDecline: { declineRequest(request) }
@@ -548,16 +562,64 @@ struct HolidayView: View {
         }
     }
 
+    private var approverPendingRequests: [HolidayBooking] {
+        guard let me = userStore.currentUser else { return [] }
+        let all = holidayStore.pendingRequests.sorted { $0.startDate > $1.startDate }
+        // Managers only approve requests assigned to them.
+        if me.permissions.manager && !me.isSuperAdmin && !me.permissions.adminAccess && me.role != .admin {
+            return all.filter { assignedApproverUserId(for: $0) == me.id }
+        }
+        // Admin/super-admin can approve unassigned requests (fallback) and requests assigned directly to them.
+        if userStore.hasAdminAccess() {
+            return all.filter {
+                let assigned = assignedApproverUserId(for: $0)
+                return assigned == nil || assigned == me.id
+            }
+        }
+        return []
+    }
+
+    private func assignedApproverUserId(for request: HolidayBooking) -> String? {
+        if let uid = request.userId,
+           let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
+            let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (managerId?.isEmpty == false) ? managerId : nil
+        }
+        if let oid = request.operativeId,
+           let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
+           let requester = userStore.organizationUsers.first(where: {
+               ($0.permissions.operativeMode || $0.role == .operative) &&
+               $0.email.lowercased() == op.email.lowercased()
+           }) {
+            let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (managerId?.isEmpty == false) ? managerId : nil
+        }
+        return nil
+    }
+
     private func approveRequest(_ request: HolidayBooking) {
         guard let uid = firebaseBackend.currentUser?.uid else { return }
         Task {
-            await holidayStore.approveBooking(request, approvedByUserId: uid)
+            if request.cancellationRequestedAt != nil {
+                await holidayStore.deleteBooking(request)
+                let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
+                await notificationService.notifyHolidayRequestDecisionToUser(
+                    userId: request.userId ?? uid,
+                    bookingId: request.id,
+                    approved: true,
+                    decidedByName: "\(approverName) approved your annual leave cancellation"
+                )
+                return
+            } else {
+                await holidayStore.approveBooking(request, approvedByUserId: uid)
+            }
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
             await notifyDecision(to: request, approved: true, decidedByName: approverName)
         }
     }
 
     private func declineRequest(_ request: HolidayBooking) {
+        if request.cancellationRequestedAt != nil { return }
         guard let uid = firebaseBackend.currentUser?.uid else { return }
         Task {
             await holidayStore.rejectBooking(request, rejectedByUserId: uid)
@@ -578,7 +640,10 @@ struct HolidayView: View {
         }
         if let oid = request.operativeId,
            let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
-           let operativeUser = userStore.organizationUsers.first(where: { $0.permissions.operativeMode && $0.email.lowercased() == op.email.lowercased() }) {
+           let operativeUser = userStore.organizationUsers.first(where: {
+               ($0.permissions.operativeMode || $0.role == .operative) &&
+               $0.email.lowercased() == op.email.lowercased()
+           }) {
             await notificationService.notifyHolidayRequestDecisionToUser(
                 userId: operativeUser.id,
                 bookingId: request.id,
@@ -599,10 +664,66 @@ struct HolidayView: View {
         }
         return "User"
     }
+
+    private func effectiveAssignedManagerUserIdForCurrentUser() -> String? {
+        guard let current = userStore.currentUser else { return nil }
+        if let latest = userStore.organizationUsers.first(where: { $0.id == current.id }) {
+            let managerId = latest.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if managerId?.isEmpty == false {
+                print("🔥🔥🔥 DEBUG: [HOLIDAY MANAGER RESOLVE] user=\(current.id) manager(from org users)=\(managerId!)")
+                return managerId
+            }
+        }
+        let fallback = current.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        print("🔥🔥🔥 DEBUG: [HOLIDAY MANAGER RESOLVE] user=\(current.id) manager(from current user)=\(fallback ?? "nil")")
+        return (fallback?.isEmpty == false) ? fallback : nil
+    }
+
+    private func canRequestCancellation(for booking: HolidayBooking) -> Bool {
+        booking.status == .approved && booking.cancellationRequestedAt == nil
+    }
+
+    private func requestCancellation(for booking: HolidayBooking) {
+        guard let uid = firebaseBackend.currentUser?.uid else { return }
+        Task {
+            await holidayStore.requestCancellation(booking, by: uid)
+            await notificationService.notifyHolidayRequestSubmitted(
+                bookingId: booking.id,
+                operativeName: requesterName(for: booking),
+                startDate: booking.startDate,
+                endDate: booking.endDate,
+                assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser()
+            )
+        }
+    }
+
+    private func conflictingApprovedOperatives(for request: HolidayBooking) -> [String] {
+        guard request.cancellationRequestedAt == nil else { return [] }
+        guard let myManagerId = assignedApproverUserId(for: request) else { return [] }
+        return holidayStore.bookings
+            .filter { $0.id != request.id && $0.status == .approved && $0.cancellationRequestedAt == nil }
+            .filter { booking in
+                assignedApproverUserId(for: booking) == myManagerId &&
+                booking.startDate <= request.endDate &&
+                booking.endDate >= request.startDate
+            }
+            .compactMap { booking in
+                if let uid = booking.userId,
+                   let user = userStore.organizationUsers.first(where: { $0.id == uid }) {
+                    return user.fullName
+                }
+                if let oid = booking.operativeId,
+                   let operative = operativeStore.allOperatives.first(where: { $0.id == oid }) {
+                    return "\(operative.firstName) \(operative.lastName)"
+                }
+                return nil
+            }
+    }
 }
 
 struct HolidayRowView: View {
     let booking: HolidayBooking
+    var onRequestCancellation: (() -> Void)? = nil
 
     var body: some View {
         HStack {
@@ -613,6 +734,17 @@ struct HolidayRowView: View {
                 Text(statusText)
                     .font(.caption)
                     .foregroundColor(statusColor)
+                if let onRequestCancellation {
+                    Button("Request cancellation") {
+                        onRequestCancellation()
+                    }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
+                } else if booking.cancellationRequestedAt != nil {
+                    Text("Cancellation pending manager approval")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
             }
             Spacer()
         }
@@ -622,6 +754,9 @@ struct HolidayRowView: View {
     }
 
     private var statusText: String {
+        if booking.cancellationRequestedAt != nil {
+            return "Cancellation requested"
+        }
         switch booking.status {
         case .pending: return "Pending approval"
         case .approved: return "Approved"
@@ -641,14 +776,26 @@ struct HolidayRowView: View {
 struct HolidayRequestRowView: View {
     let request: HolidayBooking
     let requesterName: String
+    let conflictingApprovedOperatives: [String]
     let canApprove: Bool
     let onApprove: () -> Void
     let onDecline: () -> Void
+    @State private var showConflicts = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(requesterName)
-                .font(.headline)
+            HStack {
+                Text(requesterName)
+                    .font(.headline)
+                if !conflictingApprovedOperatives.isEmpty {
+                    Button {
+                        showConflicts = true
+                    } label: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                    }
+                }
+            }
             Text("\(request.startDate.formatted(date: .abbreviated, time: .omitted)) – \(request.endDate.formatted(date: .abbreviated, time: .omitted))")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
@@ -663,14 +810,16 @@ struct HolidayRequestRowView: View {
                             .background(Color.green)
                             .cornerRadius(10)
                     }
-                    Button(action: onDecline) {
-                        Label("Decline", systemImage: "xmark.circle.fill")
-                            .font(.subheadline)
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(Color.red)
-                            .cornerRadius(10)
+                    if request.cancellationRequestedAt == nil {
+                        Button(action: onDecline) {
+                            Label("Decline", systemImage: "xmark.circle.fill")
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(Color.red)
+                                .cornerRadius(10)
+                        }
                     }
                 }
             } else {
@@ -682,6 +831,11 @@ struct HolidayRequestRowView: View {
         .padding(12)
         .background(Color(.secondarySystemBackground))
         .cornerRadius(12)
+        .alert("Annual Leave Overlap", isPresented: $showConflicts) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(conflictingApprovedOperatives.joined(separator: "\n"))
+        }
     }
 }
 

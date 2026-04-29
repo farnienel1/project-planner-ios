@@ -3015,10 +3015,22 @@ class FirebaseBackend: ObservableObject {
         ]
         
         try await db.collection("organizations").document(organizationId).collection("notifications").document(notification.id.uuidString).setData(data)
+        print("🔥🔥🔥 DEBUG: [FIREBASE SAVE NOTIFICATION OK] org=\(organizationId) id=\(notification.id.uuidString) type=\(notification.type.rawValue) target=\(notification.userId ?? "broadcast")")
     }
     
     func loadNotifications(organizationId: String) async throws -> [AppNotification] {
-        let snapshot = try await db.collection("organizations").document(organizationId).collection("notifications").getDocuments()
+        let notificationsRef = db.collection("organizations").document(organizationId).collection("notifications")
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await notificationsRef.getDocuments(source: .server)
+        } catch {
+            let nsError = error as NSError
+            if (nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7) || isOfflineNetworkError(error) {
+                snapshot = try await notificationsRef.getDocuments(source: .cache)
+            } else {
+                throw error
+            }
+        }
         
         var notifications: [AppNotification] = []
         
@@ -3057,7 +3069,7 @@ class FirebaseBackend: ObservableObject {
             notifications.append(notification)
         }
         
-        return notifications
+        return notifications.sorted { $0.createdAt > $1.createdAt }
     }
     
     // MARK: - User Invitation
@@ -3595,6 +3607,16 @@ class FirebaseBackend: ObservableObject {
         if let oid = booking.operativeId { data["operativeId"] = oid.uuidString }
         if let approvedBy = booking.approvedByUserId { data["approvedByUserId"] = approvedBy }
         if let approvedAt = booking.approvedAt { data["approvedAt"] = Timestamp(date: approvedAt) }
+        if let cancellationRequestedAt = booking.cancellationRequestedAt {
+            data["cancellationRequestedAt"] = Timestamp(date: cancellationRequestedAt)
+        } else {
+            data["cancellationRequestedAt"] = NSNull()
+        }
+        if let cancellationRequestedByUserId = booking.cancellationRequestedByUserId {
+            data["cancellationRequestedByUserId"] = cancellationRequestedByUserId
+        } else {
+            data["cancellationRequestedByUserId"] = NSNull()
+        }
         try await db.collection("organizations").document(orgId).collection("holidayBookings").document(booking.id.uuidString).setData(data, merge: true)
     }
 
@@ -3627,9 +3649,25 @@ class FirebaseBackend: ObservableObject {
             let operativeId = (data["operativeId"] as? String).flatMap { UUID(uuidString: $0) }
             let approvedByUserId = data["approvedByUserId"] as? String
             let approvedAt = (data["approvedAt"] as? Timestamp)?.dateValue()
+            let cancellationRequestedAt = (data["cancellationRequestedAt"] as? Timestamp)?.dateValue()
+            let cancellationRequestedByUserId = data["cancellationRequestedByUserId"] as? String
             let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
             let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-            return HolidayBooking(id: id, organizationId: bookingOrgId, userId: userId, operativeId: operativeId, startDate: startDate, endDate: endDate, status: status, approvedByUserId: approvedByUserId, approvedAt: approvedAt, createdAt: createdAt, updatedAt: updatedAt)
+            return HolidayBooking(
+                id: id,
+                organizationId: bookingOrgId,
+                userId: userId,
+                operativeId: operativeId,
+                startDate: startDate,
+                endDate: endDate,
+                status: status,
+                approvedByUserId: approvedByUserId,
+                approvedAt: approvedAt,
+                cancellationRequestedAt: cancellationRequestedAt,
+                cancellationRequestedByUserId: cancellationRequestedByUserId,
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            )
         }
     }
 

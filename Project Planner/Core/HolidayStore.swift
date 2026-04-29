@@ -138,7 +138,22 @@ class HolidayStore: ObservableObject {
     }
 
     var pendingRequests: [HolidayBooking] {
-        bookings.filter { $0.status == .pending && ($0.operativeId != nil || $0.userId != nil) }
+        bookings.filter {
+            ($0.status == .pending || $0.cancellationRequestedAt != nil) &&
+            ($0.operativeId != nil || $0.userId != nil)
+        }
+    }
+
+    func requestCancellation(_ booking: HolidayBooking, by userId: String) async {
+        var updated = booking
+        updated.cancellationRequestedAt = Date()
+        updated.cancellationRequestedByUserId = userId
+        updated.updatedAt = Date()
+        do {
+            try await saveBooking(updated)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func approvedBookings(covering date: Date) -> [HolidayBooking] {

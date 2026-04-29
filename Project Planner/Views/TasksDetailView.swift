@@ -13,6 +13,8 @@ struct TasksDetailView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var notificationService: NotificationService
     
     @State private var sortOrder: TaskSortOrder = .newest
     
@@ -45,7 +47,7 @@ struct TasksDetailView: View {
     }
     
     private var hasListContent: Bool {
-        !qualificationExpiryBannerItems.isEmpty || !filteredTasks.isEmpty
+        !qualificationExpiryBannerItems.isEmpty || !filteredTasks.isEmpty || !pendingHolidayApprovals.isEmpty
     }
     
     var body: some View {
@@ -88,10 +90,12 @@ struct TasksDetailView: View {
             .task {
                 print("🔥🔥🔥 DEBUG: TasksDetailView - Loading tasks")
                 await taskStore.loadData()
+                await holidayStore.loadData()
                 print("🔥🔥🔥 DEBUG: TasksDetailView - Tasks loaded: \(taskStore.tasks.count), Filtered: \(filteredTasks.count)")
             }
             .refreshable {
                 await taskStore.loadData()
+                await holidayStore.loadData()
             }
         }
     }
@@ -195,6 +199,23 @@ struct TasksDetailView: View {
     private var tasksList: some View {
         ScrollView {
             VStack(spacing: 16) {
+                if !pendingHolidayApprovals.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Holiday approvals")
+                            .font(.headline)
+                            .foregroundStyle(.orange)
+                        ForEach(pendingHolidayApprovals) { request in
+                            HolidayApprovalTaskCard(
+                                request: request,
+                                requesterName: requesterName(for: request),
+                                onApprove: { approveHolidayRequest(request) },
+                                onDecline: { declineHolidayRequest(request) }
+                            )
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+
                 if !qualificationExpiryBannerItems.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Qualification reminders")
@@ -229,6 +250,152 @@ struct TasksDetailView: View {
             }
             .padding()
         }
+    }
+
+    private var pendingHolidayApprovals: [HolidayBooking] {
+        guard let me = userStore.currentUser, !me.permissions.operativeMode else { return [] }
+        let pending = holidayStore.pendingRequests
+
+        let filtered: [HolidayBooking]
+        if me.permissions.manager && !me.isSuperAdmin && !me.permissions.adminAccess && me.role != .admin {
+            filtered = pending.filter { assignedApproverUserId(for: $0) == me.id }
+        } else if userStore.hasAdminAccess() {
+            filtered = pending.filter {
+                let assigned = assignedApproverUserId(for: $0)
+                return assigned == nil || assigned == me.id
+            }
+        } else {
+            filtered = []
+        }
+
+        switch sortOrder {
+        case .newest:
+            return filtered.sorted { $0.createdAt > $1.createdAt }
+        case .oldest:
+            return filtered.sorted { $0.createdAt < $1.createdAt }
+        }
+    }
+
+    private func assignedApproverUserId(for request: HolidayBooking) -> String? {
+        if let uid = request.userId,
+           let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
+            let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (managerId?.isEmpty == false) ? managerId : nil
+        }
+        if let oid = request.operativeId,
+           let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
+           let requester = userStore.organizationUsers.first(where: {
+               ($0.permissions.operativeMode || $0.role == .operative) &&
+               $0.email.lowercased() == op.email.lowercased()
+           }) {
+            let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (managerId?.isEmpty == false) ? managerId : nil
+        }
+        return nil
+    }
+
+    private func requesterName(for request: HolidayBooking) -> String {
+        if let uid = request.userId,
+           let u = userStore.organizationUsers.first(where: { $0.id == uid }) {
+            return u.fullName
+        }
+        if let oid = request.operativeId,
+           let op = operativeStore.allOperatives.first(where: { $0.id == oid }) {
+            return "\(op.firstName) \(op.lastName)"
+        }
+        return "Operative"
+    }
+
+    private func approveHolidayRequest(_ request: HolidayBooking) {
+        guard let uid = userStore.currentUser?.id else { return }
+        Task {
+            await holidayStore.approveBooking(request, approvedByUserId: uid)
+            let name = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
+            await notifyDecision(to: request, approved: true, decidedByName: name)
+            await notificationService.loadNotifications()
+        }
+    }
+
+    private func declineHolidayRequest(_ request: HolidayBooking) {
+        guard let uid = userStore.currentUser?.id else { return }
+        Task {
+            await holidayStore.rejectBooking(request, rejectedByUserId: uid)
+            let name = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
+            await notifyDecision(to: request, approved: false, decidedByName: name)
+            await notificationService.loadNotifications()
+        }
+    }
+
+    private func notifyDecision(to request: HolidayBooking, approved: Bool, decidedByName: String) async {
+        if let requesterUserId = request.userId {
+            await notificationService.notifyHolidayRequestDecisionToUser(
+                userId: requesterUserId,
+                bookingId: request.id,
+                approved: approved,
+                decidedByName: decidedByName
+            )
+            return
+        }
+        if let oid = request.operativeId,
+           let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
+           let operativeUser = userStore.organizationUsers.first(where: {
+               ($0.permissions.operativeMode || $0.role == .operative) &&
+               $0.email.lowercased() == op.email.lowercased()
+           }) {
+            await notificationService.notifyHolidayRequestDecisionToUser(
+                userId: operativeUser.id,
+                bookingId: request.id,
+                approved: approved,
+                decidedByName: decidedByName
+            )
+        }
+    }
+}
+
+private struct HolidayApprovalTaskCard: View {
+    let request: HolidayBooking
+    let requesterName: String
+    let onApprove: () -> Void
+    let onDecline: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "sun.max.fill")
+                    .foregroundColor(.orange)
+                Text("Holiday request")
+                    .font(.headline)
+                Spacer()
+                Text("Pending")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.15))
+                    .foregroundColor(.orange)
+                    .cornerRadius(8)
+            }
+
+            Text(requesterName)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+            Text("\(request.startDate.formatted(date: .abbreviated, time: .omitted)) – \(request.endDate.formatted(date: .abbreviated, time: .omitted))")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 10) {
+                Button("Decline", action: onDecline)
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                Button("Approve", action: onApprove)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+            }
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(14)
+        .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
     }
 }
 

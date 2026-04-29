@@ -20,6 +20,7 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case taskCreated = "task_created"
         case holidayRequestSubmitted = "holiday_request_submitted"
         case holidayRequestApproved = "holiday_request_approved"
+        case holidayRequestDeclined = "holiday_request_declined"
     }
     
     let id: UUID
