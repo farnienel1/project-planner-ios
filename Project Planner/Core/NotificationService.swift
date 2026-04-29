@@ -7,15 +7,19 @@
 
 import Foundation
 import Combine
+import UserNotifications
 
 @MainActor
 class NotificationService: ObservableObject {
     @Published var notifications: [AppNotification] = []
     @Published var unreadCount: Int = 0
+    @Published var bookingToastMessage: String?
     
     private var firebaseBackend: FirebaseBackend?
     private var userStore: UserStore?
     private var operativeStore: OperativeStore?
+    private var seenBookingNotificationIds: Set<UUID> = []
+    private var seenHolidayRequestNotificationIds: Set<UUID> = []
     
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         self.firebaseBackend = backend
@@ -255,34 +259,49 @@ class NotificationService: ObservableObject {
         await saveNotification(adminManagerNotification)
     }
 
-    func notifyHolidayRequestSubmitted(bookingId: UUID, operativeName: String, startDate: Date, endDate: Date) async {
+    func notifyHolidayRequestSubmitted(bookingId: UUID, operativeName: String, startDate: Date, endDate: Date, assignedManagerUserId: String?) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let dateRange = "\(startDate.formatted(date: .abbreviated, time: .omitted)) – \(endDate.formatted(date: .abbreviated, time: .omitted))"
-        let notification = AppNotification(
-            organizationId: organizationId,
-            type: .holidayRequestSubmitted,
-            title: "Holiday Request",
-            message: "\(operativeName) requested holiday \(dateRange). Tap to review.",
-            relatedId: bookingId,
-            requiresPermission: "canViewManagers"
-        )
-        await saveNotification(notification)
+
+        let recipients = await holidayRequestRecipients(assignedManagerUserId: assignedManagerUserId)
+        for mid in recipients {
+            let toManager = AppNotification(
+                organizationId: organizationId,
+                type: .holidayRequestSubmitted,
+                title: "Holiday Request",
+                message: "\(operativeName) requested holiday \(dateRange). Tap to review.",
+                userId: mid,
+                relatedId: bookingId,
+                requiresPermission: nil
+            )
+            await saveNotification(toManager)
+        }
     }
 
-    func notifyHolidayRequestSubmittedByUser(bookingId: UUID, requesterName: String, startDate: Date, endDate: Date) async {
+    func notifyHolidayRequestSubmittedByUser(
+        bookingId: UUID,
+        requesterName: String,
+        startDate: Date,
+        endDate: Date,
+        assignedManagerUserId: String?
+    ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let dateRange = "\(startDate.formatted(date: .abbreviated, time: .omitted)) – \(endDate.formatted(date: .abbreviated, time: .omitted))"
-        let notification = AppNotification(
-            organizationId: organizationId,
-            type: .holidayRequestSubmitted,
-            title: "Holiday Request",
-            message: "\(requesterName) requested holiday \(dateRange). Tap to review.",
-            relatedId: bookingId,
-            requiresPermission: "hasAdminAccess"
-        )
-        await saveNotification(notification)
+        let recipients = await holidayRequestRecipients(assignedManagerUserId: assignedManagerUserId)
+        for managerId in recipients {
+            let toManager = AppNotification(
+                organizationId: organizationId,
+                type: .holidayRequestSubmitted,
+                title: "Holiday Request",
+                message: "\(requesterName) requested holiday \(dateRange). Tap to review.",
+                userId: managerId,
+                relatedId: bookingId,
+                requiresPermission: nil
+            )
+            await saveNotification(toManager)
+        }
     }
 
     func notifyHolidayRequestApproved(bookingId: UUID, operativeName: String, approvedByName: String) async {
@@ -332,6 +351,8 @@ class NotificationService: ObservableObject {
             await MainActor.run {
                 self.notifications = filteredNotifications.sorted { $0.createdAt > $1.createdAt }
                 self.unreadCount = self.notifications.filter { !$0.isRead }.count
+                self.processBookingToasts(from: self.notifications)
+                self.processHolidayRequestAlerts(from: self.notifications)
             }
         } catch {
             print("🔥🔥🔥 DEBUG: Error loading notifications: \(error)")
@@ -423,6 +444,88 @@ class NotificationService: ObservableObject {
             try await firebaseBackend.saveNotification(notification, organizationId: organizationId)
         } catch {
             print("🔥🔥🔥 DEBUG: Error saving notification: \(error)")
+        }
+    }
+
+    private func processBookingToasts(from notifications: [AppNotification]) {
+        guard userStore?.isOperativeMode() == true else { return }
+        let bookingNotifications = notifications
+            .filter { $0.type == .bookingCreated }
+            .sorted { $0.createdAt > $1.createdAt }
+        for n in bookingNotifications where !seenBookingNotificationIds.contains(n.id) {
+            seenBookingNotificationIds.insert(n.id)
+            if !n.isRead {
+                bookingToastMessage = n.message
+                scheduleLocalBookingAlert(message: n.message)
+            }
+            break
+        }
+    }
+
+    private func processHolidayRequestAlerts(from notifications: [AppNotification]) {
+        let requests = notifications
+            .filter { $0.type == .holidayRequestSubmitted }
+            .sorted { $0.createdAt > $1.createdAt }
+        for n in requests where !seenHolidayRequestNotificationIds.contains(n.id) {
+            seenHolidayRequestNotificationIds.insert(n.id)
+            if !n.isRead {
+                scheduleLocalHolidayRequestAlert(message: n.message)
+            }
+            break
+        }
+    }
+
+    private func scheduleLocalHolidayRequestAlert(message: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Holiday Request"
+        content.body = message
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "holiday-request-\(UUID().uuidString)",
+            content: content,
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        )
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                print("🔥🔥🔥 DEBUG: Local holiday notification error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func holidayRequestRecipients(assignedManagerUserId: String?) async -> [String] {
+        if let mid = assignedManagerUserId, !mid.isEmpty {
+            return [mid]
+        }
+        guard let userStore else { return [] }
+        if userStore.organizationUsers.isEmpty {
+            await userStore.loadOrganizationUsers()
+        }
+        let superAdmins = userStore.organizationUsers.filter {
+            $0.isActive && $0.isSuperAdmin && !$0.permissions.operativeMode
+        }.map(\.id)
+        if !superAdmins.isEmpty {
+            return Array(Set(superAdmins))
+        }
+        let admins = userStore.organizationUsers.filter {
+            $0.isActive && ($0.permissions.adminAccess || $0.role == .admin) && !$0.permissions.operativeMode
+        }.map(\.id)
+        return Array(Set(admins))
+    }
+
+    private func scheduleLocalBookingAlert(message: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "You've Been Booked"
+        content.body = message
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "booking-\(UUID().uuidString)",
+            content: content,
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        )
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                print("🔥🔥🔥 DEBUG: Local booking notification error: \(error.localizedDescription)")
+            }
         }
     }
 }

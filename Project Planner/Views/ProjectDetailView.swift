@@ -10,6 +10,7 @@ import MapKit
 import UniformTypeIdentifiers
 import PhotosUI
 import FirebaseAuth
+import UIKit
 
 fileprivate enum TaskTab: String, CaseIterable, Identifiable {
     case active = "Active"
@@ -49,7 +50,13 @@ struct ProjectDetailView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
     
-    let project: Project
+    private let projectId: UUID
+    private let fallbackProject: Project
+    
+    /// Latest row from the store so Save on Edit Project / Small Works refreshes this screen.
+    private var project: Project {
+        projectStore.projects.first(where: { $0.id == projectId }) ?? fallbackProject
+    }
     
     @State private var selectedWeek: Date = Date()
     @State private var showingScheduleOperative = false
@@ -65,6 +72,7 @@ struct ProjectDetailView: View {
         case scheduling = "Scheduling"
         case tasks = "My Tasks"
         case materials = "Materials"
+        case siteAudit = "Site Audits"
         case settings = "Settings"
         case location = "Location"
         
@@ -74,6 +82,7 @@ struct ProjectDetailView: View {
             case .scheduling: return "calendar.badge.clock"
             case .tasks: return "checklist"
             case .materials: return "cube.box.fill"
+            case .siteAudit: return "doc.text.viewfinder"
             case .settings: return "gearshape"
             case .location: return "map"
             }
@@ -83,7 +92,8 @@ struct ProjectDetailView: View {
     
     // Initialize region from project address
     init(project: Project) {
-        self.project = project
+        self.projectId = project.id
+        self.fallbackProject = project
         // Default to London coordinates - will be updated if address is geocoded
         let defaultRegion = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 51.5074, longitude: -0.1278),
@@ -192,9 +202,15 @@ struct ProjectDetailView: View {
     }
     
     private var overviewTiles: some View {
-        let availableTiles: [DetailTile] = userStore.isOperativeMode() 
-            ? [.tasks, .materials, .location]
-            : DetailTile.allCases
+        let availableTiles: [DetailTile] = {
+            if userStore.isOperativeMode() {
+                if userStore.canViewMaterials() {
+                    return [.tasks, .materials, .siteAudit, .location]
+                }
+                return [.tasks, .siteAudit, .location]
+            }
+            return DetailTile.allCases
+        }()
         
         return LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 16) {
             ForEach(availableTiles) { tile in
@@ -221,25 +237,37 @@ struct ProjectDetailView: View {
     
     @ViewBuilder
     private func tileDestination(for tile: DetailTile) -> some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                switch tile {
-                case .scheduling:
-                    schedulingContent
-                case .tasks:
-                    tasksContent
-                case .materials:
-                    materialsContent
-                case .settings:
-                    settingsContent
-                case .location:
-                    siteLocationSection
+        switch tile {
+        case .siteAudit:
+            SiteAuditProjectHubView(project: project)
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+        default:
+            ScrollView {
+                VStack(spacing: 20) {
+                    switch tile {
+                    case .scheduling:
+                        schedulingContent
+                    case .tasks:
+                        tasksContent
+                    case .materials:
+                        materialsContent
+                    case .settings:
+                        settingsContent
+                    case .location:
+                        siteLocationSection
+                    case .siteAudit:
+                        EmptyView() // Handled in outer branch
+                    }
                 }
+                .padding()
             }
-            .padding()
+            .navigationTitle(tile.rawValue)
+            .navigationBarTitleDisplayMode(.inline)
         }
-        .navigationTitle(tile.rawValue)
-        .navigationBarTitleDisplayMode(.inline)
     }
     
     private var schedulingContent: some View {
@@ -583,7 +611,7 @@ struct ProjectDetailView: View {
         if userStore.isOperativeMode() {
             // Operative mode: only show tasks assigned to this operative
             if let currentUserEmail = userStore.currentUser?.email,
-               let operative = operativeStore.allOperatives.first(where: { $0.email == currentUserEmail }) {
+               let operative = operativeStore.allOperatives.first(where: { $0.email.lowercased() == currentUserEmail.lowercased() }) {
                 tasks = tasks.filter { task in
                     // Check both legacy single assignment and new multiple assignments
                     task.allAssignedOperativeIds.contains(operative.id)
@@ -1320,181 +1348,10 @@ private struct AddProjectTaskView: View {
     var body: some View {
         NavigationView {
             Form {
-                Section {
-                    ForEach($taskItems) { $item in
-                        VStack(alignment: .leading, spacing: 8) {
-                            TextField("Item title", text: $item.title)
-                            TextField("Description (optional)", text: $item.description, axis: .vertical)
-                                .lineLimit(2...4)
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    Button(action: {
-                        taskItems.append(TaskItemForm())
-                    }) {
-                        HStack {
-                            Image(systemName: "plus.circle.fill")
-                                .foregroundColor(.green)
-                                .font(.title2)
-                            Text("Add item")
-                                .foregroundColor(.green)
-                        }
-                    }
-                } header: {
-                    Text("Task items")
-                } footer: {
-                    Text("Add one or more items. Assignees must tick all items (when more than one) before marking the task complete.")
-                }
-                
-                Section("Assignments") {
-                    Picker("Assign To", selection: $assignmentType) {
-                        ForEach(AssignmentType.allCases, id: \.self) { type in
-                            Text(type.rawValue).tag(type)
-                        }
-                    }
-                    
-                    if assignmentType == .operative {
-                        Button(action: {
-                            showingOperativeSelection = true
-                        }) {
-                            HStack {
-                                Text("Select Operatives")
-                                Spacer()
-                                if selectedOperatives.isEmpty {
-                                    Text("None selected")
-                                        .foregroundColor(.secondary)
-                                } else {
-                                    Text("\(selectedOperatives.count) selected")
-                                        .foregroundColor(.blue)
-                                }
-                                Image(systemName: "chevron.right")
-                                    .foregroundColor(.secondary)
-                                    .font(.caption)
-                            }
-                        }
-                        
-                        if !selectedOperatives.isEmpty {
-                            ForEach(Array(selectedOperatives), id: \.self) { operativeId in
-                                if let operative = operativeStore.allOperatives.first(where: { $0.id == operativeId }) {
-                                    HStack {
-                                        Text(operative.name)
-                                        Spacer()
-                                        Button(action: {
-                                            selectedOperatives.remove(operativeId)
-                                        }) {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .foregroundColor(.red)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        Button(action: {
-                            showingManagerSelection = true
-                        }) {
-                            HStack {
-                                Text("Select Managers")
-                                    .foregroundColor(selectedManagers.isEmpty ? .red : .primary)
-                                Spacer()
-                                if selectedManagers.isEmpty {
-                                    Text("Required")
-                                        .foregroundColor(.red)
-                                } else {
-                                    Text("\(selectedManagers.count) selected")
-                                        .foregroundColor(.blue)
-                                }
-                                Image(systemName: "chevron.right")
-                                    .foregroundColor(.secondary)
-                                    .font(.caption)
-                            }
-                        }
-                        
-                        if !selectedManagers.isEmpty {
-                            ForEach(Array(selectedManagers), id: \.self) { managerId in
-                                if let manager = operativeStore.managers.first(where: { $0.id == managerId }) {
-                                    HStack {
-                                        Text(manager.fullName)
-                                        Spacer()
-                                        Button(action: {
-                                            selectedManagers.remove(managerId)
-                                        }) {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .foregroundColor(.red)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                Section("Attach Images") {
-                    Button(action: {
-                        showingImagePicker = true
-                    }) {
-                        Label("Add Images", systemImage: "photo")
-                    }
-                    
-                    if !selectedImages.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 12) {
-                                ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
-                                    ZStack(alignment: .topTrailing) {
-                                        Image(uiImage: image)
-                                            .resizable()
-                                            .scaledToFill()
-                                            .frame(width: 100, height: 100)
-                                            .clipped()
-                                            .cornerRadius(8)
-                                        
-                                        Button(action: {
-                                            selectedImages.remove(at: index)
-                                        }) {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .foregroundColor(.red)
-                                                .background(Color.white)
-                                                .clipShape(Circle())
-                                        }
-                                        .padding(4)
-                                    }
-                                }
-                            }
-                            .padding(.horizontal)
-                        }
-                    }
-                    
-                    if isUploadingImages {
-                        ProgressView(value: uploadProgress)
-                        Text("Uploading images...")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                Section("Attach File") {
-                    if let fileName = selectedFileName {
-                        HStack {
-                            Image(systemName: "doc.fill")
-                                .foregroundColor(.blue)
-                            Text(fileName)
-                                .font(.subheadline)
-                            Spacer()
-                            Button("Remove") {
-                                selectedFile = nil
-                                selectedFileName = nil
-                            }
-                            .foregroundColor(.red)
-                        }
-                    } else {
-                        Button(action: {
-                            showingFilePicker = true
-                        }) {
-                            Label("Add File (Max 10MB)", systemImage: "paperclip")
-                        }
-                    }
-                    
-                }
+                taskItemsSection
+                assignmentsSection
+                attachImagesSection
+                attachFileSection
                 .fileImporter(
                     isPresented: $showingFilePicker,
                     allowedContentTypes: [UTType.item, UTType.image, UTType.pdf, UTType.text, UTType.data],
@@ -1549,6 +1406,189 @@ private struct AddProjectTaskView: View {
             } message: {
                 if let errorMessage = errorMessage {
                     Text(errorMessage)
+                }
+            }
+        }
+    }
+
+    private var taskItemsSection: some View {
+        Section {
+            ForEach($taskItems) { $item in
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("Item title", text: $item.title)
+                    TextField("Description (optional)", text: $item.description, axis: .vertical)
+                        .lineLimit(2...4)
+                }
+                .padding(.vertical, 4)
+            }
+            Button(action: {
+                taskItems.append(TaskItemForm())
+            }) {
+                HStack {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.title2)
+                    Text("Add item")
+                        .foregroundColor(.green)
+                }
+            }
+        } header: {
+            Text("Task items")
+        } footer: {
+            Text("Add one or more items. Assignees must tick all items (when more than one) before marking the task complete.")
+        }
+    }
+
+    private var assignmentsSection: some View {
+        Section("Assignments") {
+            Picker("Assign To", selection: $assignmentType) {
+                ForEach(AssignmentType.allCases, id: \.self) { type in
+                    Text(type.rawValue).tag(type)
+                }
+            }
+
+            if assignmentType == .operative {
+                Button(action: {
+                    showingOperativeSelection = true
+                }) {
+                    HStack {
+                        Text("Select Operatives")
+                        Spacer()
+                        if selectedOperatives.isEmpty {
+                            Text("None selected")
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("\(selectedOperatives.count) selected")
+                                .foregroundColor(.blue)
+                        }
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
+                }
+
+                if !selectedOperatives.isEmpty {
+                    ForEach(Array(selectedOperatives), id: \.self) { operativeId in
+                        if let operative = operativeStore.allOperatives.first(where: { $0.id == operativeId }) {
+                            HStack {
+                                Text(operative.name)
+                                Spacer()
+                                Button(action: {
+                                    selectedOperatives.remove(operativeId)
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.red)
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                Button(action: {
+                    showingManagerSelection = true
+                }) {
+                    HStack {
+                        Text("Select Managers")
+                            .foregroundColor(selectedManagers.isEmpty ? .red : .primary)
+                        Spacer()
+                        if selectedManagers.isEmpty {
+                            Text("Required")
+                                .foregroundColor(.red)
+                        } else {
+                            Text("\(selectedManagers.count) selected")
+                                .foregroundColor(.blue)
+                        }
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
+                }
+
+                if !selectedManagers.isEmpty {
+                    ForEach(Array(selectedManagers), id: \.self) { managerId in
+                        if let manager = operativeStore.managers.first(where: { $0.id == managerId }) {
+                            HStack {
+                                Text(manager.fullName)
+                                Spacer()
+                                Button(action: {
+                                    selectedManagers.remove(managerId)
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.red)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var attachImagesSection: some View {
+        Section("Attach Images") {
+            Button(action: {
+                showingImagePicker = true
+            }) {
+                Label("Add Images", systemImage: "photo")
+            }
+
+            if !selectedImages.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
+                            ZStack(alignment: .topTrailing) {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 100, height: 100)
+                                    .clipped()
+                                    .cornerRadius(8)
+
+                                Button(action: {
+                                    selectedImages.remove(at: index)
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.red)
+                                        .background(Color.white)
+                                        .clipShape(Circle())
+                                }
+                                .padding(4)
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
+
+            if isUploadingImages {
+                ProgressView(value: uploadProgress)
+                Text("Uploading images...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private var attachFileSection: some View {
+        Section("Attach File") {
+            if let fileName = selectedFileName {
+                HStack {
+                    Image(systemName: "doc.fill")
+                        .foregroundColor(.blue)
+                    Text(fileName)
+                        .font(.subheadline)
+                    Spacer()
+                    Button("Remove") {
+                        selectedFile = nil
+                        selectedFileName = nil
+                    }
+                    .foregroundColor(.red)
+                }
+            } else {
+                Button(action: {
+                    showingFilePicker = true
+                }) {
+                    Label("Add File (Max 10MB)", systemImage: "paperclip")
                 }
             }
         }
@@ -1946,12 +1986,14 @@ struct TaskCompletionPopupView: View {
     @EnvironmentObject var taskStore: ProjectTaskStore
     
     @State private var isMarkedComplete = false
-    @State private var selectedImages: [UIImage] = []
+    @State private var selectedImages: [TaskCapturedImage] = []
     @State private var selectedFiles: [URL] = []
+    @State private var showingCameraPicker = false
     @State private var showingImagePicker = false
     @State private var showingFilePicker = false
     @State private var isUploading = false
     @State private var uploadProgress: Double = 0
+    @State private var validationMessage: String?
     
     private var displayTask: ProjectTask {
         taskStore.tasks.first(where: { $0.id == task.id }) ?? task
@@ -2011,22 +2053,39 @@ struct TaskCompletionPopupView: View {
                 
                 Section("Upload Image") {
                     Button(action: {
+                        showingCameraPicker = true
+                    }) {
+                        Label("Take Photos", systemImage: "camera.fill")
+                    }
+
+                    Button(action: {
                         showingImagePicker = true
                     }) {
-                        Label("Add Image", systemImage: "photo")
+                        Label("Choose From Library", systemImage: "photo")
                     }
                     
                     if !selectedImages.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 12) {
-                                ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
+                                ForEach(Array(selectedImages.enumerated()), id: \.element.id) { index, captured in
                                     ZStack(alignment: .topTrailing) {
-                                        Image(uiImage: image)
+                                        Image(uiImage: captured.image)
                                             .resizable()
                                             .scaledToFill()
                                             .frame(width: 100, height: 100)
                                             .clipped()
                                             .cornerRadius(8)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Spacer()
+                                            Text(Self.watermarkText(for: captured.capturedAt))
+                                                .font(.caption2)
+                                                .foregroundColor(.white)
+                                                .padding(4)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .background(Color.black.opacity(0.35))
+                                        }
+                                        .frame(width: 100, height: 100)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
                                         
                                         Button(action: {
                                             selectedImages.remove(at: index)
@@ -2042,6 +2101,12 @@ struct TaskCompletionPopupView: View {
                             }
                             .padding(.horizontal)
                         }
+                    }
+
+                    if isMarkedComplete && selectedImages.isEmpty {
+                        Text("At least 1 completion photo is required.")
+                            .font(.caption)
+                            .foregroundColor(.red)
                     }
                 }
                 
@@ -2092,11 +2157,21 @@ struct TaskCompletionPopupView: View {
                     Button("Submit") {
                         submitCompletion()
                     }
-                    .disabled(!isMarkedComplete || isUploading || (displayTask.isMultiItemTask && !displayTask.allItemsTicked))
+                    .disabled(
+                        !isMarkedComplete ||
+                        isUploading ||
+                        selectedImages.isEmpty ||
+                        (displayTask.isMultiItemTask && !displayTask.allItemsTicked)
+                    )
+                }
+            }
+            .sheet(isPresented: $showingCameraPicker) {
+                TaskCameraPicker { image in
+                    selectedImages.append(TaskCapturedImage(image: image, capturedAt: Date()))
                 }
             }
             .sheet(isPresented: $showingImagePicker) {
-                ImagePicker(images: $selectedImages)
+                CompletionImagePicker(images: $selectedImages)
             }
             .fileImporter(
                 isPresented: $showingFilePicker,
@@ -2104,6 +2179,14 @@ struct TaskCompletionPopupView: View {
                 allowsMultipleSelection: true
             ) { result in
                 handleFileSelection(result)
+            }
+            .alert("Cannot Submit Task", isPresented: Binding(
+                get: { validationMessage != nil },
+                set: { isPresented in if !isPresented { validationMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(validationMessage ?? "")
             }
         }
     }
@@ -2147,6 +2230,10 @@ struct TaskCompletionPopupView: View {
     
     private func submitCompletion() {
         guard isMarkedComplete else { return }
+        guard !selectedImages.isEmpty else {
+            validationMessage = "Please take or upload at least 1 photo before completing this task."
+            return
+        }
         
         isUploading = true
         uploadProgress = 0
@@ -2155,13 +2242,15 @@ struct TaskCompletionPopupView: View {
             let completedBy = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
             var imageURLs: [String] = []
             var fileURLs: [String] = []
+            let totalUploads = max(selectedImages.count + selectedFiles.count, 1)
             
             // Upload images
-            for image in selectedImages {
-                if let url = await uploadImage(image) {
+            for captured in selectedImages {
+                let stamped = addTimestampWatermark(to: captured.image, at: captured.capturedAt)
+                if let url = await uploadImage(stamped) {
                     imageURLs.append(url)
                 }
-                uploadProgress += 0.5 / Double(selectedImages.count + selectedFiles.count)
+                uploadProgress += 1.0 / Double(totalUploads)
             }
             
             // Upload files
@@ -2169,7 +2258,7 @@ struct TaskCompletionPopupView: View {
                 if let url = await uploadFile(file) {
                     fileURLs.append(url)
                 }
-                uploadProgress += 0.5 / Double(selectedImages.count + selectedFiles.count)
+                uploadProgress += 1.0 / Double(totalUploads)
             }
             
             uploadProgress = 1.0
@@ -2210,6 +2299,46 @@ struct TaskCompletionPopupView: View {
             print("🔥🔥🔥 DEBUG: Error uploading completion file: \(error.localizedDescription)")
             return nil
         }
+    }
+    
+    private func addTimestampWatermark(to image: UIImage, at date: Date) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: image.size)
+        let text = Self.watermarkText(for: date)
+        let scale = max(image.size.width, image.size.height) / 1200.0
+        let fontSize = max(20, 28 * scale)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.boldSystemFont(ofSize: fontSize),
+            .foregroundColor: UIColor.white
+        ]
+        let textSize = text.size(withAttributes: attributes)
+        let padding: CGFloat = max(20, 24 * scale)
+        let backgroundPadding: CGFloat = max(10, 12 * scale)
+        
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: image.size))
+            let backgroundRect = CGRect(
+                x: padding - backgroundPadding,
+                y: image.size.height - textSize.height - padding - backgroundPadding,
+                width: textSize.width + backgroundPadding * 2,
+                height: textSize.height + backgroundPadding * 2
+            )
+            UIBezierPath(roundedRect: backgroundRect, cornerRadius: 8).addClip()
+            UIColor.black.withAlphaComponent(0.2).setFill()
+            UIRectFill(backgroundRect)
+            text.draw(
+                at: CGPoint(
+                    x: padding,
+                    y: image.size.height - textSize.height - padding
+                ),
+                withAttributes: attributes
+            )
+        }
+    }
+    
+    private static func watermarkText(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "dd MMM yyyy HH:mm:ss"
+        return formatter.string(from: date)
     }
 }
 
@@ -2254,6 +2383,102 @@ private struct ImagePicker: UIViewControllerRepresentable {
                     }
                 }
             }
+        }
+    }
+}
+
+private struct CompletionImagePicker: UIViewControllerRepresentable {
+    @Binding var images: [TaskCapturedImage]
+    @Environment(\.dismiss) private var dismiss
+    
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration()
+        config.filter = .images
+        config.selectionLimit = 10
+        
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let parent: CompletionImagePicker
+        
+        init(_ parent: CompletionImagePicker) {
+            self.parent = parent
+        }
+        
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            picker.dismiss(animated: true)
+            
+            for result in results {
+                result.itemProvider.loadObject(ofClass: UIImage.self) { object, _ in
+                    if let image = object as? UIImage {
+                        DispatchQueue.main.async {
+                            self.parent.images.append(TaskCapturedImage(image: image, capturedAt: Date()))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct TaskCapturedImage: Identifiable {
+    let id = UUID()
+    let image: UIImage
+    let capturedAt: Date
+}
+
+private struct TaskCameraPicker: UIViewControllerRepresentable {
+    let onCapture: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+    
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            picker.sourceType = .camera
+            picker.cameraCaptureMode = .photo
+        } else {
+            // Simulator fallback: keep flow usable by selecting from library.
+            picker.sourceType = .photoLibrary
+        }
+        picker.delegate = context.coordinator
+        picker.allowsEditing = false
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let parent: TaskCameraPicker
+        
+        init(_ parent: TaskCameraPicker) {
+            self.parent = parent
+        }
+        
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
+        
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            if let image = info[.originalImage] as? UIImage {
+                parent.onCapture(image)
+            }
+            parent.dismiss()
         }
     }
 }
@@ -2586,7 +2811,7 @@ private struct CompletedTaskDetailView: View {
                             .padding(.horizontal)
                             .padding(.top)
                         
-                        if task.completionImages.isEmpty {
+                        if displayTask.completionImages.isEmpty {
                             Text("N/A")
                                 .font(.body)
                                 .foregroundColor(.secondary)
@@ -2596,16 +2821,8 @@ private struct CompletedTaskDetailView: View {
                         } else {
                             ScrollView(.horizontal, showsIndicators: true) {
                                 HStack(spacing: 16) {
-                                    ForEach(task.completionImages, id: \.self) { imageURL in
-                                        AsyncImage(url: URL(string: imageURL)) { image in
-                                            image
-                                                .resizable()
-                                                .scaledToFill()
-                                        } placeholder: {
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .fill(Color(.systemGray5))
-                                                .overlay(ProgressView())
-                                        }
+                                    ForEach(displayTask.completionImages, id: \.self) { imageURL in
+                                        TaskCompletionImageView(urlString: imageURL)
                                         .frame(width: 200, height: 200)
                                         .clipped()
                                         .cornerRadius(12)

@@ -263,11 +263,17 @@ class OperativeStore: ObservableObject {
                 self.errorMessage = error.localizedDescription
                 self.isLoading = false
                 print("🔥🔥🔥 DEBUG: Error loading operatives: \(error.localizedDescription)")
-                // For new users, start with empty data
-                self.operatives = []
-                self.managers = []
-                self.skills = []
-                self.qualifications = []
+                // Keep prior in-memory data whenever possible; fallback to cache before clearing.
+                if let smartCache = smartCache {
+                    let cachedOperatives = smartCache.getCachedOperatives()
+                    let cachedManagers = smartCache.getCachedManagers().filter { !Self.isPlaceholderManager($0) }
+                    let cachedSkills = smartCache.getCachedSkills()
+                    let cachedQualifications = smartCache.getCachedQualifications()
+                    if !cachedOperatives.isEmpty { self.operatives = cachedOperatives }
+                    if !cachedManagers.isEmpty { self.managers = cachedManagers }
+                    if !cachedSkills.isEmpty { self.skills = cachedSkills }
+                    if !cachedQualifications.isEmpty { self.qualifications = cachedQualifications }
+                }
             }
         }
     }

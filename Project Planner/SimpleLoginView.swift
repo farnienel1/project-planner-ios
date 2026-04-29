@@ -47,8 +47,7 @@ struct SimpleLoginView: View {
                             .keyboardType(.emailAddress)
                             .autocapitalization(.none)
                         
-                        SecureField("Password", text: $password)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                        CustomSecureField(title: "Password", text: $password)
                     }
                     
                     if let errorMessage = authManager.errorMessage {

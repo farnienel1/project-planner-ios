@@ -8,6 +8,10 @@
 import SwiftUI
 import UIKit
 
+private func defaultCurrencySymbol() -> String {
+    Locale.current.currencySymbol ?? "£"
+}
+
 struct OperativesView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
@@ -117,8 +121,8 @@ struct OperativesView: View {
         // - startDate set (not in future)
         // - hourlyRate set
         // - isActive set to true
-        return operative.startDate <= Date() && 
-               operative.hourlyRate != nil && 
+        return operative.startDate <= Date() &&
+               (operative.dayRate != nil || operative.hourlyRate != nil) &&
                operative.isActive
     }
     
@@ -151,24 +155,76 @@ struct OperativesView: View {
         case .qualifications:
             return operative.qualifications.contains { $0.name.localizedCaseInsensitiveContains(filterText) }
         case .dayRate:
-            if let rate = operative.hourlyRate {
+            let rate = operative.dayRate ?? operative.hourlyRate
+            if let rate {
                 return String(format: "%.0f", rate).contains(filterText)
             }
             return false
         }
     }
+
+    private func operativeUserPassesTextFilter(_ user: AppUser) -> Bool {
+        guard !filterText.isEmpty else { return true }
+        switch selectedFilterType {
+        case .firstName:
+            return user.firstName.localizedCaseInsensitiveContains(filterText)
+        case .surname:
+            return user.surname.localizedCaseInsensitiveContains(filterText)
+        case .email:
+            return user.email.localizedCaseInsensitiveContains(filterText)
+        case .startDate:
+            if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+                let formatter = DateFormatter()
+                formatter.dateStyle = .medium
+                return formatter.string(from: op.startDate).localizedCaseInsensitiveContains(filterText)
+            }
+            return false
+        case .skills:
+            if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+                return op.skills.contains { $0.localizedCaseInsensitiveContains(filterText) }
+            }
+            return false
+        case .qualifications:
+            if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+                return op.qualifications.contains { $0.name.localizedCaseInsensitiveContains(filterText) }
+            }
+            return false
+        case .dayRate:
+            if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+                let rate = op.dayRate ?? op.hourlyRate
+                if let rate { return String(format: "%.0f", rate).contains(filterText) }
+            }
+            return false
+        }
+    }
+
+    /// Source of truth for operative status should mirror Manage Users (AppUser flags).
+    private var linkedOperativeRecords: [(user: AppUser, operative: Operative)] {
+        let operativeUsers = userStore.organizationUsers.filter { $0.permissions.operativeMode }
+        return operativeUsers.compactMap { user in
+            guard let op = operativeStore.allOperatives.first(where: {
+                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
+                user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            }) else {
+                return nil
+            }
+            return (user, op)
+        }
+    }
+
+    private var displayedOperativeUsers: [AppUser] {
+        let base = userStore.organizationUsers.filter {
+            $0.permissions.operativeMode && rosterSegment.matches($0)
+        }
+        return base.filter { operativeUserPassesTextFilter($0) }
+    }
     
     /// Operative records from Firestore store, filtered by Active/Inactive segment and search text.
     private var displayedOperatives: [Operative] {
-        let base: [Operative]
-        switch rosterSegment {
-        case .active:
-            base = operativeStore.allOperatives.filter { $0.isActive }
-        case .inactive:
-            base = operativeStore.allOperatives.filter { !$0.isActive }
-        case .pending:
-            return []
-        }
+        guard rosterSegment != .pending else { return [] }
+        let base = linkedOperativeRecords
+            .filter { rosterSegment.matches($0.user) }
+            .map(\.operative)
         return base.filter { operativePassesTextFilter($0) }
     }
     
@@ -224,10 +280,10 @@ struct OperativesView: View {
     
     @ViewBuilder
     private var operativesList: some View {
-        if operativeStore.isLoading {
+        if operativeStore.isLoading || userStore.isLoading {
             ProgressView("Loading operatives...")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if displayedOperatives.isEmpty {
+        } else if displayedOperativeUsers.isEmpty {
             emptyOperativesView
         } else {
             VStack(spacing: 0) {
@@ -247,29 +303,17 @@ struct OperativesView: View {
                     .background(Color(.systemGray6))
                 }
                 
-                List(displayedOperatives) { operative in
-                    let _ = print("🔥🔥🔥 DEBUG: Rendering operative: \(operative.name), skills: \(Array(operative.skills))")
-                    OperativeDetailRowView(operative: operative)
+                List(displayedOperativeUsers) { user in
+                    OperativeUserRowView(user: user) {
+                        selectedUserForProfile = user
+                    }
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                         .listRowSeparator(.hidden)
-                        .onTapGesture {
-                            print("🔥🔥🔥 DEBUG: Tapped on operative: \(operative.name)")
-                            print("🔥🔥🔥 DEBUG: Operative skills: \(operative.skills)")
-                            print("🔥🔥🔥 DEBUG: Operative ID: \(operative.id)")
-                            
-                            // Find the operative by ID to ensure we get the latest data
-                            selectedOperative = operativeStore.allOperatives.first { $0.id == operative.id }
-                            print("🔥🔥🔥 DEBUG: selectedOperative set to: \(selectedOperative?.name ?? "nil")")
-                            print("🔥🔥🔥 DEBUG: selectedOperative skills: \(selectedOperative?.skills ?? [])")
-                            
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                print("🔥🔥🔥 DEBUG: About to show edit sheet, selectedOperative: \(selectedOperative?.name ?? "nil")")
-                                showingEditOperative = true
-                            }
-                        }
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button(action: {
-                                operativeToDelete = operative
+                                if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+                                    operativeToDelete = op
+                                }
                             }) {
                                 Label("Delete", systemImage: "trash")
                                     .foregroundColor(.white)
@@ -442,8 +486,8 @@ struct OperativeDetailRowView: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     
-                    if let dayRate = operative.hourlyRate, dayRate > 0 {
-                        let currencySymbol = operative.currencySymbol ?? "£"
+                    if let dayRate = (operative.dayRate ?? operative.hourlyRate), dayRate > 0 {
+                        let currencySymbol = operative.currencySymbol ?? defaultCurrencySymbol()
                         Text("\(currencySymbol)\(String(format: "%.0f", dayRate))/day")
                             .font(.caption)
                             .foregroundColor(.blue)
@@ -687,6 +731,7 @@ struct AddOperativeView: View {
             skills: selectedSkills,
             qualifications: Array(selectedQualifications),
             hourlyRate: parsedRate.amount,
+            dayRate: parsedRate.amount,
             currencySymbol: parsedRate.symbol
         )
         
@@ -717,7 +762,7 @@ struct AddOperativeView: View {
             .replacingOccurrences(of: ",", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         
-        return (Double(cleanedInput), currencySymbol)
+        return (Double(cleanedInput), currencySymbol ?? defaultCurrencySymbol())
     }
 }
 
@@ -749,8 +794,9 @@ struct EditOperativeView: View {
         self._selectedSkills = State(initialValue: operative.skills)
         self._selectedQualifications = State(initialValue: operative.qualifications)
         self._dayRate = State(initialValue: {
-            guard let amount = operative.hourlyRate else { return "" }
-            let symbol = operative.currencySymbol ?? "£"
+            let amount = operative.dayRate ?? operative.hourlyRate
+            guard let amount else { return "" }
+            let symbol = operative.currencySymbol ?? defaultCurrencySymbol()
             return "\(symbol)\(String(format: "%.0f", amount))"
         }())
         self._notes = State(initialValue: operative.notes ?? "")
@@ -936,6 +982,7 @@ struct EditOperativeView: View {
         updatedOperative.startDate = startDate
         updatedOperative.skills = selectedSkills
         updatedOperative.qualifications = selectedQualifications
+        updatedOperative.dayRate = parsedRate.amount
         updatedOperative.hourlyRate = parsedRate.amount
         updatedOperative.currencySymbol = parsedRate.symbol
         updatedOperative.notes = notes.isEmpty ? nil : notes
@@ -969,12 +1016,12 @@ struct EditOperativeView: View {
             .replacingOccurrences(of: ",", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         
-        return (Double(cleanedInput), currencySymbol)
+        return (Double(cleanedInput), currencySymbol ?? defaultCurrencySymbol())
     }
     
     private func formatCurrencyDisplay(amount: Double?, symbol: String?) -> String {
         guard let amount = amount else { return "" }
-        let symbol = symbol ?? "£" // Default to £ if no symbol
+        let symbol = symbol ?? defaultCurrencySymbol()
         return "\(symbol)\(String(format: "%.0f", amount))"
     }
 }

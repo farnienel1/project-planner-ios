@@ -38,9 +38,12 @@ struct HomeView: View {
     @State private var showingWarningsDetail = false
     @State private var showingTasksDetail = false
     @State private var showingWholesalers = false
+    @State private var showingOperativeQualifications = false
+    @State private var showingSiteAudit = false
     
     // Navigation states for menu items
     @State private var showingClientsView = false
+    @State private var showingQuickMenu = false
     
     var body: some View {
         ScrollView {
@@ -124,6 +127,11 @@ struct HomeView: View {
         .sheet(isPresented: $showingQualificationsManagement) {
             QualificationsManagementView()
                 .environmentObject(operativeStore)
+        }
+        .sheet(isPresented: $showingOperativeQualifications) {
+            OperativeQualificationsReadOnlyView()
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
         }
         .sheet(isPresented: $showingJobTypesManagement) {
             JobTypesManagementView()
@@ -233,159 +241,9 @@ struct HomeView: View {
                 }
                 .padding(.trailing, 8)
                 
-                // Small Menu Button on the right
-                Menu {
-                    // Main navigation items
-                    if !userStore.isOperativeMode() {
-                        Button {
-                            showingClientsView = true
-                        } label: {
-                            Label("Clients", systemImage: "person.2.fill")
-                        }
-                    }
-                    
-                    Button {
-                        NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 1])
-                    } label: {
-                        Label("Projects", systemImage: "folder.fill")
-                    }
-                    
-                    Button {
-                        NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 2])
-                    } label: {
-                        Label("Small Works", systemImage: "hammer.fill")
-                    }
-                    
-                    if userStore.canViewOperatives() {
-                        Button {
-                            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 3])
-                        } label: {
-                            Label("Operatives", systemImage: "person.3.fill")
-                        }
-                    }
-                    
-                    if userStore.canViewManagers() {
-                        Button {
-                            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 4])
-                        } label: {
-                            Label("Managers", systemImage: "person.badge.key.fill")
-                        }
-                    }
-                    
-                    Divider()
-                    
-                    if userStore.canManageSkills() || userStore.canManageQualifications() {
-                        if userStore.canManageSkills() {
-                            Button {
-                                showingSkillsManagement = true
-                            } label: {
-                                Label("Skills", systemImage: "wrench.and.screwdriver.fill")
-                            }
-                        }
-                        
-                        if userStore.canManageQualifications() {
-                            Button {
-                                showingQualificationsManagement = true
-                            } label: {
-                                Label("Qualifications", systemImage: "graduationcap.fill")
-                            }
-                        }
-                    }
-                    
-                    // Job Types — super admins and admins only
-                    if userStore.hasAdminAccess() {
-                        Button {
-                            showingJobTypesManagement = true
-                        } label: {
-                            Label("Job Types", systemImage: "folder.fill")
-                        }
-                    }
-                    
-                    // Wholesalers (Super Admin / Admin only)
-                    if userStore.hasAdminAccess() {
-                        Button {
-                            showingWholesalers = true
-                        } label: {
-                            Label("Wholesalers", systemImage: "building.2.fill")
-                        }
-                    }
-                    
-                    Divider()
-                    
-                    // Create New Project / Small Works — only for admins, super admin, and managers (via menu only, no + on Projects/Small Works pages)
-                    if userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true {
-                        Button {
-                            showingCreateProject = true
-                        } label: {
-                            Label("Create Project", systemImage: "plus.square.fill")
-                        }
-                        
-                        Button {
-                            showingCreateSmallWorks = true
-                        } label: {
-                            Label("Create Small Works", systemImage: "hammer.fill")
-                        }
-                    }
-                    
-                    Divider()
-                    
-                    // User Management (Admin only)
-                    if userStore.canManageUsers() {
-                        Button {
-                            showingAddUser = true
-                        } label: {
-                            Label("Add User", systemImage: "person.badge.plus.fill")
-                        }
-                        
-                        Button {
-                            showingManageUsers = true
-                        } label: {
-                            Label("Manage Users", systemImage: "person.2.fill")
-                        }
-                        
-                        Divider()
-                    }
-
-                    // Operative Management (Managers with Operative Management permission)
-                    if !userStore.hasAdminAccess(),
-                       userStore.displayUser?.permissions.manager == true,
-                       userStore.displayUser?.permissions.operatives == true {
-                        Button {
-                            showingAddUser = true
-                        } label: {
-                            Label("Add Operative", systemImage: "person.badge.plus.fill")
-                        }
-                        
-                        Button {
-                            showingManageUsers = true
-                        } label: {
-                            Label("Manage Operatives", systemImage: "person.2.fill")
-                        }
-                        
-                        Divider()
-                    }
-                    
-                    Button("Reset Password") {
-                        // Show password reset
-                        if let email = firebaseBackend.currentUser?.email {
-                            Task {
-                                do {
-                                    try await firebaseBackend.resetPassword(email: email)
-                                } catch {
-                                    print("Password reset error: \(error)")
-                                }
-                            }
-                        }
-                    }
-                    
-                    Button("Sign Out") {
-                        userStore.clearOnSignOut()
-                        do {
-                            try firebaseBackend.signOut()
-                        } catch {
-                            print("Firebase sign out error: \(error)")
-                        }
-                    }
+                // Scrollable menu sheet
+                Button {
+                    showingQuickMenu = true
                 } label: {
                     Image(systemName: "line.3.horizontal")
                         .font(.title2)
@@ -400,6 +258,22 @@ struct HomeView: View {
             .padding(.horizontal, 20)
         }
         .padding(.bottom, 20)
+        .sheet(isPresented: $showingQuickMenu) {
+            QuickMenuSheet(
+                showingClientsView: $showingClientsView,
+                showingCreateProject: $showingCreateProject,
+                showingCreateSmallWorks: $showingCreateSmallWorks,
+                showingSkillsManagement: $showingSkillsManagement,
+                showingQualificationsManagement: $showingQualificationsManagement,
+                showingJobTypesManagement: $showingJobTypesManagement,
+                showingWholesalers: $showingWholesalers,
+                showingOperativeQualifications: $showingOperativeQualifications,
+                showingAddUser: $showingAddUser,
+                showingManageUsers: $showingManageUsers
+            )
+            .environmentObject(userStore)
+            .environmentObject(firebaseBackend)
+        }
     }
     
     // MARK: - Helper Functions
@@ -537,18 +411,40 @@ struct HomeView: View {
     
     private var assignedTasksCount: Int {
         if userStore.isOperativeMode() {
-            // For operative mode, count tasks assigned to this operative
-            if let currentUserEmail = userStore.currentUser?.email,
-               let operative = operativeStore.allOperatives.first(where: { $0.email == currentUserEmail }) {
-                return taskStore.tasks.filter { task in
-                    !task.isCompleted && task.allAssignedOperativeIds.contains(operative.id)
-                }.count
+            let em = userStore.currentUser.map {
+                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            } ?? ""
+            guard !em.isEmpty,
+                  let operative = operativeStore.allOperatives.first(where: {
+                      $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
+                  }) else {
+                return operativeQualificationExpiryReminderCount
             }
-            return 0
+            let taskCount = taskStore.tasks.filter { task in
+                !task.isCompleted && task.allAssignedOperativeIds.contains(operative.id)
+            }.count
+            return taskCount + operativeQualificationExpiryReminderCount
         } else {
             // For regular users, count all active tasks
             return taskStore.tasks.filter { !$0.isCompleted }.count
         }
+    }
+    
+    /// Upcoming qualification expiries (next 30 days) — surfaced to operatives under Tasks.
+    private var operativeQualificationExpiryReminderCount: Int {
+        guard userStore.isOperativeMode(),
+              let email = userStore.currentUser?.email else { return 0 }
+        let em = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let op = operativeStore.allOperatives.first(where: {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
+        }) else { return 0 }
+        let today = Calendar.current.startOfDay(for: Date())
+        guard let horizon = Calendar.current.date(byAdding: .day, value: 30, to: today) else { return 0 }
+        var n = 0
+        for (_, exp) in op.qualificationExpiryDates {
+            if exp >= today && exp <= horizon { n += 1 }
+        }
+        return n
     }
     
     private func updateWarnings() {
@@ -610,7 +506,7 @@ struct HomeView: View {
     private var navigationTilesGrid: some View {
         VStack(spacing: 16) {
             if userStore.isOperativeMode() {
-                // Operative Mode – Projects, Small Works, My Schedule (view-only), Settings, Maintenance (coming soon)
+                // Operative Mode – Projects, Small Works, Holiday, My Schedule (view-only), Settings
                 LazyVGrid(columns: [
                     GridItem(.flexible(), spacing: 12),
                     GridItem(.flexible(), spacing: 12)
@@ -628,6 +524,18 @@ struct HomeView: View {
                         action: {
                             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 2])
                         }
+                    )
+                    navigationTile(
+                        icon: "sun.max.fill",
+                        title: "Holiday",
+                        action: {
+                            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 8])
+                        }
+                    )
+                    navigationTile(
+                        icon: "doc.text.viewfinder",
+                        title: "Site Audit",
+                        action: { showingSiteAudit = true }
                     )
                     navigationTile(
                         icon: "calendar",
@@ -695,6 +603,11 @@ struct HomeView: View {
                             action: { showingMySchedule = true }
                         )
                     }
+                    navigationTile(
+                        icon: "doc.text.viewfinder",
+                        title: "Site Audit",
+                        action: { showingSiteAudit = true }
+                    )
 
                     // Row 4: Managers + Operatives
                     if userStore.hasAdminAccess() {
@@ -762,6 +675,15 @@ struct HomeView: View {
                 .environmentObject(operativeStore)
                 .environmentObject(userStore)
                 .environmentObject(managerScheduleStore)
+                .environmentObject(holidayStore)
+        }
+        .sheet(isPresented: $showingSiteAudit) {
+            SiteAuditHubView()
+                .environmentObject(projectStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
         }
     }
     
@@ -1019,6 +941,248 @@ struct ProjectCardFromStore: View {
         return project.customJobType ?? "N/A"
     }
     
+}
+
+// MARK: - Operative qualifications (read-only)
+
+struct OperativeQualificationsReadOnlyView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var userStore: UserStore
+    @State private var isRepairingLink = false
+    @State private var repairMessage: String?
+    
+    private var operative: Operative? {
+        guard let email = userStore.currentUser?.email else { return nil }
+        let e = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return operativeStore.allOperatives.first {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == e
+        }
+    }
+    
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let op = operative {
+                    if op.qualifications.isEmpty {
+                        ContentUnavailableView(
+                            "No qualifications",
+                            systemImage: "graduationcap",
+                            description: Text("Your manager can add qualifications to your profile.")
+                        )
+                    } else {
+                        List {
+                            ForEach(Array(op.qualifications).sorted(by: { $0.name < $1.name })) { q in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(q.name).font(.headline)
+                                    if let exp = op.qualificationExpiryDates[q.id] {
+                                        Text("Expires: \(exp.formatted(date: .abbreviated, time: .omitted))")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                    } else {
+                                        Text("No expiry on file")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "Profile not linked",
+                        systemImage: "person.crop.circle.badge.questionmark",
+                        description: Text("No operative record matches your email. Ask an admin to check your account email matches your operative profile.")
+                    )
+                    if let repairMessage {
+                        Text(repairMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    }
+                    Button(isRepairingLink ? "Repairing..." : "Repair link now") {
+                        Task { await repairOperativeLinkIfNeeded() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isRepairingLink)
+                }
+            }
+            .navigationTitle("My Qualifications")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .task {
+                await repairOperativeLinkIfNeeded()
+            }
+        }
+    }
+    
+    /// Auto-repairs broken operative ↔ user linkage for operative accounts:
+    /// 1) direct email match (already linked)
+    /// 2) name match then update operative email
+    /// 3) create missing operative profile from current user details
+    @MainActor
+    private func repairOperativeLinkIfNeeded() async {
+        guard userStore.isOperativeMode() else { return }
+        guard !isRepairingLink else { return }
+        guard let u = userStore.currentUser else { return }
+        
+        let email = u.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !email.isEmpty else { return }
+        
+        // Already linked
+        if operativeStore.allOperatives.contains(where: {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+        }) {
+            repairMessage = nil
+            return
+        }
+        
+        isRepairingLink = true
+        defer { isRepairingLink = false }
+        
+        let normalizedFirst = u.firstName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedLast = u.surname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        
+        // Try name-based relink first (legacy rows where email drifted)
+        if let idx = operativeStore.allOperatives.firstIndex(where: { op in
+            op.firstName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedFirst &&
+            op.lastName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedLast
+        }) {
+            var op = operativeStore.allOperatives[idx]
+            op.email = email
+            op.updatedAt = Date()
+            await operativeStore.updateOperative(op)
+            repairMessage = "Linked to existing operative profile."
+            return
+        }
+        
+        // No match found: create missing operative profile so operative-mode features can work.
+        let first = u.firstName.isEmpty ? u.email.components(separatedBy: "@").first ?? "Operative" : u.firstName
+        let last = u.surname.isEmpty ? "User" : u.surname
+        let newOperative = Operative(
+            firstName: first,
+            lastName: last,
+            email: email,
+            startDate: Date(),
+            skills: [],
+            qualifications: [],
+            qualificationExpiryDates: [:],
+            isActive: u.isActive,
+            dayRate: u.dayRate
+        )
+        await operativeStore.addOperative(newOperative)
+        repairMessage = "Created and linked operative profile."
+    }
+}
+
+struct QuickMenuSheet: View {
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var showingClientsView: Bool
+    @Binding var showingCreateProject: Bool
+    @Binding var showingCreateSmallWorks: Bool
+    @Binding var showingSkillsManagement: Bool
+    @Binding var showingQualificationsManagement: Bool
+    @Binding var showingJobTypesManagement: Bool
+    @Binding var showingWholesalers: Bool
+    @Binding var showingOperativeQualifications: Bool
+    @Binding var showingAddUser: Bool
+    @Binding var showingManageUsers: Bool
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Navigate") {
+                    if !userStore.isOperativeMode() {
+                        actionRow("Clients", "person.2.fill") { showingClientsView = true }
+                    }
+                    actionRow("Projects", "folder.fill") { selectTab(1) }
+                    actionRow("Small Works", "hammer.fill") { selectTab(2) }
+                    if userStore.canViewOperatives() { actionRow("Operatives", "person.3.fill") { selectTab(3) } }
+                    if userStore.canViewManagers() { actionRow("Managers", "person.badge.key.fill") { selectTab(4) } }
+                }
+
+                Section("Tools") {
+                    if userStore.canManageSkills() {
+                        actionRow("Skills", "wrench.and.screwdriver.fill") { showingSkillsManagement = true }
+                    }
+                    if userStore.canManageQualifications() {
+                        actionRow("Qualifications", "graduationcap.fill") { showingQualificationsManagement = true }
+                    }
+                    if userStore.isOperativeMode() {
+                        actionRow("My Qualifications", "graduationcap.fill") { showingOperativeQualifications = true }
+                    }
+                    if userStore.hasAdminAccess() {
+                        actionRow("Job Types", "folder.fill") { showingJobTypesManagement = true }
+                        actionRow("Wholesalers", "building.2.fill") { showingWholesalers = true }
+                    }
+                }
+
+                if userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true {
+                    Section("Create") {
+                        actionRow("Create Project", "plus.square.fill") { showingCreateProject = true }
+                        actionRow("Create Small Works", "hammer.fill") { showingCreateSmallWorks = true }
+                    }
+                }
+
+                if userStore.canManageUsers() ||
+                    (!userStore.hasAdminAccess() &&
+                     userStore.displayUser?.permissions.manager == true &&
+                     userStore.displayUser?.permissions.operatives == true) {
+                    Section("User Management") {
+                        actionRow(userStore.canManageUsers() ? "Add User" : "Add Operative", "person.badge.plus.fill") {
+                            showingAddUser = true
+                        }
+                        actionRow(userStore.canManageUsers() ? "Manage Users" : "Manage Operatives", "person.2.fill") {
+                            showingManageUsers = true
+                        }
+                    }
+                }
+
+                Section("Account") {
+                    actionRow("Reset Password", "key.fill") {
+                        if let email = firebaseBackend.currentUser?.email {
+                            Task { try? await firebaseBackend.resetPassword(email: email) }
+                        }
+                    }
+                    actionRow("Sign Out", "rectangle.portrait.and.arrow.right") {
+                        userStore.clearOnSignOut()
+                        try? firebaseBackend.signOut()
+                    }
+                }
+            }
+            .navigationTitle("Menu")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionRow(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
+        Button {
+            dismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                action()
+            }
+        } label: {
+            Label(title, systemImage: icon)
+        }
+    }
+
+    private func selectTab(_ tab: Int) {
+        NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": tab])
+    }
 }
 
 #Preview {

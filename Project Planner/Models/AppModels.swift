@@ -126,6 +126,7 @@ struct UserPermissions: Codable, Hashable {
     var operatives: Bool   // Can see operatives list and details on home screen (Operative Management)
     var skills: Bool       // Can create/alter skills
     var qualifications: Bool // Can create/alter qualifications
+    var materials: Bool    // Operative materials visibility/access inside project detail
     var projects: Bool     // Can create and manage projects
     var smallWorks: Bool   // Can create and manage small works
     var operativeMode: Bool // Operative mode - limited view of app
@@ -136,6 +137,7 @@ struct UserPermissions: Codable, Hashable {
         operatives: Bool = false,
         skills: Bool = false,
         qualifications: Bool = false,
+        materials: Bool = false,
         projects: Bool = false,
         smallWorks: Bool = false,
         operativeMode: Bool = false
@@ -145,6 +147,7 @@ struct UserPermissions: Codable, Hashable {
         self.operatives = operatives
         self.skills = skills
         self.qualifications = qualifications
+        self.materials = materials
         self.projects = projects
         self.smallWorks = smallWorks
         self.operativeMode = operativeMode
@@ -231,6 +234,10 @@ struct AppUser: Identifiable, Codable, Hashable {
     var isSuperAdmin: Bool
     var policyAccepted: Bool // GDPR privacy policy acceptance
     var policyAcceptedAt: Date? // When policy was accepted
+    /// For operative accounts: Firebase Auth UID of their line manager (holiday requests route here).
+    var assignedManagerUserId: String?
+    /// Default day rate for this operative (optional; copied to roster when the operative profile is created).
+    var dayRate: Double?
     
     init(
         id: String,
@@ -246,7 +253,9 @@ struct AppUser: Identifiable, Codable, Hashable {
         permissions: UserPermissions = UserPermissions(),
         isSuperAdmin: Bool = false,
         policyAccepted: Bool = false,
-        policyAcceptedAt: Date? = nil
+        policyAcceptedAt: Date? = nil,
+        assignedManagerUserId: String? = nil,
+        dayRate: Double? = nil
     ) {
         self.id = id
         self.email = email
@@ -262,6 +271,8 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.isSuperAdmin = isSuperAdmin
         self.policyAccepted = policyAccepted
         self.policyAcceptedAt = policyAcceptedAt
+        self.assignedManagerUserId = assignedManagerUserId
+        self.dayRate = dayRate
     }
     
     var fullName: String {

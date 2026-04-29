@@ -150,6 +150,7 @@ struct AuthenticationView: View {
             .navigationTitle(isSignUp ? "Sign Up" : "Sign In")
             .sheet(isPresented: $showingForgotPassword) {
                 PasswordResetView(email: $email)
+                    .environmentObject(firebaseBackend)
             }
         }
     }

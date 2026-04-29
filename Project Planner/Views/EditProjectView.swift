@@ -303,6 +303,13 @@ struct EditProjectView: View {
                         dismiss()
                     }
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        saveProject()
+                    }
+                    .disabled(isLoading || !isFormValid)
+                    .fontWeight(.semibold)
+                }
             }
             .onAppear {
                 // Initialize selectedManager from project's managerId if available

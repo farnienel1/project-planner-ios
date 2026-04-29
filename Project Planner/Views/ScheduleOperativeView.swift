@@ -109,6 +109,8 @@ struct ScheduleOperativeView: View {
             }
             .sheet(isPresented: $showingBookingConfirmation) {
                 BookingConfirmationView(isPresented: $showingBookingConfirmation)
+                    .presentationDetents([.fraction(0.35)])
+                    .interactiveDismissDisabled(true)
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -128,13 +130,6 @@ struct ScheduleOperativeView: View {
             .sheet(isPresented: $showingSelectOperatives) {
                 SelectOperativesView(selectedOperatives: $selectedOperatives)
                     .environmentObject(operativeStore)
-            }
-            .alert("Booking Confirmed", isPresented: $showingBookingConfirmation) {
-                Button("OK") {
-                    dismiss()
-                }
-            } message: {
-                Text("Operatives have been successfully booked.")
             }
         }
     }
@@ -857,6 +852,10 @@ struct ScheduleOperativeView: View {
                 isBooking = false
                 showingBookingConfirmation = true
                 detectedClashes = []
+                // Stay on Schedule Operative page; reset selections so user can continue booking quickly.
+                selectedDates.removeAll()
+                selectedOperatives.removeAll()
+                dateTimeSlots.removeAll()
             }
         }
     }

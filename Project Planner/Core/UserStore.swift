@@ -23,6 +23,13 @@ class UserStore: ObservableObject {
     private var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
     @Published var isOffline: Bool = false
+    private let operativeProfileOverridesKey = "operative_profile_overrides_v1"
+
+    private struct OperativeProfileOverride: Codable {
+        var assignedManagerUserId: String?
+        var dayRate: Double?
+        var updatedAt: Date
+    }
     
     init() {
         // Initialize with empty state
@@ -62,6 +69,7 @@ class UserStore: ObservableObject {
                 operatives: true,
                 skills: true,
                 qualifications: true,
+                materials: true,
                 projects: true,
                 smallWorks: true,
                 operativeMode: false
@@ -75,6 +83,7 @@ class UserStore: ObservableObject {
                 operatives: true,
                 skills: true,
                 qualifications: true,
+                materials: true,
                 projects: true,
                 smallWorks: true,
                 operativeMode: false
@@ -88,6 +97,7 @@ class UserStore: ObservableObject {
                 operatives: true,
                 skills: true,
                 qualifications: true,
+                materials: true,
                 projects: true,
                 smallWorks: true,
                 operativeMode: false
@@ -101,6 +111,7 @@ class UserStore: ObservableObject {
                 operatives: false,
                 skills: false,
                 qualifications: false,
+                materials: false,
                 projects: true,
                 smallWorks: true,
                 operativeMode: true
@@ -132,6 +143,7 @@ class UserStore: ObservableObject {
                             operatives: true,
                             skills: true,
                             qualifications: true,
+                            materials: true,
                             projects: true,
                             smallWorks: true
                         )
@@ -165,6 +177,12 @@ class UserStore: ObservableObject {
                         print("🔥🔥🔥 DEBUG: Fixing passwordSet for existing user: \(updatedUser.email)")
                     }
                     
+                    // Legacy: role .operative without operativeMode flag — align so permission helpers match.
+                    if updatedUser.role == .operative && !updatedUser.permissions.operativeMode {
+                        updatedUser.permissions.operativeMode = true
+                        needsUpdate = true
+                    }
+                    
                     // CRITICAL: Operative-first hierarchy – if operativeMode is true, clear admin/manager flags so UI never shows full access
                     // Run this FIRST so we never elevate an operative to super admin in later steps.
                     if updatedUser.permissions.operativeMode {
@@ -176,6 +194,7 @@ class UserStore: ObservableObject {
                             updatedUser.permissions.operatives = false
                             updatedUser.permissions.skills = false
                             updatedUser.permissions.qualifications = false
+                            updatedUser.permissions.materials = false
                             updatedUser.permissions.projects = true
                             updatedUser.permissions.smallWorks = true
                             updatedUser.role = .operative
@@ -235,6 +254,9 @@ class UserStore: ObservableObject {
         
         do {
             let users = try await firebaseBackend.getOrganizationUsers(organizationId: currentUser.organizationId)
+            let cloudOverrides = (try? await firebaseBackend.loadOperativeProfileMetadataFallback(
+                organizationId: currentUser.organizationId
+            )) ?? [:]
             print("🔥🔥🔥 DEBUG: Loaded \(users.count) users from Firebase")
             for user in users {
                 print("🔥🔥🔥 DEBUG: - \(user.email) (\(user.firstName) \(user.surname)) - Active: \(user.isActive), PasswordSet: \(user.passwordSet)")
@@ -242,7 +264,9 @@ class UserStore: ObservableObject {
             
             await MainActor.run {
                 // Sort users: super admin first, then by email
-                let sortedUsers = users.sorted { user1, user2 in
+                let usersWithCloudOverrides = applyCloudOperativeProfileOverrides(users, overrides: cloudOverrides)
+                let usersWithOverrides = applyOperativeProfileOverrides(to: usersWithCloudOverrides)
+                let sortedUsers = usersWithOverrides.sorted { user1, user2 in
                     if user1.isSuperAdmin != user2.isSuperAdmin {
                         return user1.isSuperAdmin // Super admin first
                     }
@@ -255,6 +279,8 @@ class UserStore: ObservableObject {
                     print("🔥🔥🔥 DEBUG: [\(index)] \(user.email) - SuperAdmin: \(user.isSuperAdmin), Active: \(user.isActive)")
                 }
             }
+            
+            await enforceSingleSuperAdminInFirestoreIfNeeded()
             
             // Cache the data
             if smartCache != nil {
@@ -318,6 +344,13 @@ class UserStore: ObservableObject {
     func canViewProjects() -> Bool {
         return true
     }
+
+    func canViewMaterials() -> Bool {
+        if isOperativeMode() {
+            return displayUser?.permissions.materials == true
+        }
+        return true
+    }
     
     func canEditProjects() -> Bool {
         if isOperativeMode() { return false }
@@ -347,16 +380,66 @@ class UserStore: ObservableObject {
     }
     
     func canViewQualifications() -> Bool {
+        if isOperativeMode() { return true }
         return canManageQualifications()
     }
     
     func canEditQualifications() -> Bool {
+        if isOperativeMode() { return false }
         return canManageQualifications()
     }
     
     func canBookWork() -> Bool {
         if isOperativeMode() { return false }
         return true
+    }
+    
+    /// Super admins, admins, and managers may set whether a site audit is visible to operative-mode users.
+    func canManageSiteAuditOperativeVisibility() -> Bool {
+        guard let u = displayUser else { return false }
+        if isOperativeMode() { return false }
+        return u.isSuperAdmin || u.permissions.adminAccess || u.permissions.manager
+    }
+    
+    /// Manager account with operative management only (no admin / super admin).
+    func isActingManagerOperativeManagementOnly() -> Bool {
+        guard let u = displayUser else { return false }
+        if u.permissions.operativeMode { return false }
+        if u.isSuperAdmin || u.permissions.adminAccess { return false }
+        return u.permissions.manager && u.permissions.operatives
+    }
+    
+    /// Whether the signed-in user may change permissions for `target` in **Manage / edit user**.
+    func canEditTargetUserPermissions(_ target: AppUser) -> Bool {
+        guard let acting = currentUser else { return false }
+        if isOrganizationCreator(userId: target.id) { return false }
+        if acting.permissions.operativeMode { return false }
+        if hasAdminAccess() { return true }
+        if isActingManagerOperativeManagementOnly() {
+            return target.permissions.operativeMode || target.role == .operative
+        }
+        return false
+    }
+    
+    /// Demotes mistaken `isSuperAdmin` flags so only the organisation creator remains super admin.
+    private func enforceSingleSuperAdminInFirestoreIfNeeded() async {
+        guard let firebaseBackend,
+              let creatorId = firebaseBackend.currentOrganization?.creatorUserId,
+              hasAdminAccess() else { return }
+        var demoted = false
+        for var user in organizationUsers where user.isSuperAdmin && user.id != creatorId {
+            user.isSuperAdmin = false
+            do {
+                try await firebaseBackend.saveUser(user)
+                demoted = true
+                print("🔥🔥🔥 DEBUG: Demoted mistaken super admin for \(user.email)")
+            } catch {
+                print("🔥🔥🔥 DEBUG: Failed to demote super admin for \(user.email): \(error.localizedDescription)")
+            }
+        }
+        if demoted {
+            await loadOrganizationUsers()
+        }
     }
     
     func canViewReports() -> Bool {
@@ -425,17 +508,22 @@ class UserStore: ObservableObject {
             return false
         }
         
-        // If they have operativeMode permission, they're in operative mode
-        // This means they logged in as an operative (not as an app user)
-        return currentUser.permissions.operativeMode
+        // Operative mode flag or explicit role (Firestore may be missing the flag on some legacy docs).
+        return currentUser.permissions.operativeMode || currentUser.role == .operative
     }
     
              // MARK: - User Invitation
              
-    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions) async -> Bool {
+    /// For operative invitations, pass the line manager's Firebase Auth UID (`users` document id).
+    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil) async -> Bool {
         print("🔥🔥🔥 DEBUG: inviteUser called with firstName: \(firstName), surname: \(surname), email: \(email)")
         
         errorMessage = nil
+        
+        if permissions.operativeMode && (assignedManagerUserId == nil || assignedManagerUserId?.isEmpty == true) {
+            errorMessage = "Every operative must be assigned a line manager."
+            return false
+        }
         
         guard let firebaseBackend = firebaseBackend else {
             print("🔥🔥🔥 DEBUG: No firebaseBackend available")
@@ -540,12 +628,18 @@ class UserStore: ObservableObject {
             return false
         }
         
-        // Double-check: Verify the user document one more time right before creating
+        // Double-check: admins must still be admins; managers inviting operatives skip this admin-only gate.
         print("🔥🔥🔥 DEBUG: Final verification - checking user document one more time...")
         if let finalCheck = try? await firebaseBackend.getUserData(userId: currentUserId) {
             let hasAdmin = finalCheck.isSuperAdmin || finalCheck.permissions.adminAccess || finalCheck.role == .admin
-            print("🔥🔥🔥 DEBUG: Final check - hasAdmin: \(hasAdmin)")
-            if !hasAdmin {
+            let managerInvitingOperative =
+                !hasAdmin &&
+                !finalCheck.permissions.operativeMode &&
+                finalCheck.permissions.manager &&
+                finalCheck.permissions.operatives &&
+                permissions.operativeMode
+            print("🔥🔥🔥 DEBUG: Final check - hasAdmin: \(hasAdmin), managerInvitingOperative: \(managerInvitingOperative)")
+            if !hasAdmin && !managerInvitingOperative {
                 print("🔥🔥🔥 DEBUG: ⚠️ WARNING: User still doesn't have admin permissions after fix attempt!")
                 errorMessage = "Your user document does not have admin permissions. Please ensure isSuperAdmin=true, adminAccess=true, or role='admin' in Firebase Console. User ID: \(currentUserId)"
                 return false
@@ -563,7 +657,9 @@ class UserStore: ObservableObject {
                 firstName: firstName,
                 surname: surname,
                 mobileNumber: mobileNumber,
-                permissions: permissions
+                permissions: permissions,
+                assignedManagerUserId: assignedManagerUserId,
+                invitedOperativeDayRate: invitedOperativeDayRate
             )
             print("🔥🔥🔥 DEBUG: createUserInvitation succeeded")
             
@@ -941,9 +1037,9 @@ class UserStore: ObservableObject {
                      if let index = organizationUsers.firstIndex(where: { $0.id == userId }) {
                          var updatedUser = organizationUsers[index]
                          
-                         // Prevent editing super admin permissions
-                         if updatedUser.isSuperAdmin {
-                             print("🔥🔥🔥 DEBUG: Cannot update permissions for super admin")
+                         // Prevent editing the organisation creator (sole super admin) via permission matrix
+                         if updatedUser.isSuperAdmin && isOrganizationCreator(userId: updatedUser.id) {
+                             print("🔥🔥🔥 DEBUG: Cannot update permissions for organization creator super admin")
                              return false
                          }
                          
@@ -970,6 +1066,74 @@ class UserStore: ObservableObject {
                      print("🔥🔥🔥 DEBUG: Error updating user permissions: \(error)")
                      return false
                  }
+             }
+
+             /// Updates operative-specific profile fields on the user account and synchronizes linked operative day rate.
+             func updateOperativeProfileFields(
+                for user: AppUser,
+                assignedManagerUserId: String?,
+                dayRate: Double?,
+                operativeStore: OperativeStore?
+             ) async -> Bool {
+                guard let firebaseBackend = firebaseBackend else { return false }
+                guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
+                var updatedUser = organizationUsers[index]
+                guard updatedUser.permissions.operativeMode || updatedUser.role == .operative else { return false }
+
+                updatedUser.assignedManagerUserId = assignedManagerUserId
+                updatedUser.dayRate = dayRate
+
+                do {
+                    try await firebaseBackend.updateOperativeProfileMetadata(
+                        userId: updatedUser.id,
+                        assignedManagerUserId: assignedManagerUserId,
+                        dayRate: dayRate
+                    )
+                    clearOperativeProfileOverride(for: updatedUser.id)
+                    organizationUsers[index] = updatedUser
+                    if let operativeStore {
+                        await syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
+                    }
+                    await loadOrganizationUsers()
+                    return true
+                } catch {
+                    let nsError = error as NSError
+                    if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 {
+                        do {
+                            try await firebaseBackend.saveOperativeProfileMetadataFallback(
+                                organizationId: updatedUser.organizationId,
+                                userId: updatedUser.id,
+                                assignedManagerUserId: assignedManagerUserId,
+                                dayRate: dayRate
+                            )
+                            clearOperativeProfileOverride(for: updatedUser.id)
+                            organizationUsers[index] = updatedUser
+                            errorMessage = "Primary user profile write was blocked, but saved to cloud fallback."
+                            if let operativeStore {
+                                await syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
+                            }
+                            await loadOrganizationUsers()
+                            return true
+                        } catch {
+                            // Last fallback: keep operations unblocked by persisting an on-device override.
+                            saveOperativeProfileOverride(
+                                for: updatedUser.id,
+                                assignedManagerUserId: assignedManagerUserId,
+                                dayRate: dayRate
+                            )
+                            organizationUsers[index] = updatedUser
+                            errorMessage = "Cloud permissions blocked this update. Saved locally on this device."
+                            if let operativeStore {
+                                await syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
+                            }
+                            return true
+                        }
+                    } else {
+                        errorMessage = "Failed to update operative profile fields: \(error.localizedDescription)"
+                        print("🔥🔥🔥 DEBUG: Error updating operative profile fields: \(error)")
+                        return false
+                    }
+                }
              }
              
              // MARK: - User Active Status
@@ -1094,6 +1258,84 @@ class UserStore: ObservableObject {
         } catch {
             print("🔥🔥🔥 DEBUG: Firebase Auth password reset failed: \(error)")
             return false
+        }
+    }
+    
+    /// Keeps roster `Operative.isActive` in sync with active operative app-user accounts so scheduling pickers include them.
+    func syncActiveOperativesWithUserAccounts(operativeStore: OperativeStore) async {
+        for user in organizationUsers where user.permissions.operativeMode && user.isActive {
+            let em = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let idx = operativeStore.operatives.firstIndex(where: {
+                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
+            }) else { continue }
+            var op = operativeStore.operatives[idx]
+            var changed = false
+            if !op.isActive {
+                op.isActive = true
+                changed = true
+            }
+            if let dr = user.dayRate, op.dayRate != dr {
+                op.dayRate = dr
+                changed = true
+            }
+            if changed {
+                op.updatedAt = Date()
+                await operativeStore.updateOperative(op)
+                print("🔥🔥🔥 DEBUG: ✅ Synced operative roster for linked user \(em)")
+            }
+        }
+    }
+
+    private func loadOperativeProfileOverrides() -> [String: OperativeProfileOverride] {
+        guard let data = UserDefaults.standard.data(forKey: operativeProfileOverridesKey) else { return [:] }
+        return (try? JSONDecoder().decode([String: OperativeProfileOverride].self, from: data)) ?? [:]
+    }
+
+    private func saveOperativeProfileOverrides(_ overrides: [String: OperativeProfileOverride]) {
+        if let data = try? JSONEncoder().encode(overrides) {
+            UserDefaults.standard.set(data, forKey: operativeProfileOverridesKey)
+        }
+    }
+
+    private func saveOperativeProfileOverride(for userId: String, assignedManagerUserId: String?, dayRate: Double?) {
+        var overrides = loadOperativeProfileOverrides()
+        overrides[userId] = OperativeProfileOverride(
+            assignedManagerUserId: assignedManagerUserId,
+            dayRate: dayRate,
+            updatedAt: Date()
+        )
+        saveOperativeProfileOverrides(overrides)
+    }
+
+    private func clearOperativeProfileOverride(for userId: String) {
+        var overrides = loadOperativeProfileOverrides()
+        overrides.removeValue(forKey: userId)
+        saveOperativeProfileOverrides(overrides)
+    }
+
+    private func applyOperativeProfileOverrides(to users: [AppUser]) -> [AppUser] {
+        let overrides = loadOperativeProfileOverrides()
+        guard !overrides.isEmpty else { return users }
+        return users.map { user in
+            guard let override = overrides[user.id] else { return user }
+            var updated = user
+            updated.assignedManagerUserId = override.assignedManagerUserId
+            updated.dayRate = override.dayRate
+            return updated
+        }
+    }
+
+    private func applyCloudOperativeProfileOverrides(
+        _ users: [AppUser],
+        overrides: [String: FirebaseBackend.OperativeProfileMetadata]
+    ) -> [AppUser] {
+        guard !overrides.isEmpty else { return users }
+        return users.map { user in
+            guard let override = overrides[user.id] else { return user }
+            var updated = user
+            updated.assignedManagerUserId = override.assignedManagerUserId
+            updated.dayRate = override.dayRate
+            return updated
         }
     }
 }

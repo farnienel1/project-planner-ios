@@ -33,7 +33,7 @@ struct ProjectsView: View {
                 // Projects List
                 projectsList
             }
-            .padding(.leading, 40)
+            .padding(.horizontal, 16)
             .navigationTitle("Projects")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -178,18 +178,39 @@ struct ProjectsView: View {
         var projects = projectStore.projects.filter { $0.jobType != .smallWorks }
         
         if userStore.isOperativeMode() {
-            if let currentUserEmail = userStore.currentUser?.email,
-               let operative = operativeStore.allOperatives.first(where: { $0.email == currentUserEmail }) {
+            if let operative = resolvedCurrentOperative {
                 let assignedProjectIds = Set(bookingStore.bookings
-                    .filter { $0.operativeId == operative.id }
+                    .filter {
+                        $0.operativeId == operative.id &&
+                        ($0.status == .confirmed || $0.status == .tentative)
+                    }
                     .map { $0.projectId })
-                projects = projects.filter { assignedProjectIds.contains($0.id) }
-            } else {
-                projects = []
+                if !assignedProjectIds.isEmpty {
+                    projects = projects.filter { assignedProjectIds.contains($0.id) }
+                }
             }
         }
         
         return projects
+    }
+
+    private var resolvedCurrentOperative: Operative? {
+        let normalizedEmail = userStore.currentUser?.email
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedEmail, !normalizedEmail.isEmpty,
+           let byEmail = operativeStore.allOperatives.first(where: {
+               $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
+           }) {
+            return byEmail
+        }
+        let first = userStore.currentUser?.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let last = userStore.currentUser?.surname.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !first.isEmpty || !last.isEmpty else { return nil }
+        return operativeStore.allOperatives.first(where: {
+            $0.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == first &&
+            $0.lastName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == last
+        })
     }
     
     private var isEmptyDueToStatusFilterOnly: Bool {

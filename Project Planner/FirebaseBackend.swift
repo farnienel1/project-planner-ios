@@ -75,9 +75,17 @@ class FirebaseBackend: ObservableObject {
     // Local storage keys
     private let organizationIdKey = "cached_organizationId"
     private let organizationNameKey = "cached_organizationName"
+
+    struct OperativeProfileMetadata {
+        let userId: String
+        let assignedManagerUserId: String?
+        let dayRate: Double?
+    }
     
     /// Breaks recover → loadUserOrganization → org read fails → recover again loops (see firestore org self-read rules).
     private var suppressOrganizationReadPermissionRecovery = false
+    /// Prevents parallel org load/recovery storms from multiple stores/views.
+    private var organizationLoadInProgress = false
 
     /// Ensures org id is non-empty and org document is readable before subcollection reads.
     private func ensureReadableOrganization(_ organizationId: String) async throws -> String {
@@ -103,6 +111,34 @@ class FirebaseBackend: ObservableObject {
             throw error
         }
         return trimmedOrgId
+    }
+
+    private func isFirestorePermissionDenied(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7
+    }
+
+    @MainActor
+    private func setCurrentOrganizationFromRecovery(orgId: String, orgData: [String: Any], fallbackRole: String = "member") {
+        let resolvedName = (orgData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let organization = Organization(
+            id: UUID(uuidString: orgId) ?? UUID(),
+            firestoreDocumentId: orgId,
+            name: (resolvedName?.isEmpty == false) ? resolvedName! : "Recovered Organization",
+            settings: OrganizationSettings(),
+            officeAddressLine1: orgData["officeAddressLine1"] as? String,
+            officeCity: orgData["officeCity"] as? String,
+            officePostcode: orgData["officePostcode"] as? String,
+            countryCode: (orgData["countryCode"] as? String)?.uppercased() ?? "GB",
+            defaultLatitude: orgData["defaultLatitude"] as? Double,
+            defaultLongitude: orgData["defaultLongitude"] as? Double,
+            creatorUserId: orgData["creatorUserId"] as? String
+        )
+        currentOrganization = organization
+        userRole = UserRole(rawValue: fallbackRole) ?? .basic
+        errorMessage = nil
+        storeOrganizationLocally(organization)
+        print("🔥🔥🔥 DEBUG: ✅ Recovery set currentOrganization directly: \(organization.name) (\(orgId))")
     }
     
     init() {
@@ -280,18 +316,16 @@ class FirebaseBackend: ObservableObject {
     /// User-friendly message when session/credential is expired; sign out so they can log in again with current password.
     private static let sessionExpiredMessage = "Your session has expired. Please sign in again with your current email and password."
     
-    /// Returns true if the error means the user must sign in again (expired/invalid token). Call signOut() and show login.
+    /// True only for **stale auth session / refresh token** issues — not wrong password at sign-in.
+    /// `invalidCredential` (17004) and strings like "credential … expired" are often wrong password or bad email/password;
+    /// treating those as "session expired" misleads users (e.g. hotmail sign-in showing session message).
     private func isSessionExpiredOrInvalidCredential(_ error: Error) -> Bool {
         let ns = error as NSError
-        // Firebase Auth error domain
-        guard ns.domain == "FIRAuthErrorDomain" else {
-            return ns.localizedDescription.lowercased().contains("credential") && ns.localizedDescription.lowercased().contains("expired")
-        }
+        guard ns.domain == "FIRAuthErrorDomain" else { return false }
         switch ns.code {
-        case 17004: return true  // invalidCredential (e.g. supplied auth credential has expired)
-        case 17017: return true  // invalidUserToken
-        case 17021: return true  // userTokenExpired (e.g. password changed on another device)
-        case 17014: return true  // requiresRecentLogin
+        case 17017: return true // invalidUserToken
+        case 17021: return true // userTokenExpired (e.g. password changed elsewhere, refresh invalid)
+        case 17014: return true // requiresRecentLogin (sensitive op needs fresh sign-in)
         default: return false
         }
     }
@@ -305,12 +339,9 @@ class FirebaseBackend: ObservableObject {
             isLoading = false
         } catch {
             isLoading = false
-            if isSessionExpiredOrInvalidCredential(error) {
-                try? auth.signOut()
-                errorMessage = FirebaseBackend.sessionExpiredMessage
-            } else {
-                errorMessage = error.localizedDescription
-            }
+            // Sign-in failures should show Firebase’s message (wrong password, user not found, etc.).
+            // "Session expired" is for an already-signed-in user whose refresh token is invalid.
+            errorMessage = error.localizedDescription
             throw error
         }
     }
@@ -327,6 +358,19 @@ class FirebaseBackend: ObservableObject {
     
     /// Sends a new verification code (invitation token) so the user can set or reset their password on the Project Planner page.
     /// Creates a fresh invitation document and emails the user with "Verification code" wording.
+    /// Sends Firebase Auth’s password-reset email (login screen). Works without Resend or Apple Mail.
+    func sendPasswordResetEmailFromLogin(email: String) async throws {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw NSError(
+                domain: "AuthError",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Please enter your email address."]
+            )
+        }
+        try await auth.sendPasswordReset(withEmail: trimmed)
+    }
+
     func resetPassword(email: String) async throws {
         // Find the user in our organization so we can create a new invitation (verification code) for them.
         // Use server source so we don't use stale cache (e.g. after a user was deleted).
@@ -353,6 +397,9 @@ class FirebaseBackend: ObservableObject {
             operatives: permissionsMap["operatives"] as? Bool ?? false,
             skills: permissionsMap["skills"] as? Bool ?? false,
             qualifications: permissionsMap["qualifications"] as? Bool ?? false,
+            materials: permissionsMap["materials"] as? Bool ?? false,
+            projects: permissionsMap["projects"] as? Bool ?? true,
+            smallWorks: permissionsMap["smallWorks"] as? Bool ?? true,
             operativeMode: permissionsMap["operativeMode"] as? Bool ?? false
         )
         let invitedBy = currentUser?.uid ?? ""
@@ -369,6 +416,9 @@ class FirebaseBackend: ObservableObject {
                 "operatives": permissions.operatives,
                 "skills": permissions.skills,
                 "qualifications": permissions.qualifications,
+                "materials": permissions.materials,
+                "projects": permissions.projects,
+                "smallWorks": permissions.smallWorks,
                 "operativeMode": permissions.operativeMode
             ],
             "createdAt": Timestamp(date: Date()),
@@ -501,6 +551,12 @@ class FirebaseBackend: ObservableObject {
     @MainActor
     func loadUserOrganization(userId: String) async {
         print("🔥🔥🔥 DEBUG: loadUserOrganization (async) called for userId: \(userId)")
+        if organizationLoadInProgress {
+            print("🔥🔥🔥 DEBUG: ⏳ Organization load already in progress, skipping duplicate request")
+            return
+        }
+        organizationLoadInProgress = true
+        defer { organizationLoadInProgress = false }
         
         // Do not return early when currentOrganization is set — it can be stale (wrong org id → Firestore permission denied on projects).
         // Optionally hydrate name from cache while Firebase loads; Firebase result always wins.
@@ -513,6 +569,43 @@ class FirebaseBackend: ObservableObject {
         
         await loadUserOrganizationFromFirebase(userId: userId)
     }
+
+    private func getDocumentWithServerTimeoutAndCacheFallback(
+        _ ref: DocumentReference,
+        timeoutSeconds: Double = 8.0
+    ) async throws -> DocumentSnapshot {
+        enum ReadTimeoutError: Error { case timedOut }
+
+        func withTimeout<T>(_ seconds: Double, operation: @escaping () async throws -> T) async throws -> T {
+            try await withThrowingTaskGroup(of: T.self) { group in
+                group.addTask { try await operation() }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    throw ReadTimeoutError.timedOut
+                }
+                let value = try await group.next()!
+                group.cancelAll()
+                return value
+            }
+        }
+
+        do {
+            return try await withTimeout(timeoutSeconds) {
+                try await ref.getDocument(source: .server)
+            }
+        } catch {
+            if error is ReadTimeoutError {
+                print("🔥🔥🔥 DEBUG: ⏱️ Firestore server read timed out for \(ref.path) - trying cache")
+            } else if isOfflineNetworkError(error) {
+                print("🔥🔥🔥 DEBUG: 🌐 Offline while reading \(ref.path) from server - trying cache")
+            } else {
+                let nsError = error as NSError
+                print("🔥🔥🔥 DEBUG: ⚠️ Server read failed for \(ref.path) [\(nsError.domain):\(nsError.code)] - trying cache")
+            }
+
+            return try await ref.getDocument(source: .cache)
+        }
+    }
     
     /// Load organization from Firebase
     @MainActor
@@ -521,22 +614,31 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: User ID: \(userId)")
         print("🔥🔥🔥 DEBUG: Current user email: \(currentUser?.email ?? "N/A")")
         var failingReadStep = "starting organization bootstrap"
+        var discoveredOrganizationId: String?
+        var discoveredUserRoleRaw: String?
         
         do {
             failingReadStep = "reading users/\(userId)"
             print("🔥🔥🔥 DEBUG: Attempting to read user document: users/\(userId)")
-            let userDoc = try await db.collection("users").document(userId).getDocument(source: .server)
+            let userDoc = try await getDocumentWithServerTimeoutAndCacheFallback(
+                db.collection("users").document(userId)
+            )
             
             print("🔥🔥🔥 DEBUG: User document exists: \(userDoc.exists)")
             
             guard userDoc.exists else {
-                print("🔥🔥🔥 DEBUG: ❌ User document does not exist in Firestore!")
-                print("🔥🔥🔥 DEBUG: User ID: \(userId)")
-                print("🔥🔥🔥 DEBUG: This might be an old account created before organizations were set up.")
-                print("🔥🔥🔥 DEBUG: ⚠️ Will attempt recovery to create user document and link to organization")
+                print("🔥🔥🔥 DEBUG: ❌ User document does not exist at users/\(userId) — attempting recovery (invited users / merge)")
                 errorMessage = "User document not found. Attempting recovery..."
                 self.currentOrganization = nil
                 clearLocalOrganizationCache()
+                if let userEmail = currentUser?.email {
+                    let recovered = await recoverMissingOrganizationLink(userId: userId, userEmail: userEmail)
+                    if recovered, currentOrganization != nil {
+                        print("🔥🔥🔥 DEBUG: ✅ Organization recovered after missing user doc")
+                        NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
+                        return
+                    }
+                }
                 return
             }
             
@@ -566,12 +668,26 @@ class FirebaseBackend: ObservableObject {
                 await attemptToFixMissingOrganization(userId: userId, userData: userData)
                 return
             }
+            discoveredOrganizationId = organizationId
+            discoveredUserRoleRaw = userData["role"] as? String
             
             print("🔥🔥🔥 DEBUG: ✅ Found organizationId in user document: \(organizationId)")
             
+            // If organizationId is stored as DocumentReference, Firestore rules often deny org/subcollection access.
+            // Migrate to plain string on load so `userOrgIdMatchesPath` succeeds on the next read.
+            if !(userData["organizationId"] is String) {
+                do {
+                    try await ensureUserDocumentLinked(organizationId: organizationId)
+                } catch {
+                    print("🔥🔥🔥 DEBUG: ⚠️ organizationId → string migration failed (non-fatal): \(error.localizedDescription)")
+                }
+            }
+            
             failingReadStep = "reading organizations/\(organizationId)"
             print("🔥🔥🔥 DEBUG: Attempting to read organization document: organizations/\(organizationId)")
-            let orgDoc = try await db.collection("organizations").document(organizationId).getDocument(source: .server)
+            let orgDoc = try await getDocumentWithServerTimeoutAndCacheFallback(
+                db.collection("organizations").document(organizationId)
+            )
             
             print("🔥🔥🔥 DEBUG: Organization document exists: \(orgDoc.exists)")
             
@@ -646,6 +762,32 @@ class FirebaseBackend: ObservableObject {
                 print("🔥🔥🔥 DEBUG: Firebase projectID (must match rules deployment): \(FirebaseApp.app()?.options.projectID ?? "nil")")
                 print("🔥🔥🔥 DEBUG: Please ensure Firestore security rules are published in Firebase Console")
                 print("🔥🔥🔥 DEBUG: Rules should allow authenticated users to read their user document and organization")
+
+                // If only the organization root read is denied, continue with a lightweight org context.
+                if failingReadStep.hasPrefix("reading organizations/"),
+                   let organizationId = discoveredOrganizationId {
+                    let cachedName = loadOrganizationFromLocalStorage()?.name
+                    let fallbackOrganization = Organization(
+                        id: UUID(uuidString: organizationId) ?? UUID(),
+                        firestoreDocumentId: organizationId,
+                        name: (cachedName?.isEmpty == false) ? cachedName! : "Recovered Organization",
+                        settings: OrganizationSettings(),
+                        officeAddressLine1: nil,
+                        officeCity: nil,
+                        officePostcode: nil,
+                        countryCode: "GB",
+                        defaultLatitude: nil,
+                        defaultLongitude: nil,
+                        creatorUserId: nil
+                    )
+                    self.currentOrganization = fallbackOrganization
+                    self.userRole = UserRole(rawValue: discoveredUserRoleRaw ?? UserRole.basic.rawValue) ?? .basic
+                    self.errorMessage = nil
+                    storeOrganizationLocally(fallbackOrganization)
+                    print("🔥🔥🔥 DEBUG: ✅ Using fallback organization context despite org-root read denial: \(organizationId)")
+                    NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
+                    return
+                }
                 
                 if let userEmail = currentUser?.email, !suppressOrganizationReadPermissionRecovery {
                     print("🔥🔥🔥 DEBUG: Attempting recovery after permission error (one attempt)...")
@@ -779,26 +921,35 @@ class FirebaseBackend: ObservableObject {
     /// Repairs membership/link if a user can authenticate but org writes fail with permission denied.
     func repairCurrentUserOrganizationAccess(organizationId: String) async {
         guard let user = currentUser else { return }
+        let orgIdStr = normalizedOrganizationId(organizationId)
+        var shouldReloadOrganization = false
+        // Store a plain string: Firestore security rules match `users/{uid}.organizationId` reliably as string;
+        // DocumentReference often fails `userOrgIdMatchesPath` in rules (type not treated as path).
         do {
             try await db.collection("users").document(user.uid).setData([
-                "organizationId": organizationId,
+                "organizationId": orgIdStr,
                 "updatedAt": Timestamp(date: Date())
             ], merge: true)
+            shouldReloadOrganization = true
         } catch {
             print("🔥🔥🔥 DEBUG: repairCurrentUserOrganizationAccess - failed user doc patch: \(error.localizedDescription)")
         }
 
         do {
             // Write member entry directly without requiring organization read permission.
-            try await db.collection("organizations").document(organizationId).updateData([
+            try await db.collection("organizations").document(orgIdStr).updateData([
                 "members.\(user.uid)": "admin",
                 "updatedAt": Timestamp(date: Date())
             ])
+            shouldReloadOrganization = true
         } catch {
             print("🔥🔥🔥 DEBUG: repairCurrentUserOrganizationAccess - failed org membership patch: \(error.localizedDescription)")
         }
 
-        await loadUserOrganization(userId: user.uid)
+        // Avoid a permission-denied loop when both patches fail.
+        if shouldReloadOrganization {
+            await loadUserOrganization(userId: user.uid)
+        }
     }
 
     func saveProject(_ project: Project, organizationId: String) async throws {
@@ -901,7 +1052,17 @@ class FirebaseBackend: ObservableObject {
     func loadProjects(organizationId: String) async throws -> [Project] {
         let orgId = try await ensureReadableOrganization(organizationId)
         print("🔥🔥🔥 DEBUG: [LOAD] Starting to load projects for organization: \(orgId)")
-        let snapshot = try await db.collection("organizations").document(orgId).collection("projects").getDocuments(source: .server)
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await db.collection("organizations").document(orgId).collection("projects").getDocuments(source: .server)
+        } catch {
+            if isFirestorePermissionDenied(error) {
+                print("🔥🔥🔥 DEBUG: [LOAD] Server denied projects read for \(orgId) - trying cache fallback")
+                snapshot = try await db.collection("organizations").document(orgId).collection("projects").getDocuments(source: .cache)
+            } else {
+                throw error
+            }
+        }
         print("🔥🔥🔥 DEBUG: [LOAD] Found \(snapshot.documents.count) project documents in Firebase")
         
         var loadedProjects: [Project] = []
@@ -1007,9 +1168,31 @@ class FirebaseBackend: ObservableObject {
     
     func saveClient(_ client: Client, organizationId: String) async throws {
         print("🔥🔥🔥 DEBUG: saveClient called with organizationId: \(organizationId)")
+        guard currentUser != nil else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "You must be signed in to save a client."]
+            )
+        }
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
+            )
+        }
+        let orgId = try await ensureReadableOrganization(resolved)
+        do {
+            try await ensureUserDocumentLinked(organizationId: orgId)
+        } catch {
+            print("🔥🔥🔥 DEBUG: [saveClient] ensureUserDocumentLinked: \(error.localizedDescription)")
+        }
+        await repairCurrentUserOrganizationAccess(organizationId: orgId)
         
-        // Validate data integrity before saving
-        try await validateDataIntegrity(organizationId: organizationId)
+        try await validateDataIntegrity(organizationId: orgId)
         
         let data: [String: Any] = [
             "id": client.id.uuidString,
@@ -1018,14 +1201,14 @@ class FirebaseBackend: ObservableObject {
             "email": client.email ?? "",
             "phone": client.phone ?? "",
             "address": client.address ?? "",
-            "organizationId": organizationId,
+            "organizationId": orgId,
             "createdAt": Timestamp(date: client.createdAt),
             "updatedAt": Timestamp(date: client.updatedAt)
         ]
         
-        print("🔥🔥🔥 DEBUG: Saving client to organizations/\(organizationId)/clients/\(client.id.uuidString)")
+        print("🔥🔥🔥 DEBUG: Saving client to organizations/\(orgId)/clients/\(client.id.uuidString)")
         
-        try await db.collection("organizations").document(organizationId).collection("clients").document(client.id.uuidString).setData(data)
+        try await db.collection("organizations").document(orgId).collection("clients").document(client.id.uuidString).setData(data)
         
         print("🔥🔥🔥 DEBUG: Client saved successfully to Firebase")
     }
@@ -1033,7 +1216,17 @@ class FirebaseBackend: ObservableObject {
     func loadClients(organizationId: String) async throws -> [Client] {
         let orgId = try await ensureReadableOrganization(organizationId)
         print("🔥🔥🔥 DEBUG: loadClients called for organization: \(orgId)")
-        let snapshot = try await db.collection("organizations").document(orgId).collection("clients").getDocuments(source: .server)
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await db.collection("organizations").document(orgId).collection("clients").getDocuments(source: .server)
+        } catch {
+            if isFirestorePermissionDenied(error) {
+                print("🔥🔥🔥 DEBUG: [LOAD CLIENTS] Server denied clients read for \(orgId) - trying cache fallback")
+                snapshot = try await db.collection("organizations").document(orgId).collection("clients").getDocuments(source: .cache)
+            } else {
+                throw error
+            }
+        }
         
         let clients = snapshot.documents.compactMap { doc -> Client? in
             let data = doc.data()
@@ -1182,7 +1375,17 @@ class FirebaseBackend: ObservableObject {
     func loadSmallWorks(organizationId: String) async throws -> [Project] {
         let orgId = try await ensureReadableOrganization(organizationId)
         print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Starting to load small works for organization: \(orgId)")
-        let snapshot = try await db.collection("organizations").document(orgId).collection("smallWorks").getDocuments(source: .server)
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await db.collection("organizations").document(orgId).collection("smallWorks").getDocuments(source: .server)
+        } catch {
+            if isFirestorePermissionDenied(error) {
+                print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Server denied smallWorks read for \(orgId) - trying cache fallback")
+                snapshot = try await db.collection("organizations").document(orgId).collection("smallWorks").getDocuments(source: .cache)
+            } else {
+                throw error
+            }
+        }
         print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Found \(snapshot.documents.count) small works documents in Firebase")
         
         var loadedSmallWorks: [Project] = []
@@ -1296,19 +1499,56 @@ class FirebaseBackend: ObservableObject {
     
     func saveJobTypes(organizationId: String, jobTypes: Set<String>) async throws {
         print("🔥🔥🔥 DEBUG: saveJobTypes called for organization: \(organizationId)")
+        guard currentUser != nil else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "You must be signed in to save job types."]
+            )
+        }
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
+            )
+        }
+        let orgId = try await ensureReadableOrganization(resolved)
+        do {
+            try await ensureUserDocumentLinked(organizationId: orgId)
+        } catch {
+            print("🔥🔥🔥 DEBUG: [saveJobTypes] ensureUserDocumentLinked: \(error.localizedDescription)")
+        }
+        await repairCurrentUserOrganizationAccess(organizationId: orgId)
         let data: [String: Any] = [
             "jobTypes": Array(jobTypes),
-            "organizationId": organizationId,
+            "organizationId": orgId,
             "updatedAt": Timestamp(date: Date())
         ]
-        try await db.collection("organizations").document(organizationId).collection("settings").document("jobTypes").setData(data)
+        try await db.collection("organizations").document(orgId).collection("settings").document("jobTypes").setData(data)
         print("🔥🔥🔥 DEBUG: Job types saved successfully to Firebase")
     }
     
     func loadJobTypes(organizationId: String) async throws -> Set<String> {
         let orgId = try await ensureReadableOrganization(organizationId)
         print("🔥🔥🔥 DEBUG: loadJobTypes called for organization: \(orgId)")
-        let doc = try await db.collection("organizations").document(orgId).collection("settings").document("jobTypes").getDocument(source: .server)
+        let docRef = db.collection("organizations").document(orgId).collection("settings").document("jobTypes")
+        let doc: DocumentSnapshot
+        do {
+            doc = try await docRef.getDocument(source: .server)
+        } catch {
+            if isFirestorePermissionDenied(error) {
+                print("🔥🔥🔥 DEBUG: [JOB TYPES LOAD] Server denied settings/jobTypes read for \(orgId) - trying cache fallback")
+                doc = try await docRef.getDocument(source: .cache)
+            } else if isOfflineNetworkError(error) {
+                print("🔥🔥🔥 DEBUG: [JOB TYPES LOAD] Offline while reading settings/jobTypes for \(orgId) - trying cache fallback")
+                doc = try await docRef.getDocument(source: .cache)
+            } else {
+                throw error
+            }
+        }
         if doc.exists, let data = doc.data(), let jobTypesArray = data["jobTypes"] as? [String] {
             let jobTypes = Set(jobTypesArray)
             print("🔥🔥🔥 DEBUG: Loaded \(jobTypes.count) job types from Firebase")
@@ -1321,8 +1561,23 @@ class FirebaseBackend: ObservableObject {
     // MARK: - Project Task Management
     
     func loadProjectTasks(organizationId: String) async throws -> [ProjectTask] {
-        print("🔥🔥🔥 DEBUG: Loading tasks from Firebase for organization: \(organizationId)")
-        let snapshot = try await db.collection("organizations").document(organizationId).collection("tasks").getDocuments()
+        let orgId = try await ensureReadableOrganization(organizationId)
+        print("🔥🔥🔥 DEBUG: Loading tasks from Firebase for organization: \(orgId)")
+        let tasksRef = db.collection("organizations").document(orgId).collection("tasks")
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await tasksRef.getDocuments(source: .server)
+        } catch {
+            if isFirestorePermissionDenied(error) {
+                print("🔥🔥🔥 DEBUG: [TASK LOAD] Server denied tasks read for \(orgId) - trying cache fallback")
+                snapshot = try await tasksRef.getDocuments(source: .cache)
+            } else if isOfflineNetworkError(error) {
+                print("🔥🔥🔥 DEBUG: [TASK LOAD] Offline while loading tasks for \(orgId) - trying cache fallback")
+                snapshot = try await tasksRef.getDocuments(source: .cache)
+            } else {
+                throw error
+            }
+        }
         print("🔥🔥🔥 DEBUG: Found \(snapshot.documents.count) task documents in Firebase")
         
         return snapshot.documents.compactMap { doc in
@@ -1561,6 +1816,33 @@ class FirebaseBackend: ObservableObject {
         let downloadURL = try await storageRef.downloadURL()
         return downloadURL.absoluteString
     }
+
+    /// Site audit photos (not task attachments). Keeps Storage paths aligned with Firestore `siteAudits` for clearer rules later.
+    func uploadSiteAuditImage(_ image: UIImage, auditId: UUID, organizationId: String, imageName: String) async throws -> String {
+        guard let userId = currentUser?.uid,
+              let imageData = image.jpegData(compressionQuality: 0.8) else {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Failed to process image"])
+        }
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let sanitizedImageName = imageName.replacingOccurrences(of: " ", with: "_")
+        let imagePath = "organizations/\(organizationId)/siteAudits/\(auditId.uuidString)/images/\(userId)_\(timestamp)_\(sanitizedImageName).jpg"
+        let storageRef = storage.reference().child(imagePath)
+        let metadata = StorageMetadata()
+        metadata.contentType = "image/jpeg"
+        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+            storageRef.putData(imageData, metadata: metadata) { metadata, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else if let metadata = metadata {
+                    continuation.resume(returning: metadata)
+                } else {
+                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+                }
+            }
+        }
+        let downloadURL = try await storageRef.downloadURL()
+        return downloadURL.absoluteString
+    }
     #else
     func uploadTaskFile(_ fileURL: URL, taskId: UUID, organizationId: String, fileName: String) async throws -> String {
         throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: "FirebaseStorage is not available. Please add FirebaseStorage to your project dependencies via Xcode: File > Add Package Dependencies > https://github.com/firebase/firebase-ios-sdk"])
@@ -1568,6 +1850,10 @@ class FirebaseBackend: ObservableObject {
     
     func uploadTaskImage(_ image: UIImage, taskId: UUID, organizationId: String, imageName: String) async throws -> String {
         throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: "FirebaseStorage is not available. Please add FirebaseStorage to your project dependencies via Xcode: File > Add Package Dependencies > https://github.com/firebase/firebase-ios-sdk"])
+    }
+
+    func uploadSiteAuditImage(_ image: UIImage, auditId: UUID, organizationId: String, imageName: String) async throws -> String {
+        throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: "FirebaseStorage is not available."])
     }
     #endif
     
@@ -1605,11 +1891,12 @@ class FirebaseBackend: ObservableObject {
                 "isActive": operative.isActive,
                 "hourlyRate": operative.hourlyRate ?? 0,
                 "currencySymbol": operative.currencySymbol ?? "£",
-                "notes": operative.notes ?? "",
-                "organizationId": organizationId,
-                "createdAt": Timestamp(date: operative.createdAt),
-                "updatedAt": Timestamp(date: operative.updatedAt)
-            ]
+            "notes": operative.notes ?? "",
+            "dayRate": operative.dayRate ?? 0,
+            "organizationId": organizationId,
+            "createdAt": Timestamp(date: operative.createdAt),
+            "updatedAt": Timestamp(date: operative.updatedAt)
+        ]
         
         print("🔥🔥🔥 DEBUG: Data to save: \(data)")
         print("🔥🔥🔥 DEBUG: Saving operative to organizations/\(organizationId)/operatives/\(operative.id.uuidString)")
@@ -1647,7 +1934,21 @@ class FirebaseBackend: ObservableObject {
     func loadOperatives(organizationId: String) async throws -> [Operative] {
         let orgId = try await ensureReadableOrganization(organizationId)
         print("🔥🔥🔥 DEBUG: [LOAD OPERATIVES] Starting load for organization: \(orgId)")
-        let snapshot = try await db.collection("organizations").document(orgId).collection("operatives").getDocuments(source: .server)
+        let operativesRef = db.collection("organizations").document(orgId).collection("operatives")
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await operativesRef.getDocuments(source: .server)
+        } catch {
+            if isFirestorePermissionDenied(error) {
+                print("🔥🔥🔥 DEBUG: [LOAD OPERATIVES] Server denied operatives read for \(orgId) - trying cache fallback")
+                snapshot = try await operativesRef.getDocuments(source: .cache)
+            } else if isOfflineNetworkError(error) {
+                print("🔥🔥🔥 DEBUG: [LOAD OPERATIVES] Offline while loading operatives for \(orgId) - trying cache fallback")
+                snapshot = try await operativesRef.getDocuments(source: .cache)
+            } else {
+                throw error
+            }
+        }
         print("🔥🔥🔥 DEBUG: [LOAD OPERATIVES] Found \(snapshot.documents.count) operative documents")
         
         // Filter out legacy INITIAL-PLACEHOLDER documents
@@ -1709,6 +2010,8 @@ class FirebaseBackend: ObservableObject {
                     lastName = ""
                 }
                 
+                let loadedHourly = data["hourlyRate"] as? Double
+                let loadedDay = data["dayRate"] as? Double
                 let operative = Operative(
                     id: UUID(uuidString: doc.documentID) ?? UUID(),
                     firstName: firstName,
@@ -1719,7 +2022,8 @@ class FirebaseBackend: ObservableObject {
                     skills: skills,
                     qualifications: Array(qualifications),
                     isActive: data["isActive"] as? Bool ?? true,
-                    hourlyRate: data["hourlyRate"] as? Double ?? 0.0,
+                    hourlyRate: loadedHourly,
+                    dayRate: loadedDay ?? loadedHourly,
                     currencySymbol: data["currencySymbol"] as? String,
                     notes: data["notes"] as? String,
                     createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
@@ -2175,14 +2479,60 @@ class FirebaseBackend: ObservableObject {
     // MARK: - User Management Methods
     
     func getUserData(userId: String) async throws -> AppUser? {
-        let doc = try await db.collection("users").document(userId).getDocument()
+        let doc = try await db.collection("users").document(userId).getDocument(source: .server)
         
-        guard doc.exists, let data = doc.data() else {
+        if !doc.exists {
+            // Invited users often have users/{randomUUID} until first sign-in; merge onto Auth UID.
+            if let auth = Auth.auth().currentUser, auth.uid == userId, let authEmail = auth.email, !authEmail.isEmpty {
+                try await mergePlaceholderUserDocOntoAuthUidIfNeeded(authUid: userId, email: authEmail)
+                let retry = try await db.collection("users").document(userId).getDocument(source: .server)
+                guard retry.exists, let data = retry.data() else { return nil }
+                return Self.parseAppUserDocument(userId: userId, data: data)
+            }
             return nil
         }
         
+        guard let data = doc.data() else {
+            return nil
+        }
+        
+        return Self.parseAppUserDocument(userId: userId, data: data)
+    }
+    
+    /// Copies Firestore fields from an older `users/*` row (same email, different document id) to `users/{authUid}`.
+    private func mergePlaceholderUserDocOntoAuthUidIfNeeded(authUid: String, email rawEmail: String) async throws {
+        let variants = Array(Set([
+            rawEmail,
+            rawEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        ].filter { !$0.isEmpty }))
+        
+        for variant in variants {
+            let snap = try await db.collection("users")
+                .whereField("email", isEqualTo: variant)
+                .limit(to: 8)
+                .getDocuments(source: .server)
+            
+            for placeholder in snap.documents where placeholder.documentID != authUid {
+                guard let orgId = organizationIdFromFirestore(placeholder.data()["organizationId"]) else { continue }
+                print("🔥🔥🔥 DEBUG: Merging invited user doc \(placeholder.documentID) → \(authUid) for email \(variant)")
+                var merged = placeholder.data()
+                merged["email"] = rawEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                merged["organizationId"] = orgId
+                merged["updatedAt"] = Timestamp(date: Date())
+                merged["passwordSet"] = true
+                try await db.collection("users").document(authUid).setData(merged, merge: true)
+                let norm = rawEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                try await db.collection("organizations").document(orgId)
+                    .collection("userEmails").document(norm)
+                    .setData(["userId": authUid], merge: true)
+                return
+            }
+        }
+    }
+    
+    private static func parseAppUserDocument(userId: String, data: [String: Any]) -> AppUser {
         let email = data["email"] as? String ?? ""
-        let organizationId = data["organizationId"] as? String ?? ""
+        let organizationId = organizationIdFromFirestore(data["organizationId"]) ?? ""
         let roleString = data["role"] as? String ?? "viewer"
         let role = UserRole(rawValue: roleString) ?? .viewer
         let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
@@ -2194,6 +2544,7 @@ class FirebaseBackend: ObservableObject {
             operatives: operativeMode ? false : (data["operatives"] as? Bool ?? false),
             skills: operativeMode ? false : (data["skills"] as? Bool ?? false),
             qualifications: operativeMode ? false : (data["qualifications"] as? Bool ?? false),
+            materials: operativeMode ? (data["materials"] as? Bool ?? false) : (data["materials"] as? Bool ?? true),
             projects: operativeMode ? true : (data["projects"] as? Bool ?? false),
             smallWorks: operativeMode ? true : (data["smallWorks"] as? Bool ?? false),
             operativeMode: operativeMode
@@ -2203,6 +2554,9 @@ class FirebaseBackend: ObservableObject {
         let rawIsSuperAdmin = data["isSuperAdmin"] as? Bool ?? false
         let isSuperAdmin = operativeMode ? false : rawIsSuperAdmin
         let resolvedRole: UserRole = operativeMode ? .operative : role
+        
+        let assignedManagerUserId = data["assignedManagerUserId"] as? String
+        let dayRate = data["dayRate"] as? Double
         
         return AppUser(
             id: userId,
@@ -2218,7 +2572,9 @@ class FirebaseBackend: ObservableObject {
             permissions: permissions,
             isSuperAdmin: isSuperAdmin,
             policyAccepted: policyAccepted,
-            policyAcceptedAt: policyAcceptedAt
+            policyAcceptedAt: policyAcceptedAt,
+            assignedManagerUserId: assignedManagerUserId,
+            dayRate: dayRate
         )
     }
     
@@ -2243,52 +2599,17 @@ class FirebaseBackend: ObservableObject {
             let data = doc.data()
             let userId = doc.documentID
             let email = data["email"] as? String ?? ""
-            let docOrganizationId = data["organizationId"] as? String ?? ""
-            let roleString = data["role"] as? String ?? "viewer"
-            let role = UserRole(rawValue: roleString) ?? .viewer
-            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+            let docOrganizationId = organizationIdFromFirestore(data["organizationId"]) ?? ""
             
             print("🔥🔥🔥 DEBUG: Processing user - DocumentID: \(userId), Email: \(email), DocOrgId: \(docOrganizationId), RequestedOrgId: \(organizationId)")
             
-            // Only include users that match the organizationId (double check)
-            guard docOrganizationId == organizationId else {
+            guard organizationIdsMatch(docOrganizationId, organizationId) else {
                 print("🔥🔥🔥 DEBUG: Skipping user \(email) - organizationId mismatch")
                 continue
             }
             
-            let operativeMode = data["operativeMode"] as? Bool ?? false
-            let permissions = UserPermissions(
-                adminAccess: operativeMode ? false : (data["adminAccess"] as? Bool ?? false),
-                manager: operativeMode ? false : (data["manager"] as? Bool ?? false),
-                operatives: operativeMode ? false : (data["operatives"] as? Bool ?? false),
-                skills: operativeMode ? false : (data["skills"] as? Bool ?? false),
-                qualifications: operativeMode ? false : (data["qualifications"] as? Bool ?? false),
-                projects: operativeMode ? true : (data["projects"] as? Bool ?? false),
-                smallWorks: operativeMode ? true : (data["smallWorks"] as? Bool ?? false),
-                operativeMode: operativeMode
-            )
-            let policyAccepted = data["policyAccepted"] as? Bool ?? false
-            let policyAcceptedAt = (data["policyAcceptedAt"] as? Timestamp)?.dateValue()
-            let rawIsSuperAdmin = data["isSuperAdmin"] as? Bool ?? false
-            let isSuperAdmin = operativeMode ? false : rawIsSuperAdmin
-            let resolvedRole: UserRole = operativeMode ? .operative : role
-            
-            let user = AppUser(
-                id: userId,
-                email: email,
-                organizationId: organizationId,
-                role: resolvedRole,
-                createdAt: createdAt,
-                firstName: data["firstName"] as? String ?? "",
-                surname: data["surname"] as? String ?? "",
-                mobileNumber: data["mobileNumber"] as? String,
-                isActive: data["isActive"] as? Bool ?? true,
-                passwordSet: data["passwordSet"] as? Bool ?? false,
-                permissions: permissions,
-                isSuperAdmin: isSuperAdmin,
-                policyAccepted: policyAccepted,
-                policyAcceptedAt: policyAcceptedAt
-            )
+            var user = Self.parseAppUserDocument(userId: userId, data: data)
+            user.organizationId = organizationId
             
             users.append(user)
             print("🔥🔥🔥 DEBUG: Added user to list: \(user.email) (\(user.firstName) \(user.surname))")
@@ -2452,6 +2773,7 @@ class FirebaseBackend: ObservableObject {
             "operatives": user.permissions.operativeMode ? false : user.permissions.operatives,
             "skills": user.permissions.operativeMode ? false : user.permissions.skills,
             "qualifications": user.permissions.operativeMode ? false : user.permissions.qualifications,
+            "materials": user.permissions.operativeMode ? user.permissions.materials : true,
             "projects": user.permissions.projects,
             "smallWorks": user.permissions.smallWorks,
             "operativeMode": user.permissions.operativeMode,
@@ -2468,7 +2790,115 @@ class FirebaseBackend: ObservableObject {
             userData["policyAcceptedAt"] = Timestamp(date: policyAcceptedAt)
         }
         
+        if user.permissions.operativeMode,
+           let mid = user.assignedManagerUserId,
+           !mid.isEmpty {
+            userData["assignedManagerUserId"] = mid
+        }
+        
+        if user.permissions.operativeMode, let dr = user.dayRate {
+            userData["dayRate"] = dr
+        }
+        
         try await db.collection("users").document(user.id).setData(userData)
+    }
+
+    /// Patch-only update for operative profile metadata managed from Manage Users.
+    /// Writes only targeted fields to avoid rules rejecting unrelated user fields.
+    func updateOperativeProfileMetadata(userId: String, assignedManagerUserId: String?, dayRate: Double?) async throws {
+        var payload: [String: Any] = [
+            "updatedAt": Timestamp(date: Date())
+        ]
+        if let managerId = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !managerId.isEmpty {
+            payload["assignedManagerUserId"] = managerId
+        } else {
+            payload["assignedManagerUserId"] = FieldValue.delete()
+        }
+        if let dayRate {
+            payload["dayRate"] = dayRate
+        } else {
+            payload["dayRate"] = FieldValue.delete()
+        }
+        try await db.collection("users").document(userId).updateData(payload)
+    }
+
+    /// Cloud fallback for operative metadata when direct users/{userId} updates are denied by rules.
+    /// Stored at organizations/{orgId}/operativeProfiles/{userId} and merged on user load.
+    func saveOperativeProfileMetadataFallback(
+        organizationId: String,
+        userId: String,
+        assignedManagerUserId: String?,
+        dayRate: Double?
+    ) async throws {
+        let orgId = try await ensureReadableOrganization(organizationId)
+        let ref = db.collection("organizations")
+            .document(orgId)
+            .collection("operativeProfiles")
+            .document(userId)
+
+        var payload: [String: Any] = [
+            "userId": userId,
+            "updatedAt": Timestamp(date: Date())
+        ]
+        if let managerId = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !managerId.isEmpty {
+            payload["assignedManagerUserId"] = managerId
+        } else {
+            payload["assignedManagerUserId"] = FieldValue.delete()
+        }
+        if let dayRate {
+            payload["dayRate"] = dayRate
+        } else {
+            payload["dayRate"] = FieldValue.delete()
+        }
+
+        do {
+            try await ref.updateData(payload)
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 5 {
+                var createPayload: [String: Any] = [
+                    "userId": userId,
+                    "updatedAt": Timestamp(date: Date())
+                ]
+                if let managerId = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !managerId.isEmpty {
+                    createPayload["assignedManagerUserId"] = managerId
+                }
+                if let dayRate {
+                    createPayload["dayRate"] = dayRate
+                }
+                try await ref.setData(createPayload, merge: true)
+            } else {
+                throw error
+            }
+        }
+    }
+
+    func loadOperativeProfileMetadataFallback(organizationId: String) async throws -> [String: OperativeProfileMetadata] {
+        let orgId = try await ensureReadableOrganization(organizationId)
+        let query = db.collection("organizations")
+            .document(orgId)
+            .collection("operativeProfiles")
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await query.getDocuments(source: .server)
+        } catch {
+            snapshot = try await query.getDocuments()
+        }
+
+        var mapped: [String: OperativeProfileMetadata] = [:]
+        for doc in snapshot.documents {
+            let data = doc.data()
+            let userId = (data["userId"] as? String) ?? doc.documentID
+            mapped[userId] = OperativeProfileMetadata(
+                userId: userId,
+                assignedManagerUserId: data["assignedManagerUserId"] as? String,
+                dayRate: data["dayRate"] as? Double
+            )
+        }
+        return mapped
     }
     
     // Helper method to update only user permissions (for fixing admin status)
@@ -2632,7 +3062,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         
         let emailLower = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2679,11 +3109,21 @@ class FirebaseBackend: ObservableObject {
                 "operatives": permissions.operatives,
                 "skills": permissions.skills,
                 "qualifications": permissions.qualifications,
+                    "materials": permissions.materials,
+                "projects": permissions.projects,
+                "smallWorks": permissions.smallWorks,
                 "operativeMode": permissions.operativeMode
             ],
             "createdAt": Timestamp(date: Date()),
             "isUsed": false
         ]
+        
+        if permissions.operativeMode, let mid = assignedManagerUserId, !mid.isEmpty {
+            invitationData["assignedManagerUserId"] = mid
+        }
+        if permissions.operativeMode, let dr = invitedOperativeDayRate {
+            invitationData["dayRate"] = dr
+        }
         
         if let mobileNumber = mobileNumber, !mobileNumber.isEmpty {
             invitationData["mobileNumber"] = mobileNumber
@@ -2710,6 +3150,11 @@ class FirebaseBackend: ObservableObject {
                 userRole = .operative
             }
             
+            let operativeManagerId: String? = {
+                guard permissions.operativeMode, let m = assignedManagerUserId, !m.isEmpty else { return nil }
+                return m
+            }()
+            
             let newUser = AppUser(
                 id: userId,
                 email: emailLower, // store lowercase for Firestore rule (userEmails claim)
@@ -2722,7 +3167,9 @@ class FirebaseBackend: ObservableObject {
                 isActive: true,
                 passwordSet: false, // Will be set to true when they accept invitation and set password
                 permissions: permissions, // Use the permissions from the invitation
-                isSuperAdmin: false
+                isSuperAdmin: false,
+                assignedManagerUserId: operativeManagerId,
+                dayRate: permissions.operativeMode ? invitedOperativeDayRate : nil
             )
             
             do {
@@ -2831,6 +3278,7 @@ class FirebaseBackend: ObservableObject {
                     "operatives": newUser.permissions.operatives,
                     "skills": newUser.permissions.skills,
                     "qualifications": newUser.permissions.qualifications,
+                    "materials": newUser.permissions.materials,
                     "operativeMode": newUser.permissions.operativeMode,
                     "isSuperAdmin": newUser.isSuperAdmin
                 ]
@@ -2892,8 +3340,18 @@ class FirebaseBackend: ObservableObject {
                     "manager": permissions.manager,
                     "operatives": permissions.operatives,
                     "skills": permissions.skills,
-                    "qualifications": permissions.qualifications
+                    "qualifications": permissions.qualifications,
+                    "materials": permissions.materials,
+                    "projects": permissions.projects,
+                    "smallWorks": permissions.smallWorks,
+                    "operativeMode": permissions.operativeMode
                 ]
+                
+                if permissions.operativeMode, let mid = assignedManagerUserId, !mid.isEmpty {
+                    updateData["assignedManagerUserId"] = mid
+                } else {
+                    updateData["assignedManagerUserId"] = FieldValue.delete()
+                }
                 
                 if let mobileNumber = mobileNumber, !mobileNumber.isEmpty {
                     updateData["mobileNumber"] = mobileNumber
@@ -2981,9 +3439,24 @@ class FirebaseBackend: ObservableObject {
     }
     
     // MARK: - Booking Methods
+
+    private func resolveWritableOrganizationId(preferred organizationId: String) async throws -> String {
+        var resolved = normalizedOrganizationId(organizationId)
+        if let userId = currentUser?.uid,
+           let linkedOrgId = try? await validateUserOrganizationLink(userId: userId),
+           !linkedOrgId.isEmpty,
+           !organizationIdsMatch(linkedOrgId, resolved) {
+            print("🔥🔥🔥 DEBUG: Switching write org from \(resolved) to linked org \(linkedOrgId)")
+            resolved = linkedOrgId
+        }
+        let orgId = try await ensureReadableOrganization(resolved)
+        await repairCurrentUserOrganizationAccess(organizationId: orgId)
+        return orgId
+    }
     
     func saveBooking(_ booking: Booking, organizationId: String) async throws {
         print("🔥🔥🔥 DEBUG: saveBooking called with organizationId: \(organizationId), bookingId: \(booking.id.uuidString)")
+        let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
         
         let bookingData: [String: Any] = [
             "id": booking.id.uuidString,
@@ -2998,15 +3471,30 @@ class FirebaseBackend: ObservableObject {
             "updatedAt": Timestamp(date: booking.updatedAt)
         ]
         
-        print("🔥🔥🔥 DEBUG: Saving booking to organizations/\(organizationId)/bookings/\(booking.id.uuidString)")
+        print("🔥🔥🔥 DEBUG: Saving booking to organizations/\(orgId)/bookings/\(booking.id.uuidString)")
         
-        try await db.collection("organizations").document(organizationId).collection("bookings").document(booking.id.uuidString).setData(bookingData, merge: true)
+        try await db.collection("organizations").document(orgId).collection("bookings").document(booking.id.uuidString).setData(bookingData, merge: true)
         
         print("🔥🔥🔥 DEBUG: Booking saved successfully to Firebase")
     }
     
     func loadBookings(organizationId: String) async throws -> [Booking] {
-        let snapshot = try await db.collection("organizations").document(organizationId).collection("bookings").getDocuments()
+        let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
+        let bookingsRef = db.collection("organizations").document(orgId).collection("bookings")
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await bookingsRef.getDocuments(source: .server)
+        } catch {
+            if isFirestorePermissionDenied(error) {
+                print("🔥🔥🔥 DEBUG: [BOOKING LOAD] Server denied bookings read for \(orgId) - trying cache fallback")
+                snapshot = try await bookingsRef.getDocuments(source: .cache)
+            } else if isOfflineNetworkError(error) {
+                print("🔥🔥🔥 DEBUG: [BOOKING LOAD] Offline while loading bookings for \(orgId) - trying cache fallback")
+                snapshot = try await bookingsRef.getDocuments(source: .cache)
+            } else {
+                throw error
+            }
+        }
         
         return snapshot.documents.compactMap { doc in
             let data = doc.data()
@@ -3045,7 +3533,8 @@ class FirebaseBackend: ObservableObject {
     }
     
     func deleteBooking(_ booking: Booking, organizationId: String) async throws {
-        try await db.collection("organizations").document(organizationId).collection("bookings").document(booking.id.uuidString).delete()
+        let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
+        try await db.collection("organizations").document(orgId).collection("bookings").document(booking.id.uuidString).delete()
     }
 
     // MARK: - Manager / Admin site bookings (where I'm working – AM, PM, Full Day, Office)
@@ -3092,9 +3581,10 @@ class FirebaseBackend: ObservableObject {
     // MARK: - Holiday Bookings
 
     func saveHolidayBooking(_ booking: HolidayBooking, organizationId: String) async throws {
+        let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
         var data: [String: Any] = [
             "id": booking.id.uuidString,
-            "organizationId": booking.organizationId,
+            "organizationId": orgId,
             "startDate": Timestamp(date: booking.startDate),
             "endDate": Timestamp(date: booking.endDate),
             "status": booking.status.rawValue,
@@ -3105,18 +3595,33 @@ class FirebaseBackend: ObservableObject {
         if let oid = booking.operativeId { data["operativeId"] = oid.uuidString }
         if let approvedBy = booking.approvedByUserId { data["approvedByUserId"] = approvedBy }
         if let approvedAt = booking.approvedAt { data["approvedAt"] = Timestamp(date: approvedAt) }
-        try await db.collection("organizations").document(organizationId).collection("holidayBookings").document(booking.id.uuidString).setData(data, merge: true)
+        try await db.collection("organizations").document(orgId).collection("holidayBookings").document(booking.id.uuidString).setData(data, merge: true)
     }
 
     func loadHolidayBookings(organizationId: String) async throws -> [HolidayBooking] {
-        let snapshot = try await db.collection("organizations").document(organizationId).collection("holidayBookings").getDocuments()
+        let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
+        let holidaysRef = db.collection("organizations").document(orgId).collection("holidayBookings")
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await holidaysRef.getDocuments(source: .server)
+        } catch {
+            if isFirestorePermissionDenied(error) {
+                print("🔥🔥🔥 DEBUG: [HOLIDAY LOAD] Server denied holidayBookings read for \(orgId) - trying cache fallback")
+                snapshot = try await holidaysRef.getDocuments(source: .cache)
+            } else if isOfflineNetworkError(error) {
+                print("🔥🔥🔥 DEBUG: [HOLIDAY LOAD] Offline while loading holidayBookings for \(orgId) - trying cache fallback")
+                snapshot = try await holidaysRef.getDocuments(source: .cache)
+            } else {
+                throw error
+            }
+        }
         return snapshot.documents.compactMap { doc -> HolidayBooking? in
             let data = doc.data()
-            guard let orgId = data["organizationId"] as? String,
-                  let startDate = (data["startDate"] as? Timestamp)?.dateValue(),
+            guard let startDate = (data["startDate"] as? Timestamp)?.dateValue(),
                   let endDate = (data["endDate"] as? Timestamp)?.dateValue(),
                   let statusRaw = data["status"] as? String,
                   let status = HolidayStatus(rawValue: statusRaw) else { return nil }
+            let bookingOrgId = (data["organizationId"] as? String) ?? orgId
             let id = UUID(uuidString: doc.documentID) ?? UUID()
             let userId = data["userId"] as? String
             let operativeId = (data["operativeId"] as? String).flatMap { UUID(uuidString: $0) }
@@ -3124,24 +3629,38 @@ class FirebaseBackend: ObservableObject {
             let approvedAt = (data["approvedAt"] as? Timestamp)?.dateValue()
             let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
             let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-            return HolidayBooking(id: id, organizationId: orgId, userId: userId, operativeId: operativeId, startDate: startDate, endDate: endDate, status: status, approvedByUserId: approvedByUserId, approvedAt: approvedAt, createdAt: createdAt, updatedAt: updatedAt)
+            return HolidayBooking(id: id, organizationId: bookingOrgId, userId: userId, operativeId: operativeId, startDate: startDate, endDate: endDate, status: status, approvedByUserId: approvedByUserId, approvedAt: approvedAt, createdAt: createdAt, updatedAt: updatedAt)
         }
     }
 
     func deleteHolidayBooking(_ booking: HolidayBooking, organizationId: String) async throws {
-        try await db.collection("organizations").document(organizationId).collection("holidayBookings").document(booking.id.uuidString).delete()
+        let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
+        try await db.collection("organizations").document(orgId).collection("holidayBookings").document(booking.id.uuidString).delete()
     }
 
     // MARK: - Data Validation & Safeguards
     
     /// Validates that an organization exists before allowing operations
     func validateOrganizationExists(_ organizationId: String) async throws -> Bool {
-        let doc = try await db.collection("organizations").document(organizationId).getDocument(source: .server)
-        guard doc.exists else {
-            print("🔥🔥🔥 DEBUG: ❌ Organization validation failed - organization does not exist: \(organizationId)")
-            throw NSError(domain: "FirebaseBackend", code: 404, userInfo: [NSLocalizedDescriptionKey: "Organization not found"])
+        let trimmed = normalizedOrganizationId(organizationId)
+        guard !trimmed.isEmpty else {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Organization ID is empty"])
         }
-        return true
+        do {
+            let doc = try await db.collection("organizations").document(trimmed).getDocument(source: .server)
+            guard doc.exists else {
+                print("🔥🔥🔥 DEBUG: ❌ Organization validation failed - organization does not exist: \(trimmed)")
+                throw NSError(domain: "FirebaseBackend", code: 404, userInfo: [NSLocalizedDescriptionKey: "Organization not found"])
+            }
+            return true
+        } catch {
+            if isFirestorePermissionDenied(error) {
+                // Match ensureReadableOrganization: some orgs deny root doc reads while subcollection writes still succeed.
+                print("🔥🔥🔥 DEBUG: ⚠️ Org root read denied for \(trimmed) during validation — skipping strict existence check")
+                return true
+            }
+            throw error
+        }
     }
     
     /// Validates that user has organizationId before saving data
@@ -3179,11 +3698,19 @@ class FirebaseBackend: ObservableObject {
             if userDoc.exists {
                 let userData = userDoc.data() ?? [:]
                 let currentOrgId = organizationIdFromFirestore(userData["organizationId"])
+                let orgIdStr = normalizedOrganizationId(organizationId)
+                // Migrate DocumentReference (or any non-string) to string so Firestore rules `userOrgIdMatchesPath` succeeds.
+                let storedAsPlainString = userData["organizationId"] is String
+                let needsOrgStringMigration = organizationIdsMatch(currentOrgId, organizationId) && !storedAsPlainString
                 
-                if !organizationIdsMatch(currentOrgId, organizationId) {
-                    print("🔥🔥🔥 DEBUG: [ensureUserDocumentLinked] Current orgId: \(currentOrgId ?? "nil"), updating to: \(organizationId)")
+                if !organizationIdsMatch(currentOrgId, organizationId) || needsOrgStringMigration {
+                    if needsOrgStringMigration {
+                        print("🔥🔥🔥 DEBUG: [ensureUserDocumentLinked] Migrating organizationId to string for rules compatibility (was ref/other type)")
+                    } else {
+                        print("🔥🔥🔥 DEBUG: [ensureUserDocumentLinked] Current orgId: \(currentOrgId ?? "nil"), updating to: \(organizationId)")
+                    }
                     try await userDocRef.updateData([
-                        "organizationId": organizationId,
+                        "organizationId": orgIdStr,
                         "updatedAt": Timestamp(date: Date())
                     ])
                     print("🔥🔥🔥 DEBUG: [ensureUserDocumentLinked] ✅ User document updated successfully")
@@ -3202,9 +3729,10 @@ class FirebaseBackend: ObservableObject {
                 }
             } else {
                 print("🔥🔥🔥 DEBUG: [ensureUserDocumentLinked] User document doesn't exist - creating it...")
+                let orgIdStr = normalizedOrganizationId(organizationId)
                 try await userDocRef.setData([
                     "email": userEmail,
-                    "organizationId": organizationId,
+                    "organizationId": orgIdStr,
                     "role": "basic",
                     "isActive": true,
                     "createdAt": Timestamp(date: Date()),
@@ -3252,6 +3780,7 @@ class FirebaseBackend: ObservableObject {
             "operatives": data["operatives"] as? Bool ?? false,
             "skills": data["skills"] as? Bool ?? false,
             "qualifications": data["qualifications"] as? Bool ?? false,
+            "materials": data["materials"] as? Bool ?? false,
             "operativeMode": data["operativeMode"] as? Bool ?? false,
             "projects": data["projects"] as? Bool ?? true,
             "smallWorks": data["smallWorks"] as? Bool ?? false,
@@ -3308,9 +3837,12 @@ class FirebaseBackend: ObservableObject {
                         // Store organizationId locally for offline access
                         storeOrganizationIdLocally(organizationId)
                         
-                        // Reload organization
+                        // Reload organization (rules may deny org root read; fall back to snapshot data).
                         await loadUserOrganization(userId: userId)
-                        return true
+                        if currentOrganization == nil {
+                            setCurrentOrganizationFromRecovery(orgId: organizationId, orgData: orgDoc.data(), fallbackRole: "admin")
+                        }
+                        return currentOrganization != nil
                     }
                     
                     // Strategy 2: Check if user is a member (any role)
@@ -3349,6 +3881,7 @@ class FirebaseBackend: ObservableObject {
                                 newUserData["operatives"] = existing["operatives"] ?? false
                                 newUserData["skills"] = existing["skills"] ?? false
                                 newUserData["qualifications"] = existing["qualifications"] ?? false
+                                newUserData["materials"] = existing["materials"] ?? false
                                 newUserData["operativeMode"] = existing["operativeMode"] ?? false
                                 newUserData["projects"] = existing["projects"] ?? true
                                 newUserData["smallWorks"] = existing["smallWorks"] ?? false
@@ -3364,9 +3897,12 @@ class FirebaseBackend: ObservableObject {
                         // Store organizationId locally for offline access
                         storeOrganizationIdLocally(organizationId)
                         
-                        // Reload organization
+                        // Reload organization (rules may deny org root read; fall back to snapshot data).
                         await loadUserOrganization(userId: userId)
-                        return true
+                        if currentOrganization == nil {
+                            setCurrentOrganizationFromRecovery(orgId: organizationId, orgData: orgDoc.data(), fallbackRole: userRole)
+                        }
+                        return currentOrganization != nil
                     }
                 }
             }
@@ -3383,46 +3919,69 @@ class FirebaseBackend: ObservableObject {
                     storeOrganizationIdLocally(orgId)
                     // Reload organization
                     await loadUserOrganization(userId: userId)
-                    return true
+                    return currentOrganization != nil
                 }
             }
             
             // Strategy 3b: Invited user – find org by existing user with same email (e.g. users/{randomUUID} from invite).
-            // Use server source so we don't use stale cache (e.g. after a user was deleted).
-            let sameEmailQuery = try await db.collection("users")
-                .whereField("email", isEqualTo: userEmail)
-                .limit(to: 5)
-                .getDocuments(source: .server)
-            for doc in sameEmailQuery.documents where doc.documentID != userId {
-                let data = doc.data()
-                guard let orgId = data["organizationId"] as? String else { continue }
-                let orgDoc = try await db.collection("organizations").document(orgId).getDocument()
-                guard orgDoc.exists else { continue }
-                print("🔥🔥🔥 DEBUG: ✅ Found organization via same-email user (invited): \(orgId)")
-                let userDocRef = db.collection("users").document(userId)
-                var newUserData: [String: Any] = [
-                    "email": userEmail,
-                    "organizationId": orgId,
-                    "role": data["role"] ?? "basic",
-                    "isActive": data["isActive"] as? Bool ?? true,
-                    "createdAt": Timestamp(date: Date()),
-                    "updatedAt": Timestamp(date: Date()),
-                    "adminAccess": data["adminAccess"] as? Bool ?? false,
-                    "manager": data["manager"] as? Bool ?? false,
-                    "operatives": data["operatives"] as? Bool ?? false,
-                    "skills": data["skills"] as? Bool ?? false,
-                    "qualifications": data["qualifications"] as? Bool ?? false,
-                    "operativeMode": data["operativeMode"] as? Bool ?? false,
-                    "projects": data["projects"] as? Bool ?? true,
-                    "smallWorks": data["smallWorks"] as? Bool ?? false,
-                    "isSuperAdmin": data["isSuperAdmin"] as? Bool ?? false,
-                ]
-                if let fn = data["firstName"] { newUserData["firstName"] = fn }
-                if let sn = data["surname"] { newUserData["surname"] = sn }
-                if let mobile = data["mobileNumber"] { newUserData["mobileNumber"] = mobile }
-                try await userDocRef.setData(newUserData)
-                storeOrganizationIdLocally(orgId)
-                await loadUserOrganization(userId: userId)
+            let emailVariants = Array(Set([
+                userEmail,
+                userEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            ].filter { !$0.isEmpty }))
+            
+            variantLoop: for emailVariant in emailVariants {
+                let sameEmailQuery = try await db.collection("users")
+                    .whereField("email", isEqualTo: emailVariant)
+                    .limit(to: 8)
+                    .getDocuments(source: .server)
+                for doc in sameEmailQuery.documents where doc.documentID != userId {
+                    let data = doc.data()
+                    guard let orgId = organizationIdFromFirestore(data["organizationId"]) else { continue }
+                    let orgDoc = try await db.collection("organizations").document(orgId).getDocument()
+                    guard orgDoc.exists else { continue }
+                    print("🔥🔥🔥 DEBUG: ✅ Found organization via same-email user (invited): \(orgId)")
+                    let userDocRef = db.collection("users").document(userId)
+                    let emailNorm = userEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                    var newUserData: [String: Any] = [
+                        "email": emailNorm,
+                        "organizationId": orgId,
+                        "role": data["role"] ?? "basic",
+                        "isActive": data["isActive"] as? Bool ?? true,
+                        "createdAt": Timestamp(date: Date()),
+                        "updatedAt": Timestamp(date: Date()),
+                        "adminAccess": data["adminAccess"] as? Bool ?? false,
+                        "manager": data["manager"] as? Bool ?? false,
+                        "operatives": data["operatives"] as? Bool ?? false,
+                        "skills": data["skills"] as? Bool ?? false,
+                        "qualifications": data["qualifications"] as? Bool ?? false,
+                        "operativeMode": data["operativeMode"] as? Bool ?? false,
+                        "projects": data["projects"] as? Bool ?? true,
+                        "smallWorks": data["smallWorks"] as? Bool ?? false,
+                        "isSuperAdmin": data["isSuperAdmin"] as? Bool ?? false,
+                    ]
+                    if let fn = data["firstName"] { newUserData["firstName"] = fn }
+                    if let sn = data["surname"] { newUserData["surname"] = sn }
+                    if let mobile = data["mobileNumber"] { newUserData["mobileNumber"] = mobile }
+                    if let am = data["assignedManagerUserId"] as? String, !am.isEmpty {
+                        newUserData["assignedManagerUserId"] = am
+                    }
+                    try await userDocRef.setData(newUserData, merge: true)
+                    try await db.collection("organizations").document(orgId)
+                        .collection("userEmails").document(emailNorm)
+                        .setData(["userId": userId], merge: true)
+                    storeOrganizationIdLocally(orgId)
+                    await loadUserOrganization(userId: userId)
+                    if currentOrganization == nil {
+                        setCurrentOrganizationFromRecovery(
+                            orgId: orgId,
+                            orgData: orgDoc.data() ?? [:],
+                            fallbackRole: data["role"] as? String ?? "basic"
+                        )
+                    }
+                    break variantLoop
+                }
+            }
+            if currentOrganization != nil {
                 return true
             }
             
@@ -3466,6 +4025,7 @@ class FirebaseBackend: ObservableObject {
                             newUserData["operatives"] = existing["operatives"] ?? false
                             newUserData["skills"] = existing["skills"] ?? false
                             newUserData["qualifications"] = existing["qualifications"] ?? false
+                            newUserData["materials"] = existing["materials"] ?? false
                             newUserData["operativeMode"] = existing["operativeMode"] ?? false
                             newUserData["projects"] = existing["projects"] ?? true
                             newUserData["smallWorks"] = existing["smallWorks"] ?? false
@@ -3481,9 +4041,12 @@ class FirebaseBackend: ObservableObject {
                     // Store organizationId locally for offline access
                     storeOrganizationIdLocally(organizationId)
                     
-                    // Reload organization
+                    // Reload organization (rules may deny org root read; fall back to snapshot data).
                     await loadUserOrganization(userId: userId)
-                    return true
+                    if currentOrganization == nil {
+                        setCurrentOrganizationFromRecovery(orgId: organizationId, orgData: orgDoc.data(), fallbackRole: "member")
+                    }
+                    return currentOrganization != nil
                 }
             }
             
@@ -3525,7 +4088,7 @@ class FirebaseBackend: ObservableObject {
         if currentOrganization == nil, let userEmail = currentUser?.email {
             print("🔥🔥🔥 DEBUG: ⚠️ Organization is nil after load, attempting recovery...")
             let recovered = await recoverMissingOrganizationLink(userId: userId, userEmail: userEmail)
-            if recovered {
+            if recovered, currentOrganization != nil {
                 print("🔥🔥🔥 DEBUG: ✅ Recovery successful! Organization loaded: \(currentOrganization?.name ?? "N/A")")
                 // Post notification that organization was recovered so stores can reload
                 NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
@@ -3534,7 +4097,7 @@ class FirebaseBackend: ObservableObject {
                 print("🔥🔥🔥 DEBUG: ⚠️ First recovery attempt failed, retrying in 2 seconds...")
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 let retryRecovered = await recoverMissingOrganizationLink(userId: userId, userEmail: userEmail)
-                if retryRecovered {
+                if retryRecovered, currentOrganization != nil {
                     print("🔥🔥🔥 DEBUG: ✅ Retry recovery successful!")
                     NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
                 } else {
@@ -3910,9 +4473,20 @@ class FirebaseBackend: ObservableObject {
                 if !isUserInOrg { continue }
 
                 let orgRef = db.collection("organizations").document(orgId)
-                let projectsCount = try await orgRef.collection("projects").limit(to: 200).getDocuments(source: .server).documents.count
-                let smallWorksCount = try await orgRef.collection("smallWorks").limit(to: 200).getDocuments(source: .server).documents.count
-                let clientsCount = try await orgRef.collection("clients").limit(to: 200).getDocuments(source: .server).documents.count
+                let projectsCount: Int
+                let smallWorksCount: Int
+                let clientsCount: Int
+                do {
+                    projectsCount = try await orgRef.collection("projects").limit(to: 200).getDocuments(source: .server).documents.count
+                    smallWorksCount = try await orgRef.collection("smallWorks").limit(to: 200).getDocuments(source: .server).documents.count
+                    clientsCount = try await orgRef.collection("clients").limit(to: 200).getDocuments(source: .server).documents.count
+                } catch {
+                    if isFirestorePermissionDenied(error) {
+                        print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] Skipping org \(orgId) due to permission denial while counting")
+                        continue
+                    }
+                    throw error
+                }
 
                 // Prefer orgs with actual work data first, then use clients as tie-breaker.
                 let score = (projectsCount * 1000) + (smallWorksCount * 100) + clientsCount
@@ -4133,6 +4707,61 @@ extension FirebaseBackend {
         print("✅ [FirebaseBackend] Returning \(materials.count) materials")
         return materials
     }
+
+    func observeMaterialItems(
+        organizationId: String,
+        projectId: UUID,
+        onChange: @escaping @MainActor ([MaterialItem]) -> Void
+    ) -> ListenerRegistration {
+        db.collection("organizations").document(organizationId)
+            .collection("materials")
+            .whereField("projectId", isEqualTo: projectId.uuidString)
+            .addSnapshotListener { snapshot, error in
+                if let error {
+                    print("❌ [FirebaseBackend] observeMaterialItems error: \(error.localizedDescription)")
+                    return
+                }
+
+                guard let docs = snapshot?.documents else { return }
+
+                var loaded: [MaterialItem] = []
+                let calendar = Calendar.current
+
+                for doc in docs {
+                    let data = doc.data()
+                    guard let idString = data["id"] as? String,
+                          let id = UUID(uuidString: idString),
+                          let quantity = data["quantity"] as? Int,
+                          let unitString = data["unit"] as? String,
+                          let unit = MaterialUnit(rawValue: unitString),
+                          let material = data["material"] as? String,
+                          let addedBy = data["addedBy"] as? String,
+                          let addedAt = (data["addedAt"] as? Timestamp)?.dateValue(),
+                          let projectIdString = data["projectId"] as? String,
+                          let parsedProjectId = UUID(uuidString: projectIdString),
+                          let date = (data["date"] as? Timestamp)?.dateValue() else {
+                        continue
+                    }
+
+                    loaded.append(MaterialItem(
+                        id: id,
+                        quantity: quantity,
+                        unit: unit,
+                        material: material,
+                        addedBy: addedBy,
+                        addedAt: addedAt,
+                        editedBy: data["editedBy"] as? String,
+                        editedAt: (data["editedAt"] as? Timestamp)?.dateValue(),
+                        projectId: parsedProjectId,
+                        date: calendar.startOfDay(for: date)
+                    ))
+                }
+
+                Task { @MainActor in
+                    onChange(loaded)
+                }
+            }
+    }
     
     func deleteMaterialItem(_ materialId: UUID, organizationId: String) async throws {
         try await db.collection("organizations").document(organizationId)
@@ -4170,6 +4799,177 @@ extension FirebaseBackend {
         }
         
         print("🧹 Cleaned up \(snapshot.documents.count) materials older than \(keepDays) days")
+    }
+
+    // MARK: - Site Audits
+
+    /// Resolves the org document id for Firestore paths, preferring `users/{uid}.organizationId` from the server
+    /// so writes match Security Rules (exact reference id / casing from Firestore vs stale UI cache).
+    func resolveOrganizationIdForFirebaseWrites(preferredFallback: String?) async -> String? {
+        let trimmedFallback = preferredFallback.map { normalizedOrganizationId($0) } ?? ""
+        guard let uid = currentUser?.uid else {
+            return trimmedFallback.isEmpty ? nil : trimmedFallback
+        }
+        do {
+            let snap = try await db.collection("users").document(uid).getDocument(source: .server)
+            if let data = snap.data(),
+               let fromUser = organizationIdFromFirestore(data["organizationId"]) {
+                let t = normalizedOrganizationId(fromUser)
+                if !t.isEmpty {
+                    print("🔥🔥🔥 DEBUG: resolveOrganizationIdForFirebaseWrites using users document org id: \(t)")
+                    return t
+                }
+            }
+        } catch {
+            print("🔥🔥🔥 DEBUG: resolveOrganizationIdForFirebaseWrites user read failed: \(error.localizedDescription)")
+        }
+        if !trimmedFallback.isEmpty {
+            print("🔥🔥🔥 DEBUG: resolveOrganizationIdForFirebaseWrites using caller fallback: \(trimmedFallback)")
+            return trimmedFallback
+        }
+        if let c = currentOrganization?.firestoreDocumentId {
+            let t = normalizedOrganizationId(c)
+            if !t.isEmpty { return t }
+        }
+        return nil
+    }
+
+    func saveSiteAudit(_ audit: SiteAudit, organizationId: String) async throws {
+        guard currentUser != nil else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "You must be signed in to save a site audit."]
+            )
+        }
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
+            )
+        }
+        let orgId = try await ensureReadableOrganization(resolved)
+        guard !orgId.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings or sign in again, then retry."]
+            )
+        }
+        do {
+            try await ensureUserDocumentLinked(organizationId: orgId)
+        } catch {
+            print("🔥🔥🔥 DEBUG: [saveSiteAudit] ensureUserDocumentLinked: \(error.localizedDescription)")
+        }
+        await repairCurrentUserOrganizationAccess(organizationId: orgId)
+
+        let data: [String: Any] = [
+            "id": audit.id.uuidString,
+            "organizationId": orgId,
+            "projectId": audit.projectId.uuidString,
+            "projectJobNumber": audit.projectJobNumber,
+            "projectName": audit.projectName,
+            "type": audit.type.rawValue,
+            "authorName": audit.authorName,
+            "date": Timestamp(date: audit.date),
+            "createdAt": Timestamp(date: audit.createdAt),
+            "createdByUserId": audit.createdByUserId,
+            "visibleToOperatives": audit.visibleToOperatives,
+            "items": audit.items.map { item in
+                var row: [String: Any] = [
+                    "id": item.id.uuidString,
+                    "title": item.title,
+                    "assignee": item.assignee,
+                    "comments": item.comments,
+                    "annotations": item.annotations,
+                    "createdAt": Timestamp(date: item.createdAt)
+                ]
+                if let imageURL = item.imageURL {
+                    row["imageURL"] = imageURL
+                }
+                if let capturedAt = item.imageCapturedAt {
+                    row["imageCapturedAt"] = Timestamp(date: capturedAt)
+                }
+                return row
+            }
+        ]
+
+        try await db.collection("organizations").document(orgId)
+            .collection("siteAudits")
+            .document(audit.id.uuidString)
+            .setData(data)
+    }
+
+    func loadSiteAudits(organizationId: String, projectId: UUID? = nil) async throws -> [SiteAudit] {
+        var query: Query = db.collection("organizations").document(organizationId)
+            .collection("siteAudits")
+
+        if let projectId {
+            query = query.whereField("projectId", isEqualTo: projectId.uuidString)
+        }
+
+        let snapshot = try await query.getDocuments()
+        var audits: [SiteAudit] = []
+
+        for doc in snapshot.documents {
+            let data = doc.data()
+            guard let idString = data["id"] as? String,
+                  let id = UUID(uuidString: idString),
+                  let projectIdString = data["projectId"] as? String,
+                  let parsedProjectId = UUID(uuidString: projectIdString),
+                  let projectJobNumber = data["projectJobNumber"] as? String,
+                  let projectName = data["projectName"] as? String,
+                  let typeRaw = data["type"] as? String,
+                  let type = SiteAuditType(rawValue: typeRaw),
+                  let authorName = data["authorName"] as? String,
+                  let date = (data["date"] as? Timestamp)?.dateValue(),
+                  let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
+                  let createdByUserId = data["createdByUserId"] as? String else {
+                continue
+            }
+            let visibleToOperatives = data["visibleToOperatives"] as? Bool ?? true
+
+            let itemRows = data["items"] as? [[String: Any]] ?? []
+            let items: [SiteAuditItem] = itemRows.compactMap { row in
+                guard let itemIdString = row["id"] as? String,
+                      let itemId = UUID(uuidString: itemIdString),
+                      let title = row["title"] as? String,
+                      let assignee = row["assignee"] as? String,
+                      let comments = row["comments"] as? String,
+                      let createdAt = (row["createdAt"] as? Timestamp)?.dateValue() else {
+                    return nil
+                }
+                return SiteAuditItem(
+                    id: itemId,
+                    title: title,
+                    assignee: assignee,
+                    comments: comments,
+                    annotations: row["annotations"] as? String ?? "",
+                    imageURL: row["imageURL"] as? String,
+                    imageCapturedAt: (row["imageCapturedAt"] as? Timestamp)?.dateValue(),
+                    createdAt: createdAt
+                )
+            }
+
+            audits.append(SiteAudit(
+                id: id,
+                projectId: parsedProjectId,
+                projectJobNumber: projectJobNumber,
+                projectName: projectName,
+                type: type,
+                authorName: authorName,
+                date: date,
+                items: items,
+                createdAt: createdAt,
+                createdByUserId: createdByUserId,
+                visibleToOperatives: visibleToOperatives
+            ))
+        }
+
+        return audits.sorted { $0.createdAt > $1.createdAt }
     }
     
     // MARK: - Wholesalers

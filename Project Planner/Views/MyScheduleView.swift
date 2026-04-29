@@ -18,8 +18,15 @@ struct MyScheduleView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject var holidayStore: HolidayStore
 
     private var isOperativeMode: Bool { userStore.isOperativeMode() }
+    /// Office / site attendance booking is only for organisation admins and managers — not operatives or basic users.
+    private var canBookManagerSiteAttendance: Bool {
+        if isOperativeMode { return false }
+        guard let u = userStore.displayUser else { return false }
+        return userStore.hasAdminAccess() || u.permissions.manager
+    }
 
     var body: some View {
         NavigationView {
@@ -30,12 +37,27 @@ struct MyScheduleView: View {
                         .environmentObject(projectStore)
                         .environmentObject(operativeStore)
                         .environmentObject(userStore)
-                } else {
+                        .environmentObject(holidayStore)
+                } else if canBookManagerSiteAttendance {
                     ManagerScheduleContentView()
                         .environmentObject(firebaseBackend)
                         .environmentObject(managerScheduleStore)
                         .environmentObject(projectStore)
+                        .environmentObject(bookingStore)
+                        .environmentObject(operativeStore)
                         .environmentObject(userStore)
+                        .environmentObject(holidayStore)
+                } else {
+                    VStack(spacing: 16) {
+                        Image(systemName: "lock.fill")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                        Text("Office and site attendance booking is only available to administrators and managers.")
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .navigationTitle("My Schedule")
@@ -57,8 +79,11 @@ struct MyScheduleView: View {
 struct ManagerScheduleContentView: View {
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var holidayStore: HolidayStore
 
     private let calendar = Calendar.current
     @State private var weekStart: Date = Date()
@@ -83,6 +108,30 @@ struct ManagerScheduleContentView: View {
 
     private var liveSmallWorks: [Project] {
         projectStore.projects.filter { $0.isLive && $0.jobType == .smallWorks }
+    }
+
+    /// Some admins/managers also have an operative profile and can be booked onto projects/small works.
+    private func myOperativeBookings(on day: Date) -> [Booking] {
+        guard let email = userStore.currentUser.map({ $0.email.lowercased() }),
+              let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == email }) else { return [] }
+        return bookingStore.bookings.filter {
+            $0.operativeId == op.id &&
+            ($0.status == .confirmed || $0.status == .tentative) &&
+            calendar.isDate($0.date, inSameDayAs: day)
+        }
+    }
+
+    private func myHolidayBookings(on day: Date) -> [HolidayBooking] {
+        guard let uid = firebaseBackend.currentUser?.uid else { return [] }
+        let targetDay = calendar.startOfDay(for: day)
+        return holidayStore.myBookings(userId: uid, operativeId: nil)
+            .filter { $0.status != .rejected }
+            .filter { booking in
+                let start = calendar.startOfDay(for: booking.startDate)
+                let end = calendar.startOfDay(for: booking.endDate)
+                return targetDay >= start && targetDay <= end
+            }
+            .sorted { $0.startDate < $1.startDate }
     }
 
     var body: some View {
@@ -284,9 +333,32 @@ struct ManagerScheduleContentView: View {
 
     private func dayContent(for day: Date) -> some View {
         let bookings = managerScheduleStore.myBookings(on: day)
+        let operativeBookings = myOperativeBookings(on: day)
+        let holidayBookings = myHolidayBookings(on: day)
         let isExpandedOffice = expandedOffice
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                if !holidayBookings.isEmpty {
+                    Section {
+                        ForEach(holidayBookings) { holiday in
+                            HStack {
+                                Label("Holiday", systemImage: "sun.max.fill")
+                                    .font(.subheadline)
+                                    .foregroundColor(.orange)
+                                Spacer()
+                                Text(holiday.status == .pending ? "Pending" : "Approved")
+                                    .font(.caption)
+                                    .foregroundColor(holiday.status == .pending ? .orange : .green)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    } header: {
+                        Text("Your holiday")
+                            .font(.title3)
+                            .fontWeight(.semibold)
+                    }
+                }
+
                 Section {
                     if bookings.isEmpty {
                         Text("No bookings for this day.")
@@ -302,6 +374,31 @@ struct ManagerScheduleContentView: View {
                     Text("Your bookings")
                         .font(.title3)
                         .fontWeight(.semibold)
+                }
+
+                if !operativeBookings.isEmpty {
+                    Section {
+                        ForEach(operativeBookings) { b in
+                            let p = projectStore.projects.first(where: { $0.id == b.projectId }) ??
+                                projectStore.smallWorks.first(where: { $0.id == b.projectId })
+                            HStack {
+                                Text(b.timeSlot.displayName)
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(Color.indigo.opacity(0.18))
+                                    .cornerRadius(6)
+                                Text(p.map { "\($0.jobNumber) \($0.siteName)" } ?? "Project booking")
+                                    .font(.body)
+                                Spacer()
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    } header: {
+                        Text("Project/Small Works bookings")
+                            .font(.headline)
+                    }
                 }
 
                 Section {
@@ -560,6 +657,7 @@ struct OperativeScheduleContentView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var holidayStore: HolidayStore
 
     private let calendar = Calendar.current
     @State private var weekStart: Date = Date()
@@ -578,7 +676,25 @@ struct OperativeScheduleContentView: View {
     private var myBookingsThisWeek: [Booking] {
         guard let op = currentOperative else { return [] }
         return bookingStore.bookings.filter { b in
-            b.operativeId == op.id && weekDates.contains { calendar.isDate(b.date, inSameDayAs: $0) }
+            b.operativeId == op.id &&
+            (b.status == .confirmed || b.status == .tentative) &&
+            weekDates.contains { calendar.isDate(b.date, inSameDayAs: $0) }
+        }
+    }
+
+    private var myApprovedHolidays: [HolidayBooking] {
+        guard let userId = userStore.currentUser?.id else { return [] }
+        let operativeId = currentOperative?.id
+        return holidayStore.myBookings(userId: userId, operativeId: operativeId)
+            .filter { $0.status == .approved }
+    }
+
+    private func holidayCoversDay(_ date: Date) -> Bool {
+        let day = calendar.startOfDay(for: date)
+        return myApprovedHolidays.contains { holiday in
+            let start = calendar.startOfDay(for: holiday.startDate)
+            let end = calendar.startOfDay(for: holiday.endDate)
+            return day >= start && day <= end
         }
     }
 
@@ -641,18 +757,25 @@ struct OperativeScheduleContentView: View {
 
     private func dayRow(date: Date) -> some View {
         let dayBookings = myBookingsThisWeek.filter { calendar.isDate($0.date, inSameDayAs: date) }
+        let isOnHoliday = holidayCoversDay(date)
         let f = DateFormatter()
         f.dateFormat = "EEEE, d MMM"
         return VStack(alignment: .leading, spacing: 8) {
             Text(f.string(from: date))
                 .font(.headline)
-            if dayBookings.isEmpty {
+            if isOnHoliday {
+                Label("Holiday", systemImage: "sun.max.fill")
+                    .font(.subheadline)
+                    .foregroundColor(.orange)
+            }
+            if dayBookings.isEmpty && !isOnHoliday {
                 Text("No bookings")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             } else {
                 ForEach(dayBookings) { b in
-                    if let project = projectStore.projects.first(where: { $0.id == b.projectId }) {
+                    if let project = projectStore.projects.first(where: { $0.id == b.projectId }) ??
+                        projectStore.smallWorks.first(where: { $0.id == b.projectId }) {
                         HStack {
                             Text(b.timeSlot.displayName)
                                 .font(.caption)

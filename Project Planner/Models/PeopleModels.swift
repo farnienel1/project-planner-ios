@@ -79,6 +79,8 @@ struct Operative: Identifiable, Codable {
     var qualificationExpiryDates: [UUID: Date]
     var isActive: Bool
     var hourlyRate: Double?
+    /// Preferred day-rate field (distinct from legacy `hourlyRate` where both exist).
+    var dayRate: Double?
     var currencySymbol: String?
     var notes: String?
     var createdAt: Date
@@ -101,6 +103,7 @@ struct Operative: Identifiable, Codable {
         qualificationExpiryDates: [UUID: Date] = [:],
         isActive: Bool = true,
         hourlyRate: Double? = nil,
+        dayRate: Double? = nil,
         currencySymbol: String? = nil,
         notes: String? = nil,
         createdAt: Date = Date(),
@@ -121,6 +124,7 @@ struct Operative: Identifiable, Codable {
         self.qualificationExpiryDates = qualificationExpiryDates
         self.isActive = isActive
         self.hourlyRate = hourlyRate
+        self.dayRate = dayRate
         self.currencySymbol = currencySymbol
         self.notes = notes
         self.createdAt = createdAt
@@ -139,6 +143,7 @@ struct Operative: Identifiable, Codable {
         qualificationExpiryDates: [UUID: Date] = [:],
         isActive: Bool = true,
         hourlyRate: Double? = nil,
+        dayRate: Double? = nil,
         currencySymbol: String? = nil,
         notes: String? = nil,
         createdAt: Date = Date(),
@@ -160,6 +165,7 @@ struct Operative: Identifiable, Codable {
         self.qualificationExpiryDates = qualificationExpiryDates
         self.isActive = isActive
         self.hourlyRate = hourlyRate
+        self.dayRate = dayRate
         self.currencySymbol = currencySymbol
         self.notes = notes
         self.createdAt = createdAt

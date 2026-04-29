@@ -1,0 +1,17 @@
+---
+description: Enforce org/auth path safety and role test matrix for major changes
+alwaysApply: true
+---
+
+# Org And Auth Guardrails
+
+- For any change touching Firebase, stores, onboarding, roles, or permissions, verify the organization path is consistent end-to-end: `users/{uid}.organizationId` -> resolved org id -> `organizations/{orgId}/...`.
+- Never assume super admin only. Validate behavior for super admin, admin, manager, and operative before declaring a fix complete.
+- For Firestore rules changes, update both `website/firestore.rules` and `Project Planner/firestore.rules`, then explicitly state which file is deployment source of truth.
+- Avoid introducing stricter rule logic in one subcollection than sibling org subcollections unless explicitly required and documented in the PR notes.
+- On permission failures, prefer non-destructive fallback behavior in app code: keep existing data in memory, try cache fallback, and show actionable non-blocking errors.
+- Before finalizing major changes, run and report a role matrix check:
+  - Can each role read required org collections?
+  - Can each role perform intended writes for their flow?
+  - Do denied actions fail with clear user-facing messages?
+- If a fix is temporary/emergency, label it clearly and include a follow-up tightening step.

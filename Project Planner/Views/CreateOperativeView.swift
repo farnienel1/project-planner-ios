@@ -166,6 +166,7 @@ struct CreateOperativeView: View {
         isLoading = true
         errorMessage = nil
         
+        let parsedRate = operativeDayRate.isEmpty ? nil : Double(operativeDayRate.replacingOccurrences(of: ",", with: "."))
         let operative = Operative(
             firstName: operativeFirstName.trimmingCharacters(in: .whitespaces),
             lastName: operativeSurname.trimmingCharacters(in: .whitespaces),
@@ -173,7 +174,8 @@ struct CreateOperativeView: View {
             phone: operativePhone.trimmingCharacters(in: .whitespaces),
             startDate: Date(),
             skills: selectedSkills,
-            hourlyRate: operativeDayRate.isEmpty ? nil : Double(operativeDayRate)
+            hourlyRate: parsedRate,
+            dayRate: parsedRate
         )
         
         Task {

@@ -8,7 +8,7 @@ struct CustomSecureField: View {
     var body: some View {
         HStack {
             if isSecure {
-                TextField(title, text: $text)
+                SecureField(title, text: $text)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .textContentType(.none)
                     .autocorrectionDisabled()

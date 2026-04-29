@@ -16,6 +16,7 @@ struct DailyOverviewView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @Environment(\.dismiss) private var dismiss
     @State private var showingPastBookings = false
     
@@ -35,6 +36,77 @@ struct DailyOverviewView: View {
     
     private var dayHolidays: [HolidayBooking] {
         holidayStore.approvedBookings(covering: overviewDate)
+    }
+
+    private var isWeekday: Bool {
+        let weekday = Calendar.current.component(.weekday, from: overviewDate)
+        return weekday >= 2 && weekday <= 6
+    }
+
+    private var operativeUsers: [AppUser] {
+        userStore.organizationUsers.filter { $0.permissions.operativeMode && $0.isActive }
+    }
+
+    private var managerUsers: [AppUser] {
+        userStore.organizationUsers.filter {
+            !$0.permissions.operativeMode &&
+            !$0.isSuperAdmin &&
+            !$0.permissions.adminAccess &&
+            $0.permissions.manager &&
+            $0.isActive
+        }
+    }
+
+    private func hasApprovedHoliday(userId: String, operativeId: UUID?) -> Bool {
+        dayHolidays.contains { holiday in
+            if holiday.status != .approved { return false }
+            if holiday.userId == userId { return true }
+            if let operativeId, holiday.operativeId == operativeId { return true }
+            return false
+        }
+    }
+
+    private func operativeHasFullDayBooking(_ operativeId: UUID) -> Bool {
+        let bookings = dayBookings.filter {
+            $0.operativeId == operativeId && ($0.status == .confirmed || $0.status == .tentative)
+        }
+        if bookings.contains(where: { $0.timeSlot == .fullDay }) { return true }
+        let hasAM = bookings.contains(where: { $0.timeSlot == .morning })
+        let hasPM = bookings.contains(where: { $0.timeSlot == .afternoon })
+        return hasAM && hasPM
+    }
+
+    private func managerHasFullDayProjectBooking(_ userId: String) -> Bool {
+        let bookings: [ManagerSiteBooking] = managerScheduleStore.managerSiteBookings.filter { booking in
+            let sameDay = Calendar.current.isDate(booking.date, inSameDayAs: overviewDate)
+            let sameUser = booking.userId == userId
+            let isProjectLocation = booking.locationType == ManagerLocationType.project || booking.locationType == ManagerLocationType.smallWork
+            return sameDay && sameUser && isProjectLocation
+        }
+        if bookings.contains(where: { $0.timeSlot == ManagerTimeSlot.fullDay }) { return true }
+        let hasAM = bookings.contains(where: { $0.timeSlot == ManagerTimeSlot.morning })
+        let hasPM = bookings.contains(where: { $0.timeSlot == ManagerTimeSlot.afternoon })
+        return hasAM && hasPM
+    }
+
+    private var unbookedOperativeNames: [String] {
+        operativeUsers.compactMap { user in
+            let linkedOperative = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
+            if hasApprovedHoliday(userId: user.id, operativeId: linkedOperative?.id) { return nil }
+            guard let operativeId = linkedOperative?.id else {
+                return user.fullName.isEmpty ? user.email : user.fullName
+            }
+            return operativeHasFullDayBooking(operativeId) ? nil : linkedOperative?.name
+        }
+        .sorted()
+    }
+
+    private var unbookedManagerNames: [String] {
+        managerUsers.compactMap { user in
+            if hasApprovedHoliday(userId: user.id, operativeId: nil) { return nil }
+            return managerHasFullDayProjectBooking(user.id) ? nil : (user.fullName.isEmpty ? user.email : user.fullName)
+        }
+        .sorted()
     }
     
     // Group bookings by project
@@ -63,7 +135,7 @@ struct DailyOverviewView: View {
 
                         if !isHistoric {
                             Button(action: { showingPastBookings = true }) {
-                                Label("Past Bookings", systemImage: "clock.arrow.circlepath")
+                                Label("View By Date", systemImage: "calendar")
                                     .font(.subheadline)
                             }
                             .buttonStyle(.bordered)
@@ -72,6 +144,29 @@ struct DailyOverviewView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 20)
                     
+                    if isWeekday && (!unbookedManagerNames.isEmpty || !unbookedOperativeNames.isEmpty) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Unbooked Labour")
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                                .padding(.horizontal, 20)
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(unbookedManagerNames, id: \.self) { name in
+                                    Label(name, systemImage: "person.badge.key.fill")
+                                        .font(.subheadline)
+                                }
+                                ForEach(unbookedOperativeNames, id: \.self) { name in
+                                    Label(name, systemImage: "person.fill")
+                                        .font(.subheadline)
+                                }
+                            }
+                            .padding(12)
+                            .background(Color.yellow.opacity(0.14))
+                            .cornerRadius(12)
+                            .padding(.horizontal, 20)
+                        }
+                    }
+
                     // On holiday
                     if !dayHolidays.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
@@ -92,13 +187,15 @@ struct DailyOverviewView: View {
                     } else if !dayBookings.isEmpty {
                         LazyVStack(spacing: 16) {
                             ForEach(Array(bookingsByProject.keys.sorted(by: { projectId1, projectId2 in
-                                guard let project1 = projectStore.projects.first(where: { $0.id == projectId1 }),
-                                      let project2 = projectStore.projects.first(where: { $0.id == projectId2 }) else {
+                                let allProjects = projectStore.projects + projectStore.smallWorks
+                                guard let project1 = allProjects.first(where: { $0.id == projectId1 }),
+                                      let project2 = allProjects.first(where: { $0.id == projectId2 }) else {
                                     return false
                                 }
                                 return project1.siteName < project2.siteName
                             })), id: \.self) { projectId in
-                                if let project = projectStore.projects.first(where: { $0.id == projectId }),
+                                let allProjects = projectStore.projects + projectStore.smallWorks
+                                if let project = allProjects.first(where: { $0.id == projectId }),
                                    let bookings = bookingsByProject[projectId] {
                                     ProjectBookingCard(project: project, bookings: bookings)
                                 }
@@ -134,6 +231,7 @@ struct DailyOverviewView: View {
                 .environmentObject(operativeStore)
                 .environmentObject(userStore)
                 .environmentObject(holidayStore)
+                .environmentObject(managerScheduleStore)
         }
     }
     
@@ -182,16 +280,20 @@ struct OnHolidayRowView: View {
     }
 }
 
-/// Historic Daily Overview: pick a past (or today) date and see that day's bookings and holidays. For managers, admins, super admins.
+/// Date Overview: pick any date (past or future) and see that day's bookings and holidays.
 struct HistoricDailyOverviewView: View {
     @State private var selectedDate: Date = {
         let cal = Calendar.current
-        return cal.startOfDay(for: cal.date(byAdding: .day, value: -1, to: Date()) ?? Date())
+        return cal.startOfDay(for: Date())
     }()
     @Environment(\.dismiss) private var dismiss
     
+    private var minDate: Date {
+        Calendar.current.startOfDay(for: Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date())
+    }
+
     private var maxDate: Date {
-        Calendar.current.startOfDay(for: Date())
+        Calendar.current.startOfDay(for: Calendar.current.date(byAdding: .year, value: 1, to: Date()) ?? Date())
     }
     
     var body: some View {
@@ -201,7 +303,7 @@ struct HistoricDailyOverviewView: View {
                     Text("Select date")
                         .font(.headline)
                         .foregroundColor(.primary)
-                    DatePicker("", selection: $selectedDate, in: ...maxDate, displayedComponents: .date)
+                    DatePicker("", selection: $selectedDate, in: minDate...maxDate, displayedComponents: .date)
                         .datePickerStyle(.graphical)
                 }
                 .padding(.horizontal, 20)
@@ -212,7 +314,7 @@ struct HistoricDailyOverviewView: View {
                 
                 DailyOverviewView(displayDate: selectedDate)
             }
-            .navigationTitle("Past Bookings")
+            .navigationTitle("Date Overview")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {

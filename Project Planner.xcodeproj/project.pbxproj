@@ -276,6 +276,9 @@
 				DEVELOPMENT_TEAM = RTUL47LH55;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access to capture timestamped snag completion photos.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving and attaching snag completion photos.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow selecting photos to attach to task and snag completions.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -308,6 +311,9 @@
 				DEVELOPMENT_TEAM = RTUL47LH55;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access to capture timestamped snag completion photos.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving and attaching snag completion photos.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow selecting photos to attach to task and snag completions.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

@@ -24,6 +24,11 @@ class ProjectStore: ObservableObject {
     private var smartCache: SmartCacheService?
     private var cancellables = Set<AnyCancellable>()
     private var didAttemptOrgAutoSwitch = false
+
+    private func isPermissionDeniedError(_ error: Error?) -> Bool {
+        guard let nsError = error as NSError? else { return false }
+        return nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7
+    }
     
     init(persistenceService: PersistenceService? = nil) {
         self.persistenceService = persistenceService ?? PersistenceService()
@@ -172,6 +177,7 @@ class ProjectStore: ObservableObject {
                         let existingProjectsBeforeLoad = self.projects
                         var firebaseProjects: [Project] = []
                         var projectsLoaded = false
+                        var projectsError: Error?
                         do {
                             firebaseProjects = try await withTimeout(seconds: 10) {
                                 try await firebaseBackend.loadProjects(organizationId: organizationId)
@@ -180,11 +186,13 @@ class ProjectStore: ObservableObject {
                             projectsLoaded = true
                             print("🔥🔥🔥 DEBUG: ✅ Successfully loaded \(firebaseProjects.count) projects from Firebase (excluding small works)")
                         } catch {
+                            projectsError = error
                             print("🔥🔥🔥 DEBUG: ❌❌❌ ERROR loading projects: \(error.localizedDescription)")
                         }
 
                         var firebaseSmallWorks: [Project] = []
                         var smallWorksLoaded = false
+                        var smallWorksError: Error?
                         do {
                             firebaseSmallWorks = try await withTimeout(seconds: 10) {
                                 try await firebaseBackend.loadSmallWorks(organizationId: organizationId)
@@ -192,6 +200,7 @@ class ProjectStore: ObservableObject {
                             smallWorksLoaded = true
                             print("🔥🔥🔥 DEBUG: ✅ Successfully loaded \(firebaseSmallWorks.count) small works from Firebase")
                         } catch {
+                            smallWorksError = error
                             print("🔥🔥🔥 DEBUG: ❌❌❌ ERROR loading small works: \(error.localizedDescription)")
                         }
 
@@ -254,11 +263,15 @@ class ProjectStore: ObservableObject {
                             print("🔥🔥🔥 DEBUG: Error loading job types from Firebase: \(error.localizedDescription)")
                         }
                         
-                        if allItems.isEmpty,
-                           !self.clients.isEmpty,
-                           !didAttemptOrgAutoSwitch,
+                        let permissionDeniedWhileLoadingWork =
+                            isPermissionDeniedError(projectsError) || isPermissionDeniedError(smallWorksError)
+                        let shouldTryOrgAutoSwitch =
+                            !didAttemptOrgAutoSwitch &&
+                            (allItems.isEmpty || permissionDeniedWhileLoadingWork)
+
+                        if shouldTryOrgAutoSwitch,
                            let userId = firebaseBackend.currentUser?.uid {
-                            print("🔥🔥🔥 DEBUG: No work items in current org but clients exist — attempting auto-switch to org with work data")
+                            print("🔥🔥🔥 DEBUG: Work data missing/denied in current org — attempting auto-switch to org with work data")
                             let switched = await firebaseBackend.autoSwitchToOrganizationWithWorkData(
                                 userId: userId,
                                 currentOrganizationId: organizationId
@@ -275,7 +288,22 @@ class ProjectStore: ObservableObject {
 
                         print("🔥🔥🔥 DEBUG: Summary — store now \(self.projects.count) projects, \(self.clients.count) clients (Firebase batches ok: projects=\(projectsLoaded), smallWorks=\(smallWorksLoaded); raw doc counts \(firebaseProjects.count)+\(firebaseSmallWorks.count))")
                     } else {
-                        // Organization still nil after recovery attempt - try loading from local storage
+                        // Organization still nil after recovery attempt - try finding a better org before local fallback.
+                        if !didAttemptOrgAutoSwitch, let userId = firebaseBackend.currentUser?.uid {
+                            print("🔥🔥🔥 DEBUG: Organization still nil — attempting org auto-switch recovery")
+                            let switched = await firebaseBackend.autoSwitchToOrganizationWithWorkData(
+                                userId: userId,
+                                currentOrganizationId: ""
+                            )
+                            if switched {
+                                didAttemptOrgAutoSwitch = true
+                                print("🔥🔥🔥 DEBUG: ✅ Org auto-switch recovery succeeded. Reloading data now...")
+                                self.loadData()
+                                return
+                            }
+                        }
+
+                        // Local fallback
                         print("🔥🔥🔥 DEBUG: Organization still nil after recovery, loading from local storage")
                         let (projects, clients) = try await persistenceService.loadProjectData()
                         self.projects = projects
@@ -308,18 +336,6 @@ class ProjectStore: ObservableObject {
                 
                 print("🔥🔥🔥 DEBUG: Finished loading - Total projects: \(self.projects.count), Total clients: \(self.clients.count)")
                 
-                // CRITICAL: After loading, ensure all data is synced to Firebase
-                // This ensures data isn't lost if it was only in local storage
-                if let firebaseBackend = self.firebaseBackend,
-                   firebaseBackend.isAuthenticated,
-                   let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
-                   !self.projects.isEmpty {
-                    print("🔥🔥🔥 DEBUG: Verifying data sync - ensuring all \(self.projects.count) projects are in Firebase")
-                    Task {
-                        // Sync all projects to Firebase to ensure nothing is lost
-                        await self.syncAllDataToFirebase(organizationId: organizationId)
-                    }
-                }
             } catch {
                 self.errorMessage = error.localizedDescription
                 print("🔥🔥🔥 DEBUG: Error loading data: \(error.localizedDescription)")
@@ -329,14 +345,6 @@ class ProjectStore: ObservableObject {
                     print("🔥🔥🔥 DEBUG: No existing data, starting with empty arrays")
                 } else {
                     print("🔥🔥🔥 DEBUG: Keeping existing data: \(self.projects.count) projects, \(self.clients.count) clients")
-                    // Try to sync existing data to Firebase
-                    if let firebaseBackend = self.firebaseBackend,
-                       firebaseBackend.isAuthenticated,
-                       let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-                        Task {
-                            await self.syncAllDataToFirebase(organizationId: organizationId)
-                        }
-                    }
                 }
             }
         }
@@ -358,43 +366,6 @@ class ProjectStore: ObservableObject {
             group.cancelAll()
             return result
         }
-    }
-    
-    /// Syncs all current data to Firebase - ensures nothing is lost
-    private func syncAllDataToFirebase(organizationId: String) async {
-        guard let firebaseBackend = firebaseBackend else { return }
-        
-        print("🔥🔥🔥 DEBUG: [Sync] Starting sync of all data to Firebase")
-        
-        // Sync projects
-        for project in projects {
-            do {
-                try await firebaseBackend.saveProject(project, organizationId: organizationId)
-                print("🔥🔥🔥 DEBUG: [Sync] ✅ Synced project: \(project.siteName)")
-            } catch {
-                print("🔥🔥🔥 DEBUG: [Sync] ❌ Failed to sync project \(project.siteName): \(error.localizedDescription)")
-            }
-        }
-        
-        // Sync clients
-        for client in clients {
-            do {
-                try await firebaseBackend.saveClient(client, organizationId: organizationId)
-                print("🔥🔥🔥 DEBUG: [Sync] ✅ Synced client: \(client.name)")
-            } catch {
-                print("🔥🔥🔥 DEBUG: [Sync] ❌ Failed to sync client \(client.name): \(error.localizedDescription)")
-            }
-        }
-        
-        // Sync job types
-        do {
-            try await firebaseBackend.saveJobTypes(organizationId: organizationId, jobTypes: jobTypes)
-            print("🔥🔥🔥 DEBUG: [Sync] ✅ Synced job types")
-        } catch {
-            print("🔥🔥🔥 DEBUG: [Sync] ❌ Failed to sync job types: \(error.localizedDescription)")
-        }
-        
-        print("🔥🔥🔥 DEBUG: [Sync] Sync complete - \(projects.count) projects, \(clients.count) clients")
     }
     
     private func loadSampleData() {
@@ -981,10 +952,10 @@ class ProjectStore: ObservableObject {
                 
                 if !projectSaveErrors.isEmpty || !smallWorksSaveErrors.isEmpty || !clientSaveErrors.isEmpty {
                     let allErrors = projectSaveErrors + smallWorksSaveErrors + clientSaveErrors
-                    let errorMessage = allErrors.joined(separator: "; ")
-                    print("🔥🔥🔥 DEBUG: Some Firebase saves failed: \(errorMessage)")
-                    // Throw error so retry logic can handle it
-                    throw NSError(domain: "ProjectStore", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+                    let joined = allErrors.joined(separator: "; ")
+                    print("🔥🔥🔥 DEBUG: Some Firebase saves failed: \(joined)")
+                    // Keep local state without forcing retry storms on partial/permission failures.
+                    self.errorMessage = "Some cloud saves failed. Local data is kept."
                 } else {
                     print("🔥🔥🔥 DEBUG: Successfully saved \(regularProjects.count) projects, \(smallWorksProjects.count) small works, and \(clients.count) clients to Firebase")
                 }

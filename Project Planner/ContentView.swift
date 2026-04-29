@@ -7,6 +7,7 @@
 
 import SwiftUI
 import FirebaseAuth
+import UserNotifications
 
 // Preference key to track if we're in a detail view (should hide bottom menu)
 struct HideBottomMenuKey: PreferenceKey {
@@ -45,10 +46,13 @@ struct ContentView: View {
     @State private var hideBottomMenu = false
     @State private var showingHolidaySheet = false
     @State private var holidaySheetShowRequests = false
+    @State private var showingBookingToast = false
+    @State private var bookingToastText: String?
     
     /// Drives TabView `.id` so the page controller is recreated when role preview adds/removes tabs (avoids UIPageViewController deadlock on invalid selection).
     private var tabViewIdentity: String {
-        var keys: [String] = ["0", "5", "6", "8"]
+        var keys: [String] = ["0", "5", "8"]
+        if !userStore.isOperativeMode() { keys.append("6") }
         if userStore.canViewProjects() { keys.append(contentsOf: ["1", "2"]) }
         if userStore.canViewOperatives() { keys.append("3") }
         if userStore.hasAdminAccess() { keys.append(contentsOf: ["4", "7"]) }
@@ -125,6 +129,23 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second delay
                 await loadInitialData()
             }
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        }
+        .task(id: firebaseBackend.isAuthenticated) {
+            guard firebaseBackend.isAuthenticated else { return }
+            while firebaseBackend.isAuthenticated {
+                await notificationService.loadNotifications()
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+            }
+        }
+        .onChange(of: notificationService.bookingToastMessage) { _, newValue in
+            guard let text = newValue, !text.isEmpty else { return }
+            bookingToastText = text
+            withAnimation(.easeInOut(duration: 0.2)) { showingBookingToast = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                withAnimation(.easeInOut(duration: 0.2)) { showingBookingToast = false }
+                notificationService.bookingToastMessage = nil
+            }
         }
         .onChange(of: firebaseBackend.currentOrganization) { oldValue, newValue in
             // Reload all data when organization changes or is loaded
@@ -173,6 +194,27 @@ struct ContentView: View {
                 .environmentObject(notificationService)
                 .environmentObject(appSettings)
         }
+        .overlay(alignment: .top) {
+            if showingBookingToast, let bookingToastText {
+                HStack(spacing: 10) {
+                    Image(systemName: "calendar.badge.plus")
+                        .foregroundStyle(.white)
+                    Text(bookingToastText)
+                        .font(.subheadline)
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(Color.green.opacity(0.95))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .shadow(color: .black.opacity(0.2), radius: 6, x: 0, y: 3)
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
     }
     
     private func loadInitialData() async {
@@ -185,6 +227,7 @@ struct ContentView: View {
             group.addTask { await taskStore.loadData() }
             group.addTask { await holidayStore.loadData() }
         }
+        await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
     }
     
     @ViewBuilder
@@ -234,11 +277,13 @@ struct ContentView: View {
             .tag(5)
             .id(5) // Add ID to force reset when tab changes
             
-            NavigationStack {
-                HelpView()
+            if !userStore.isOperativeMode() {
+                NavigationStack {
+                    HelpView()
+                }
+                .tag(6)
+                .id(6) // Add ID to force reset when tab changes
             }
-            .tag(6)
-            .id(6) // Add ID to force reset when tab changes
             
             if userStore.hasAdminAccess() {
                 NavigationStack {

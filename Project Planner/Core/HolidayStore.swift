@@ -14,32 +14,84 @@ class HolidayStore: ObservableObject {
     @Published var errorMessage: String?
 
     private var firebaseBackend: FirebaseBackend?
+    private var isLoadingInFlight = false
+
+    init() {
+        NotificationCenter.default.addObserver(
+            forName: .organizationDidLoad,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.loadData()
+            }
+        }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    private func resolveOrganizationId() async throws -> String {
+        guard let fb = firebaseBackend, fb.isAuthenticated else {
+            throw NSError(domain: "HolidayStore", code: 401, userInfo: [NSLocalizedDescriptionKey: "You must be signed in to manage holidays."])
+        }
+
+        if let orgId = fb.currentOrganization?.firestoreDocumentId, !orgId.isEmpty {
+            return orgId
+        }
+
+        if let userId = fb.currentUser?.uid {
+            await fb.loadUserOrganizationWithRecovery(userId: userId)
+        }
+
+        if let orgId = fb.currentOrganization?.firestoreDocumentId, !orgId.isEmpty {
+            return orgId
+        }
+
+        throw NSError(domain: "HolidayStore", code: 404, userInfo: [NSLocalizedDescriptionKey: "Organization not loaded yet. Please try again in a moment."])
+    }
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         firebaseBackend = backend
     }
 
     func loadData() async {
-        guard let fb = firebaseBackend,
-              fb.isAuthenticated,
-              let orgId = fb.currentOrganization?.firestoreDocumentId else {
-            bookings = []
+        guard let fb = firebaseBackend else {
+            errorMessage = "Holiday service unavailable. Please reopen the app."
+            isLoading = false
             return
         }
+        guard fb.isAuthenticated else {
+            errorMessage = "Please sign in again to load holidays."
+            isLoading = false
+            return
+        }
+        guard !isLoadingInFlight else { return }
+        isLoadingInFlight = true
         isLoading = true
+        defer {
+            isLoading = false
+            isLoadingInFlight = false
+        }
         errorMessage = nil
         do {
+            let orgId = try await resolveOrganizationId()
             bookings = try await fb.loadHolidayBookings(organizationId: orgId)
         } catch {
-            errorMessage = error.localizedDescription
-            bookings = []
+            let nsError = error as NSError
+            if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 {
+                errorMessage = "Holiday sync is currently blocked by Firebase permissions. Existing cached data may still be shown."
+            } else {
+                errorMessage = error.localizedDescription
+            }
+            // Keep currently loaded bookings on transient permission/network errors.
         }
-        isLoading = false
     }
 
     func saveBooking(_ booking: HolidayBooking) async throws {
-        guard let fb = firebaseBackend,
-              let orgId = fb.currentOrganization?.firestoreDocumentId else { return }
+        guard let fb = firebaseBackend else { return }
+        let orgId = try await resolveOrganizationId()
         try await fb.saveHolidayBooking(booking, organizationId: orgId)
         if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
             bookings[index] = booking
@@ -49,9 +101,9 @@ class HolidayStore: ObservableObject {
     }
 
     func deleteBooking(_ booking: HolidayBooking) async {
-        guard let fb = firebaseBackend,
-              let orgId = fb.currentOrganization?.firestoreDocumentId else { return }
+        guard let fb = firebaseBackend else { return }
         do {
+            let orgId = try await resolveOrganizationId()
             try await fb.deleteHolidayBooking(booking, organizationId: orgId)
             bookings.removeAll { $0.id == booking.id }
         } catch {

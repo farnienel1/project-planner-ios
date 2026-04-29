@@ -21,10 +21,37 @@ struct TasksDetailView: View {
         case oldest = "Oldest"
     }
     
+    private var qualificationExpiryBannerItems: [(id: String, title: String, subtitle: String)] {
+        guard userStore.isOperativeMode(),
+              let email = userStore.currentUser?.email else { return [] }
+        let em = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let op = operativeStore.allOperatives.first(where: {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
+        }) else { return [] }
+        let today = Calendar.current.startOfDay(for: Date())
+        guard let horizon = Calendar.current.date(byAdding: .day, value: 30, to: today) else { return [] }
+        var rows: [(String, String, String)] = []
+        for (qid, exp) in op.qualificationExpiryDates {
+            guard exp >= today && exp <= horizon,
+                  let q = op.qualifications.first(where: { $0.id == qid }) else { continue }
+            let days = Calendar.current.dateComponents([.day], from: today, to: exp).day ?? 0
+            rows.append((
+                id: qid.uuidString,
+                title: "Qualification expiring: \(q.name)",
+                subtitle: days <= 0 ? "Renew today — tell your manager when complete." : "\(days) day(s) remaining. Tell your manager when you have renewed it."
+            ))
+        }
+        return rows.sorted(by: { $0.1 < $1.1 })
+    }
+    
+    private var hasListContent: Bool {
+        !qualificationExpiryBannerItems.isEmpty || !filteredTasks.isEmpty
+    }
+    
     var body: some View {
         NavigationView {
             Group {
-                if filteredTasks.isEmpty {
+                if !hasListContent {
                     emptyStateView
                 } else {
                     VStack(spacing: 0) {
@@ -75,7 +102,9 @@ struct TasksDetailView: View {
         if userStore.isOperativeMode() {
             // For operative mode, only show tasks assigned to this operative
             if let currentUserEmail = userStore.currentUser?.email,
-               let operative = operativeStore.allOperatives.first(where: { $0.email == currentUserEmail }) {
+               let operative = operativeStore.allOperatives.first(where: {
+                   $0.email.lowercased() == currentUserEmail.lowercased()
+               }) {
                 tasks = taskStore.tasks.filter { task in
                     !task.isCompleted && task.allAssignedOperativeIds.contains(operative.id)
                 }
@@ -140,7 +169,9 @@ struct TasksDetailView: View {
                     .font(.title2)
                     .fontWeight(.semibold)
                 
-                Text("You have no assigned tasks at the moment.")
+                Text(qualificationExpiryBannerItems.isEmpty
+                     ? "You have no assigned tasks at the moment."
+                     : "No project tasks right now. See qualification reminders above when you open Tasks from Home.")
                     .font(.body)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -164,6 +195,30 @@ struct TasksDetailView: View {
     private var tasksList: some View {
         ScrollView {
             VStack(spacing: 16) {
+                if !qualificationExpiryBannerItems.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Qualification reminders")
+                            .font(.headline)
+                            .foregroundStyle(.red)
+                        ForEach(qualificationExpiryBannerItems, id: \.id) { item in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(item.title)
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .foregroundStyle(.primary)
+                                Text(item.subtitle)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(Color.red.opacity(0.08))
+                            .cornerRadius(12)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+                
                 ForEach(filteredTasks) { task in
                     TaskTileView(task: task)
                         .environmentObject(projectStore)

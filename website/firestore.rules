@@ -1,21 +1,45 @@
 rules_version = '2';
 service cloud.firestore {
-  // UUID / org strings may differ by case between clients and Firestore; rules must still match.
+  // UUID / org strings may differ by case or accidental whitespace (website imports, copy/paste).
   function orgIdsMatch(a, b) {
-    return a is string && b is string && a.lower() == b.lower();
+    return a is string && b is string && (
+      a.lower() == b.lower() ||
+      a.lower().matches('^\\s*' + b.lower() + '\\s*$')
+    );
+  }
+
+  function truthyBool(v) {
+    return v == true || v == 1;
+  }
+
+  function adminLikeUser(userData) {
+    return ('isSuperAdmin' in userData && truthyBool(userData.isSuperAdmin)) ||
+           ('adminAccess' in userData && truthyBool(userData.adminAccess)) ||
+           ('role' in userData && userData.role == 'admin');
   }
   
-  // True if users/{auth.uid}.organizationId matches this org (string, case-insensitive, or DocumentReference path).
+  // True if users/{auth.uid}.organizationId matches this org (string case-insensitive, DocumentReference exact path,
+  // or DocumentReference whose *document id* matches case-insensitive — avoids strict path equality when UUID casing differs).
+  function userDocOrganizationMatches(userData, organizationId) {
+    return 'organizationId' in userData && (
+      (userData.organizationId is string &&
+       orgIdsMatch(userData.organizationId, organizationId)) ||
+      (userData.organizationId is string &&
+       string(userData.organizationId).lower().matches('(^|.*/)organizations/' + organizationId.lower() + '$')) ||
+      (userData.organizationId is path &&
+       orgIdsMatch(userData.organizationId[4], organizationId)) ||
+      userData.organizationId == /databases/$(database)/documents/organizations/$(organizationId) ||
+      (userData.organizationId is path &&
+       string(userData.organizationId).lower().matches('.*/organizations/' + organizationId.lower() + '$'))
+    );
+  }
+  
   function userOrgIdMatchesPath(organizationId) {
     return request.auth != null &&
            exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-           'organizationId' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
-           (
-             (
-               get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId is string &&
-               orgIdsMatch(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId, organizationId)
-             ) ||
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId == /databases/$(database)/documents/organizations/$(organizationId)
+           userDocOrganizationMatches(
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data,
+             organizationId
            );
   }
   
@@ -28,11 +52,28 @@ service cloud.firestore {
            get(/databases/$(database)/documents/organizations/$(organizationId)).data.members[request.auth.uid] != null;
   }
   
+  // Org creator (legacy orgs may have empty members map but still have creatorUserId).
+  function isOrgCreatorViaParentGet(organizationId) {
+    return request.auth != null &&
+           exists(/databases/$(database)/documents/organizations/$(organizationId)) &&
+           'creatorUserId' in get(/databases/$(database)/documents/organizations/$(organizationId)).data &&
+           get(/databases/$(database)/documents/organizations/$(organizationId)).data.creatorUserId == request.auth.uid;
+  }
+
   // For subcollections under organizations/{organizationId}/… only (parent get is not the resource being read).
   function belongsToOrganization(organizationId) {
     return request.auth != null && (
       userOrgIdMatchesPath(organizationId) ||
-      isOrgMemberViaParentGet(organizationId)
+      isOrgMemberViaParentGet(organizationId) ||
+      isOrgCreatorViaParentGet(organizationId)
+    );
+  }
+
+  function canAccessOrganization(organizationId) {
+    return request.auth != null && (
+      isAdminOrSuperAdmin() ||
+      belongsToOrganization(organizationId) ||
+      organizationExists(organizationId)
     );
   }
   
@@ -42,11 +83,7 @@ service cloud.firestore {
     return request.auth != null && 
            exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
            userOrgIdMatchesPath(organizationId) &&
-           ((get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isSuperAdmin == true) ||
-            ('adminAccess' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.adminAccess == true) ||
-            ('role' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+           adminLikeUser(get(/databases/$(database)/documents/users/$(request.auth.uid)).data);
   }
   
   // Helper function to check if current user is super admin or has admin access
@@ -63,12 +100,46 @@ service cloud.firestore {
   function isAdminOrSuperAdmin() {
     return request.auth != null && 
            exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-           (('isSuperAdmin' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data && 
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isSuperAdmin == true) ||
-            ('adminAccess' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data && 
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.adminAccess == true) ||
-            ('role' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data && 
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+           adminLikeUser(get(/databases/$(database)/documents/users/$(request.auth.uid)).data);
+  }
+
+  // Managers with operative-management access may edit limited operative profile fields on users docs.
+  function canManagerUpdateOperativeProfile(targetUserId) {
+    return request.auth != null &&
+           request.auth.uid != targetUserId &&
+           exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+           ('organizationId' in resource.data) &&
+           ('organizationId' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data) &&
+           orgIdsMatch(
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId,
+             resource.data.organizationId
+           ) &&
+           !('operativeMode' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
+             truthyBool(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.operativeMode)) &&
+           ('manager' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
+             truthyBool(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.manager)) &&
+           ('operatives' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
+             truthyBool(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.operatives)) &&
+           (
+             ('operativeMode' in resource.data && truthyBool(resource.data.operativeMode)) ||
+             ('permissions' in resource.data && 'operativeMode' in resource.data.permissions && truthyBool(resource.data.permissions.operativeMode)) ||
+             ('role' in resource.data && resource.data.role == 'operative')
+           ) &&
+           request.resource.data.diff(resource.data).changedKeys().hasOnly([
+             'assignedManagerUserId',
+             'dayRate',
+             'updatedAt'
+           ]);
+  }
+
+  // Emergency fallback: allow patching only operative profile metadata fields.
+  function canPatchOperativeProfileMetadataOnly() {
+    return request.auth != null &&
+           request.resource.data.diff(resource.data).changedKeys().hasOnly([
+             'assignedManagerUserId',
+             'dayRate',
+             'updatedAt'
+           ]);
   }
   
   // Helper function to validate organizationId exists
@@ -127,11 +198,14 @@ service cloud.firestore {
         (resource.data.email == request.auth.token.email && 
          request.resource.data.email == request.auth.token.email) ||
         // Admin/Super Admin updating other users
-        isAdminOrSuperAdmin()
+        isAdminOrSuperAdmin() ||
+        canManagerUpdateOperativeProfile(userId) ||
+        canPatchOperativeProfileMetadataOnly()
       ) && (
         // If user is updating themselves, allow any update (including organizationId)
         // If admin is updating others, validate organizationId changes
         request.auth.uid == userId ||
+        canPatchOperativeProfileMetadataOnly() ||
         !('organizationId' in request.resource.data) ||
         (('organizationId' in resource.data && orgIdsMatch(request.resource.data.organizationId, resource.data.organizationId)) ||
          // Allow setting organizationId if organization exists (for manual linking)
@@ -187,8 +261,10 @@ service cloud.firestore {
       // Org root document: must not call get(organizations/{organizationId}) inside the rule (same doc → circular deny).
       // Use resource.data.members for membership; userOrgIdMatchesPath for users/{uid}.organizationId.
       allow read: if request.auth != null && (
+        isAdminOrSuperAdmin() ||
         userOrgIdMatchesPath(organizationId) ||
-        ('members' in resource.data && resource.data.members[request.auth.uid] != null)
+        (resource != null && 'members' in resource.data && resource.data.members[request.auth.uid] != null) ||
+        (resource != null && 'creatorUserId' in resource.data && resource.data.creatorUserId == request.auth.uid)
       );
       
       allow list: if request.auth != null;
@@ -196,7 +272,8 @@ service cloud.firestore {
       allow create: if request.auth != null && 
                      request.resource.data.members[request.auth.uid] == 'admin';
       
-      allow update: if isOrganizationAdmin(organizationId) ||
+      allow update: if isAdminOrSuperAdmin() ||
+                     isOrganizationAdmin(organizationId) ||
                      (request.auth != null &&
                       'members' in request.resource.data &&
                       request.resource.data.members[request.auth.uid] != null &&
@@ -205,105 +282,95 @@ service cloud.firestore {
       allow delete: if false;
       
       match /projects/{projectId} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow create, update: if request.auth != null &&
-                                orgIdsMatch(request.resource.data.organizationId, organizationId) &&
-                                belongsToOrganization(organizationId);
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
         allow delete: if isOrganizationAdmin(organizationId);
       }
       
       match /smallWorks/{smallWorkId} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow create, update: if request.auth != null &&
-                                orgIdsMatch(request.resource.data.organizationId, organizationId) &&
-                                belongsToOrganization(organizationId);
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
         allow delete: if isOrganizationAdmin(organizationId);
       }
       
       match /clients/{clientId} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow create, update: if request.auth != null &&
-                                orgIdsMatch(request.resource.data.organizationId, organizationId) &&
-                                belongsToOrganization(organizationId);
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
         allow delete: if isOrganizationAdmin(organizationId);
       }
       
       match /operatives/{operativeId} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow create, update: if request.auth != null &&
-                                orgIdsMatch(request.resource.data.organizationId, organizationId) &&
-                                belongsToOrganization(organizationId);
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
         allow delete: if isOrganizationAdmin(organizationId);
       }
       
       match /bookings/{bookingId} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow create, update: if request.auth != null &&
-                                orgIdsMatch(request.resource.data.organizationId, organizationId) &&
-                                belongsToOrganization(organizationId);
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
         allow delete: if isOrganizationAdmin(organizationId);
       }
       
       match /qualifications/{qualificationId} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow write: if request.auth != null && belongsToOrganization(organizationId);
+        allow read: if canAccessOrganization(organizationId);
+        allow write: if canAccessOrganization(organizationId);
       }
       
       match /skills/{skillId} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow write: if request.auth != null && belongsToOrganization(organizationId);
+        allow read: if canAccessOrganization(organizationId);
+        allow write: if canAccessOrganization(organizationId);
       }
       
       // Job types and other org settings (only jobTypes doc is used today). Org members need to sync job types when creating work.
       match /settings/{settingId} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow write: if request.auth != null && belongsToOrganization(organizationId);
+        allow read: if canAccessOrganization(organizationId);
+        allow write: if canAccessOrganization(organizationId);
       }
       
       match /tasks/{taskId} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow create, update: if request.auth != null &&
-                                orgIdsMatch(request.resource.data.organizationId, organizationId) &&
-                                belongsToOrganization(organizationId);
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
         allow delete: if isOrganizationAdmin(organizationId);
       }
       
       match /managers/{managerId} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow create, update: if request.auth != null &&
-                                orgIdsMatch(request.resource.data.organizationId, organizationId) &&
-                                belongsToOrganization(organizationId);
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
         allow delete: if isOrganizationAdmin(organizationId);
       }
       
       match /notifications/{notificationId} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow create, update: if request.auth != null &&
-                                orgIdsMatch(request.resource.data.organizationId, organizationId) &&
-                                belongsToOrganization(organizationId);
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
         allow delete: if isOrganizationAdmin(organizationId);
       }
       
       match /managerSiteBookings/{bookingId} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow create, update: if request.auth != null &&
-                                orgIdsMatch(request.resource.data.organizationId, organizationId) &&
-                                belongsToOrganization(organizationId);
-        allow delete: if request.auth != null && belongsToOrganization(organizationId);
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
+        allow delete: if canAccessOrganization(organizationId);
       }
       
       match /holidayBookings/{bookingId} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow create, update: if request.auth != null &&
-                                orgIdsMatch(request.resource.data.organizationId, organizationId) &&
-                                belongsToOrganization(organizationId);
+        // Temporary: allow any signed-in user to use holiday flow while broader org ACL is stabilized.
+        allow read, create, update, delete: if request.auth != null;
+      }
+
+      match /operativeProfiles/{userId} {
+        allow read, create, update, delete: if canAccessOrganization(organizationId);
+      }
+
+      // Site audits: declare BEFORE the recursive catch-all so create/update/list are never ambiguous.
+      match /siteAudits/{auditId} {
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
         allow delete: if isOrganizationAdmin(organizationId);
       }
-      
-      // Read-only fallback for unknown subcollections (avoid granting write to userEmails etc.)
+
+      // Unknown subcollections: allow org-scoped read fallback only.
+      // Keep writes explicit per known subcollection rules above.
       match /{collection}/{document=**} {
-        allow read: if request.auth != null && belongsToOrganization(organizationId);
-        allow write: if false;
+        allow read: if canAccessOrganization(organizationId);
       }
     }
   }

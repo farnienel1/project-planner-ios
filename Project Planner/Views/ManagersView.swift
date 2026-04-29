@@ -32,8 +32,9 @@ struct ManagersView: View {
     // Get managers from users - includes admins (who are automatically managers) and users with manager permission
     private var allManagers: [AppUser] {
         userStore.organizationUsers.filter { user in
-            // Include admins (they are automatically managers) and users with manager permission
-            (user.permissions.adminAccess || user.isSuperAdmin) || user.permissions.manager
+            guard !user.permissions.operativeMode else { return false }
+            // Match Manage Users → Managers tab: admins and manager-role accounts only
+            return (user.permissions.adminAccess || user.isSuperAdmin) || user.permissions.manager
         }
     }
     

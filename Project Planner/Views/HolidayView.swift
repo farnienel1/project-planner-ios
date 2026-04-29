@@ -31,11 +31,12 @@ struct HolidayView: View {
     private var canApproveRequests: Bool { userStore.hasAdminAccess() && showRequests }
 
     @State private var displayedMonth: Date = Date()
-    @State private var selectedStart: Date?
-    @State private var selectedEnd: Date?
+    @State private var selectedDates: Set<Date> = []
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var showError = false
+    @State private var successMessage: String?
+    @State private var showSuccess = false
     @State private var activeSection: HolidaySection = .calendar
 
     enum HolidaySection: String, CaseIterable {
@@ -50,11 +51,42 @@ struct HolidayView: View {
         NavigationView {
             Group {
                 if holidayStore.isLoading && holidayStore.bookings.isEmpty {
-                    ProgressView("Loading…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(spacing: 12) {
+                        ProgressView("Loading…")
+                        if let msg = holidayStore.errorMessage, !msg.isEmpty {
+                            Text(msg)
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                        }
+                        Button("Retry") {
+                            Task { await holidayStore.loadData() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 24) {
+                            if let msg = holidayStore.errorMessage, !msg.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Some holiday data could not be synced.")
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                    Text(msg)
+                                        .font(.footnote)
+                                        .foregroundColor(.secondary)
+                                    Button("Retry") {
+                                        Task { await holidayStore.loadData() }
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color(.secondarySystemBackground))
+                                .cornerRadius(10)
+                            }
                             if isRequestMode || canApproveRequests {
                                 Picker("Section", selection: $activeSection) {
                                     Text(isRequestMode ? "Request" : "Book").tag(HolidaySection.calendar)
@@ -94,6 +126,11 @@ struct HolidayView: View {
                 Button("OK") { showError = false }
             } message: {
                 if let msg = errorMessage { Text(msg) }
+            }
+            .alert("Success", isPresented: $showSuccess) {
+                Button("OK") { showSuccess = false }
+            } message: {
+                if let msg = successMessage { Text(msg) }
             }
         }
     }
@@ -169,32 +206,28 @@ struct HolidayView: View {
     }
 
     private func dayCell(date: Date) -> some View {
-        let isInRange = isDateInSelectedRange(date)
-        let isStartOrEnd = isStartOrEndDate(date)
+        let day = calendar.startOfDay(for: date)
+        let isSelected = selectedDates.contains(day)
         let isInMonth = calendar.isDate(date, equalTo: displayedMonth, toGranularity: .month)
+        let isToday = calendar.isDateInToday(day)
         return Button {
-            if selectedStart == nil {
-                selectedStart = date
-                selectedEnd = date
+            if selectedDates.contains(day) {
+                selectedDates.remove(day)
             } else {
-                selectedEnd = date
-                if let start = selectedStart, let end = selectedEnd, start > end {
-                    selectedStart = end
-                    selectedEnd = start
-                }
+                selectedDates.insert(day)
             }
         } label: {
             Text("\(calendar.component(.day, from: date))")
                 .font(.subheadline)
-                .fontWeight(isStartOrEnd ? .bold : .regular)
-                .foregroundColor(isInMonth ? (isStartOrEnd ? .white : .primary) : .secondary)
+                .fontWeight(isSelected ? .bold : .regular)
+                .foregroundColor(isInMonth ? (isSelected ? .white : .primary) : .secondary)
                 .frame(width: 36, height: 36)
                 .background(
                     Group {
-                        if isStartOrEnd {
+                        if isSelected {
                             Color.theme.primary(for: appSettings.settings.colorScheme)
-                        } else if isInRange {
-                            Color.theme.primary(for: appSettings.settings.colorScheme).opacity(0.3)
+                        } else if isToday {
+                            Color.gray.opacity(0.35)
                         } else {
                             Color.clear
                         }
@@ -203,22 +236,6 @@ struct HolidayView: View {
                 .clipShape(Circle())
         }
         .buttonStyle(PlainButtonStyle())
-    }
-
-    private func isDateInSelectedRange(_ date: Date) -> Bool {
-        guard let start = selectedStart, let end = selectedEnd else { return false }
-        let d = calendar.startOfDay(for: date)
-        let s = calendar.startOfDay(for: start)
-        let e = calendar.startOfDay(for: end)
-        return d >= s && d <= e
-    }
-
-    private func isStartOrEndDate(_ date: Date) -> Bool {
-        guard let start = selectedStart, let end = selectedEnd else { return false }
-        let d = calendar.startOfDay(for: date)
-        let s = calendar.startOfDay(for: start)
-        let e = calendar.startOfDay(for: end)
-        return d == s || d == e
     }
 
     private func daysInDisplayedMonth() -> [Date?] {
@@ -237,49 +254,79 @@ struct HolidayView: View {
 
     private var selectedRangeSummary: some View {
         Group {
-            if let start = selectedStart, let end = selectedEnd {
+            let sorted = selectedDates.sorted()
+            if let first = sorted.first, let last = sorted.last {
                 HStack {
                     Image(systemName: "calendar")
                         .foregroundColor(.secondary)
-                    Text("\(start.formatted(date: .abbreviated, time: .omitted)) – \(end.formatted(date: .abbreviated, time: .omitted))")
-                        .font(.subheadline)
+                    if sorted.count == 1 {
+                        Text(first.formatted(date: .abbreviated, time: .omitted))
+                            .font(.subheadline)
+                    } else {
+                        Text("\(sorted.count) days selected (\(first.formatted(date: .abbreviated, time: .omitted)) – \(last.formatted(date: .abbreviated, time: .omitted)))")
+                            .font(.subheadline)
+                    }
                 }
             } else {
-                Text("Tap dates to select a range")
+                Text("Tap each day you want to book")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
         }
     }
 
-    private var submitButton: some View {
-        Button {
-            submitHoliday()
-        } label: {
-            HStack {
-                if isSaving {
-                    ProgressView()
-                        .tint(.white)
-                } else {
-                    Image(systemName: isRequestMode ? "paperplane.fill" : "checkmark.circle.fill")
-                    Text(isRequestMode ? "Request holiday" : "Book holiday")
+    private var selectedDatesPreview: some View {
+        let sorted = selectedDates.sorted()
+        return VStack(alignment: .leading, spacing: 8) {
+            if sorted.isEmpty {
+                EmptyView()
+            } else {
+                Text("Selected days")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                ForEach(sorted, id: \.self) { day in
+                    Text(day.formatted(date: .abbreviated, time: .omitted))
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
                 }
             }
-            .frame(maxWidth: .infinity)
-            .padding()
-            .background(selectedStart != nil && selectedEnd != nil ? Color.theme.primary(for: appSettings.settings.colorScheme) : Color.gray)
-            .foregroundColor(.white)
-            .cornerRadius(12)
         }
-        .disabled(selectedStart == nil || selectedEnd == nil || isSaving)
+    }
+
+    private var selectedDatesSorted: [Date] {
+        selectedDates.sorted()
+    }
+
+    private func hasExistingHoliday(on day: Date, userId: String?, operativeId: UUID?) -> Bool {
+        holidayStore.bookings.contains { booking in
+            guard booking.status != .rejected else { return false }
+            let matchesUser = userId != nil && booking.userId == userId
+            let matchesOperative = operativeId != nil && booking.operativeId == operativeId
+            guard matchesUser || matchesOperative else {
+                return false
+            }
+            let target = calendar.startOfDay(for: day)
+            let start = calendar.startOfDay(for: booking.startDate)
+            let end = calendar.startOfDay(for: booking.endDate)
+            return target >= start && target <= end
+        }
+    }
+
+    private func clearSelection() {
+        selectedDates.removeAll()
     }
 
     private func submitHoliday() {
-        guard let start = selectedStart, let end = selectedEnd,
-              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let startDay = calendar.startOfDay(for: start)
-        let endDay = calendar.startOfDay(for: end)
-        guard startDay <= endDay else { return }
+        let selectedDays = selectedDatesSorted
+        guard !selectedDays.isEmpty else { return }
+        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
+            ?? userStore.currentUser?.organizationId
+            ?? ""
+        guard !orgId.isEmpty else {
+            errorMessage = "Organization not loaded yet. Please try again in a moment."
+            showError = true
+            return
+        }
 
         isSaving = true
         errorMessage = nil
@@ -295,21 +342,47 @@ struct HolidayView: View {
                         }
                         return
                     }
-                    let booking = HolidayBooking(
-                        organizationId: orgId,
-                        userId: nil,
-                        operativeId: operative.id,
-                        startDate: startDay,
-                        endDate: endDay,
-                        status: .pending
-                    )
-                    try await holidayStore.saveBooking(booking)
-                    await notificationService.notifyHolidayRequestSubmitted(
-                        bookingId: booking.id,
-                        operativeName: operative.firstName + " " + operative.lastName,
-                        startDate: startDay,
-                        endDate: endDay
-                    )
+                    guard let uid = firebaseBackend.currentUser?.uid else {
+                        await MainActor.run {
+                            errorMessage = "Not signed in."
+                            showError = true
+                            isSaving = false
+                        }
+                        return
+                    }
+                    for day in selectedDays {
+                        if hasExistingHoliday(on: day, userId: uid, operativeId: operative.id) {
+                            throw NSError(domain: "Holiday", code: 409, userInfo: [NSLocalizedDescriptionKey: "One or more selected days already have a holiday booking/request."])
+                        }
+                    }
+                    var createdBookingIds: [UUID] = []
+                    for day in selectedDays {
+                        let booking = HolidayBooking(
+                            organizationId: orgId,
+                            userId: uid,
+                            operativeId: operative.id,
+                            startDate: day,
+                            endDate: day,
+                            status: .pending
+                        )
+                        try await holidayStore.saveBooking(booking)
+                        createdBookingIds.append(booking.id)
+                    }
+                    if let firstBookingId = createdBookingIds.first,
+                       let startDate = selectedDays.first,
+                       let endDate = selectedDays.last {
+                        await notificationService.notifyHolidayRequestSubmitted(
+                            bookingId: firstBookingId,
+                            operativeName: operative.firstName + " " + operative.lastName,
+                            startDate: startDate,
+                            endDate: endDate,
+                            assignedManagerUserId: userStore.currentUser?.assignedManagerUserId
+                        )
+                    }
+                    await MainActor.run {
+                        successMessage = "Holiday request submitted for \(selectedDays.count) day\(selectedDays.count == 1 ? "" : "s")."
+                        showSuccess = true
+                    }
                 } else {
                     guard let uid = firebaseBackend.currentUser?.uid else {
                         await MainActor.run {
@@ -319,28 +392,48 @@ struct HolidayView: View {
                         }
                         return
                     }
-                    let booking = HolidayBooking(
-                        organizationId: orgId,
-                        userId: uid,
-                        operativeId: nil,
-                        startDate: startDay,
-                        endDate: endDay,
-                        status: isManagerRequestMode ? .pending : .approved
-                    )
-                    try await holidayStore.saveBooking(booking)
-                    if isManagerRequestMode {
+                    for day in selectedDays {
+                        if hasExistingHoliday(on: day, userId: uid, operativeId: nil) {
+                            throw NSError(domain: "Holiday", code: 409, userInfo: [NSLocalizedDescriptionKey: "One or more selected days already have a holiday booking/request."])
+                        }
+                    }
+                    var firstBookingId: UUID?
+                    for day in selectedDays {
+                        let booking = HolidayBooking(
+                            organizationId: orgId,
+                            userId: uid,
+                            operativeId: nil,
+                            startDate: day,
+                            endDate: day,
+                            status: isManagerRequestMode ? .pending : .approved
+                        )
+                        try await holidayStore.saveBooking(booking)
+                        firstBookingId = firstBookingId ?? booking.id
+                    }
+                    if isManagerRequestMode,
+                       let bookingId = firstBookingId,
+                       let startDate = selectedDays.first,
+                       let endDate = selectedDays.last {
                         let requesterName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
                         await notificationService.notifyHolidayRequestSubmittedByUser(
-                            bookingId: booking.id,
+                            bookingId: bookingId,
                             requesterName: requesterName,
-                            startDate: startDay,
-                            endDate: endDay
+                            startDate: startDate,
+                            endDate: endDate,
+                            assignedManagerUserId: userStore.currentUser?.assignedManagerUserId
                         )
+                    }
+                    await MainActor.run {
+                        if isManagerRequestMode {
+                            successMessage = "Holiday request submitted for \(selectedDays.count) day\(selectedDays.count == 1 ? "" : "s")."
+                        } else {
+                            successMessage = "Holiday booked for \(selectedDays.count) day\(selectedDays.count == 1 ? "" : "s")."
+                        }
+                        showSuccess = true
                     }
                 }
                 await MainActor.run {
-                    selectedStart = nil
-                    selectedEnd = nil
+                    clearSelection()
                     isSaving = false
                 }
             } catch {
@@ -350,6 +443,31 @@ struct HolidayView: View {
                     isSaving = false
                 }
             }
+        }
+    }
+
+    private var submitButton: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            selectedDatesPreview
+            Button {
+                submitHoliday()
+            } label: {
+                HStack {
+                    if isSaving {
+                        ProgressView()
+                            .tint(.white)
+                    } else {
+                        Image(systemName: isRequestMode ? "paperplane.fill" : "checkmark.circle.fill")
+                        Text(isRequestMode ? "Request holiday" : "Book holiday")
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(!selectedDates.isEmpty ? Color.theme.primary(for: appSettings.settings.colorScheme) : Color.gray)
+                .foregroundColor(.white)
+                .cornerRadius(12)
+            }
+            .disabled(selectedDates.isEmpty || isSaving)
         }
     }
 

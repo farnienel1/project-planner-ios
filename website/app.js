@@ -9,7 +9,7 @@ const firebaseConfig = {
     projectId: "project-planner-f986c",
     storageBucket: "project-planner-f986c.appspot.com",
     messagingSenderId: "980527300983",
-    appId: "1:980527300983:web:project-planner"
+    appId: "1:980527300983:web:89bd0c7a69881d1b1be172"
 };
 
 const app = initializeApp(firebaseConfig);

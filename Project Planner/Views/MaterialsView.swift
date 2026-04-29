@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import FirebaseFirestore
 
 struct MaterialsView: View {
     @EnvironmentObject var userStore: UserStore
@@ -17,6 +18,7 @@ struct MaterialsView: View {
     @State private var currentWeek: Date = Date()
     @State private var materials: [MaterialItem] = []
     @State private var isLoading = false
+    @State private var materialsListener: ListenerRegistration?
     
     var body: some View {
         Group {
@@ -45,6 +47,7 @@ struct MaterialsView: View {
         }
         .task {
             await loadMaterials()
+            startMaterialsListener()
         }
         .refreshable {
             await loadMaterials()
@@ -53,6 +56,10 @@ struct MaterialsView: View {
             Task {
                 await loadMaterials()
             }
+        }
+        .onDisappear {
+            materialsListener?.remove()
+            materialsListener = nil
         }
     }
     
@@ -84,6 +91,17 @@ struct MaterialsView: View {
             await MainActor.run {
                 isLoading = false
             }
+        }
+    }
+
+    private func startMaterialsListener() {
+        guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        materialsListener?.remove()
+        materialsListener = firebaseBackend.observeMaterialItems(
+            organizationId: organizationId,
+            projectId: project.id
+        ) { updated in
+            materials = updated
         }
     }
 }
@@ -300,6 +318,17 @@ struct MaterialItemRow: View {
     
     let material: MaterialItem
     @State private var showingEditMaterial = false
+
+    private var timeString: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: material.addedAt)
+    }
+
+    private var isLateAddition: Bool {
+        let hour = Calendar.current.component(.hour, from: material.addedAt)
+        return hour >= 16
+    }
     
     var body: some View {
         HStack {
@@ -323,6 +352,15 @@ struct MaterialItemRow: View {
                 }
             }
             Spacer()
+
+            Text(timeString)
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(isLateAddition ? Color.red.opacity(0.9) : Color(.systemGray5))
+                .foregroundColor(isLateAddition ? .white : .secondary)
+                .cornerRadius(6)
             
             if !userStore.isOperativeMode() {
                 Button(action: {
@@ -358,6 +396,7 @@ struct AddMaterialView: View {
     
     @State private var materialEntries: [MaterialEntryForm] = []
     @State private var isSaving = false
+    @State private var showingLateSubmissionAlert = false
     
     struct MaterialEntryForm: Identifiable {
         let id = UUID()
@@ -410,11 +449,37 @@ struct AddMaterialView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Submit All") {
-                        saveAllMaterials()
+                        handleSubmitAllTapped()
                     }
                     .disabled(materialEntries.allSatisfy { $0.materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } || isSaving)
                 }
             }
+        }
+        .alert("Material Time Check", isPresented: $showingLateSubmissionAlert) {
+            Button("Book Materials") {
+                saveAllMaterials()
+            }
+            Button("Change Date", role: .cancel) { }
+        } message: {
+            Text("Some materials are being added for today after 4:00 PM. Continue or change the date.")
+        }
+    }
+
+    private func handleSubmitAllTapped() {
+        if hasTodayEntriesAfterCutoff() {
+            showingLateSubmissionAlert = true
+            return
+        }
+        saveAllMaterials()
+    }
+
+    private func hasTodayEntriesAfterCutoff() -> Bool {
+        let calendar = Calendar.current
+        let now = Date()
+        guard calendar.component(.hour, from: now) >= 16 else { return false }
+        return materialEntries.contains {
+            calendar.isDate($0.selectedDate, inSameDayAs: now) &&
+            !$0.materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
     
