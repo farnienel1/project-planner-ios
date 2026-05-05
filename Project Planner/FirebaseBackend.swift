@@ -2,6 +2,12 @@ import Foundation
 import FirebaseAuth
 import FirebaseCore
 import FirebaseFirestore
+#if canImport(FirebaseMessaging)
+import FirebaseMessaging
+#endif
+#if canImport(UIKit)
+import UIKit
+#endif
 #if canImport(FirebaseStorage)
 import FirebaseStorage
 #endif
@@ -3000,6 +3006,83 @@ class FirebaseBackend: ObservableObject {
     }
     
     // MARK: - Notifications
+
+    func registerPushToken(_ token: String) async {
+        guard let authUser = currentUser else { return }
+        let uid = authUser.uid
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            try await db.collection("users").document(uid).setData([
+                "pushTokens": FieldValue.arrayUnion([trimmed]),
+                "pushTokenUpdatedAt": Timestamp(date: Date())
+            ], merge: true)
+            // Backward compatibility: invitations may still reference legacy users/{placeholderId}.
+            // Mirror this token into same-email docs so targeted push still works during id convergence.
+            let normalizedEmail = authUser.email?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !normalizedEmail.isEmpty {
+                var candidateDocs: [QueryDocumentSnapshot] = []
+                if let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty {
+                    // Case-insensitive email matching within org to catch legacy mixed-case rows.
+                    let orgUsers = try await db.collection("users")
+                        .whereField("organizationId", isEqualTo: orgId)
+                        .limit(to: 250)
+                        .getDocuments(source: .server)
+                    candidateDocs = orgUsers.documents.filter { doc in
+                        let email = (doc.data()["email"] as? String)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .lowercased() ?? ""
+                        return !email.isEmpty && email == normalizedEmail
+                    }
+                } else {
+                    let sameEmail = try await db.collection("users")
+                        .whereField("email", isEqualTo: normalizedEmail)
+                        .limit(to: 12)
+                        .getDocuments(source: .server)
+                    candidateDocs = sameEmail.documents
+                }
+                for doc in candidateDocs where doc.documentID != uid {
+                    try await db.collection("users").document(doc.documentID).setData([
+                        "pushTokens": FieldValue.arrayUnion([trimmed]),
+                        "pushTokenUpdatedAt": Timestamp(date: Date())
+                    ], merge: true)
+                    print("🔥🔥🔥 DEBUG: Mirrored push token from \(uid) to legacy user doc \(doc.documentID)")
+                }
+            }
+            print("🔥🔥🔥 DEBUG: Registered push token for user \(uid)")
+        } catch {
+            print("🔥🔥🔥 DEBUG: Failed to register push token: \(error.localizedDescription)")
+        }
+    }
+
+    func forceRefreshAndRegisterPushToken() async -> String {
+        guard currentUser != nil else { return "❌ Not signed in." }
+#if canImport(UIKit)
+        await MainActor.run {
+            UIApplication.shared.registerForRemoteNotifications()
+        }
+#endif
+#if canImport(FirebaseMessaging)
+        return await withCheckedContinuation { continuation in
+            Messaging.messaging().token { [weak self] token, error in
+                if let error {
+                    continuation.resume(returning: "❌ Failed to fetch FCM token: \(error.localizedDescription)")
+                    return
+                }
+                guard let self, let token, !token.isEmpty else {
+                    continuation.resume(returning: "❌ FCM token unavailable.")
+                    return
+                }
+                Task {
+                    await self.registerPushToken(token)
+                    continuation.resume(returning: "✅ Refreshed and registered FCM token.")
+                }
+            }
+        }
+#else
+        return "❌ FirebaseMessaging not available in this build."
+#endif
+    }
     
     func saveNotification(_ notification: AppNotification, organizationId: String) async throws {
         let data: [String: Any] = [
@@ -3453,17 +3536,29 @@ class FirebaseBackend: ObservableObject {
     // MARK: - Booking Methods
 
     private func resolveWritableOrganizationId(preferred organizationId: String) async throws -> String {
-        var resolved = normalizedOrganizationId(organizationId)
+        let preferredOrgId = normalizedOrganizationId(organizationId)
+        do {
+            let orgId = try await ensureReadableOrganization(preferredOrgId)
+            await repairCurrentUserOrganizationAccess(organizationId: orgId)
+            return orgId
+        } catch {
+            print("🔥🔥🔥 DEBUG: Preferred booking org \(preferredOrgId) was not readable: \(error.localizedDescription)")
+        }
+
         if let userId = currentUser?.uid,
            let linkedOrgId = try? await validateUserOrganizationLink(userId: userId),
-           !linkedOrgId.isEmpty,
-           !organizationIdsMatch(linkedOrgId, resolved) {
-            print("🔥🔥🔥 DEBUG: Switching write org from \(resolved) to linked org \(linkedOrgId)")
-            resolved = linkedOrgId
+           !linkedOrgId.isEmpty {
+            print("🔥🔥🔥 DEBUG: Falling back booking org to linked org \(linkedOrgId)")
+            let fallbackOrgId = try await ensureReadableOrganization(linkedOrgId)
+            await repairCurrentUserOrganizationAccess(organizationId: fallbackOrgId)
+            return fallbackOrgId
         }
-        let orgId = try await ensureReadableOrganization(resolved)
-        await repairCurrentUserOrganizationAccess(organizationId: orgId)
-        return orgId
+
+        throw NSError(
+            domain: "FirebaseBackend",
+            code: 403,
+            userInfo: [NSLocalizedDescriptionKey: "Could not resolve a writable organization for bookings."]
+        )
     }
     
     func saveBooking(_ booking: Booking, organizationId: String) async throws {
@@ -4664,6 +4759,23 @@ extension FirebaseBackend {
     // MARK: - Materials
     
     func saveMaterialItem(_ material: MaterialItem, organizationId: String) async throws {
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
+            )
+        }
+        let orgId = try await ensureReadableOrganization(resolved)
+        do {
+            try await ensureUserDocumentLinked(organizationId: orgId)
+        } catch {
+            print("🔥🔥🔥 DEBUG: [saveMaterialItem] ensureUserDocumentLinked: \(error.localizedDescription)")
+        }
+        await repairCurrentUserOrganizationAccess(organizationId: orgId)
+
         // Ensure date is normalized to start of day
         let calendar = Calendar.current
         let normalizedDate = calendar.startOfDay(for: material.date)
@@ -4684,9 +4796,9 @@ extension FirebaseBackend {
         print("   Material: \(material.material)")
         print("   Project ID: \(material.projectId.uuidString)")
         print("   Date: \(normalizedDate)")
-        print("   Organization ID: \(organizationId)")
+        print("   Organization ID: \(orgId)")
         
-        try await db.collection("organizations").document(organizationId)
+        try await db.collection("organizations").document(orgId)
             .collection("materials")
             .document(material.id.uuidString)
             .setData(data)
@@ -4695,8 +4807,9 @@ extension FirebaseBackend {
     }
     
     func loadMaterialItems(organizationId: String, projectId: UUID) async throws -> [MaterialItem] {
+        let orgId = try await ensureReadableOrganization(organizationId)
         print("🔍 [FirebaseBackend] Loading materials for projectId: \(projectId.uuidString)")
-        let snapshot = try await db.collection("organizations").document(organizationId)
+        let snapshot = try await db.collection("organizations").document(orgId)
             .collection("materials")
             .whereField("projectId", isEqualTo: projectId.uuidString)
             .getDocuments()
@@ -4751,7 +4864,8 @@ extension FirebaseBackend {
         projectId: UUID,
         onChange: @escaping @MainActor ([MaterialItem]) -> Void
     ) -> ListenerRegistration {
-        db.collection("organizations").document(organizationId)
+        let orgId = normalizedOrganizationId(organizationId)
+        return db.collection("organizations").document(orgId)
             .collection("materials")
             .whereField("projectId", isEqualTo: projectId.uuidString)
             .addSnapshotListener { snapshot, error in

@@ -113,6 +113,9 @@ struct HolidayView: View {
                         .padding()
                     }
                     .refreshable {
+                        if userStore.isOperativeMode() {
+                            operativeStore.loadData()
+                        }
                         await holidayStore.loadData()
                         await notificationService.loadNotifications()
                     }
@@ -129,6 +132,9 @@ struct HolidayView: View {
             }
             .onAppear {
                 if showRequests { activeSection = .requests }
+                if userStore.isOperativeMode() {
+                    operativeStore.loadData()
+                }
                 Task { await holidayStore.loadData() }
             }
             .alert("Error", isPresented: $showError) {
@@ -343,14 +349,6 @@ struct HolidayView: View {
         Task {
             do {
                 if isOperativeMode {
-                    guard let operative = currentOperative else {
-                        await MainActor.run {
-                            errorMessage = "Operative profile not found."
-                            showError = true
-                            isSaving = false
-                        }
-                        return
-                    }
                     guard let uid = firebaseBackend.currentUser?.uid else {
                         await MainActor.run {
                             errorMessage = "Not signed in."
@@ -359,8 +357,20 @@ struct HolidayView: View {
                         }
                         return
                     }
+                    // Prefer linked operative roster row (email match) for operativeId; otherwise userId-only booking is valid.
+                    let operative = currentOperative
+                    let operativeId = operative?.id
+                    let operativeDisplayName: String = {
+                        if let o = operative {
+                            let n = "\(o.firstName) \(o.lastName)".trimmingCharacters(in: .whitespaces)
+                            return n.isEmpty ? (userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Operative") : n
+                        }
+                        return userStore.currentUser?.fullName
+                            ?? userStore.currentUser?.email
+                            ?? "Operative"
+                    }()
                     for day in selectedDays {
-                        if hasExistingHoliday(on: day, userId: uid, operativeId: operative.id) {
+                        if hasExistingHoliday(on: day, userId: uid, operativeId: operativeId) {
                             throw NSError(domain: "Holiday", code: 409, userInfo: [NSLocalizedDescriptionKey: "One or more selected days already have a holiday booking/request."])
                         }
                     }
@@ -369,7 +379,7 @@ struct HolidayView: View {
                         let booking = HolidayBooking(
                             organizationId: orgId,
                             userId: uid,
-                            operativeId: operative.id,
+                            operativeId: operativeId,
                             startDate: day,
                             endDate: day,
                             status: .pending
@@ -382,7 +392,7 @@ struct HolidayView: View {
                        let endDate = selectedDays.last {
                         await notificationService.notifyHolidayRequestSubmitted(
                             bookingId: firstBookingId,
-                            operativeName: operative.firstName + " " + operative.lastName,
+                            operativeName: operativeDisplayName,
                             startDate: startDate,
                             endDate: endDate,
                             assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser()

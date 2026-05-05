@@ -8,15 +8,24 @@
 import SwiftUI
 import Firebase
 import FirebaseAuth
+#if canImport(FirebaseMessaging)
+import FirebaseMessaging
+#endif
 import UIKit
 import UserNotifications
 
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    var onPushToken: ((String) -> Void)?
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        requestRemoteNotificationRegistration(application: application)
+#if canImport(FirebaseMessaging)
+        Messaging.messaging().delegate = self
+#endif
         return true
     }
 
@@ -28,7 +37,42 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Ensure local notifications are shown as real banners while app is foregrounded.
         completionHandler([.banner, .sound, .badge, .list])
     }
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+#if canImport(FirebaseMessaging)
+        Messaging.messaging().apnsToken = deviceToken
+#endif
+    }
+
+    private func requestRemoteNotificationRegistration(application: UIApplication) {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+            if let error {
+                print("🔥🔥🔥 DEBUG: Push permission request failed: \(error.localizedDescription)")
+                return
+            }
+            guard granted else {
+                print("🔥🔥🔥 DEBUG: Push permission not granted")
+                return
+            }
+            DispatchQueue.main.async {
+                application.registerForRemoteNotifications()
+            }
+        }
+    }
 }
+
+#if canImport(FirebaseMessaging)
+extension AppDelegate: MessagingDelegate {
+    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
+        guard let token = fcmToken, !token.isEmpty else { return }
+        print("🔥🔥🔥 DEBUG: Received FCM token")
+        onPushToken?(token)
+    }
+}
+#endif
 
 @main
 struct Project_PlannerApp: App {
@@ -135,6 +179,23 @@ struct Project_PlannerApp: App {
                 notificationService.setUserStore(userStore)
                 notificationService.setOperativeStore(operativeStore)
                 notificationService.setHolidayStore(holidayStore)
+                appDelegate.onPushToken = { token in
+                    Task {
+                        await firebaseBackend.registerPushToken(token)
+                    }
+                }
+#if canImport(FirebaseMessaging)
+                Messaging.messaging().token { token, error in
+                    if let error {
+                        print("🔥🔥🔥 DEBUG: Failed to fetch current FCM token: \(error.localizedDescription)")
+                        return
+                    }
+                    guard let token, !token.isEmpty else { return }
+                    Task {
+                        await firebaseBackend.registerPushToken(token)
+                    }
+                }
+#endif
                 
                 // Wait for organization to load, then load all data
                 Task {
@@ -150,20 +211,15 @@ struct Project_PlannerApp: App {
                         print("🔥🔥🔥 DEBUG: ✅ Organization loaded: \(organizationId), starting data load...")
                         
                         // Load all data stores in parallel
-                        async let _ = projectStore.loadData()
-                        async let _ = operativeStore.loadData()
-                        async let _ = bookingStore.loadData()
-                        managerScheduleStore.loadData()
-                        async let _ = taskStore.loadData()
-                        async let _ = holidayStore.loadData()
-                        async let _ = notificationService.loadNotifications()
-                        
-                        // Wait for all to complete
                         projectStore.loadData()
                         operativeStore.loadData()
                         bookingStore.loadData()
+                        managerScheduleStore.loadData()
                         Task {
                             await taskStore.loadData()
+                        }
+                        Task {
+                            await holidayStore.loadData()
                         }
                         Task {
                             await notificationService.loadNotifications()

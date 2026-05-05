@@ -18,6 +18,7 @@ struct SettingsView: View {
     @EnvironmentObject var taskStore: ProjectTaskStore
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var notificationService: NotificationService
     @Environment(\.dismiss) private var dismiss
     
     @State private var showingDiagnosticReport = false
@@ -37,6 +38,7 @@ struct SettingsView: View {
     @State private var isDeletingAllOperatives = false
     @State private var showingNotificationTestAlert = false
     @State private var notificationTestMessage = ""
+    @State private var isRunningPushDiagnostic = false
     @State private var deleteTestMessage = ""
     @State private var isTestingDelete = false
     @State private var isUpdatingUser = false
@@ -301,6 +303,23 @@ struct SettingsView: View {
                     Text("Test notifications will appear 3 seconds after tapping.")
                         .font(.caption)
                         .foregroundColor(.secondary)
+
+                    if userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true {
+                        Button(action: {
+                            Task { await runTemporaryPushDiagnostic() }
+                        }) {
+                            HStack {
+                                Text("TEMP: Remote Push Diagnostic")
+                                Spacer()
+                                if isRunningPushDiagnostic {
+                                    ProgressView()
+                                } else {
+                                    Image(systemName: "antenna.radiowaves.left.and.right")
+                                }
+                            }
+                        }
+                        .disabled(isRunningPushDiagnostic)
+                    }
                     
                     Button(action: {
                         Task {
@@ -863,6 +882,18 @@ struct SettingsView: View {
             isTestingEmail = false
         }
     }
+
+    private func runTemporaryPushDiagnostic() async {
+        await MainActor.run {
+            isRunningPushDiagnostic = true
+        }
+        let result = await notificationService.sendTemporaryPushDiagnosticToCurrentUser()
+        await MainActor.run {
+            notificationTestMessage = result
+            showingNotificationTestAlert = true
+            isRunningPushDiagnostic = false
+        }
+    }
     
     private func deleteAllOperatives() async {
         await MainActor.run {
@@ -1083,6 +1114,7 @@ struct SettingsView: View {
         .environmentObject(OperativeStore())
         .environmentObject(BookingStore())
         .environmentObject(ProjectTaskStore())
+        .environmentObject(NotificationService())
         .environmentObject(UserStore())
         .environmentObject(AppSettingsStore())
 }

@@ -458,7 +458,8 @@ struct HomeView: View {
         if let oid = request.operativeId,
            let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
            let requester = userStore.organizationUsers.first(where: {
-               $0.permissions.operativeMode && $0.email.lowercased() == op.email.lowercased()
+               ($0.permissions.operativeMode || $0.role == .operative) &&
+               $0.email.lowercased() == op.email.lowercased()
            }) {
             let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
             return (managerId?.isEmpty == false) ? managerId : nil
