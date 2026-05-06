@@ -6,7 +6,46 @@
 //
 
 import SwiftUI
+import FirebaseAuth
 import FirebaseFirestore
+
+private func materialCanBeManagedByCurrentUser(
+    _ material: MaterialItem,
+    userStore: UserStore,
+    firebaseBackend: FirebaseBackend
+) -> Bool {
+    guard let authUser = firebaseBackend.currentUser else { return false }
+    if !userStore.isOperativeMode() {
+        return true
+    }
+    if let ownerUserId = material.addedByUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !ownerUserId.isEmpty {
+        return ownerUserId == authUser.uid
+    }
+
+    let normalizedAddedBy = material.addedBy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if normalizedAddedBy.isEmpty {
+        return false
+    }
+
+    let fullName = (userStore.currentUser?.fullName ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    let appEmail = (userStore.currentUser?.email ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    let authDisplayName = (authUser.displayName ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    let authEmail = (authUser.email ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+
+    return normalizedAddedBy == fullName ||
+        normalizedAddedBy == appEmail ||
+        normalizedAddedBy == authDisplayName ||
+        normalizedAddedBy == authEmail
+}
 
 struct MaterialsView: View {
     @EnvironmentObject var userStore: UserStore
@@ -19,6 +58,7 @@ struct MaterialsView: View {
     @State private var materials: [MaterialItem] = []
     @State private var isLoading = false
     @State private var materialsListener: ListenerRegistration?
+    @State private var showMaterialsRetentionNotice = false
     
     var body: some View {
         Group {
@@ -46,31 +86,84 @@ struct MaterialsView: View {
             }
         }
         .task {
-            await loadMaterials()
-            startMaterialsListener()
+            await loadMaterials(isInitial: true)
+            await attachMaterialsListener()
         }
         .refreshable {
-            await loadMaterials()
+            await loadMaterials(isInitial: false)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("reloadMaterials"))) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("reloadMaterials"))) { note in
             Task {
-                await loadMaterials()
+                if let intervals = note.userInfo?["materialBookingDayIntervals"] as? [TimeInterval], !intervals.isEmpty {
+                    await MainActor.run {
+                        let cal = Calendar.current
+                        let days = intervals.map { cal.startOfDay(for: Date(timeIntervalSince1970: $0)) }
+                        if let target = days.min() {
+                            selectedDate = target
+                            currentWeek = target
+                        }
+                    }
+                }
+                await loadMaterials(isInitial: false)
             }
         }
         .onDisappear {
             materialsListener?.remove()
             materialsListener = nil
         }
+        .alert("Materials orders retention", isPresented: $showMaterialsRetentionNotice) {
+            Button("OK") {
+                if let uid = firebaseBackend.currentUser?.uid, !uid.isEmpty {
+                    UserDefaults.standard.set(true, forKey: Self.materialsRetentionNoticeKey(userId: uid, projectId: project.id))
+                }
+            }
+        } message: {
+            Text("Material orders are kept in the app for about one year per job (by the date the material is needed). Older lines are removed automatically to keep lists manageable.")
+        }
     }
     
-    private func loadMaterials() async {
+    private static func materialsRetentionNoticeKey(userId: String, projectId: UUID) -> String {
+        "materialsOneYearRetentionNoticeShown_\(userId)_\(projectId.uuidString)"
+    }
+    
+    /// When Firestore returns rows, the week strip may still be on “this week” while all bookings are on other dates — jump to a week that has data.
+    private func syncWeekSelectionToLoadedMaterialsIfNothingForCurrentDay() {
+        guard !materials.isEmpty else { return }
+        let calendar = Calendar.current
+        let selectedDay = calendar.startOfDay(for: selectedDate)
+        let hasMatch = materials.contains { calendar.isDate(calendar.startOfDay(for: $0.date), inSameDayAs: selectedDay) }
+        if hasMatch { return }
+        let uniqueDays = materials.map { calendar.startOfDay(for: $0.date) }.sorted()
+        // Prefer the “needed” date nearest to what the user already has selected (avoids snapping to an unrelated
+        // past week when they just booked a future day, then a stale listener snapshot runs sync).
+        let targetDay = uniqueDays.min(by: { a, b in
+            let da = abs(a.timeIntervalSince1970 - selectedDay.timeIntervalSince1970)
+            let db = abs(b.timeIntervalSince1970 - selectedDay.timeIntervalSince1970)
+            if da != db { return da < db }
+            return a < b
+        }) ?? uniqueDays[0]
+        selectedDate = targetDay
+        currentWeek = targetDay
+    }
+    
+    private func queueMaterialsRetentionNoticeIfNeeded() {
+        guard !userStore.isOperativeMode() else { return }
+        guard let uid = firebaseBackend.currentUser?.uid, !uid.isEmpty else { return }
+        let key = Self.materialsRetentionNoticeKey(userId: uid, projectId: project.id)
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        showMaterialsRetentionNotice = true
+    }
+    
+    private func loadMaterials(isInitial: Bool) async {
         guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { 
             print("❌ [MaterialsView] No organization ID for loading materials")
             return 
         }
-        isLoading = true
+        if isInitial {
+            await MainActor.run { isLoading = true }
+        }
         
-        print("📦 [MaterialsView] Loading materials for project: \(project.id) (org: \(organizationId))")
+        print("📦 [MaterialsView] Loading materials for project: \(project.id) (org: \(organizationId)) initial=\(isInitial)")
         do {
             let loadedMaterials = try await firebaseBackend.loadMaterialItems(organizationId: organizationId, projectId: project.id)
             await MainActor.run {
@@ -84,24 +177,41 @@ struct MaterialsView: View {
                         print("     - \(material.material) for date: \(material.date)")
                     }
                 }
-                isLoading = false
+                syncWeekSelectionToLoadedMaterialsIfNothingForCurrentDay()
+                queueMaterialsRetentionNoticeIfNeeded()
+                if isInitial {
+                    isLoading = false
+                }
             }
         } catch {
             print("❌ [MaterialsView] Error loading materials: \(error.localizedDescription)")
             await MainActor.run {
-                isLoading = false
+                if isInitial {
+                    isLoading = false
+                }
             }
         }
     }
 
-    private func startMaterialsListener() {
+    private func attachMaterialsListener() async {
         guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        materialsListener?.remove()
-        materialsListener = firebaseBackend.observeMaterialItems(
-            organizationId: organizationId,
-            projectId: project.id
-        ) { updated in
-            materials = updated
+        guard let orgId = try? await firebaseBackend.resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId) else {
+            print("❌ [MaterialsView] Could not resolve org for materials listener")
+            return
+        }
+        await MainActor.run {
+            materialsListener?.remove()
+            materialsListener = firebaseBackend.observeMaterialItems(
+                organizationId: orgId,
+                projectId: project.id
+            ) { updated, _ in
+                // `observeMaterialItems` already ignores empty cache-only snapshots (see FirebaseBackend), so we
+                // always apply non-empty and server snapshots here. Do not skip cache updates when `materials`
+                // is non-empty: that blocked newly saved rows from ever appearing if a cached full snapshot
+                // arrived after the initial load (common right after "Submit All" while other days already had lines).
+                materials = updated
+                syncWeekSelectionToLoadedMaterialsIfNothingForCurrentDay()
+            }
         }
     }
 }
@@ -118,6 +228,8 @@ private struct OperativeMaterialsView: View {
     @Binding var materials: [MaterialItem]
     
     @State private var showingAddMaterial = false
+    @State private var deleteErrorMessage = ""
+    @State private var showingDeleteErrorAlert = false
     
     var body: some View {
         VStack(spacing: 0) {
@@ -130,6 +242,7 @@ private struct OperativeMaterialsView: View {
             // Materials List for Selected Day
             materialsListView
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingAddMaterial) {
             AddMaterialView(
                 project: project,
@@ -138,27 +251,6 @@ private struct OperativeMaterialsView: View {
             )
             .environmentObject(userStore)
             .environmentObject(firebaseBackend)
-        }
-        .task {
-            await loadMaterials()
-        }
-        .refreshable {
-            await loadMaterials()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("reloadMaterials"))) { _ in
-            Task {
-                await loadMaterials()
-            }
-        }
-    }
-    
-    private func loadMaterials() async {
-        guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        
-        do {
-            materials = try await firebaseBackend.loadMaterialItems(organizationId: organizationId, projectId: project.id)
-        } catch {
-            print("Error loading materials: \(error.localizedDescription)")
         }
     }
     
@@ -211,55 +303,111 @@ private struct OperativeMaterialsView: View {
     }
     
     private var materialsListView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Materials for \(formattedDate(selectedDate))")
-                        .font(.headline)
-                    Spacer()
-                    Button(action: {
-                        showingAddMaterial = true
-                    }) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title2)
-                            .foregroundColor(.blue)
-                    }
-                }
-                .padding(.horizontal)
-                
-                let calendar = Calendar.current
-                let selectedDay = calendar.startOfDay(for: selectedDate)
-                let dayMaterials = materials.filter { material in
-                    let materialDay = calendar.startOfDay(for: material.date)
-                    return calendar.isDate(materialDay, inSameDayAs: selectedDay)
-                }
-                
-                if dayMaterials.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "cube.box")
-                            .font(.system(size: 48))
-                            .foregroundColor(.secondary)
-                        Text("No materials added for this day")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 40)
-                } else {
-                    ForEach(dayMaterials) { material in
-                        MaterialItemRow(material: material)
-                            .padding(.horizontal)
-                    }
+        let dayMaterials = materialsForSelectedDate.sorted(by: { $0.addedAt > $1.addedAt })
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Materials for \(formattedDate(selectedDate))")
+                    .font(.headline)
+                Spacer()
+                Button(action: {
+                    showingAddMaterial = true
+                }) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title2)
+                        .foregroundColor(.blue)
                 }
             }
-            .padding(.vertical)
+            .padding(.horizontal)
+            
+            if dayMaterials.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "cube.box")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("No materials added for this day")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    if !materials.isEmpty {
+                        Text("(\(materials.count) total for this project — none on this day)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                        Text("Use the week arrows to find the week when those materials were booked.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 8)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 40)
+            } else {
+                List {
+                    ForEach(dayMaterials) { material in
+                        MaterialItemRow(material: material)
+                            .environmentObject(userStore)
+                            .environmentObject(firebaseBackend)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: canManage(material)) {
+                                if canManage(material) {
+                                    Button(role: .destructive) {
+                                        deleteMaterial(material)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                            }
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .padding(.vertical)
+        .alert("Could Not Delete Material", isPresented: $showingDeleteErrorAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(deleteErrorMessage)
+        }
+    }
+
+    private var materialsForSelectedDate: [MaterialItem] {
+        let calendar = Calendar.current
+        let selectedDay = calendar.startOfDay(for: selectedDate)
+        return materials.filter { material in
+            let materialDay = calendar.startOfDay(for: material.date)
+            return calendar.isDate(materialDay, inSameDayAs: selectedDay)
+        }
+    }
+
+    private func canManage(_ material: MaterialItem) -> Bool {
+        materialCanBeManagedByCurrentUser(material, userStore: userStore, firebaseBackend: firebaseBackend)
+    }
+
+    private func deleteMaterial(_ material: MaterialItem) {
+        guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        Task {
+            do {
+                try await firebaseBackend.deleteMaterialItem(material.id, organizationId: organizationId)
+                await MainActor.run {
+                    if let idx = materials.firstIndex(where: { $0.id == material.id }) {
+                        materials.remove(at: idx)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    deleteErrorMessage = error.localizedDescription
+                    showingDeleteErrorAlert = true
+                }
+            }
         }
     }
     
     private func changeWeek(by weeks: Int) {
-        if let newWeek = Calendar.current.date(byAdding: .weekOfYear, value: weeks, to: currentWeek) {
-            currentWeek = newWeek
-        }
+        MaterialsWeekNavigation.applyWeekDelta(weeks, currentWeek: &currentWeek, selectedDate: &selectedDate)
     }
     
     private var weekDays: [Date] {
@@ -318,6 +466,10 @@ struct MaterialItemRow: View {
     
     let material: MaterialItem
     @State private var showingEditMaterial = false
+    
+    private var canManageMaterial: Bool {
+        materialCanBeManagedByCurrentUser(material, userStore: userStore, firebaseBackend: firebaseBackend)
+    }
 
     private var timeString: String {
         let formatter = DateFormatter()
@@ -325,9 +477,13 @@ struct MaterialItemRow: View {
         return formatter.string(from: material.addedAt)
     }
 
-    private var isLateAddition: Bool {
+    private var shouldShowBookingTime: Bool {
+        Calendar.current.isDate(material.date, inSameDayAs: material.addedAt)
+    }
+    
+    private var bookingTimeColor: Color {
         let hour = Calendar.current.component(.hour, from: material.addedAt)
-        return hour >= 16
+        return (hour >= 7 && hour < 16) ? .green : .red
     }
     
     var body: some View {
@@ -353,29 +509,40 @@ struct MaterialItemRow: View {
             }
             Spacer()
 
-            Text(timeString)
-                .font(.caption2)
-                .fontWeight(.semibold)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(isLateAddition ? Color.red.opacity(0.9) : Color(.systemGray5))
-                .foregroundColor(isLateAddition ? .white : .secondary)
-                .cornerRadius(6)
+            if shouldShowBookingTime {
+                Text(timeString)
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(bookingTimeColor.opacity(0.15))
+                    .foregroundColor(bookingTimeColor)
+                    .cornerRadius(6)
+            }
             
-            if !userStore.isOperativeMode() {
+            if userStore.isOperativeMode() && !canManageMaterial {
+                Image(systemName: "lock.fill")
+                    .foregroundColor(.secondary)
+                    .font(.body)
+            } else {
                 Button(action: {
+                    guard canManageMaterial else { return }
                     showingEditMaterial = true
                 }) {
                     Image(systemName: "pencil")
                         .foregroundColor(.blue)
                         .font(.body)
                 }
+                .buttonStyle(.borderless)
             }
         }
         .padding()
         .background(Color(.systemGray6))
         .cornerRadius(8)
-        .sheet(isPresented: $showingEditMaterial) {
+        .sheet(isPresented: Binding(
+            get: { showingEditMaterial && canManageMaterial },
+            set: { showingEditMaterial = $0 }
+        )) {
             EditMaterialView(material: material, isPresented: $showingEditMaterial)
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
@@ -397,6 +564,8 @@ struct AddMaterialView: View {
     @State private var materialEntries: [MaterialEntryForm] = []
     @State private var isSaving = false
     @State private var showingLateSubmissionAlert = false
+    @State private var showingSaveErrorAlert = false
+    @State private var saveErrorMessage = ""
     
     struct MaterialEntryForm: Identifiable {
         let id = UUID()
@@ -463,6 +632,11 @@ struct AddMaterialView: View {
         } message: {
             Text("Some materials are being added for today after 4:00 PM. Continue or change the date.")
         }
+        .alert("Could Not Save Materials", isPresented: $showingSaveErrorAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(saveErrorMessage)
+        }
     }
 
     private func handleSubmitAllTapped() {
@@ -500,6 +674,7 @@ struct AddMaterialView: View {
             }
             
             var savedCount = 0
+            var firstError: String?
             for entry in validEntries {
                 let normalizedDate = calendar.startOfDay(for: entry.selectedDate)
                 
@@ -508,6 +683,7 @@ struct AddMaterialView: View {
                     unit: entry.unit,
                     material: entry.materialDescription.trimmingCharacters(in: .whitespacesAndNewlines),
                     addedBy: addedBy,
+                    addedByUserId: firebaseBackend.currentUser?.uid,
                     projectId: project.id,
                     date: normalizedDate
                 )
@@ -518,18 +694,31 @@ struct AddMaterialView: View {
                     print("✅ Material saved: \(material.material) for date: \(normalizedDate)")
                 } catch {
                     print("❌ Error saving material: \(error.localizedDescription)")
+                    if firstError == nil {
+                        firstError = error.localizedDescription
+                    }
                 }
             }
             
-            // Clean up old materials (older than 50 days)
-            try? await firebaseBackend.cleanupOldMaterials(organizationId: organizationId, keepDays: 50)
+            // Per job: keep ~1 year of past “needed” dates for this project only; older rows for this project are removed.
+            try? await firebaseBackend.cleanupOldMaterials(organizationId: organizationId, projectId: project.id, keepDays: 365)
             
             await MainActor.run {
                 isSaving = false
-                isPresented = false
-                
-                // Post notification to reload materials in parent view
-                NotificationCenter.default.post(name: NSNotification.Name("reloadMaterials"), object: nil)
+                if savedCount > 0 {
+                    isPresented = false
+                    let bookingDayIntervals = validEntries.map {
+                        calendar.startOfDay(for: $0.selectedDate).timeIntervalSince1970
+                    }
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("reloadMaterials"),
+                        object: nil,
+                        userInfo: ["materialBookingDayIntervals": bookingDayIntervals]
+                    )
+                } else {
+                    saveErrorMessage = firstError ?? "No materials were saved."
+                    showingSaveErrorAlert = true
+                }
             }
         }
     }
@@ -610,6 +799,22 @@ private struct MaterialEntrySection: View {
             .lineLimit(3...6)
         }
         .padding(.vertical, 8)
+    }
+}
+
+// MARK: - Week strip keeps `selectedDate` in the visible week (shared by operative + admin views)
+
+enum MaterialsWeekNavigation {
+    /// Moving the week arrows used to update only `currentWeek`, so the list still filtered an old day while the strip showed another week.
+    static func applyWeekDelta(_ weeks: Int, currentWeek: inout Date, selectedDate: inout Date) {
+        let calendar = Calendar.current
+        guard let anchor = calendar.date(byAdding: .weekOfYear, value: weeks, to: currentWeek) else { return }
+        guard let oldWeekStart = calendar.dateInterval(of: .weekOfYear, for: currentWeek)?.start,
+              let newWeekStart = calendar.dateInterval(of: .weekOfYear, for: anchor)?.start else { return }
+        let rawOffset = calendar.dateComponents([.day], from: oldWeekStart, to: calendar.startOfDay(for: selectedDate)).day ?? 0
+        let dayOffset = max(0, min(6, rawOffset))
+        currentWeek = anchor
+        selectedDate = calendar.date(byAdding: .day, value: dayOffset, to: newWeekStart) ?? newWeekStart
     }
 }
 

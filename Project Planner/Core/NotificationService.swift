@@ -19,6 +19,8 @@ class NotificationService: ObservableObject {
     private var firebaseBackend: FirebaseBackend?
     private var userStore: UserStore?
     private var operativeStore: OperativeStore?
+    private var projectStore: ProjectStore?
+    private var appSettingsStore: AppSettingsStore?
     private var holidayStore: HolidayStore?
     private var seenBookingNotificationIds: Set<UUID> = []
     private var seenHolidayRequestNotificationKeys: Set<String> = []
@@ -51,8 +53,37 @@ class NotificationService: ObservableObject {
         self.operativeStore = store
     }
 
+    func setProjectStore(_ store: ProjectStore) {
+        self.projectStore = store
+    }
+
+    func setAppSettingsStore(_ store: AppSettingsStore) {
+        self.appSettingsStore = store
+    }
+
     func setHolidayStore(_ store: HolidayStore) {
         self.holidayStore = store
+    }
+
+    func refreshDailyMaterialCutOffReminder() async {
+        guard let userStore, let currentUser = userStore.currentUser else {
+            LocalNotificationService.shared.removeDailyMaterialCutOffReminder()
+            return
+        }
+        let roleCanReceive = !currentUser.permissions.operativeMode &&
+            (currentUser.isSuperAdmin || currentUser.permissions.adminAccess || currentUser.permissions.manager || currentUser.role == .manager || currentUser.role == .admin)
+        guard roleCanReceive else {
+            LocalNotificationService.shared.removeDailyMaterialCutOffReminder()
+            return
+        }
+
+        let notificationsEnabled = appSettingsStore?.settings.notifications.materialOrderCutOff ?? true
+        guard notificationsEnabled else {
+            LocalNotificationService.shared.removeDailyMaterialCutOffReminder()
+            return
+        }
+
+        await LocalNotificationService.shared.scheduleDailyMaterialCutOffReminder(hour: 16, minute: 0)
     }
     
     // MARK: - Notification Creation
@@ -396,41 +427,37 @@ class NotificationService: ObservableObject {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
               let currentUser = userStore?.currentUser else { return }
+
+        let fetched = try? await firebaseBackend.loadNotifications(organizationId: organizationId)
+        let fallbackExisting = notifications.filter { $0.requiresPermission != "syntheticAnnualLeave" }
+        let allNotifications = fetched ?? fallbackExisting
+        print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] currentUser=\(currentUser.id) totalLoaded=\(allNotifications.count)")
         
-        do {
-            let fetched = try? await firebaseBackend.loadNotifications(organizationId: organizationId)
-            let fallbackExisting = notifications.filter { $0.requiresPermission != "syntheticAnnualLeave" }
-            let allNotifications = fetched ?? fallbackExisting
-            print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] currentUser=\(currentUser.id) totalLoaded=\(allNotifications.count)")
-            
-            // Filter notifications based on user permissions
-            let filteredNotifications = allNotifications.filter { notification in
-                shouldShowNotification(notification, for: currentUser)
-            }
-            let synthetic = syntheticAnnualLeaveNotifications(for: currentUser, organizationId: organizationId)
-            let merged = (filteredNotifications + synthetic).sorted { $0.createdAt > $1.createdAt }
-            let targetedToCurrent = allNotifications.filter { $0.userId == currentUser.id }.count
-            let broadcastCount = allNotifications.filter { $0.userId == nil }.count
-            print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] targetedToCurrent=\(targetedToCurrent) broadcasts=\(broadcastCount) filteredVisible=\(filteredNotifications.count)")
-            
-            await MainActor.run {
-                self.notifications = merged
-                self.unreadCount = self.notifications.filter { !$0.isRead }.count
-                // Catch-up path: if app was closed/backgrounded and new notifications arrived,
-                // alert once for notifications newer than the last processed timestamp.
-                if let cutoff = self.lastProcessedNotificationAt {
-                    let catchUp = self.notifications.filter { $0.createdAt > cutoff }
-                    self.processBookingToasts(from: catchUp)
-                    self.processHolidayRequestAlerts(from: catchUp)
-                    self.processHolidayDecisionAlerts(from: catchUp)
-                    self.processGeneralLocalAlerts(from: catchUp)
-                }
-                self.advanceLastProcessedNotificationDate(using: self.notifications)
-            }
-            startNotificationsListenerIfNeeded(organizationId: organizationId, userId: currentUser.id)
-        } catch {
-            print("🔥🔥🔥 DEBUG: Error loading notifications: \(error)")
+        // Filter notifications based on user permissions
+        let filteredNotifications = allNotifications.filter { notification in
+            shouldShowNotification(notification, for: currentUser)
         }
+        let synthetic = syntheticAnnualLeaveNotifications(for: currentUser, organizationId: organizationId)
+        let merged = (filteredNotifications + synthetic).sorted { $0.createdAt > $1.createdAt }
+        let targetedToCurrent = allNotifications.filter { $0.userId == currentUser.id }.count
+        let broadcastCount = allNotifications.filter { $0.userId == nil }.count
+        print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] targetedToCurrent=\(targetedToCurrent) broadcasts=\(broadcastCount) filteredVisible=\(filteredNotifications.count)")
+        
+        await MainActor.run {
+            self.notifications = merged
+            self.unreadCount = self.notifications.filter { !$0.isRead }.count
+            // Catch-up path: if app was closed/backgrounded and new notifications arrived,
+            // alert once for notifications newer than the last processed timestamp.
+            if let cutoff = self.lastProcessedNotificationAt {
+                let catchUp = self.notifications.filter { $0.createdAt > cutoff }
+                self.processBookingToasts(from: catchUp)
+                self.processHolidayRequestAlerts(from: catchUp)
+                self.processHolidayDecisionAlerts(from: catchUp)
+                self.processGeneralLocalAlerts(from: catchUp)
+            }
+            self.advanceLastProcessedNotificationDate(using: self.notifications)
+        }
+        startNotificationsListenerIfNeeded(organizationId: organizationId, userId: currentUser.id)
     }
     
     func markAsRead(_ notification: AppNotification) async {
@@ -692,10 +719,10 @@ class NotificationService: ObservableObject {
                 content: content,
                 trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
             )
-            UNUserNotificationCenter.current().add(request) { error in
-                if let error {
-                    print("🔥🔥🔥 DEBUG: Local holiday notification error: \(error.localizedDescription)")
-                }
+            do {
+                try await UNUserNotificationCenter.current().add(request)
+            } catch {
+                print("🔥🔥🔥 DEBUG: Local holiday notification error: \(error.localizedDescription)")
             }
         }
     }

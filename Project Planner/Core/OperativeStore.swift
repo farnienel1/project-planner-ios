@@ -56,11 +56,9 @@ class OperativeStore: ObservableObject {
             Task { @MainActor [weak self] in
                 print("🔥🔥🔥 DEBUG: OperativeStore received organizationDidLoad notification - reloading data")
                 self?.loadData()
-                // After loading, sync any local data to Firebase
-                if let self = self, (!self.operatives.isEmpty || !self.managers.isEmpty) {
-                    print("🔥🔥🔥 DEBUG: Syncing local operatives/managers to Firebase after organization load")
-                    _ = await self.saveDataWithRetry(description: "syncing local data to Firebase after organization load")
-                }
+                // Do not auto-sync local rows here: on some roles/org setups this can hit permission-denied
+                // during startup and create noisy retry loops that look like the app is "stuck loading".
+                // Sync still happens on explicit user actions and offline-change sync events.
             }
         }
         

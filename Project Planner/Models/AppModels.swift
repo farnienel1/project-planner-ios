@@ -556,29 +556,33 @@ struct NotificationSettings: Codable, Sendable {
     var projectDeadlines: Bool
     var operativeAvailability: Bool
     var dailyReports: Bool
+    var materialOrderCutOff: Bool
     
     nonisolated init(
         bookingConflicts: Bool = true,
         projectDeadlines: Bool = true,
         operativeAvailability: Bool = false,
-        dailyReports: Bool = false
+        dailyReports: Bool = false,
+        materialOrderCutOff: Bool = true
     ) {
         self.bookingConflicts = bookingConflicts
         self.projectDeadlines = projectDeadlines
         self.operativeAvailability = operativeAvailability
         self.dailyReports = dailyReports
+        self.materialOrderCutOff = materialOrderCutOff
     }
     
     nonisolated enum CodingKeys: String, CodingKey {
-        case bookingConflicts, projectDeadlines, operativeAvailability, dailyReports
+        case bookingConflicts, projectDeadlines, operativeAvailability, dailyReports, materialOrderCutOff
     }
     
     nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        bookingConflicts = try container.decode(Bool.self, forKey: .bookingConflicts)
-        projectDeadlines = try container.decode(Bool.self, forKey: .projectDeadlines)
-        operativeAvailability = try container.decode(Bool.self, forKey: .operativeAvailability)
-        dailyReports = try container.decode(Bool.self, forKey: .dailyReports)
+        bookingConflicts = try container.decodeIfPresent(Bool.self, forKey: .bookingConflicts) ?? true
+        projectDeadlines = try container.decodeIfPresent(Bool.self, forKey: .projectDeadlines) ?? true
+        operativeAvailability = try container.decodeIfPresent(Bool.self, forKey: .operativeAvailability) ?? false
+        dailyReports = try container.decodeIfPresent(Bool.self, forKey: .dailyReports) ?? false
+        materialOrderCutOff = try container.decodeIfPresent(Bool.self, forKey: .materialOrderCutOff) ?? true
     }
     
     nonisolated func encode(to encoder: Encoder) throws {
@@ -587,6 +591,7 @@ struct NotificationSettings: Codable, Sendable {
         try container.encode(projectDeadlines, forKey: .projectDeadlines)
         try container.encode(operativeAvailability, forKey: .operativeAvailability)
         try container.encode(dailyReports, forKey: .dailyReports)
+        try container.encode(materialOrderCutOff, forKey: .materialOrderCutOff)
     }
 }
 

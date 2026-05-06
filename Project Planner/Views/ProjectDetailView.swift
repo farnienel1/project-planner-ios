@@ -245,7 +245,15 @@ struct ProjectDetailView: View {
                 .environmentObject(projectStore)
                 .environmentObject(bookingStore)
                 .environmentObject(operativeStore)
-        default:
+        case .materials:
+            // Materials contains its own `List` and expandable layout; nesting it inside `ScrollView` gives the
+            // list an unbounded height and often collapses the rows to zero (looks like “nothing saved”).
+            MaterialsView(project: project)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+                .navigationTitle(tile.rawValue)
+                .navigationBarTitleDisplayMode(.inline)
+        case .scheduling, .tasks, .settings, .location:
             ScrollView {
                 VStack(spacing: 20) {
                     switch tile {
@@ -253,14 +261,12 @@ struct ProjectDetailView: View {
                         schedulingContent
                     case .tasks:
                         tasksContent
-                    case .materials:
-                        materialsContent
                     case .settings:
                         settingsContent
                     case .location:
                         siteLocationSection
-                    case .siteAudit:
-                        EmptyView() // Handled in outer branch
+                    default:
+                        EmptyView()
                     }
                 }
                 .padding()
@@ -911,12 +917,6 @@ struct ProjectDetailView: View {
     }
     
     // MARK: - Materials Content
-    
-    private var materialsContent: some View {
-        MaterialsView(project: project)
-            .environmentObject(userStore)
-            .environmentObject(firebaseBackend)
-    }
     
     private var settingsContent: some View {
         VStack(spacing: 16) {

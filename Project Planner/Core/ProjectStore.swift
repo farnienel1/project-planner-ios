@@ -24,6 +24,7 @@ class ProjectStore: ObservableObject {
     private var smartCache: SmartCacheService?
     private var cancellables = Set<AnyCancellable>()
     private var didAttemptOrgAutoSwitch = false
+    private var pendingReloadAfterCurrentLoad = false
 
     private func isPermissionDeniedError(_ error: Error?) -> Bool {
         guard let nsError = error as NSError? else { return false }
@@ -64,11 +65,8 @@ class ProjectStore: ObservableObject {
             Task { @MainActor [weak self] in
                 print("🔥🔥🔥 DEBUG: ProjectStore received organizationDidLoad notification - reloading data")
                 self?.loadData()
-                // After loading, sync any local data to Firebase
-                if let self = self, (!self.projects.isEmpty || !self.clients.isEmpty) {
-                    print("🔥🔥🔥 DEBUG: Syncing local projects/clients to Firebase after organization load")
-                    _ = await self.saveDataWithRetry(description: "syncing local data to Firebase after organization load")
-                }
+                // Do not auto-sync local data during startup organization hydration.
+                // Permission-denied writes here can trigger retry loops and degrade first-load UX.
             }
         }
         
@@ -122,8 +120,15 @@ class ProjectStore: ObservableObject {
     // MARK: - Data Loading
     
     func loadData() {
+        if isLoading {
+            pendingReloadAfterCurrentLoad = true
+            print("🔥🔥🔥 DEBUG: ProjectStore loadData ignored (already loading); queued one follow-up reload")
+            return
+        }
+
         isLoading = true
         errorMessage = nil
+        pendingReloadAfterCurrentLoad = false
         
         Task {
             // Add timeout to prevent infinite loading
@@ -139,6 +144,11 @@ class ProjectStore: ObservableObject {
             defer {
                 timeoutTask.cancel()
                 isLoading = false
+                if pendingReloadAfterCurrentLoad {
+                    pendingReloadAfterCurrentLoad = false
+                    print("🔥🔥🔥 DEBUG: ProjectStore running queued follow-up reload")
+                    self.loadData()
+                }
             }
             
             do {

@@ -17,6 +17,11 @@ service cloud.firestore {
            ('adminAccess' in userData && truthyBool(userData.adminAccess)) ||
            ('role' in userData && userData.role == 'admin');
   }
+
+  function materialManagerLikeUser(userData) {
+    return adminLikeUser(userData) ||
+           ('manager' in userData && truthyBool(userData.manager));
+  }
   
   // True if users/{auth.uid}.organizationId matches this org (string case-insensitive, DocumentReference exact path,
   // or DocumentReference whose *document id* matches case-insensitive — avoids strict path equality when UUID casing differs).
@@ -28,7 +33,7 @@ service cloud.firestore {
        string(userData.organizationId).lower().matches('(^|.*/)organizations/' + organizationId.lower() + '$')) ||
       (userData.organizationId is path &&
        orgIdsMatch(userData.organizationId[4], organizationId)) ||
-      userData.organizationId == /databases/$(database)/documents/organizations/$(organizationId) ||
+      userData.organizationId == /databases/(default)/documents/organizations/$(organizationId) ||
       (userData.organizationId is path &&
        string(userData.organizationId).lower().matches('.*/organizations/' + organizationId.lower() + '$'))
     );
@@ -36,9 +41,9 @@ service cloud.firestore {
   
   function userOrgIdMatchesPath(organizationId) {
     return request.auth != null &&
-           exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+           exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
            userDocOrganizationMatches(
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data,
+             get(/databases/(default)/documents/users/$(request.auth.uid)).data,
              organizationId
            );
   }
@@ -47,17 +52,17 @@ service cloud.firestore {
   // (circular get can deny access). For organizations/{organizationId} document reads, use resource.data.members instead.
   function isOrgMemberViaParentGet(organizationId) {
     return request.auth != null &&
-           exists(/databases/$(database)/documents/organizations/$(organizationId)) &&
-           'members' in get(/databases/$(database)/documents/organizations/$(organizationId)).data &&
-           get(/databases/$(database)/documents/organizations/$(organizationId)).data.members[request.auth.uid] != null;
+           exists(/databases/(default)/documents/organizations/$(organizationId)) &&
+           'members' in get(/databases/(default)/documents/organizations/$(organizationId)).data &&
+           get(/databases/(default)/documents/organizations/$(organizationId)).data.members[request.auth.uid] != null;
   }
   
   // Org creator (legacy orgs may have empty members map but still have creatorUserId).
   function isOrgCreatorViaParentGet(organizationId) {
     return request.auth != null &&
-           exists(/databases/$(database)/documents/organizations/$(organizationId)) &&
-           'creatorUserId' in get(/databases/$(database)/documents/organizations/$(organizationId)).data &&
-           get(/databases/$(database)/documents/organizations/$(organizationId)).data.creatorUserId == request.auth.uid;
+           exists(/databases/(default)/documents/organizations/$(organizationId)) &&
+           'creatorUserId' in get(/databases/(default)/documents/organizations/$(organizationId)).data &&
+           get(/databases/(default)/documents/organizations/$(organizationId)).data.creatorUserId == request.auth.uid;
   }
 
   // For subcollections under organizations/{organizationId}/… only (parent get is not the resource being read).
@@ -77,13 +82,107 @@ service cloud.firestore {
     );
   }
   
+  // Treat missing or blank addedByUserId like legacy rows (see canDeleteOwnMaterial / canClaimLegacyOwnMaterial).
+  function resourceMaterialHasNonEmptyOwnerUid() {
+    return resource != null &&
+           'addedByUserId' in resource.data &&
+           resource.data.addedByUserId is string &&
+           resource.data.addedByUserId.size() > 0;
+  }
+
+  function isMaterialOwnerForRequest() {
+    return request.auth != null && (
+      (resourceMaterialHasNonEmptyOwnerUid() && resource.data.addedByUserId == request.auth.uid) ||
+      (
+        request.resource.data.addedByUserId is string &&
+        request.resource.data.addedByUserId.size() > 0 &&
+        request.resource.data.addedByUserId == request.auth.uid
+      )
+    );
+  }
+
+  function legacyMaterialAddedByMatchesCurrentUser() {
+    return request.auth != null &&
+           exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+           resource.data.addedBy is string &&
+           (
+             (
+               'email' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+               get(/databases/(default)/documents/users/$(request.auth.uid)).data.email is string &&
+               resource.data.addedBy.lower() == get(/databases/(default)/documents/users/$(request.auth.uid)).data.email.lower()
+             ) ||
+             (
+               'firstName' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+               'surname' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+               get(/databases/(default)/documents/users/$(request.auth.uid)).data.firstName is string &&
+               get(/databases/(default)/documents/users/$(request.auth.uid)).data.surname is string &&
+               resource.data.addedBy.lower() == (
+                 get(/databases/(default)/documents/users/$(request.auth.uid)).data.firstName + ' ' +
+                 get(/databases/(default)/documents/users/$(request.auth.uid)).data.surname
+               ).lower()
+             ) ||
+             (
+               'firstName' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+               'lastName' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+               get(/databases/(default)/documents/users/$(request.auth.uid)).data.firstName is string &&
+               get(/databases/(default)/documents/users/$(request.auth.uid)).data.lastName is string &&
+               resource.data.addedBy.lower() == (
+                 get(/databases/(default)/documents/users/$(request.auth.uid)).data.firstName + ' ' +
+                 get(/databases/(default)/documents/users/$(request.auth.uid)).data.lastName
+               ).lower()
+             )
+           );
+  }
+
+  function canClaimLegacyOwnMaterial(organizationId) {
+    return canAccessOrganization(organizationId) &&
+           userOrgIdMatchesPath(organizationId) &&
+           !resourceMaterialHasNonEmptyOwnerUid() &&
+           request.resource.data.addedByUserId is string &&
+           request.resource.data.addedByUserId.size() > 0 &&
+           request.resource.data.addedByUserId == request.auth.uid &&
+           legacyMaterialAddedByMatchesCurrentUser();
+  }
+
+  function isOnlyClaimingLegacyOwnMaterial(organizationId) {
+    return canClaimLegacyOwnMaterial(organizationId) &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['addedByUserId']);
+  }
+  
+  function canCreateOwnMaterial(organizationId) {
+    return canAccessOrganization(organizationId) &&
+           request.resource.data.addedByUserId is string &&
+           request.resource.data.addedByUserId.size() > 0 &&
+           request.resource.data.addedByUserId == request.auth.uid;
+  }
+  
+  function canUpdateOwnMaterial(organizationId) {
+    return canAccessOrganization(organizationId) &&
+           isMaterialOwnerForRequest() &&
+           (request.resource.data.addedByUserId == resource.data.addedByUserId);
+  }
+
+  function canDeleteOwnMaterial(organizationId) {
+    return canAccessOrganization(organizationId) && (
+      (resourceMaterialHasNonEmptyOwnerUid() && resource.data.addedByUserId == request.auth.uid) ||
+      (!resourceMaterialHasNonEmptyOwnerUid() && legacyMaterialAddedByMatchesCurrentUser())
+    );
+  }
+  
   // Helper function to check if user is admin of organization
   // Includes adminAccess so users with admin permissions can update org (e.g. members map on user delete).
   function isOrganizationAdmin(organizationId) {
     return request.auth != null && 
-           exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+           exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
            userOrgIdMatchesPath(organizationId) &&
-           adminLikeUser(get(/databases/$(database)/documents/users/$(request.auth.uid)).data);
+           adminLikeUser(get(/databases/(default)/documents/users/$(request.auth.uid)).data);
+  }
+
+  function isOrganizationMaterialManager(organizationId) {
+    return request.auth != null && 
+           exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+           userOrgIdMatchesPath(organizationId) &&
+           materialManagerLikeUser(get(/databases/(default)/documents/users/$(request.auth.uid)).data);
   }
   
   // Helper function to check if current user is super admin or has admin access
@@ -99,27 +198,27 @@ service cloud.firestore {
   // Managers and operatives can only create their own accounts (self-creation via website signup).
   function isAdminOrSuperAdmin() {
     return request.auth != null && 
-           exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-           adminLikeUser(get(/databases/$(database)/documents/users/$(request.auth.uid)).data);
+           exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+           adminLikeUser(get(/databases/(default)/documents/users/$(request.auth.uid)).data);
   }
 
   // Managers with operative-management access may edit limited operative profile fields on users docs.
   function canManagerUpdateOperativeProfile(targetUserId) {
     return request.auth != null &&
            request.auth.uid != targetUserId &&
-           exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+           exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
            ('organizationId' in resource.data) &&
-           ('organizationId' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data) &&
+           ('organizationId' in get(/databases/(default)/documents/users/$(request.auth.uid)).data) &&
            orgIdsMatch(
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId,
+             get(/databases/(default)/documents/users/$(request.auth.uid)).data.organizationId,
              resource.data.organizationId
            ) &&
-           !('operativeMode' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
-             truthyBool(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.operativeMode)) &&
-           ('manager' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
-             truthyBool(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.manager)) &&
-           ('operatives' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
-             truthyBool(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.operatives)) &&
+           !('operativeMode' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+             truthyBool(get(/databases/(default)/documents/users/$(request.auth.uid)).data.operativeMode)) &&
+           ('manager' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+             truthyBool(get(/databases/(default)/documents/users/$(request.auth.uid)).data.manager)) &&
+           ('operatives' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+             truthyBool(get(/databases/(default)/documents/users/$(request.auth.uid)).data.operatives)) &&
            (
              ('operativeMode' in resource.data && truthyBool(resource.data.operativeMode)) ||
              ('permissions' in resource.data && 'operativeMode' in resource.data.permissions && truthyBool(resource.data.permissions.operativeMode)) ||
@@ -144,7 +243,7 @@ service cloud.firestore {
   
   // Helper function to validate organizationId exists
   function organizationExists(organizationId) {
-    return exists(/databases/$(database)/documents/organizations/$(organizationId));
+    return exists(/databases/(default)/documents/organizations/$(organizationId));
   }
   
   match /databases/{database}/documents {
@@ -176,16 +275,16 @@ service cloud.firestore {
         // Path 1: Self-creation (user creating their own account)
         // Email matches, and either no claim for this email in org or claim already points to this user (prevents duplicate accounts)
         (request.resource.data.email == request.auth.token.email &&
-         (exists(/databases/$(database)/documents/organizations/$(request.resource.data.organizationId)/userEmails/$(request.resource.data.email)) == false ||
-          get(/databases/$(database)/documents/organizations/$(request.resource.data.organizationId)/userEmails/$(request.resource.data.email)).data.userId == request.auth.uid)) ||
+         (exists(/databases/(default)/documents/organizations/$(request.resource.data.organizationId)/userEmails/$(request.resource.data.email)) == false ||
+          get(/databases/(default)/documents/organizations/$(request.resource.data.organizationId)/userEmails/$(request.resource.data.email)).data.userId == request.auth.uid)) ||
         // Path 2: Admin creation (admin/super admin creating other users e.g. invite)
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         (('isSuperAdmin' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
-           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isSuperAdmin == true) ||
-          ('adminAccess' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
-           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.adminAccess == true) ||
-          ('role' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
-           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')))
+        (exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+         (('isSuperAdmin' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+           get(/databases/(default)/documents/users/$(request.auth.uid)).data.isSuperAdmin == true) ||
+          ('adminAccess' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+           get(/databases/(default)/documents/users/$(request.auth.uid)).data.adminAccess == true) ||
+          ('role' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+           get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin')))
       );
       
       // Allow update if:
@@ -221,22 +320,22 @@ service cloud.firestore {
         request.auth.uid == userId ||
         (request.auth.token.email != null && resource.data.email == request.auth.token.email) ||
         (
-          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-          orgIdsMatch(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId, resource.data.organizationId) &&
+          exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+          orgIdsMatch(get(/databases/(default)/documents/users/$(request.auth.uid)).data.organizationId, resource.data.organizationId) &&
           (
             (
-              ('isSuperAdmin' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
-               get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isSuperAdmin == true) &&
+              ('isSuperAdmin' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+               get(/databases/(default)/documents/users/$(request.auth.uid)).data.isSuperAdmin == true) &&
               (
-                !exists(/databases/$(database)/documents/organizations/$(resource.data.organizationId)) ||
-                !('creatorUserId' in get(/databases/$(database)/documents/organizations/$(resource.data.organizationId)).data) ||
-                get(/databases/$(database)/documents/organizations/$(resource.data.organizationId)).data.creatorUserId != userId
+                !exists(/databases/(default)/documents/organizations/$(resource.data.organizationId)) ||
+                !('creatorUserId' in get(/databases/(default)/documents/organizations/$(resource.data.organizationId)).data) ||
+                get(/databases/(default)/documents/organizations/$(resource.data.organizationId)).data.creatorUserId != userId
               )
             ) ||
             (
               isAdminOrSuperAdmin() &&
-              !('isSuperAdmin' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
-                get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isSuperAdmin == true) &&
+              !('isSuperAdmin' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+                get(/databases/(default)/documents/users/$(request.auth.uid)).data.isSuperAdmin == true) &&
               !('isSuperAdmin' in resource.data && resource.data.isSuperAdmin == true) &&
               !('adminAccess' in resource.data && resource.data.adminAccess == true) &&
               !('role' in resource.data && resource.data.role == 'admin')
@@ -343,6 +442,15 @@ service cloud.firestore {
         allow read: if canAccessOrganization(organizationId);
         allow create, update: if canAccessOrganization(organizationId);
         allow delete: if isOrganizationAdmin(organizationId);
+      }
+
+      match /materials/{materialId} {
+        allow read: if canAccessOrganization(organizationId);
+        allow create: if isOrganizationMaterialManager(organizationId) || canCreateOwnMaterial(organizationId);
+        allow update: if isOrganizationMaterialManager(organizationId) ||
+          canUpdateOwnMaterial(organizationId) ||
+          isOnlyClaimingLegacyOwnMaterial(organizationId);
+        allow delete: if isOrganizationMaterialManager(organizationId) || canDeleteOwnMaterial(organizationId);
       }
       
       match /managerSiteBookings/{bookingId} {

@@ -11,6 +11,7 @@ import UserNotifications
 @MainActor
 class LocalNotificationService {
     static let shared = LocalNotificationService()
+    static let dailyMaterialCutoffIdentifier = "daily-material-order-cutoff-16h"
     
     private init() {}
     
@@ -129,6 +130,44 @@ class LocalNotificationService {
         } catch {
             print("🔥🔥🔥 DEBUG: Error scheduling notification: \(error)")
         }
+    }
+
+    func scheduleDailyMaterialCutOffReminder(hour: Int = 16, minute: Int = 0) async {
+        let authorized = await requestAuthorization()
+        guard authorized else {
+            print("🔥🔥🔥 DEBUG: Notification permission not granted")
+            return
+        }
+
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [Self.dailyMaterialCutoffIdentifier])
+
+        let content = UNMutableNotificationContent()
+        content.title = "Material order cut off"
+        content.body = "Material order cut off"
+        content.sound = .default
+
+        var components = DateComponents()
+        components.hour = hour
+        components.minute = minute
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
+        let request = UNNotificationRequest(
+            identifier: Self.dailyMaterialCutoffIdentifier,
+            content: content,
+            trigger: trigger
+        )
+
+        do {
+            try await center.add(request)
+            print("✅ Daily material cut off reminder scheduled for \(hour):\(String(format: "%02d", minute))")
+        } catch {
+            print("🔥🔥🔥 DEBUG: Error scheduling daily material cut off reminder: \(error)")
+        }
+    }
+
+    func removeDailyMaterialCutOffReminder() {
+        UNUserNotificationCenter.current()
+            .removePendingNotificationRequests(withIdentifiers: [Self.dailyMaterialCutoffIdentifier])
     }
 }
 

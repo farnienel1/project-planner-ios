@@ -15,8 +15,10 @@ struct MaterialItem: Identifiable, Codable, Hashable {
     var unit: MaterialUnit
     var material: String // Description
     var addedBy: String // User who added it
+    var addedByUserId: String? // Stable auth UID for ownership checks
     var addedAt: Date
     var editedBy: String? // User who last edited it (nil if never edited)
+    var editedByUserId: String? // Stable auth UID for audit
     var editedAt: Date? // Date when last edited (nil if never edited)
     var projectId: UUID
     var date: Date // The date this material is needed/for
@@ -27,8 +29,10 @@ struct MaterialItem: Identifiable, Codable, Hashable {
         unit: MaterialUnit,
         material: String,
         addedBy: String,
+        addedByUserId: String? = nil,
         addedAt: Date = Date(),
         editedBy: String? = nil,
+        editedByUserId: String? = nil,
         editedAt: Date? = nil,
         projectId: UUID,
         date: Date
@@ -38,8 +42,10 @@ struct MaterialItem: Identifiable, Codable, Hashable {
         self.unit = unit
         self.material = material
         self.addedBy = addedBy
+        self.addedByUserId = addedByUserId
         self.addedAt = addedAt
         self.editedBy = editedBy
+        self.editedByUserId = editedByUserId
         self.editedAt = editedAt
         self.projectId = projectId
         self.date = date

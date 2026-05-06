@@ -178,6 +178,8 @@ struct Project_PlannerApp: App {
                 notificationService.setFirebaseBackend(firebaseBackend)
                 notificationService.setUserStore(userStore)
                 notificationService.setOperativeStore(operativeStore)
+                notificationService.setProjectStore(projectStore)
+                notificationService.setAppSettingsStore(appSettings)
                 notificationService.setHolidayStore(holidayStore)
                 appDelegate.onPushToken = { token in
                     Task {

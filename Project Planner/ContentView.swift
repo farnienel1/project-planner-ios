@@ -149,8 +149,10 @@ struct ContentView: View {
         }
         .onChange(of: firebaseBackend.currentOrganization) { oldValue, newValue in
             // Reload all data when organization changes or is loaded
-            if newValue != nil {
-                print("🔥🔥🔥 DEBUG: Organization changed/loaded - reloading all data")
+            let oldOrgId = oldValue?.firestoreDocumentId
+            let newOrgId = newValue?.firestoreDocumentId
+            if let newOrgId, newOrgId != oldOrgId {
+                print("🔥🔥🔥 DEBUG: Organization changed to \(newOrgId) - reloading all data once")
                 Task {
                     await loadInitialData()
                 }
@@ -163,6 +165,12 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+        .onChange(of: userStore.currentUser?.id) { _, _ in
+            Task { await notificationService.refreshDailyMaterialCutOffReminder() }
+        }
+        .onChange(of: appSettings.settings.notifications.materialOrderCutOff) { _, _ in
+            Task { await notificationService.refreshDailyMaterialCutOffReminder() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("goBackToPreviousTab"))) { _ in
             // Go back to home tab when back button is pressed from secondary tabs (Operatives/Settings)
@@ -228,6 +236,7 @@ struct ContentView: View {
             group.addTask { await holidayStore.loadData() }
         }
         await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
+        await notificationService.refreshDailyMaterialCutOffReminder()
     }
     
     @ViewBuilder

@@ -4757,18 +4757,145 @@ extension FirebaseBackend {
     }
     
     // MARK: - Materials
+
+    /// Firestore often returns numeric fields as `Int64` / `NSNumber`; plain `as? Int` drops valid rows.
+    private func materialQuantityFromFirestore(_ value: Any?) -> Int? {
+        switch value {
+        case let v as Int: return v
+        case let v as Int8: return Int(v)
+        case let v as Int16: return Int(v)
+        case let v as Int32: return Int(v)
+        case let v as Int64: return Int(exactly: v)
+        case let v as UInt: return Int(exactly: v)
+        case let v as Double: return Int(exactly: v)
+        case let v as Float: return Int(v)
+        case let n as NSNumber: return n.intValue
+        default: return nil
+        }
+    }
+
+    /// Parses a materials subcollection document for ownership checks and delete. Returns nil if required fields are missing.
+    private func materialItemFromFirestoreDocumentData(_ data: [String: Any]) -> MaterialItem? {
+        guard let idString = data["id"] as? String,
+              let id = UUID(uuidString: idString),
+              let quantity = materialQuantityFromFirestore(data["quantity"]),
+              let unitString = data["unit"] as? String,
+              let unit = MaterialUnit(rawValue: unitString),
+              let materialName = data["material"] as? String,
+              let addedBy = data["addedBy"] as? String,
+              let addedAt = (data["addedAt"] as? Timestamp)?.dateValue(),
+              let projectIdString = data["projectId"] as? String,
+              let projectId = UUID(uuidString: projectIdString),
+              let date = (data["date"] as? Timestamp)?.dateValue() else {
+            return nil
+        }
+        return MaterialItem(
+            id: id,
+            quantity: quantity,
+            unit: unit,
+            material: materialName,
+            addedBy: addedBy,
+            addedByUserId: data["addedByUserId"] as? String,
+            addedAt: addedAt,
+            editedBy: data["editedBy"] as? String,
+            editedByUserId: data["editedByUserId"] as? String,
+            editedAt: (data["editedAt"] as? Timestamp)?.dateValue(),
+            projectId: projectId,
+            date: Calendar.current.startOfDay(for: date)
+        )
+    }
+    
+    private func truthyFirestoreBool(_ value: Any?) -> Bool {
+        (value as? Bool == true) || (value as? Int == 1)
+    }
+
+    private func normalizedMaterialOwnerString(_ value: String?) -> String {
+        (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+    
+    private func materialAddedByMatchesAuthUser(_ material: MaterialItem) -> Bool {
+        let normalizedAddedBy = normalizedMaterialOwnerString(material.addedBy)
+        let authDisplay = normalizedMaterialOwnerString(currentUser?.displayName)
+        let authEmail = normalizedMaterialOwnerString(currentUser?.email)
+        return normalizedAddedBy == authDisplay || normalizedAddedBy == authEmail
+    }
+
+    private func materialAddedByMatchesUserDocument(_ material: MaterialItem, userData: [String: Any]) -> Bool {
+        let normalizedAddedBy = normalizedMaterialOwnerString(material.addedBy)
+        let email = normalizedMaterialOwnerString(userData["email"] as? String)
+        let firstName = normalizedMaterialOwnerString(userData["firstName"] as? String)
+        let surname = normalizedMaterialOwnerString(userData["surname"] as? String)
+        let lastName = normalizedMaterialOwnerString(userData["lastName"] as? String)
+        let fullName = [firstName, surname].filter { !$0.isEmpty }.joined(separator: " ")
+        let alternateFullName = [firstName, lastName].filter { !$0.isEmpty }.joined(separator: " ")
+        return normalizedAddedBy == email ||
+            (!fullName.isEmpty && normalizedAddedBy == fullName) ||
+            (!alternateFullName.isEmpty && normalizedAddedBy == alternateFullName)
+    }
+
+    private func currentUserOwnsLegacyMaterial(_ material: MaterialItem, organizationId: String) async -> Bool {
+        guard let uid = currentUser?.uid else { return false }
+        let orgId = normalizedOrganizationId(organizationId)
+        guard let snap = try? await db.collection("users").document(uid).getDocument(source: .server),
+              snap.exists,
+              let userData = snap.data(),
+              organizationIdsMatch(organizationIdFromFirestore(userData["organizationId"]), orgId) else {
+            return materialAddedByMatchesAuthUser(material)
+        }
+        return materialAddedByMatchesUserDocument(material, userData: userData) || materialAddedByMatchesAuthUser(material)
+    }
+    
+    /// Mirrors materials delete rules: admins/managers may delete any; others only their own booking.
+    private func canCurrentUserDeleteMaterial(_ material: MaterialItem, organizationId: String) async -> Bool {
+        guard let uid = currentUser?.uid else { return false }
+        let orgId = normalizedOrganizationId(organizationId)
+        guard let snap = try? await db.collection("users").document(uid).getDocument(source: .server),
+              snap.exists,
+              let userData = snap.data(),
+              organizationIdsMatch(organizationIdFromFirestore(userData["organizationId"]), orgId) else {
+            if let ownerId = material.addedByUserId, !ownerId.isEmpty {
+                return ownerId == uid
+            }
+            return materialAddedByMatchesAuthUser(material)
+        }
+        let isSuperAdmin = truthyFirestoreBool(userData["isSuperAdmin"])
+        let adminAccess = truthyFirestoreBool(userData["adminAccess"])
+        let role = userData["role"] as? String ?? ""
+        let adminLike = isSuperAdmin || adminAccess || role == "admin"
+        let manager = truthyFirestoreBool(userData["manager"])
+        if adminLike || manager {
+            return true
+        }
+        if let ownerId = material.addedByUserId, !ownerId.isEmpty {
+            return ownerId == uid
+        }
+        return materialAddedByMatchesUserDocument(material, userData: userData) || materialAddedByMatchesAuthUser(material)
+    }
+    
+    /// Same path resolution as material writes so loads and listeners see newly saved rows.
+    func resolveOrganizationIdForMaterials(preferredOrganizationId: String) async throws -> String {
+        let preferredOrgId = normalizedOrganizationId(preferredOrganizationId)
+        do {
+            return try await ensureReadableOrganization(preferredOrgId)
+        } catch {
+            print("🔥🔥🔥 DEBUG: Preferred materials org \(preferredOrgId) was not readable: \(error.localizedDescription)")
+            let fallback = await resolveOrganizationIdForFirebaseWrites(preferredFallback: preferredOrganizationId)
+                ?? preferredOrgId
+            guard !fallback.isEmpty else {
+                throw NSError(
+                    domain: "FirebaseBackend",
+                    code: 400,
+                    userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
+                )
+            }
+            let orgId = try await ensureReadableOrganization(fallback)
+            print("🔥🔥🔥 DEBUG: Falling back materials org to \(orgId)")
+            return orgId
+        }
+    }
     
     func saveMaterialItem(_ material: MaterialItem, organizationId: String) async throws {
-        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
-            ?? normalizedOrganizationId(organizationId)
-        guard !resolved.isEmpty else {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 400,
-                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
-            )
-        }
-        let orgId = try await ensureReadableOrganization(resolved)
+        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
         do {
             try await ensureUserDocumentLinked(organizationId: orgId)
         } catch {
@@ -4779,6 +4906,39 @@ extension FirebaseBackend {
         // Ensure date is normalized to start of day
         let calendar = Calendar.current
         let normalizedDate = calendar.startOfDay(for: material.date)
+        let docRef = db.collection("organizations").document(orgId)
+            .collection("materials")
+            .document(material.id.uuidString)
+
+        let serverSnapshot = try await docRef.getDocument(source: .server)
+        if serverSnapshot.exists,
+           let serverData = serverSnapshot.data(),
+           let serverMaterial = materialItemFromFirestoreDocumentData(serverData) {
+            guard await canCurrentUserDeleteMaterial(serverMaterial, organizationId: orgId) else {
+                throw NSError(
+                    domain: "FirebaseBackend",
+                    code: 403,
+                    userInfo: [NSLocalizedDescriptionKey: "You can only edit materials that you booked."]
+                )
+            }
+        }
+
+        var effectiveAddedByUserId = material.addedByUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if effectiveAddedByUserId?.isEmpty == true {
+            effectiveAddedByUserId = nil
+        }
+        if effectiveAddedByUserId == nil,
+           let uid = currentUser?.uid,
+           await currentUserOwnsLegacyMaterial(material, organizationId: orgId) {
+            // Legacy material rows predate addedByUserId. Claim with a one-field update first so rules can
+            // verify the existing addedBy value before the full edit save.
+            do {
+                try await docRef.updateData(["addedByUserId": uid])
+            } catch {
+                print("⚠️ [FirebaseBackend] Legacy material owner backfill skipped: \(error.localizedDescription)")
+            }
+            effectiveAddedByUserId = uid
+        }
         
         let data: [String: Any] = [
             "id": material.id.uuidString,
@@ -4786,7 +4946,11 @@ extension FirebaseBackend {
             "unit": material.unit.rawValue,
             "material": material.material,
             "addedBy": material.addedBy,
+            "addedByUserId": effectiveAddedByUserId as Any,
             "addedAt": Timestamp(date: material.addedAt),
+            "editedBy": material.editedBy as Any,
+            "editedByUserId": material.editedByUserId as Any,
+            "editedAt": material.editedAt.map { Timestamp(date: $0) } as Any,
             "projectId": material.projectId.uuidString,
             "date": Timestamp(date: normalizedDate)
         ]
@@ -4798,21 +4962,24 @@ extension FirebaseBackend {
         print("   Date: \(normalizedDate)")
         print("   Organization ID: \(orgId)")
         
-        try await db.collection("organizations").document(orgId)
-            .collection("materials")
-            .document(material.id.uuidString)
-            .setData(data)
+        try await docRef.setData(data)
         
         print("✅ [FirebaseBackend] Material saved successfully to Firebase")
     }
     
     func loadMaterialItems(organizationId: String, projectId: UUID) async throws -> [MaterialItem] {
-        let orgId = try await ensureReadableOrganization(organizationId)
-        print("🔍 [FirebaseBackend] Loading materials for projectId: \(projectId.uuidString)")
-        let snapshot = try await db.collection("organizations").document(orgId)
+        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
+        print("🔍 [FirebaseBackend] Loading materials for projectId: \(projectId.uuidString) org: \(orgId)")
+        let materialsQuery = db.collection("organizations").document(orgId)
             .collection("materials")
             .whereField("projectId", isEqualTo: projectId.uuidString)
-            .getDocuments()
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await materialsQuery.getDocuments(source: .server)
+        } catch {
+            print("⚠️ [FirebaseBackend] Server materials read failed, using cache/default: \(error.localizedDescription)")
+            snapshot = try await materialsQuery.getDocuments()
+        }
         
         print("🔍 [FirebaseBackend] Found \(snapshot.documents.count) material documents in Firebase")
         
@@ -4823,7 +4990,7 @@ extension FirebaseBackend {
             
             guard let idString = data["id"] as? String,
                   let id = UUID(uuidString: idString),
-                  let quantity = data["quantity"] as? Int,
+                  let quantity = materialQuantityFromFirestore(data["quantity"]),
                   let unitString = data["unit"] as? String,
                   let unit = MaterialUnit(rawValue: unitString),
                   let material = data["material"] as? String,
@@ -4846,7 +5013,11 @@ extension FirebaseBackend {
                 unit: unit,
                 material: material,
                 addedBy: addedBy,
+                addedByUserId: data["addedByUserId"] as? String,
                 addedAt: addedAt,
+                editedBy: data["editedBy"] as? String,
+                editedByUserId: data["editedByUserId"] as? String,
+                editedAt: (data["editedAt"] as? Timestamp)?.dateValue(),
                 projectId: projectId,
                 date: normalizedDate
             )
@@ -4862,7 +5033,7 @@ extension FirebaseBackend {
     func observeMaterialItems(
         organizationId: String,
         projectId: UUID,
-        onChange: @escaping @MainActor ([MaterialItem]) -> Void
+        onChange: @escaping @MainActor ([MaterialItem], SnapshotMetadata) -> Void
     ) -> ListenerRegistration {
         let orgId = normalizedOrganizationId(organizationId)
         return db.collection("organizations").document(orgId)
@@ -4874,8 +5045,14 @@ extension FirebaseBackend {
                     return
                 }
 
-                guard let docs = snapshot?.documents else { return }
+                guard let snapshot else { return }
+                let metadata = snapshot.metadata
+                // Empty local-cache snapshots can arrive before the server/index reflects new writes; don't wipe a good list.
+                if snapshot.documents.isEmpty, metadata.isFromCache {
+                    return
+                }
 
+                let docs = snapshot.documents
                 var loaded: [MaterialItem] = []
                 let calendar = Calendar.current
 
@@ -4883,7 +5060,7 @@ extension FirebaseBackend {
                     let data = doc.data()
                     guard let idString = data["id"] as? String,
                           let id = UUID(uuidString: idString),
-                          let quantity = data["quantity"] as? Int,
+                          let quantity = self.materialQuantityFromFirestore(data["quantity"]),
                           let unitString = data["unit"] as? String,
                           let unit = MaterialUnit(rawValue: unitString),
                           let material = data["material"] as? String,
@@ -4901,8 +5078,10 @@ extension FirebaseBackend {
                         unit: unit,
                         material: material,
                         addedBy: addedBy,
+                        addedByUserId: data["addedByUserId"] as? String,
                         addedAt: addedAt,
                         editedBy: data["editedBy"] as? String,
+                        editedByUserId: data["editedByUserId"] as? String,
                         editedAt: (data["editedAt"] as? Timestamp)?.dateValue(),
                         projectId: parsedProjectId,
                         date: calendar.startOfDay(for: date)
@@ -4910,38 +5089,76 @@ extension FirebaseBackend {
                 }
 
                 Task { @MainActor in
-                    onChange(loaded)
+                    onChange(loaded, metadata)
                 }
             }
     }
     
     func deleteMaterialItem(_ materialId: UUID, organizationId: String) async throws {
-        try await db.collection("organizations").document(organizationId)
+        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
+        let docRef = db.collection("organizations").document(orgId)
             .collection("materials")
             .document(materialId.uuidString)
-            .delete()
+        let snapshot = try await docRef.getDocument(source: .server)
+        guard let data = snapshot.data(),
+              let material = materialItemFromFirestoreDocumentData(data) else {
+            throw NSError(domain: "FirebaseBackend", code: 404, userInfo: [NSLocalizedDescriptionKey: "Material could not be found."])
+        }
+        guard await canCurrentUserDeleteMaterial(material, organizationId: orgId) else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 403,
+                userInfo: [NSLocalizedDescriptionKey: "You can only delete materials that you booked."]
+            )
+        }
+        if (material.addedByUserId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+           let uid = currentUser?.uid,
+           await currentUserOwnsLegacyMaterial(material, organizationId: orgId) {
+            do {
+                try await docRef.updateData(["addedByUserId": uid])
+            } catch {
+                print("⚠️ [FirebaseBackend] Legacy material owner backfill before delete failed: \(error.localizedDescription)")
+                throw NSError(
+                    domain: "FirebaseBackend",
+                    code: 403,
+                    userInfo: [NSLocalizedDescriptionKey: "This older material needs its owner recorded before it can be deleted. Please deploy the updated Firestore rules, then try again."]
+                )
+            }
+        }
+        try await docRef.delete()
     }
     
-    func cleanupOldMaterials(organizationId: String, keepDays: Int) async throws {
-        let cutoffDate = Calendar.current.date(byAdding: .day, value: -keepDays, to: Date()) ?? Date()
-        let cutoffTimestamp = Timestamp(date: cutoffDate)
+    /// Deletes materials for **this project only** whose **needed** `date` is older than `keepDays` before today. Other jobs in the org are untouched.
+    func cleanupOldMaterials(organizationId: String, projectId: UUID, keepDays: Int) async throws {
+        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
+        let calendar = Calendar.current
+        let today = Date()
+        let cutoffDay = calendar.startOfDay(
+            for: calendar.date(byAdding: .day, value: -keepDays, to: today) ?? today
+        )
         
-        let snapshot = try await db.collection("organizations").document(organizationId)
+        let snapshot = try await db.collection("organizations").document(orgId)
             .collection("materials")
-            .whereField("date", isLessThan: cutoffTimestamp)
+            .whereField("projectId", isEqualTo: projectId.uuidString)
             .getDocuments()
         
-        // Delete old materials in batches
-        let batch = db.batch()
+        let toDelete = snapshot.documents.filter { doc in
+            guard let ts = doc.data()["date"] as? Timestamp else { return false }
+            let neededDay = calendar.startOfDay(for: ts.dateValue())
+            return neededDay < cutoffDay
+        }
+        
+        var batch = db.batch()
         var batchCount = 0
         let maxBatchSize = 500 // Firestore batch limit
         
-        for doc in snapshot.documents {
+        for doc in toDelete {
             batch.deleteDocument(doc.reference)
             batchCount += 1
             
             if batchCount >= maxBatchSize {
                 try await batch.commit()
+                batch = db.batch()
                 batchCount = 0
             }
         }
@@ -4950,7 +5167,7 @@ extension FirebaseBackend {
             try await batch.commit()
         }
         
-        print("🧹 Cleaned up \(snapshot.documents.count) materials older than \(keepDays) days")
+        print("🧹 [materials] Project \(projectId): removed \(toDelete.count) rows older than \(keepDays) days (needed date)")
     }
 
     // MARK: - Site Audits

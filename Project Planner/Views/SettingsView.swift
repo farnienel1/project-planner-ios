@@ -45,557 +45,88 @@ struct SettingsView: View {
     @State private var isSeedingPlayground = false
     @State private var playgroundSeedMessage: String?
     @State private var showingCompanyDetails = false
+
+    private var canConfigureMaterialCutOffNotifications: Bool {
+        guard let user = userStore.currentUser else { return false }
+        if user.permissions.operativeMode { return false }
+        return user.isSuperAdmin || user.permissions.adminAccess || user.permissions.manager || user.role == .manager || user.role == .admin
+    }
     
     var body: some View {
         List {
-                // Account Details Section
-                Section("Account Details") {
-                    if let user = firebaseBackend.currentUser {
-                        // Always show Name (even if empty, will show email fallback)
+            accountDetailsSection
+
+            if userStore.currentUser?.isSuperAdmin == true,
+               firebaseBackend.currentOrganization != nil {
+                Section {
+                    Button {
+                        showingCompanyDetails = true
+                    } label: {
                         HStack {
-                            Text("Name")
+                            Image(systemName: "building.2.fill")
+                            Text("Company details")
                             Spacer()
-                            if let appUser = userStore.currentUser {
-                                let fullName = "\(appUser.firstName) \(appUser.surname)".trimmingCharacters(in: .whitespaces)
-                                Text(fullName.isEmpty ? (user.email?.components(separatedBy: "@").first?.capitalized ?? "N/A") : fullName)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                Text(user.email?.components(separatedBy: "@").first?.capitalized ?? "N/A")
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        
-                        HStack {
-                            Text("Email")
-                            Spacer()
-                            Text(user.email ?? "N/A")
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        if let org = firebaseBackend.currentOrganization {
-                            HStack {
-                                Text("Organization")
-                                Spacer()
-                                Text(org.name)
-                                    .foregroundColor(.secondary)
-                            }
-                        } else {
-                            HStack {
-                                Text("Organization")
-                                Spacer()
-                                Text("Not linked")
-                                    .foregroundColor(.red)
-                            }
-                        }
-                    }
-                    
-                    // Update user name button (for fixing existing users like farnienelyt@gmail.com)
-                    if let appUser = userStore.currentUser, appUser.email == "farnienelyt@gmail.com" {
-                        Button(action: {
-                            updateUserName()
-                        }) {
-                            HStack {
-                                if isUpdatingUser {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                }
-                                Text(isUpdatingUser ? "Updating..." : "Update Name to 'Farnie Nel'")
-                            }
-                        }
-                        .disabled(isUpdatingUser)
-                    }
-                    
-                    Button("Sign Out") {
-                        showingSignOutAlert = true
-                    }
-                    .foregroundColor(.red)
-                }
-                
-                if userStore.currentUser?.isSuperAdmin == true,
-                   firebaseBackend.currentOrganization != nil {
-                    Section {
-                        Button {
-                            showingCompanyDetails = true
-                        } label: {
-                            HStack {
-                                Image(systemName: "building.2.fill")
-                                Text("Company details")
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    } header: {
-                        Text("Organisation")
-                    } footer: {
-                        Text("Super admins can update the organisation name, country, office address, and map default location.")
-                    }
-                }
-                
-                // What you can / cannot see — hidden for operatives
-                if !userStore.isOperativeMode() {
-                    Section("Your access") {
-                        Text(userStore.currentUserAccessSummary())
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                if userStore.canConfigureRoleTesting {
-                    Section {
-                        Toggle("Role testing (preview UI)", isOn: Binding(
-                            get: { userStore.roleTestingPreset != nil },
-                            set: { enabled in
-                                if !enabled {
-                                    userStore.roleTestingPreset = nil
-                                } else if userStore.roleTestingPreset == nil {
-                                    userStore.roleTestingPreset = .manager
-                                }
-                            }
-                        ))
-                        if userStore.roleTestingPreset != nil {
-                            Picker("Preview as", selection: Binding(
-                                get: { userStore.roleTestingPreset ?? .manager },
-                                set: { userStore.roleTestingPreset = $0 }
-                            )) {
-                                ForEach(RoleTestingPreset.allCases) { preset in
-                                    Text(preset.title).tag(preset)
-                                }
-                            }
-                            Text("Choose a role to see tabs and screens as that role. Your email and Firebase permissions are unchanged; super-admin-only actions still require your real account.")
+                            Image(systemName: "chevron.right")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
                         }
-                    } header: {
-                        Text("Strength test (demo)")
                     }
+                } header: {
+                    Text("Organisation")
                 }
-                
-                if userStore.hasAdminAccess() {
-                    Section {
-                        Button {
-                            Task { await seedPlaygroundDemo() }
-                        } label: {
-                            HStack {
-                                Text("Load playground demo data")
-                                Spacer()
-                                if isSeedingPlayground {
-                                    ProgressView()
-                                }
-                            }
-                        }
-                        .disabled(isSeedingPlayground)
-                        if let playgroundSeedMessage {
-                            Text(playgroundSeedMessage)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    } header: {
-                        Text("Playground demo data")
-                    } footer: {
-                        Text("Adds one demo project (DEMO-PP-PROJ), one small works (DEMO-PP-SW), tasks, and bookings linked to the first operative in your organization. All roles share the same Firestore data — use role testing to preview each view.")
-                    }
-                }
-                
-                // Appearance Section
-                if !userStore.isOperativeMode() {
-                    Section("Appearance") {
-                        ColorSchemePicker()
-                            .environmentObject(appSettings)
-                    }
-                }
+            }
 
-                // Calendar (Outlook) – admins/managers only
-                if userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true {
-                    Section {
-                        HStack {
-                            Image(systemName: "calendar.badge.clock")
-                            Text("Link Outlook Calendar")
-                            Spacer()
-                            Text("Coming soon")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+            if canConfigureMaterialCutOffNotifications {
+                Section {
+                    Toggle("Material order cut off (4:00 PM daily)", isOn: Binding(
+                        get: { appSettings.settings.notifications.materialOrderCutOff },
+                        set: { enabled in
+                            Task { await updateMaterialCutOffNotificationPreference(enabled) }
                         }
-                    } footer: {
-                        Text("Show your Outlook meetings in My Schedule and Daily Overview (e.g. 1-hour meetings within AM/PM/Full day).")
-                    }
+                    ))
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    Text("Sends a daily reminder at 4:00 PM. Admins and managers can turn this off at any time.")
                 }
+            }
 
-                // Legal Section
-                Section("Legal") {
-                    NavigationLink(destination: PrivacyPolicyView(isAcceptanceRequired: .constant(false))) {
-                        HStack {
-                            Image(systemName: "doc.text.fill")
-                            Text("Privacy Policy")
-                        }
-                    }
-                }
-                
-                // Data Management Section
-                if !userStore.isOperativeMode() {
-                    Section("Data Management") {
-                        Button(action: {
-                            Task {
-                                await diagnoseData()
-                            }
-                        }) {
-                            HStack {
-                                Text("Diagnose Missing Data")
-                                Spacer()
-                                if isDiagnosing {
-                                    ProgressView()
-                                }
-                            }
-                        }
-                        .disabled(isDiagnosing)
-                        
-                        Button(action: {
-                            Task {
-                                await forceReloadData()
-                            }
-                        }) {
-                            HStack {
-                                Text("Force Reload Data")
-                                Spacer()
-                                if isReloading {
-                                    ProgressView()
-                                }
-                            }
-                        }
-                        .disabled(isReloading)
-                        
-                        Button(action: {
-                            showingManualLinkSheet = true
-                        }) {
-                            Text("Manually Link Organization")
-                        }
-                    }
-                }
-                
-                // Troubleshooting Section
-                if !userStore.isOperativeMode() {
-                    Section("Troubleshooting") {
-                        NavigationLink(destination: FixPermissionsView()
-                            .environmentObject(firebaseBackend)
-                            .environmentObject(userStore)) {
-                            Text("Fix Permission Errors")
-                        }
-                        
-                        if userStore.canManageUsers() {
-                            Button(action: {
-                                showingEmailTest = true
-                            }) {
-                                Text("Test Email Sending")
-                            }
-                            
-                            if let result = emailTestResult {
-                                Text(result)
-                                    .font(.caption)
-                                    .foregroundColor(result.contains("✅") ? .green : .red)
-                            }
-                        }
-                    }
-                }
-                
-                // Notification Testing Section
-                Section("Notification Testing") {
-                    Text("Test notifications will appear 3 seconds after tapping.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    if userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true {
-                        Button(action: {
-                            Task { await runTemporaryPushDiagnostic() }
-                        }) {
-                            HStack {
-                                Text("TEMP: Remote Push Diagnostic")
-                                Spacer()
-                                if isRunningPushDiagnostic {
-                                    ProgressView()
-                                } else {
-                                    Image(systemName: "antenna.radiowaves.left.and.right")
-                                }
-                            }
-                        }
-                        .disabled(isRunningPushDiagnostic)
-                    }
-                    
-                    Button(action: {
-                        Task {
-                            await LocalNotificationService.shared.scheduleTestNotification(
-                                type: .operativeCreated,
-                                details: "John Smith has been added as a new operative."
-                            )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
-                            showingNotificationTestAlert = true
-                        }
-                    }) {
-                        HStack {
-                            Text("Test: New Operative Created")
-                            Spacer()
-                            Image(systemName: "bell")
-                        }
-                    }
-                    
-                    Button(action: {
-                        Task {
-                            await LocalNotificationService.shared.scheduleTestNotification(
-                                type: .managerCreated,
-                                details: "Jane Doe has been added as a new manager."
-                            )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
-                            showingNotificationTestAlert = true
-                        }
-                    }) {
-                        HStack {
-                            Text("Test: New Manager Created")
-                            Spacer()
-                            Image(systemName: "bell")
-                        }
-                    }
-                    
-                    Button(action: {
-                        Task {
-                            await LocalNotificationService.shared.scheduleTestNotification(
-                                type: .clientCreated,
-                                details: "ABC Company has been added as a new client."
-                            )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
-                            showingNotificationTestAlert = true
-                        }
-                    }) {
-                        HStack {
-                            Text("Test: New Client Created")
-                            Spacer()
-                            Image(systemName: "bell")
-                        }
-                    }
-                    
-                    Button(action: {
-                        Task {
-                            await LocalNotificationService.shared.scheduleTestNotification(
-                                type: .bookingCreated,
-                                details: "A new booking has been created for Project XYZ on December 1, 2025."
-                            )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
-                            showingNotificationTestAlert = true
-                        }
-                    }) {
-                        HStack {
-                            Text("Test: New Booking Created")
-                            Spacer()
-                            Image(systemName: "bell")
-                        }
-                    }
-                    
-                    Button(action: {
-                        Task {
-                            await LocalNotificationService.shared.scheduleTestNotification(
-                                type: .taskCreated,
-                                details: "A new task has been assigned: Complete site inspection."
-                            )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
-                            showingNotificationTestAlert = true
-                        }
-                    }) {
-                        HStack {
-                            Text("Test: New Task Created")
-                            Spacer()
-                            Image(systemName: "bell")
-                        }
-                    }
-                    Button(action: {
-                        Task {
-                            await LocalNotificationService.shared.scheduleTestNotification(
-                                type: .taskCompleted,
-                                details: "Task complete: Site inspection has been marked complete."
-                            )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
-                            showingNotificationTestAlert = true
-                        }
-                    }) {
-                        HStack {
-                            Text("Test: Task Completed")
-                            Spacer()
-                            Image(systemName: "bell")
-                        }
-                    }
-
-                    Button(action: {
-                        Task {
-                            await LocalNotificationService.shared.scheduleTestNotification(
-                                type: .bookingClash,
-                                details: "Booking clash detected for Test Operative."
-                            )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
-                            showingNotificationTestAlert = true
-                        }
-                    }) {
-                        HStack {
-                            Text("Test: Booking Clash")
-                            Spacer()
-                            Image(systemName: "bell")
-                        }
-                    }
-
-                    Button(action: {
-                        Task {
-                            await LocalNotificationService.shared.scheduleTestNotification(
-                                type: .holidayRequestSubmitted,
-                                details: "Annual leave request submitted and pending approval."
-                            )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
-                            showingNotificationTestAlert = true
-                        }
-                    }) {
-                        HStack {
-                            Text("Test: Annual Leave Request")
-                            Spacer()
-                            Image(systemName: "bell")
-                        }
-                    }
-
-                    Button(action: {
-                        Task {
-                            await LocalNotificationService.shared.scheduleTestNotification(
-                                type: .holidayRequestApproved,
-                                details: "Your annual leave request has been approved."
-                            )
-                            notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
-                            showingNotificationTestAlert = true
-                        }
-                    }) {
-                        HStack {
-                            Text("Test: Annual Leave Approved")
-                            Spacer()
-                            Image(systemName: "bell")
-                        }
-                    }
-                }
-                .alert("Notification Test", isPresented: $showingNotificationTestAlert) {
-                    Button("OK", role: .cancel) { }
-                } message: {
-                    Text(notificationTestMessage)
-                }
-                
-                // Admin Tools Section
-                if userStore.canManageUsers() {
-                    Section("Admin Tools") {
-                        Button(action: {
-                            showingDeleteAllOperativesConfirmation = true
-                        }) {
-                            Text("Delete All Operatives")
-                                .foregroundColor(.red)
-                        }
-                        
-                        // Delete Test Button
-                        Button(action: {
-                            Task {
-                                await testDeleteFunctionality()
-                            }
-                        }) {
-                            HStack {
-                                Text("Test Delete Functionality")
-                                Spacer()
-                                if isTestingDelete {
-                                    ProgressView()
-                                }
-                            }
-                        }
-                        .disabled(isTestingDelete)
-                        
-                        if !deleteTestMessage.isEmpty {
-                            Text(deleteTestMessage)
-                                .font(.caption)
-                                .foregroundColor(deleteTestMessage.contains("✅") ? .green : .red)
-                                .padding(.vertical, 4)
-                        }
-                    }
-                }
-                
-                // App Info Section
-                Section("App Information") {
+            Section {
+                NavigationLink(destination: PrivacyPolicyView(isAcceptanceRequired: .constant(false))) {
                     HStack {
-                        Text("Version")
-                        Spacer()
-                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "N/A")
-                            .foregroundColor(.secondary)
+                        Image(systemName: "doc.text.fill")
+                        Text("Privacy Policy")
                     }
                 }
+            } header: {
+                Text("Legal")
             }
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
-                    }) {
-                        Image(systemName: "chevron.left")
-                            .foregroundColor(Color.theme.primary)
-                            .font(.system(size: 17, weight: .semibold))
-                    }
+
+            Section {
+                HStack {
+                    Text("Version")
+                    Spacer()
+                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "N/A")
+                        .foregroundColor(.secondary)
                 }
+            } header: {
+                Text("App Information")
             }
-            .navigationBarBackButtonHidden(true)
-        .onAppear {
-            // Use UIKit to directly hide the back button
-            DispatchQueue.main.async {
-                // Find the navigation controller and hide back button
-                if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                   let window = windowScene.windows.first {
-                    // Traverse view hierarchy to find navigation controller
-                    func findNavigationController(in viewController: UIViewController?) -> UINavigationController? {
-                        guard let viewController = viewController else { return nil }
-                        if let navController = viewController as? UINavigationController {
-                            return navController
-                        }
-                        for child in viewController.children {
-                            if let navController = findNavigationController(in: child) {
-                                return navController
-                            }
-                        }
-                        return nil
-                    }
-                    
-                    if let navController = findNavigationController(in: window.rootViewController) {
-                        // Hide back button completely
-                        navController.navigationBar.topItem?.leftBarButtonItem = nil
-                        navController.navigationBar.backItem?.backBarButtonItem = nil
-                        navController.navigationBar.backIndicatorImage = UIImage()
-                        navController.navigationBar.backIndicatorTransitionMaskImage = UIImage()
-                        
-                        // Also set appearance to hide back button
-                        let appearance = UINavigationBarAppearance()
-                        appearance.configureWithOpaqueBackground()
-                        appearance.backButtonAppearance.normal.titlePositionAdjustment = UIOffset(horizontal: -1000, vertical: 0)
-                        navController.navigationBar.standardAppearance = appearance
-                        navController.navigationBar.scrollEdgeAppearance = appearance
-                    }
+        }
+        .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: {
+                    NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+                }) {
+                    Image(systemName: "chevron.left")
+                        .foregroundColor(Color.theme.primary)
+                        .font(.system(size: 17, weight: .semibold))
                 }
             }
         }
-        .sheet(isPresented: $showingDiagnosticReport) {
-            NavigationView {
-                ScrollView {
-                    Text(diagnosticReport)
-                        .font(.system(.body, design: .monospaced))
-                        .padding()
-                }
-                .navigationTitle("Diagnostic Report")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Done") {
-                            showingDiagnosticReport = false
-                        }
-                    }
-                }
-            }
-        }
-        .sheet(isPresented: $showingManualLinkSheet) {
-            manualLinkSheet
-        }
+        .navigationBarBackButtonHidden(true)
         .sheet(isPresented: $showingCompanyDetails) {
             CompanyDetailsEditView()
                 .environmentObject(firebaseBackend)
@@ -612,25 +143,6 @@ struct SettingsView: View {
             }
         } message: {
             Text("Are you sure you want to sign out?")
-        }
-        .sheet(isPresented: $showingEmailTest) {
-            emailTestSheet
-        }
-        .alert("Delete All Operatives", isPresented: $showingDeleteAllOperativesConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete All", role: .destructive) {
-                Task {
-                    await deleteAllOperatives()
-                }
-            }
-        } message: {
-            let operativeCount = operativeStore.operatives.count
-            let bookingCount = bookingStore.bookings.count
-            if operativeCount > 0 {
-                Text("Are you sure you want to delete all \(operativeCount) operative\(operativeCount == 1 ? "" : "s")?\n\nThis will also delete all \(bookingCount) booking\(bookingCount == 1 ? "" : "s") associated with these operatives.\n\nThis action cannot be undone.")
-            } else {
-                Text("There are no operatives to delete.")
-            }
         }
     }
     
@@ -683,6 +195,124 @@ struct SettingsView: View {
                         linkError = nil
                     }
                 }
+            }
+        }
+    }
+
+    private var accountDetailsSection: some View {
+        Section("Account Details") {
+            if let user = firebaseBackend.currentUser {
+                HStack {
+                    Text("Name")
+                    Spacer()
+                    if let appUser = userStore.currentUser {
+                        let fullName = "\(appUser.firstName) \(appUser.surname)".trimmingCharacters(in: .whitespaces)
+                        Text(fullName.isEmpty ? (user.email?.components(separatedBy: "@").first?.capitalized ?? "N/A") : fullName)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text(user.email?.components(separatedBy: "@").first?.capitalized ?? "N/A")
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                HStack {
+                    Text("Email")
+                    Spacer()
+                    Text(user.email ?? "N/A")
+                        .foregroundColor(.secondary)
+                }
+
+                if let org = firebaseBackend.currentOrganization {
+                    HStack {
+                        Text("Organization")
+                        Spacer()
+                        Text(org.name)
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    HStack {
+                        Text("Organization")
+                        Spacer()
+                        Text("Not linked")
+                            .foregroundColor(.red)
+                    }
+                }
+            }
+
+            if let appUser = userStore.currentUser, appUser.email == "farnienelyt@gmail.com" {
+                Button(action: {
+                    updateUserName()
+                }) {
+                    HStack {
+                        if isUpdatingUser {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        }
+                        Text(isUpdatingUser ? "Updating..." : "Update Name to 'Farnie Nel'")
+                    }
+                }
+                .disabled(isUpdatingUser)
+            }
+
+            Button("Sign Out") {
+                showingSignOutAlert = true
+            }
+            .foregroundColor(.red)
+        }
+    }
+
+    private var notificationTestingSection: some View {
+        Section("Notification Testing") {
+            Text("Test notifications will appear 3 seconds after tapping.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true {
+                Button(action: {
+                    Task { await runTemporaryPushDiagnostic() }
+                }) {
+                    HStack {
+                        Text("TEMP: Remote Push Diagnostic")
+                        Spacer()
+                        if isRunningPushDiagnostic {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                        }
+                    }
+                }
+                .disabled(isRunningPushDiagnostic)
+            }
+
+            notificationTestButton(
+                title: "Test Local Notification",
+                type: .bookingCreated,
+                details: "Project Planner notification test."
+            )
+        }
+        .alert("Notification Test", isPresented: $showingNotificationTestAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(notificationTestMessage)
+        }
+    }
+
+    private func notificationTestButton(
+        title: String,
+        type: AppNotification.NotificationType,
+        details: String
+    ) -> some View {
+        Button(action: {
+            Task {
+                await LocalNotificationService.shared.scheduleTestNotification(type: type, details: details)
+                notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
+                showingNotificationTestAlert = true
+            }
+        }) {
+            HStack {
+                Text(title)
+                Spacer()
+                Image(systemName: "bell")
             }
         }
     }
@@ -893,6 +523,13 @@ struct SettingsView: View {
             showingNotificationTestAlert = true
             isRunningPushDiagnostic = false
         }
+    }
+
+    private func updateMaterialCutOffNotificationPreference(_ enabled: Bool) async {
+        var updated = appSettings.settings.notifications
+        updated.materialOrderCutOff = enabled
+        await appSettings.updateNotifications(updated)
+        await notificationService.refreshDailyMaterialCutOffReminder()
     }
     
     private func deleteAllOperatives() async {

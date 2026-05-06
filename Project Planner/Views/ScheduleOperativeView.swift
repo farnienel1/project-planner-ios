@@ -22,7 +22,7 @@ struct ScheduleOperativeView: View {
     @State private var selectedOperatives: Set<UUID> = []
     @State private var showingSelectOperatives = false
     @State private var selectedDates: Set<Date> = []
-    @State private var dateTimeSlots: [Date: TimeSlot] = [:]
+    @State private var dateTimeSlots: [String: TimeSlot] = [:]
     @State private var currentMonth: Date = Date()
     @State private var quickSelectDays: Int? = nil
     @State private var showingBookingConfirmation = false
@@ -478,7 +478,7 @@ struct ScheduleOperativeView: View {
     }
     
     private func selectedDateRow(for date: Date) -> some View {
-        let timeSlot = dateTimeSlots[date] ?? .fullDay
+        let timeSlot = dateTimeSlots[slotKey(for: date)] ?? .fullDay
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "EEEE, d MMM yyyy"
         
@@ -498,7 +498,7 @@ struct ScheduleOperativeView: View {
                 Button(action: {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                         selectedDates.remove(date)
-                        dateTimeSlots.removeValue(forKey: date)
+                        dateTimeSlots.removeValue(forKey: slotKey(for: date))
                     }
                 }) {
                     Image(systemName: "xmark.circle.fill")
@@ -535,7 +535,8 @@ struct ScheduleOperativeView: View {
     private func timeSlotButton(slot: TimeSlot, selected: Bool, date: Date) -> some View {
         Button(action: {
             withAnimation(.spring(response: 0.2, dampingFraction: 0.8)) {
-                dateTimeSlots[date] = selected && dateTimeSlots[date] == slot ? .fullDay : slot
+                let key = slotKey(for: date)
+                dateTimeSlots[key] = selected && dateTimeSlots[key] == slot ? .fullDay : slot
             }
         }) {
             Text(slot.shortDisplayName)
@@ -686,14 +687,15 @@ struct ScheduleOperativeView: View {
     private func toggleDateSelection(_ date: Date) {
         let calendar = Calendar.current
         let normalizedDate = calendar.startOfDay(for: date)
+        let key = slotKey(for: normalizedDate)
         
         if selectedDates.contains(normalizedDate) {
             selectedDates.remove(normalizedDate)
-            dateTimeSlots.removeValue(forKey: normalizedDate)
+            dateTimeSlots.removeValue(forKey: key)
         } else {
             selectedDates.insert(normalizedDate)
-            if dateTimeSlots[normalizedDate] == nil {
-                dateTimeSlots[normalizedDate] = .fullDay
+            if dateTimeSlots[key] == nil {
+                dateTimeSlots[key] = .fullDay
             }
         }
         
@@ -711,7 +713,7 @@ struct ScheduleOperativeView: View {
             if let date = calendar.date(byAdding: .day, value: i, to: today) {
                 let normalizedDate = calendar.startOfDay(for: date)
                 selectedDates.insert(normalizedDate)
-                dateTimeSlots[normalizedDate] = .fullDay
+                dateTimeSlots[slotKey(for: normalizedDate)] = .fullDay
             }
         }
     }
@@ -754,7 +756,7 @@ struct ScheduleOperativeView: View {
         
         for operative in operatives {
             for date in dates {
-                if let timeSlot = dateTimeSlots[date] {
+                if let timeSlot = dateTimeSlots[slotKey(for: date)] {
                     // Check for existing bookings for this operative on this date
                     let existingBookings = bookingStore.bookings.filter { booking in
                         booking.operativeId == operative.id &&
@@ -796,6 +798,13 @@ struct ScheduleOperativeView: View {
         }
         return false
     }
+
+    private func slotKey(for date: Date) -> String {
+        let calendar = Calendar.current
+        let normalizedDate = calendar.startOfDay(for: date)
+        let components = calendar.dateComponents([.year, .month, .day], from: normalizedDate)
+        return "\(components.year ?? 0)-\(components.month ?? 0)-\(components.day ?? 0)"
+    }
     
     private func proceedWithBooking() {
         isBooking = true
@@ -810,7 +819,7 @@ struct ScheduleOperativeView: View {
             // Create bookings for each operative on each selected date
             for operative in operatives {
                 for date in dates {
-                    if let timeSlot = dateTimeSlots[date] {
+                    if let timeSlot = dateTimeSlots[slotKey(for: date)] {
                         // Check if this booking was cancelled due to clash
                         let isCancelled = activeClashes.contains { clash in
                             clash.operative.id == operative.id &&
