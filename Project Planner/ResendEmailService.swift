@@ -7,18 +7,16 @@
 
 import Foundation
 import Combine
+import FirebaseCore
 
 class ResendEmailService: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     
-    private let apiKeyName = "RESEND_API_KEY"
-    
     // Using verified domain: info@projectplanner.us
     // Domain has been verified in Resend dashboard
     private let fromEmail = "info@projectplanner.us" // Your verified domain
-    
-    private let baseURL = "https://api.resend.com/emails"
+    private let setupPasswordBaseURL = "https://project-planner-f986c.web.app"
     
     func sendVerificationEmail(to email: String, verificationCode: String) async -> Bool {
         return await sendEmail(
@@ -58,7 +56,7 @@ class ResendEmailService: ObservableObject {
         )
     }
 
-    /// Sends sign-up email with a single setup link and one verification code (the invitation token). Use organisation name as From so new users see the org.
+    /// Sends sign-up email with a single setup link. Use organisation name as From so new users see the org.
     /// - Parameter fromName: Organization name shown as the email "From" (e.g. "Acme Ltd"). If nil, uses "Project Planner".
     func sendSignUpEmailWithVerification(to email: String, firstName: String, surname: String, invitationCode: String, fromName: String? = nil) async -> Bool {
         return await sendEmail(
@@ -92,21 +90,51 @@ class ResendEmailService: ObservableObject {
             self.errorMessage = nil
         }
         
-        guard let url = URL(string: baseURL) else {
-            await MainActor.run {
-                self.errorMessage = "Invalid URL"
-                self.isLoading = false
-            }
-            return false
+        // Production path: always use server-side secret via Firebase Function.
+        let sentViaFunction = await sendViaFirebaseFunction(
+            to: email,
+            subject: subject,
+            htmlContent: htmlContent,
+            cc: cc,
+            replyTo: replyTo,
+            fromName: fromName
+        )
+        if sentViaFunction {
+            await MainActor.run { self.isLoading = false }
+            return true
         }
-
-        guard let apiKey = SecureConfig.requiredSecret(named: apiKeyName) else {
-            await MainActor.run {
-                self.errorMessage = "Email service not configured. Add RESEND_API_KEY to your scheme environment variables."
-                self.isLoading = false
-            }
-            return false
+        
+#if DEBUG
+        // Developer fallback only: allows local testing without function deployment.
+        if let directKey = SecureConfig.requiredSecret(named: "RESEND_API_KEY") {
+            let directSuccess = await sendDirectViaResend(
+                apiKey: directKey,
+                to: email,
+                subject: subject,
+                htmlContent: htmlContent,
+                cc: cc,
+                replyTo: replyTo,
+                fromName: fromName
+            )
+            await MainActor.run { self.isLoading = false }
+            return directSuccess
         }
+#endif
+        
+        await MainActor.run { self.isLoading = false }
+        return false
+    }
+    
+    private func sendDirectViaResend(
+        apiKey: String,
+        to email: String,
+        subject: String,
+        htmlContent: String,
+        cc: String?,
+        replyTo: String?,
+        fromName: String?
+    ) async -> Bool {
+        guard let url = URL(string: "https://api.resend.com/emails") else { return false }
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -118,111 +146,97 @@ class ResendEmailService: ObservableObject {
             "from": fromDisplay,
             "to": [email],
             "subject": subject,
-            "html": htmlContent
+            "html": htmlContent,
+            "reply_to": replyTo ?? fromEmail
         ]
-        
-        // Add CC if provided
-        if let ccEmail = cc {
-            emailData["cc"] = [ccEmail]
+        if let cc, !cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            emailData["cc"] = [cc]
         }
-        
-        // Reply-To: use provided address (e.g. user's email for material requests) so replies go to the user; otherwise default to from
-        emailData["reply_to"] = replyTo ?? fromEmail
         
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: emailData)
-            
-            print("📧 [Resend] Sending email to: \(email)")
-            print("📧 [Resend] From: \(fromEmail)")
-            print("📧 [Resend] Subject: \(subject)")
-            
             let (data, response) = try await URLSession.shared.data(for: request)
-            
-            if let httpResponse = response as? HTTPURLResponse {
-                print("📧 [Resend] Response status: \(httpResponse.statusCode)")
-                
-                if httpResponse.statusCode == 200 {
-                    if let responseData = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let responseId = responseData["id"] as? String {
-                        print("✅ [Resend] Email sent successfully! ID: \(responseId)")
-                    } else {
-                        print("✅ [Resend] Email sent successfully!")
-                    }
-                    
-                    await MainActor.run {
-                        self.isLoading = false
-                    }
-                    return true
-                } else {
-                    // Log response body for debugging
-                    if let responseString = String(data: data, encoding: .utf8) {
-                        print("❌ [Resend] Error response: \(responseString)")
-                        
-                        // Try to parse error message
-                        if let errorData = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                            // Check for different error message formats
-                            var errorMessage: String?
-                            
-                            if let message = errorData["message"] as? String {
-                                errorMessage = message
-                            } else if let errors = errorData["errors"] as? [[String: Any]],
-                                      let firstError = errors.first,
-                                      let message = firstError["message"] as? String {
-                                errorMessage = message
-                            } else if let error = errorData["error"] as? [String: Any],
-                                      let message = error["message"] as? String {
-                                errorMessage = message
-                            }
-                            
-                            if let message = errorMessage {
-                                print("❌ [Resend] Parsed error: \(message)")
-                                await MainActor.run {
-                                    self.errorMessage = message
-                                }
-                            }
-                        }
-                    }
-                    
-                    let errorMessage: String
-                    switch httpResponse.statusCode {
-                    case 400:
-                        errorMessage = "Bad Request - Check email format"
-                    case 401:
-                        errorMessage = "Unauthorized - Invalid API key. Get your key from https://resend.com/api-keys"
-                    case 403:
-                        errorMessage = "Forbidden - API key lacks permissions"
-                    case 422:
-                        errorMessage = "Unprocessable - Invalid email address or content"
-                    case 429:
-                        errorMessage = "Rate Limited - Too many requests"
-                    default:
-                        errorMessage = "Failed to send email. Status: \(httpResponse.statusCode)"
-                    }
-                    
-                    print("❌ [Resend] \(errorMessage)")
-                    
-                    await MainActor.run {
-                        if self.errorMessage == nil {
-                            self.errorMessage = errorMessage
-                        }
-                        self.isLoading = false
-                    }
-                    return false
-                }
-            }
-        } catch {
-            print("❌ [Resend] Email error: \(error)")
+            guard let httpResponse = response as? HTTPURLResponse else { return false }
+            if httpResponse.statusCode == 200 { return true }
+            let body = String(data: data, encoding: .utf8) ?? ""
             await MainActor.run {
-                self.errorMessage = "Failed to send email: \(error.localizedDescription)"
-                self.isLoading = false
+                self.errorMessage = "Direct resend fallback failed (\(httpResponse.statusCode)): \(body)"
+            }
+            return false
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Direct resend fallback failed: \(error.localizedDescription)"
+            }
+            return false
+        }
+    }
+    
+    private func sendViaFirebaseFunction(
+        to email: String,
+        subject: String,
+        htmlContent: String,
+        cc: String?,
+        replyTo: String?,
+        fromName: String?
+    ) async -> Bool {
+        guard let projectId = FirebaseApp.app()?.options.projectID,
+              let url = URL(string: "https://us-central1-\(projectId).cloudfunctions.net/sendProjectPlannerEmail") else {
+            await MainActor.run {
+                self.errorMessage = "Email service not configured (missing Firebase project)."
             }
             return false
         }
         
-        await MainActor.run {
-            self.isLoading = false
+        var payload: [String: Any] = [
+            "to": email,
+            "subject": subject,
+            "html": htmlContent
+        ]
+        if let cc, !cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["cc"] = cc
         }
-        return false
+        if let replyTo, !replyTo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["replyTo"] = replyTo
+        }
+        if let fromName, !fromName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["fromName"] = fromName
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                await MainActor.run {
+                    self.errorMessage = "Email fallback failed: invalid response."
+                }
+                return false
+            }
+            guard httpResponse.statusCode == 200 else {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                await MainActor.run {
+                    self.errorMessage = "Email fallback failed (\(httpResponse.statusCode)): \(body)"
+                }
+                return false
+            }
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let sent = json["sent"] as? Bool,
+               sent == true {
+                return true
+            }
+            await MainActor.run {
+                self.errorMessage = "Email fallback failed: provider did not confirm delivery."
+            }
+            return false
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Email fallback failed: \(error.localizedDescription)"
+            }
+            return false
+        }
     }
     
     // MARK: - Email Body Templates (same as SendGrid)
@@ -270,7 +284,7 @@ class ResendEmailService: ObservableObject {
     
     /// Reset email with link only – no code. User clicks the button and sets new password on the website.
     private func createPasswordResetLinkEmailBody(firstName: String, surname: String, token: String) -> String {
-        let url = "https://projectplanner.us/setup-password.html?token=\(token)"
+        let url = "\(setupPasswordBaseURL)/setup-password.html?token=\(token)"
         return """
         <!DOCTYPE html>
         <html>
@@ -341,7 +355,7 @@ class ResendEmailService: ObservableObject {
     }
 
     private func createPasswordResetEmailBody(resetCode: String, email: String) -> String {
-        let url = "https://projectplanner.us/setup-password.html?token=\(resetCode)"
+        let url = "\(setupPasswordBaseURL)/setup-password.html?token=\(resetCode)"
         return """
         <html>
         <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -400,34 +414,25 @@ class ResendEmailService: ObservableObject {
             </p>
             
             <div style="text-align: center; margin: 30px 0;">
-                <a href="https://projectplanner.us/setup-password.html?token=\(invitationCode)" 
+                <a href="\(setupPasswordBaseURL)/setup-password.html?token=\(invitationCode)" 
                    style="background-color: #007AFF; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
                     Set Up Your Password
                 </a>
             </div>
             
             <p style="color: #666; line-height: 1.6;">
-                If the button doesn't work, you can also visit:
+                If the button doesn't work, copy and paste this full link into your browser:
             </p>
             <p style="word-break: break-all; color: #666; background-color: #f5f5f5; padding: 10px; border-radius: 4px; font-family: monospace;">
-                https://projectplanner.us/setup-password.html
+                \(setupPasswordBaseURL)/setup-password.html?token=\(invitationCode)
             </p>
-            
-            <p style="color: #666; line-height: 1.6;">
-                Or enter this verification code:
-            </p>
-            <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 4px; margin: 20px 0; text-align: center;">
-                <p style="margin: 0; color: #856404; font-size: 18px; font-weight: bold; font-family: monospace;">
-                    \(invitationCode)
-                </p>
-            </div>
             
             <p style="color: #666; line-height: 1.6;">
                 Once you've set up your password, you'll be able to access the Project Planner system and view your assigned projects and schedule.
             </p>
             
             <p style="color: #ff6b6b; font-weight: bold;">
-                This verification code will expire in 7 days for security reasons.
+                This setup link will expire in 7 days for security reasons.
             </p>
             
             <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
@@ -462,7 +467,6 @@ class ResendEmailService: ObservableObject {
         """
     }
     
-    /// One verification code only: the invitation token. Used for the link and for manual entry.
     private func createSignUpEmailWithVerificationBody(firstName: String, surname: String, invitationCode: String, email: String) -> String {
         return """
         <html>
@@ -481,27 +485,25 @@ class ResendEmailService: ObservableObject {
             </p>
             
             <div style="text-align: center; margin: 30px 0;">
-                <a href="https://projectplanner.us/setup-password.html?token=\(invitationCode)" 
+                <a href="\(setupPasswordBaseURL)/setup-password.html?token=\(invitationCode)" 
                    style="background-color: #007AFF; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
                     Set Up Your Password
                 </a>
             </div>
             
             <p style="color: #666; line-height: 1.6;">
-                If the button doesn't work, go to <strong>https://projectplanner.us/setup-password.html</strong> and enter this verification code when prompted:
+                If the button doesn't work, copy and paste this full link into your browser:
             </p>
-            <div style="background-color: #e7f3ff; border: 1px solid #b3d9ff; padding: 15px; border-radius: 4px; margin: 20px 0; text-align: center;">
-                <p style="margin: 0; color: #004085; font-size: 16px; font-weight: bold; font-family: monospace; word-break: break-all;">
-                    \(invitationCode)
-                </p>
-            </div>
+            <p style="word-break: break-all; color: #666; background-color: #f5f5f5; padding: 10px; border-radius: 4px; font-family: monospace;">
+                \(setupPasswordBaseURL)/setup-password.html?token=\(invitationCode)
+            </p>
             
             <p style="color: #666; line-height: 1.6;">
                 Once you've set up your password, you'll be able to access the Project Planner system and view your assigned projects and schedule.
             </p>
             
             <p style="color: #ff6b6b; font-weight: bold;">
-                This link and code will expire in 7 days for security reasons.
+                This setup link will expire in 7 days for security reasons.
             </p>
             
             <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">

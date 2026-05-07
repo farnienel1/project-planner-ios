@@ -84,18 +84,20 @@ struct ManagerScheduleContentView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var appSettings: AppSettingsStore
 
     private let calendar = Calendar.current
     @State private var weekStart: Date = Date()
     @State private var selectedDate: Date?
     /// Expanded "Book yourself in" item: true = Office, non-nil UUID = that project/small work (only one expanded at a time).
-    @State private var expandedOffice = false
+    @State private var expandedStandardLocation: ManagerLocationType?
     @State private var expandedLocationId: UUID?
     @State private var clashWarning: String?
     @State private var clashWarningFading = false
     @State private var clashWarningWorkItem: DispatchWorkItem?
     @State private var isMultiDaySelectionEnabled = false
     @State private var selectedDates: Set<Date> = []
+    @State private var expandedCustomLocationName: String?
 
     private var weekDates: [Date] {
         guard let start = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: weekStart)) else { return [] }
@@ -237,7 +239,7 @@ struct ManagerScheduleContentView: View {
             Text(weekRangeText)
                 .font(.headline)
             Spacer()
-            Button(isMultiDaySelectionEnabled ? "Multi-day: On" : "Multi-day") {
+            Button(isMultiDaySelectionEnabled ? "Multiday Select: On" : "Multiday Select") {
                 isMultiDaySelectionEnabled.toggle()
                 if isMultiDaySelectionEnabled {
                     if let day = selectedDate ?? weekDates.first {
@@ -276,13 +278,25 @@ struct ManagerScheduleContentView: View {
     }
 
     private var dayStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(weekDates, id: \.self) { date in
-                    dayButton(date: date)
+        VStack(alignment: .leading, spacing: 4) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(weekDates, id: \.self) { date in
+                        dayButton(date: date)
+                    }
                 }
+                .padding(.horizontal)
             }
-            .padding(.horizontal)
+            if let selected = selectedDate {
+                HStack {
+                    Text("Selected: \(fullDateLabel(selected))")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.blue)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.top, 4)
+            }
         }
         .padding(.vertical, 8)
     }
@@ -295,23 +309,25 @@ struct ManagerScheduleContentView: View {
             VStack(spacing: 4) {
                 Text(dayLabel(date))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(isSelected ? .white.opacity(0.9) : .secondary)
                 Text("\(calendar.component(.day, from: date))")
                     .font(.title2)
                     .fontWeight(isSelected ? .bold : .regular)
+                    .foregroundColor(isSelected ? .white : .primary)
                 if hasBooking {
                     Circle()
-                        .fill(Color.blue)
+                        .fill(isSelected ? Color.white : Color.blue)
                         .frame(width: 6, height: 6)
                 }
             }
             .frame(width: 48, height: 64)
-            .background(isSelected ? Color.blue.opacity(0.15) : Color(.systemGray6))
+            .background(isSelected ? Color.blue : Color(.systemGray6))
             .cornerRadius(10)
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .stroke(isMultiSelected ? Color.indigo : Color.clear, lineWidth: 2)
+                    .stroke(isSelected ? Color.blue : (isMultiSelected ? Color.indigo : Color.clear), lineWidth: isSelected ? 3 : 2)
             )
+            .shadow(color: isSelected ? Color.blue.opacity(0.35) : .clear, radius: 4, x: 0, y: 2)
         }
         .buttonStyle(PlainButtonStyle())
         .simultaneousGesture(TapGesture().onEnded {
@@ -330,12 +346,20 @@ struct ManagerScheduleContentView: View {
         f.dateFormat = "EEE"
         return f.string(from: date)
     }
+    
+    private func fullDateLabel(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "EEEE d MMMM"
+        return f.string(from: date)
+    }
 
     private func dayContent(for day: Date) -> some View {
         let bookings = managerScheduleStore.myBookings(on: day)
         let operativeBookings = myOperativeBookings(on: day)
         let holidayBookings = myHolidayBookings(on: day)
-        let isExpandedOffice = expandedOffice
+        let isExpandedOffice = expandedStandardLocation == .office
+        let isExpandedWorkingFromHome = expandedStandardLocation == .workingFromHome
+        let isExpandedSiteSurvey = expandedStandardLocation == .siteSurvey
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if !holidayBookings.isEmpty {
@@ -406,33 +430,38 @@ struct ManagerScheduleContentView: View {
                         Text("Book yourself in")
                             .font(.title3)
                             .fontWeight(.semibold)
-                        // Office: single button, expand to Full Day / AM / PM
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                if isExpandedOffice {
-                                    expandedOffice = false
-                                } else {
-                                    expandedOffice = true
-                                    expandedLocationId = nil
-                                }
-                            }
-                        } label: {
-                            HStack {
-                                Text("Office")
-                                    .font(.body)
-                                Spacer()
-                                Image(systemName: isExpandedOffice ? "chevron.down" : "chevron.right")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.vertical, 12)
-                            .padding(.horizontal, 14)
-                            .background(Color(.systemGray6))
-                            .cornerRadius(10)
+                        if appSettings.settings.myScheduleOptions.showOffice {
+                            standardLocationRow(
+                                title: "Office",
+                                type: .office,
+                                isExpanded: isExpandedOffice,
+                                day: day
+                            )
                         }
-                        .buttonStyle(.plain)
-                        if isExpandedOffice {
-                            slotButtons(day: day, locationType: .office, locationId: nil)
+                        if appSettings.settings.myScheduleOptions.showWorkingFromHome {
+                            standardLocationRow(
+                                title: "Working From Home",
+                                type: .workingFromHome,
+                                isExpanded: isExpandedWorkingFromHome,
+                                day: day
+                            )
+                        }
+                        if appSettings.settings.myScheduleOptions.showSiteSurvey {
+                            standardLocationRow(
+                                title: "Site Survey",
+                                type: .siteSurvey,
+                                isExpanded: isExpandedSiteSurvey,
+                                day: day
+                            )
+                        }
+                        ForEach(appSettings.settings.myScheduleOptions.customItems, id: \.self) { customItem in
+                            standardLocationRow(
+                                title: customItem,
+                                type: .custom,
+                                customName: customItem,
+                                isExpanded: expandedCustomLocationName == customItem,
+                                day: day
+                            )
                         }
 
                         Text("Projects")
@@ -442,10 +471,11 @@ struct ManagerScheduleContentView: View {
                         ForEach(liveProjects, id: \.id) { p in
                             expandableLocationRow(
                                 title: "\(p.jobNumber) \(p.siteName)",
-                                isExpanded: expandedLocationId == p.id && !expandedOffice
+                                isExpanded: expandedLocationId == p.id && expandedStandardLocation == nil
                             ) {
                                 withAnimation(.easeInOut(duration: 0.2)) {
-                                    expandedOffice = false
+                                    expandedStandardLocation = nil
+                                    expandedCustomLocationName = nil
                                     if expandedLocationId == p.id {
                                         expandedLocationId = nil
                                     } else {
@@ -453,7 +483,7 @@ struct ManagerScheduleContentView: View {
                                     }
                                 }
                             }
-                            if expandedLocationId == p.id, !expandedOffice {
+                            if expandedLocationId == p.id, expandedStandardLocation == nil {
                                 slotButtons(day: day, locationType: .project, locationId: p.id)
                             }
                         }
@@ -465,10 +495,11 @@ struct ManagerScheduleContentView: View {
                         ForEach(liveSmallWorks, id: \.id) { p in
                             expandableLocationRow(
                                 title: "\(p.jobNumber) \(p.siteName)",
-                                isExpanded: expandedLocationId == p.id && !expandedOffice
+                                isExpanded: expandedLocationId == p.id && expandedStandardLocation == nil
                             ) {
                                 withAnimation(.easeInOut(duration: 0.2)) {
-                                    expandedOffice = false
+                                    expandedStandardLocation = nil
+                                    expandedCustomLocationName = nil
                                     if expandedLocationId == p.id {
                                         expandedLocationId = nil
                                     } else {
@@ -476,7 +507,7 @@ struct ManagerScheduleContentView: View {
                                     }
                                 }
                             }
-                            if expandedLocationId == p.id, !expandedOffice {
+                            if expandedLocationId == p.id, expandedStandardLocation == nil {
                                 slotButtons(day: day, locationType: .smallWork, locationId: p.id)
                             }
                         }
@@ -532,8 +563,56 @@ struct ManagerScheduleContentView: View {
         }
         .buttonStyle(.plain)
     }
+    
+    private func standardLocationRow(
+        title: String,
+        type: ManagerLocationType,
+        customName: String? = nil,
+        isExpanded: Bool,
+        day: Date
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    expandedLocationId = nil
+                    if type == .custom {
+                        expandedStandardLocation = nil
+                        if expandedCustomLocationName == customName {
+                            expandedCustomLocationName = nil
+                        } else {
+                            expandedCustomLocationName = customName
+                        }
+                    } else {
+                        expandedCustomLocationName = nil
+                        if expandedStandardLocation == type {
+                            expandedStandardLocation = nil
+                        } else {
+                            expandedStandardLocation = type
+                        }
+                    }
+                }
+            } label: {
+                HStack {
+                    Text(title)
+                        .font(.body)
+                    Spacer()
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 12)
+                .padding(.horizontal, 14)
+                .background(Color(.systemGray6))
+                .cornerRadius(10)
+            }
+            .buttonStyle(.plain)
+            if isExpanded {
+                slotButtons(day: day, locationType: type, locationId: nil, customLocationName: customName)
+            }
+        }
+    }
 
-    private func slotButtons(day: Date, locationType: ManagerLocationType, locationId: UUID?) -> some View {
+    private func slotButtons(day: Date, locationType: ManagerLocationType, locationId: UUID?, customLocationName: String? = nil) -> some View {
         HStack(spacing: 14) {
             ForEach([ManagerTimeSlot.fullDay, ManagerTimeSlot.morning, ManagerTimeSlot.afternoon], id: \.self) { slot in
                 Button(slot.displayName) {
@@ -543,7 +622,7 @@ struct ManagerScheduleContentView: View {
                     } else {
                         daysToBook = [day]
                     }
-                    attemptBook(days: daysToBook, timeSlot: slot, locationType: locationType, locationId: locationId)
+                    attemptBook(days: daysToBook, timeSlot: slot, locationType: locationType, locationId: locationId, customLocationName: customLocationName)
                 }
                 .font(.body)
                 .fontWeight(.medium)
@@ -558,21 +637,34 @@ struct ManagerScheduleContentView: View {
         .padding(.bottom, 12)
     }
 
-    private func attemptBook(days: [Date], timeSlot: ManagerTimeSlot, locationType: ManagerLocationType, locationId: UUID?) {
+    private func attemptBook(days: [Date], timeSlot: ManagerTimeSlot, locationType: ManagerLocationType, locationId: UUID?, customLocationName: String? = nil) {
         for day in days {
+            let duplicateExists = managerScheduleStore.myBookings(on: day).contains { existing in
+                existing.timeSlot == timeSlot &&
+                existing.locationType == locationType &&
+                existing.locationId == locationId &&
+                (existing.customLocationName ?? "") == (customLocationName ?? "")
+            }
+            if duplicateExists {
+                showClashWarning()
+                return
+            }
             if wouldClash(on: day, newSlot: timeSlot) {
                 showClashWarning()
                 return
             }
         }
         for day in days {
-            saveBooking(date: day, timeSlot: timeSlot, locationType: locationType, locationId: locationId)
+            saveBooking(date: day, timeSlot: timeSlot, locationType: locationType, locationId: locationId, customLocationName: customLocationName)
         }
     }
 
     private func locationName(for b: ManagerSiteBooking) -> Text {
-        if b.locationType == .office {
-            return Text("Office")
+        if b.locationType == .office || b.locationType == .workingFromHome || b.locationType == .siteSurvey {
+            return Text(b.locationType.displayName)
+        }
+        if b.locationType == .custom {
+            return Text((b.customLocationName?.isEmpty == false) ? (b.customLocationName ?? "Custom") : "Custom")
         }
         if let id = b.locationId {
             if let p = projectStore.projects.first(where: { $0.id == id }) {
@@ -582,9 +674,16 @@ struct ManagerScheduleContentView: View {
         return Text("Site")
     }
 
-    private func saveBooking(date: Date, timeSlot: ManagerTimeSlot, locationType: ManagerLocationType, locationId: UUID?) {
+    private func saveBooking(date: Date, timeSlot: ManagerTimeSlot, locationType: ManagerLocationType, locationId: UUID?, customLocationName: String? = nil) {
         guard let uid = firebaseBackend.currentUser?.uid else { return }
-        let b = ManagerSiteBooking(userId: uid, date: date, timeSlot: timeSlot, locationType: locationType, locationId: locationId)
+        let b = ManagerSiteBooking(
+            userId: uid,
+            date: date,
+            timeSlot: timeSlot,
+            locationType: locationType,
+            locationId: locationId,
+            customLocationName: customLocationName
+        )
         Task {
             await managerScheduleStore.saveBooking(b)
         }
@@ -606,7 +705,12 @@ struct ManagerBookingSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private var locationTitle: String {
-        if locationType == .office { return "Office" }
+        if locationType == .office || locationType == .workingFromHome || locationType == .siteSurvey {
+            return locationType.displayName
+        }
+        if locationType == .custom {
+            return (existingBookings.first?.customLocationName?.isEmpty == false) ? (existingBookings.first?.customLocationName ?? "Custom") : "Custom"
+        }
         guard let id = locationId, let p = projectStore.projects.first(where: { $0.id == id }) else { return "Site" }
         return "\(p.jobNumber) \(p.siteName)"
     }

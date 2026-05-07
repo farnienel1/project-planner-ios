@@ -129,6 +129,74 @@ class NotificationService: ObservableObject {
         await saveNotification(adminManagerNotification)
     }
     
+    func notifyBookingBatchCreated(projectName: String, bookingCount: Int, createdBy: String) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        
+        let plural = bookingCount == 1 ? "booking" : "bookings"
+        let notification = AppNotification(
+            organizationId: organizationId,
+            type: .bookingCreated,
+            title: "New Booking Created",
+            message: "\(createdBy) created \(bookingCount) \(plural) for \(projectName).",
+            relatedId: UUID(),
+            requiresPermission: "superAdminOrAdmin"
+        )
+        await saveNotification(notification)
+    }
+    
+    /// Sends one targeted notification per booked user so it appears in their in-app notification center
+    /// and can be picked up by push delivery.
+    func notifyBookedUsers(
+        projectName: String,
+        bookedBy: String,
+        recipients: [BookedUserRecipient]
+    ) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+              let userStore,
+              let operativeStore else { return }
+        guard !recipients.isEmpty else { return }
+        
+        if userStore.organizationUsers.isEmpty {
+            await userStore.loadOrganizationUsers()
+        }
+        
+        for recipient in recipients {
+            guard let operative = operativeStore.allOperatives.first(where: { $0.id == recipient.operativeId }) else { continue }
+            let normalizedEmail = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedEmail.isEmpty else { continue }
+            guard let user = userStore.organizationUsers.first(where: {
+                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
+            }) else { continue }
+            
+            let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(user.id)
+            let dateText = recipient.dates
+                .sorted()
+                .map { $0.formatted(date: .abbreviated, time: .omitted) }
+                .joined(separator: ", ")
+            let message = dateText.isEmpty
+                ? "\(bookedBy) booked you for \(projectName)."
+                : "\(bookedBy) booked you for \(projectName) on \(dateText)."
+            
+            let notification = AppNotification(
+                organizationId: organizationId,
+                type: .bookingCreated,
+                title: "You've Been Booked",
+                message: message,
+                userId: canonicalUserId,
+                relatedId: UUID(),
+                requiresPermission: nil
+            )
+            await saveNotification(notification)
+        }
+    }
+    
+    struct BookedUserRecipient {
+        let operativeId: UUID
+        let dates: [Date]
+    }
+    
     func notifyOperativeCreated(operativeId: UUID, operativeName: String, createdBy: String) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
@@ -337,6 +405,7 @@ class NotificationService: ObservableObject {
 
     func notifyHolidayRequestSubmittedByUser(
         bookingId: UUID,
+        requesterUserId: String,
         requesterName: String,
         startDate: Date,
         endDate: Date,
@@ -345,7 +414,10 @@ class NotificationService: ObservableObject {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let dateRange = "\(startDate.formatted(date: .abbreviated, time: .omitted)) – \(endDate.formatted(date: .abbreviated, time: .omitted))"
-        let recipients = await holidayRequestRecipients(assignedManagerUserId: assignedManagerUserId)
+        let recipients = await holidayRequestRecipients(
+            assignedManagerUserId: assignedManagerUserId,
+            requesterUserId: requesterUserId
+        )
         print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY SUBMIT_BY_USER] bookingId=\(bookingId.uuidString) requester=\(requesterName) assignedManager=\(assignedManagerUserId ?? "nil") resolvedRecipients=\(recipients)")
         for managerId in recipients {
             let targetId = await resolvedRecipientUserIdResolvingStaleIds(managerId)
@@ -360,6 +432,35 @@ class NotificationService: ObservableObject {
                 requiresPermission: nil
             )
             await saveNotification(toManager)
+        }
+    }
+
+    func notifyAdminAnnualLeaveApproval(managerName: String, approvedByName: String, excludingUserId: String?) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+              let userStore else { return }
+        if userStore.organizationUsers.isEmpty {
+            await userStore.loadOrganizationUsers()
+        }
+        let recipients = userStore.organizationUsers.filter { user in
+            user.isActive &&
+            user.passwordSet &&
+            !user.permissions.operativeMode &&
+            (user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin) &&
+            user.id != excludingUserId
+        }
+        for admin in recipients {
+            let targetId = resolvedRecipientUserId(admin.id)
+            let notification = AppNotification(
+                organizationId: organizationId,
+                type: .holidayRequestApproved,
+                title: "Annual Leave Approved",
+                message: "\(approvedByName) approved \(managerName)'s annual leave request.",
+                userId: targetId,
+                relatedId: UUID(),
+                requiresPermission: nil
+            )
+            await saveNotification(notification)
         }
     }
 
@@ -727,14 +828,34 @@ class NotificationService: ObservableObject {
         }
     }
 
-    private func holidayRequestRecipients(assignedManagerUserId: String?) async -> [String] {
-        if let mid = assignedManagerUserId, !mid.isEmpty {
-            let canonical = await resolvedRecipientUserIdResolvingStaleIds(mid)
-            return [canonical]
-        }
+    private func holidayRequestRecipients(assignedManagerUserId: String?, requesterUserId: String? = nil) async -> [String] {
         guard let userStore else { return [] }
         if userStore.organizationUsers.isEmpty {
             await userStore.loadOrganizationUsers()
+        }
+
+        if let requesterUserId,
+           let requester = userStore.organizationUsers.first(where: { $0.id == requesterUserId }) {
+            let isManagerWithoutSelfBook = requester.permissions.manager &&
+                !requester.permissions.operativeMode &&
+                !requester.isSuperAdmin &&
+                !requester.permissions.adminAccess &&
+                requester.role != .admin &&
+                !requester.permissions.annualLeaveSelfBook
+            if isManagerWithoutSelfBook {
+                let admins = userStore.organizationUsers.filter {
+                    $0.isActive &&
+                    $0.passwordSet &&
+                    !$0.permissions.operativeMode &&
+                    ($0.isSuperAdmin || $0.permissions.adminAccess || $0.role == .admin)
+                }.map(\.id)
+                return uniqueCanonicalUserIds(from: admins)
+            }
+        }
+
+        if let mid = assignedManagerUserId, !mid.isEmpty {
+            let canonical = await resolvedRecipientUserIdResolvingStaleIds(mid)
+            return [canonical]
         }
         // Fallback priority: active managers first, then super admins, then admins.
         // This keeps annual leave approval routing aligned with the line-manager flow.

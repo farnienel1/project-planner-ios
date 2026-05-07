@@ -605,7 +605,10 @@ struct ManageUserRowView: View {
                         "materials": user.permissions.materials,
                         "projects": user.permissions.projects,
                         "smallWorks": user.permissions.smallWorks,
-                        "operativeMode": user.permissions.operativeMode
+                        "operativeMode": user.permissions.operativeMode,
+                        "weeklyReports": user.permissions.weeklyReports,
+                        "subContractors": user.permissions.subContractors,
+                        "siteAudit": user.permissions.siteAudit
                     ],
                     "createdAt": Timestamp(date: Date()),
                     "isUsed": false
@@ -671,6 +674,7 @@ struct EditUserView: View {
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @Environment(\.dismiss) private var dismiss
     
     let user: AppUser
@@ -692,6 +696,8 @@ struct EditUserView: View {
     @State private var saveErrorMessage: String?
     @State private var selectedAssignedManagerUserId: String?
     @State private var dayRateText: String
+    @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
+    @State private var showingQualificationsEditor = false
     
     init(user: AppUser) {
         self.user = user
@@ -719,23 +725,33 @@ struct EditUserView: View {
         canUseAdminAccountTools || (isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative))
     }
     
+    private var linkedOperativeForUser: Operative? {
+        operativeStore.allOperatives.first {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
+            user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+    
     // Check if any changes have been made
     private var hasChanges: Bool {
         if userStore.isOrganizationCreator(userId: user.id) {
             return false
         }
+        let dayRateEligible = (user.permissions.operativeMode || user.role == .operative || user.permissions.manager || user.role == .manager)
         let operativeProfileChanged = (user.permissions.operativeMode || user.role == .operative) && (
             (selectedAssignedManagerUserId ?? "") != (user.assignedManagerUserId ?? "") ||
             parseDayRate(dayRateText) != user.dayRate
         )
+        let managerDayRateChanged = (user.permissions.manager || user.role == .manager) && dayRateEligible && parseDayRate(dayRateText) != user.dayRate
         if canUseAdminAccountTools {
-            return permissions != user.permissions || isActive != user.isActive || operativeProfileChanged
+            return permissions != user.permissions || isActive != user.isActive || operativeProfileChanged || managerDayRateChanged
         }
         if canEditPermissionsMatrix && operativeProfileChanged {
             return true
         }
         if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative) {
-            return permissions.materials != user.permissions.materials
+            return permissions.materials != user.permissions.materials ||
+                permissions.siteAudit != user.permissions.siteAudit
         }
         return false
     }
@@ -819,11 +835,25 @@ struct EditUserView: View {
                     Text(msg)
                 }
             }
+            .sheet(isPresented: $showingQualificationsEditor) {
+                if let operative = linkedOperativeForUser {
+                    OperativeQualificationsEditorView(
+                        operative: operative,
+                        title: "Skills & Qualifications",
+                        canEditAssignments: canEditPermissionsMatrix && (user.permissions.operativeMode || user.role == .operative)
+                    )
+                    .environmentObject(operativeStore)
+                    .environmentObject(firebaseBackend)
+                }
+            }
         }
         .sheet(isPresented: $showingHolidayReport) {
             HolidayReportView(user: user)
                 .environmentObject(holidayStore)
                 .environmentObject(operativeStore)
+        }
+        .task {
+            await loadDayRateHistory()
         }
     }
     
@@ -897,18 +927,20 @@ struct EditUserView: View {
             }
             .padding(.horizontal, 20)
 
-            if (user.permissions.operativeMode || user.role == .operative) && canEditPermissionsMatrix {
+            if (user.permissions.operativeMode || user.role == .operative || user.permissions.manager || user.role == .manager) && canEditPermissionsMatrix {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Operative setup")
+                    Text((user.permissions.manager || user.role == .manager) ? "Manager setup" : "Operative setup")
                         .font(.headline)
 
-                    Text("Line manager")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    Picker("Line manager", selection: $selectedAssignedManagerUserId) {
-                        Text("Select manager…").tag(nil as String?)
-                        ForEach(lineManagerCandidates, id: \.id) { manager in
-                            Text(manager.fullName.isEmpty ? manager.email : manager.fullName).tag(Optional(manager.id))
+                    if user.permissions.operativeMode || user.role == .operative {
+                        Text("Line manager")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Picker("Line manager", selection: $selectedAssignedManagerUserId) {
+                            Text("Select manager…").tag(nil as String?)
+                            ForEach(lineManagerCandidates, id: \.id) { manager in
+                                Text(manager.fullName.isEmpty ? manager.email : manager.fullName).tag(Optional(manager.id))
+                            }
                         }
                     }
 
@@ -921,6 +953,39 @@ struct EditUserView: View {
                         TextField("Leave blank if not set", text: $dayRateText)
                             .keyboardType(.decimalPad)
                     }
+                    if (user.permissions.operativeMode || user.role == .operative) && !dayRateHistory.isEmpty {
+                        Text("Previous day rates")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 4)
+                        ForEach(dayRateHistory) { entry in
+                            HStack {
+                                Text(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text("\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))")
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                    
+                    if (user.permissions.operativeMode || user.role == .operative), linkedOperativeForUser != nil {
+                        Button(action: { showingQualificationsEditor = true }) {
+                            HStack {
+                                Image(systemName: "graduationcap.fill")
+                                Text("Skills & Qualifications")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                            }
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.indigo)
+                            .cornerRadius(10)
+                        }
+                        .padding(.top, 6)
+                    }
                 }
                 .padding(16)
                 .background(Color(.systemBackground))
@@ -929,6 +994,16 @@ struct EditUserView: View {
                 .padding(.top, 8)
             }
         }
+    }
+
+    private func loadDayRateHistory() async {
+        guard user.permissions.operativeMode || user.role == .operative else {
+            dayRateHistory = []
+            return
+        }
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let all = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? [:]
+        dayRateHistory = (all[user.id] ?? []).sorted(by: { $0.effectiveAt > $1.effectiveAt })
     }
     
     private var activeToggleSection: some View {
@@ -1187,6 +1262,12 @@ struct EditUserView: View {
                         isOn: $permissions.materials
                     )
                     .padding(.horizontal, 20)
+                    PermissionToggle(
+                        title: "Site Audit",
+                        description: "Allow this operative to access Site Audits for assigned projects and small works.",
+                        isOn: $permissions.siteAudit
+                    )
+                    .padding(.horizontal, 20)
                 }
             } else {
                 VStack(alignment: .leading, spacing: 12) {
@@ -1215,12 +1296,6 @@ struct EditUserView: View {
                             isOn: $permissions.manager
                         )
                         .disabled(permissions.adminAccess || permissions.operativeMode)
-                        .onChange(of: permissions.manager) { oldValue, newValue in
-                            if newValue && !permissions.operativeMode {
-                                permissions.projects = true
-                                permissions.smallWorks = true
-                            }
-                        }
                         
                         PermissionToggle(
                             title: "Projects",
@@ -1233,6 +1308,20 @@ struct EditUserView: View {
                             title: "Small Works",
                             description: "Can create and manage small works.",
                             isOn: $permissions.smallWorks
+                        )
+                        .disabled((!permissions.manager && !permissions.adminAccess) || permissions.operativeMode)
+
+                        PermissionToggle(
+                            title: "Weekly Report",
+                            description: "Will be able to pull weekly reports.",
+                            isOn: $permissions.weeklyReports
+                        )
+                        .disabled((!permissions.manager && !permissions.adminAccess) || permissions.operativeMode)
+                        
+                        PermissionToggle(
+                            title: "Sub Contractors",
+                            description: "Can add and manage sub contractors. If unselected they will be unable to manage them, they will only be able to book them in.",
+                            isOn: $permissions.subContractors
                         )
                         .disabled((!permissions.manager && !permissions.adminAccess) || permissions.operativeMode)
                         
@@ -1264,6 +1353,13 @@ struct EditUserView: View {
                         )
                         .disabled(!permissions.operativeMode)
                         
+                        PermissionToggle(
+                            title: "Site Audit",
+                            description: "For operatives: can open Site Audits in assigned projects and small works.",
+                            isOn: $permissions.siteAudit
+                        )
+                        .disabled(!permissions.operativeMode)
+                        
                         Divider()
                             .padding(.vertical, 8)
                         
@@ -1282,6 +1378,7 @@ struct EditUserView: View {
                                 permissions.skills = false
                                 permissions.qualifications = false
                                 permissions.materials = false
+                                permissions.siteAudit = false
                             }
                         }
                     }
@@ -1303,9 +1400,10 @@ struct EditUserView: View {
                         permissions: permissions
                     )
                 } else if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative),
-                          permissions.materials != user.permissions.materials {
+                          (permissions.materials != user.permissions.materials || permissions.siteAudit != user.permissions.siteAudit) {
                     var merged = user.permissions
                     merged.materials = permissions.materials
+                    merged.siteAudit = permissions.siteAudit
                     permissionsSuccess = await userStore.updateUserPermissions(
                         userId: user.id,
                         permissions: merged
@@ -1333,9 +1431,15 @@ struct EditUserView: View {
                 )
             }
             
+            var managerDayRateSuccess = true
+            let managerDayRateChanged = (user.permissions.manager || user.role == .manager) && parseDayRate(dayRateText) != user.dayRate
+            if canEditPermissionsMatrix && managerDayRateChanged {
+                managerDayRateSuccess = await userStore.updateManagerDayRate(for: user, dayRate: parseDayRate(dayRateText))
+            }
+            
             await MainActor.run {
                 isUpdating = false
-                if permissionsSuccess && activeSuccess && operativeDetailsSuccess {
+                if permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess {
                     dismiss()
                 } else {
                     saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."
@@ -1426,7 +1530,10 @@ struct EditUserView: View {
                 "materials": permissions.materials,
                 "projects": permissions.projects,
                 "smallWorks": permissions.smallWorks,
-                "operativeMode": permissions.operativeMode
+                "operativeMode": permissions.operativeMode,
+                "weeklyReports": permissions.weeklyReports,
+                "subContractors": permissions.subContractors,
+                "siteAudit": permissions.siteAudit
             ],
             "createdAt": Timestamp(date: Date()),
             "isUsed": false
@@ -1492,7 +1599,10 @@ struct EditUserView: View {
                         "materials": user.permissions.materials,
                         "projects": user.permissions.projects,
                         "smallWorks": user.permissions.smallWorks,
-                        "operativeMode": user.permissions.operativeMode
+                        "operativeMode": user.permissions.operativeMode,
+                        "weeklyReports": user.permissions.weeklyReports,
+                        "subContractors": user.permissions.subContractors,
+                        "siteAudit": user.permissions.siteAudit
                     ],
                     "createdAt": Timestamp(date: Date()),
                     "isUsed": false

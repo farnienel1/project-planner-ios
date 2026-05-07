@@ -17,6 +17,7 @@ struct DailyOverviewView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject var subcontractorStore: SubcontractorStore
     @Environment(\.dismiss) private var dismiss
     @State private var showingPastBookings = false
     
@@ -36,6 +37,44 @@ struct DailyOverviewView: View {
     
     private var dayHolidays: [HolidayBooking] {
         holidayStore.approvedBookings(covering: overviewDate)
+    }
+    
+    private var dayOfficeBookings: [ManagerSiteBooking] {
+        managerScheduleStore.managerSiteBookings
+            .filter { booking in
+                Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) &&
+                booking.locationType == .office
+            }
+            .sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+    }
+    
+    private var dayWorkingFromHomeBookings: [ManagerSiteBooking] {
+        managerScheduleStore.managerSiteBookings
+            .filter { booking in
+                Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) &&
+                booking.locationType == .workingFromHome
+            }
+            .sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+    }
+    
+    private var daySiteSurveyBookings: [ManagerSiteBooking] {
+        managerScheduleStore.managerSiteBookings
+            .filter { booking in
+                Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) &&
+                booking.locationType == .siteSurvey
+            }
+            .sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+    }
+    
+    private var dayCustomBookingsByName: [String: [ManagerSiteBooking]] {
+        let list = managerScheduleStore.managerSiteBookings.filter { booking in
+            Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) &&
+            booking.locationType == .custom
+        }
+        return Dictionary(grouping: list) { booking in
+            let name = booking.customLocationName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return name.isEmpty ? "Custom" : name
+        }
     }
 
     private var isWeekday: Bool {
@@ -114,6 +153,23 @@ struct DailyOverviewView: View {
         Dictionary(grouping: dayBookings) { $0.projectId }
     }
     
+    private var displayedProjectIds: [UUID] {
+        var ids = Set(bookingsByProject.keys)
+        let managerIds = managerScheduleStore.managerSiteBookings.compactMap { booking -> UUID? in
+            guard Calendar.current.isDate(booking.date, inSameDayAs: overviewDate),
+                  (booking.locationType == .project || booking.locationType == .smallWork) else { return nil }
+            return booking.locationId
+        }
+        let subcontractorIds = subcontractorStore.bookings.compactMap { booking -> UUID? in
+            guard Calendar.current.isDate(booking.date, inSameDayAs: overviewDate),
+                  booking.status != .cancelled else { return nil }
+            return booking.projectId
+        }
+        ids.formUnion(managerIds)
+        ids.formUnion(subcontractorIds)
+        return Array(ids)
+    }
+    
     private var dateFormatter: DateFormatter {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEEE, d MMMM yyyy"
@@ -167,10 +223,10 @@ struct DailyOverviewView: View {
                         }
                     }
 
-                    // On holiday
+                    // Annual leave
                     if !dayHolidays.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(isHistoric ? "On holiday" : "On holiday today")
+                            Text(isHistoric ? "Annual Leave" : "Annual Leave Today")
                                 .font(.headline)
                                 .foregroundColor(.primary)
                                 .padding(.horizontal, 20)
@@ -181,12 +237,36 @@ struct DailyOverviewView: View {
                         }
                     }
                     
+                    managerScheduleSection(
+                        title: "Office (Managers/Admins)",
+                        bookings: dayOfficeBookings
+                    )
+                    managerScheduleSection(
+                        title: "Working From Home (Managers/Admins)",
+                        bookings: dayWorkingFromHomeBookings
+                    )
+                    managerScheduleSection(
+                        title: "Site Survey (Managers/Admins)",
+                        bookings: daySiteSurveyBookings
+                    )
+                    ForEach(dayCustomBookingsByName.keys.sorted(), id: \.self) { customName in
+                        managerScheduleSection(
+                            title: "\(customName) (Managers/Admins)",
+                            bookings: dayCustomBookingsByName[customName] ?? []
+                        )
+                    }
+                    
                     // Bookings List
-                    if dayBookings.isEmpty && dayHolidays.isEmpty {
+                    if displayedProjectIds.isEmpty &&
+                        dayHolidays.isEmpty &&
+                        dayOfficeBookings.isEmpty &&
+                        dayWorkingFromHomeBookings.isEmpty &&
+                        daySiteSurveyBookings.isEmpty &&
+                        dayCustomBookingsByName.isEmpty {
                         noBookingsView
-                    } else if !dayBookings.isEmpty {
+                    } else if !displayedProjectIds.isEmpty {
                         LazyVStack(spacing: 16) {
-                            ForEach(Array(bookingsByProject.keys.sorted(by: { projectId1, projectId2 in
+                            ForEach(Array(displayedProjectIds.sorted(by: { projectId1, projectId2 in
                                 let allProjects = projectStore.projects + projectStore.smallWorks
                                 guard let project1 = allProjects.first(where: { $0.id == projectId1 }),
                                       let project2 = allProjects.first(where: { $0.id == projectId2 }) else {
@@ -197,7 +277,13 @@ struct DailyOverviewView: View {
                                 let allProjects = projectStore.projects + projectStore.smallWorks
                                 if let project = allProjects.first(where: { $0.id == projectId }),
                                    let bookings = bookingsByProject[projectId] {
-                                    ProjectBookingCard(project: project, bookings: bookings)
+                                    ProjectBookingCard(project: project, bookings: bookings, day: overviewDate)
+                                        .environmentObject(managerScheduleStore)
+                                        .environmentObject(subcontractorStore)
+                                } else if let project = allProjects.first(where: { $0.id == projectId }) {
+                                    ProjectBookingCard(project: project, bookings: [], day: overviewDate)
+                                        .environmentObject(managerScheduleStore)
+                                        .environmentObject(subcontractorStore)
                                 }
                             }
                         }
@@ -232,6 +318,7 @@ struct DailyOverviewView: View {
                 .environmentObject(userStore)
                 .environmentObject(holidayStore)
                 .environmentObject(managerScheduleStore)
+                .environmentObject(subcontractorStore)
         }
     }
     
@@ -244,6 +331,57 @@ struct DailyOverviewView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
         .padding(.horizontal, 20)
+    }
+    
+    @ViewBuilder
+    private func managerScheduleSection(title: String, bookings: [ManagerSiteBooking]) -> some View {
+        if !bookings.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 20)
+                VStack(spacing: 8) {
+                    ForEach(bookings, id: \.id) { booking in
+                        HStack(spacing: 8) {
+                            Text(managerTimeSlotDisplayText(for: booking.timeSlot))
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.purple)
+                                .cornerRadius(8)
+                            Text(managerName(for: booking.userId))
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                            Spacer()
+                        }
+                        .padding(12)
+                        .background(Color.purple.opacity(0.12))
+                        .cornerRadius(12)
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+        }
+    }
+}
+
+private extension DailyOverviewView {
+    func managerTimeSlotDisplayText(for timeSlot: ManagerTimeSlot) -> String {
+        switch timeSlot {
+        case .morning: return "AM"
+        case .afternoon: return "PM"
+        case .fullDay: return "FULL DAY"
+        }
+    }
+    
+    func managerName(for userId: String) -> String {
+        if let user = userStore.organizationUsers.first(where: { $0.id == userId }) {
+            return user.fullName.isEmpty ? user.email : user.fullName
+        }
+        return userId
     }
 }
 
@@ -331,7 +469,9 @@ struct ManagerScheduleRowView: View {
     @EnvironmentObject var userStore: UserStore
 
     private var locationTitle: String {
-        if booking.locationType == .office { return "Office" }
+        if booking.locationType == .office || booking.locationType == .workingFromHome || booking.locationType == .siteSurvey {
+            return booking.locationType.displayName
+        }
         guard let id = booking.locationId,
               let p = projectStore.projects.first(where: { $0.id == id }) else { return "Site" }
         return "\(p.jobNumber) \(p.siteName)"
@@ -374,7 +514,11 @@ struct ManagerScheduleRowView: View {
 struct ProjectBookingCard: View {
     let project: Project
     let bookings: [Booking]
+    let day: Date
     @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject var subcontractorStore: SubcontractorStore
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -395,35 +539,44 @@ struct ProjectBookingCard: View {
                     .foregroundColor(.gray)
             }
             
-            // Operative Assignments
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(sortedBookings, id: \.id) { booking in
-                    if let operative = operativeStore.operatives.first(where: { $0.id == booking.operativeId }) {
-                        HStack(spacing: 8) {
-                            // Time slot badge
-                            Text(timeSlotDisplayText(for: booking.timeSlot))
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.blue)
-                                .cornerRadius(8)
-                            
-                            Text(operative.name)
-                                .font(.subheadline)
-                                .foregroundColor(.primary)
-                            
-                            Spacer()
-                        }
-                    }
-                }
-            }
+            bookingSection(title: "Managers/Admins", rows: managerRows, color: .purple)
+            bookingSection(title: "Operatives", rows: operativeRows, color: .blue)
+            bookingSection(title: "Sub Contractors", rows: subcontractorRows, color: .indigo)
         }
         .padding(16)
         .background(Color.white)
         .cornerRadius(12)
         .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+    }
+    
+    private func bookingSection(title: String, rows: [(slot: String, name: String)], color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.secondary)
+            if rows.isEmpty {
+                Text("None")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    HStack(spacing: 8) {
+                        Text(row.slot)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(color)
+                            .cornerRadius(8)
+                        Text(row.name)
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        Spacer()
+                    }
+                }
+            }
+        }
     }
     
     private var sortedBookings: [Booking] {
@@ -443,6 +596,46 @@ struct ProjectBookingCard: View {
         }
     }
     
+    private var operativeRows: [(slot: String, name: String)] {
+        sortedBookings.compactMap { booking in
+            guard let operative = operativeStore.operatives.first(where: { $0.id == booking.operativeId }) else { return nil }
+            return (timeSlotDisplayText(for: booking.timeSlot), operative.name)
+        }
+    }
+    
+    private var managerRows: [(slot: String, name: String)] {
+        managerScheduleStore.managerSiteBookings
+            .filter { booking in
+                booking.locationId == project.id &&
+                (booking.locationType == .project || booking.locationType == .smallWork) &&
+                Calendar.current.isDate(booking.date, inSameDayAs: day)
+            }
+            .map { booking in
+                (managerTimeSlotDisplayText(for: booking.timeSlot), managerName(userId: booking.userId))
+            }
+    }
+    
+    private var subcontractorRows: [(slot: String, name: String)] {
+        subcontractorStore.bookings
+            .filter { booking in
+                booking.projectId == project.id &&
+                Calendar.current.isDate(booking.date, inSameDayAs: day) &&
+                booking.status != .cancelled
+            }
+            .sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+            .map { booking in
+                let name = subcontractorStore.subcontractors.first(where: { $0.id == booking.subcontractorId })?.name ?? "Sub Contractor"
+                return (timeSlotDisplayText(for: booking.timeSlot), name)
+            }
+    }
+    
+    private func managerName(userId: String) -> String {
+        if let user = userStore.organizationUsers.first(where: { $0.id == userId }) {
+            return user.fullName.isEmpty ? user.email : user.fullName
+        }
+        return userId
+    }
+    
     private func timeSlotOrder(_ timeSlot: TimeSlot) -> Int {
         switch timeSlot {
         case .morning: return 1
@@ -460,6 +653,14 @@ struct ProjectBookingCard: View {
         case .fullDay: return "FULL DAY"
         case .evening: return "EVENING"
         case .overtime: return "OVERTIME"
+        }
+    }
+    
+    private func managerTimeSlotDisplayText(for timeSlot: ManagerTimeSlot) -> String {
+        switch timeSlot {
+        case .morning: return "AM"
+        case .afternoon: return "PM"
+        case .fullDay: return "FULL DAY"
         }
     }
 }

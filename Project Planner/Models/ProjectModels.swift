@@ -29,6 +29,10 @@ struct Project: Identifiable, Codable, Hashable {
     var notes: String?
     var createdAt: Date
     var updatedAt: Date
+    /// Managers hidden from this project/small works by admin.
+    var hiddenManagerUserIds: Set<String>
+    /// Operatives hidden from this project/small works by admin.
+    var hiddenOperativeUserIds: Set<String>
     
     // Legacy support - computed property for backward compatibility
     var siteAddress: String {
@@ -57,7 +61,9 @@ struct Project: Identifiable, Codable, Hashable {
         managerId: UUID? = nil,
         isLive: Bool = true,
         description: String? = nil,
-        notes: String? = nil
+        notes: String? = nil,
+        hiddenManagerUserIds: Set<String> = [],
+        hiddenOperativeUserIds: Set<String> = []
     ) {
         self.id = id
         self.jobNumber = jobNumber
@@ -78,6 +84,8 @@ struct Project: Identifiable, Codable, Hashable {
         self.notes = notes
         self.createdAt = Date()
         self.updatedAt = Date()
+        self.hiddenManagerUserIds = hiddenManagerUserIds
+        self.hiddenOperativeUserIds = hiddenOperativeUserIds
     }
     
     // Legacy initializer for backward compatibility
@@ -93,7 +101,9 @@ struct Project: Identifiable, Codable, Hashable {
         manager: ManagerLegacy,
         isLive: Bool = true,
         description: String? = nil,
-        notes: String? = nil
+        notes: String? = nil,
+        hiddenManagerUserIds: Set<String> = [],
+        hiddenOperativeUserIds: Set<String> = []
     ) {
         self.id = id
         self.jobNumber = jobNumber
@@ -139,6 +149,8 @@ struct Project: Identifiable, Codable, Hashable {
         self.notes = notes
         self.createdAt = Date()
         self.updatedAt = Date()
+        self.hiddenManagerUserIds = hiddenManagerUserIds
+        self.hiddenOperativeUserIds = hiddenOperativeUserIds
     }
     
     var duration: Int {
@@ -156,6 +168,63 @@ struct Project: Identifiable, Codable, Hashable {
         if now < startDate { return .upcoming }
         if now > endDate { return .completed }
         return .active
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case id, jobNumber, siteName, addressLine1, addressLine2, townCity, postcode
+        case client, startDate, endDate, jobType, customJobType, manager, managerId
+        case isLive, description, notes, createdAt, updatedAt
+        case hiddenManagerUserIds, hiddenOperativeUserIds
+    }
+    
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        jobNumber = try c.decode(String.self, forKey: .jobNumber)
+        siteName = try c.decode(String.self, forKey: .siteName)
+        addressLine1 = try c.decodeIfPresent(String.self, forKey: .addressLine1) ?? ""
+        addressLine2 = try c.decodeIfPresent(String.self, forKey: .addressLine2)
+        townCity = try c.decodeIfPresent(String.self, forKey: .townCity) ?? ""
+        postcode = try c.decodeIfPresent(String.self, forKey: .postcode) ?? ""
+        client = try c.decode(Client.self, forKey: .client)
+        startDate = try c.decode(Date.self, forKey: .startDate)
+        endDate = try c.decode(Date.self, forKey: .endDate)
+        jobType = try c.decode(JobType.self, forKey: .jobType)
+        customJobType = try c.decodeIfPresent(String.self, forKey: .customJobType)
+        manager = try c.decode(ManagerLegacy.self, forKey: .manager)
+        managerId = try c.decodeIfPresent(UUID.self, forKey: .managerId)
+        isLive = try c.decodeIfPresent(Bool.self, forKey: .isLive) ?? true
+        description = try c.decodeIfPresent(String.self, forKey: .description)
+        notes = try c.decodeIfPresent(String.self, forKey: .notes)
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        hiddenManagerUserIds = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenManagerUserIds) ?? []
+        hiddenOperativeUserIds = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenOperativeUserIds) ?? []
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(jobNumber, forKey: .jobNumber)
+        try c.encode(siteName, forKey: .siteName)
+        try c.encode(addressLine1, forKey: .addressLine1)
+        try c.encodeIfPresent(addressLine2, forKey: .addressLine2)
+        try c.encode(townCity, forKey: .townCity)
+        try c.encode(postcode, forKey: .postcode)
+        try c.encode(client, forKey: .client)
+        try c.encode(startDate, forKey: .startDate)
+        try c.encode(endDate, forKey: .endDate)
+        try c.encode(jobType, forKey: .jobType)
+        try c.encodeIfPresent(customJobType, forKey: .customJobType)
+        try c.encode(manager, forKey: .manager)
+        try c.encodeIfPresent(managerId, forKey: .managerId)
+        try c.encode(isLive, forKey: .isLive)
+        try c.encodeIfPresent(description, forKey: .description)
+        try c.encodeIfPresent(notes, forKey: .notes)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(updatedAt, forKey: .updatedAt)
+        try c.encode(hiddenManagerUserIds, forKey: .hiddenManagerUserIds)
+        try c.encode(hiddenOperativeUserIds, forKey: .hiddenOperativeUserIds)
     }
 }
 

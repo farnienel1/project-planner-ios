@@ -2,6 +2,9 @@
   "firestore": {
     "rules": "website/firestore.rules"
   },
+  "storage": {
+    "rules": "Project Planner/storage.rules"
+  },
   "functions": [
     {
       "source": "website/functions",

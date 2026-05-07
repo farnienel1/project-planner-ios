@@ -13,6 +13,19 @@ enum HolidayStatus: String, Codable, CaseIterable {
     case rejected = "rejected"
 }
 
+enum HolidayTimeSlot: String, Codable, CaseIterable {
+    case fullDay = "FULL DAY"
+    case morning = "AM"
+    case afternoon = "PM"
+
+    var dayValue: Double {
+        switch self {
+        case .fullDay: return 1.0
+        case .morning, .afternoon: return 0.5
+        }
+    }
+}
+
 /// One holiday booking. Either self-booked by an app user (userId set, status .approved) or requested by an operative (operativeId set, status pending/approved/rejected).
 struct HolidayBooking: Identifiable, Codable, Hashable {
     let id: UUID
@@ -22,6 +35,7 @@ struct HolidayBooking: Identifiable, Codable, Hashable {
     var startDate: Date
     var endDate: Date
     var status: HolidayStatus
+    var timeSlot: HolidayTimeSlot
     var approvedByUserId: String?
     var approvedAt: Date?
     var cancellationRequestedAt: Date?
@@ -37,6 +51,7 @@ struct HolidayBooking: Identifiable, Codable, Hashable {
         startDate: Date,
         endDate: Date,
         status: HolidayStatus = .approved,
+        timeSlot: HolidayTimeSlot = .fullDay,
         approvedByUserId: String? = nil,
         approvedAt: Date? = nil,
         cancellationRequestedAt: Date? = nil,
@@ -51,6 +66,7 @@ struct HolidayBooking: Identifiable, Codable, Hashable {
         self.startDate = startDate
         self.endDate = endDate
         self.status = status
+        self.timeSlot = timeSlot
         self.approvedByUserId = approvedByUserId
         self.approvedAt = approvedAt
         self.cancellationRequestedAt = cancellationRequestedAt

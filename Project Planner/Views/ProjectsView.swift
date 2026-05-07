@@ -37,7 +37,7 @@ struct ProjectsView: View {
             .navigationTitle("Projects")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button(action: {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                     }) {
@@ -178,17 +178,24 @@ struct ProjectsView: View {
         var projects = projectStore.projects.filter { $0.jobType != .smallWorks }
         
         if userStore.isOperativeMode() {
-            if let operative = resolvedCurrentOperative {
-                let assignedProjectIds = Set(bookingStore.bookings
-                    .filter {
-                        $0.operativeId == operative.id &&
-                        ($0.status == .confirmed || $0.status == .tentative)
-                    }
-                    .map { $0.projectId })
-                if !assignedProjectIds.isEmpty {
-                    projects = projects.filter { assignedProjectIds.contains($0.id) }
-                }
+            guard let operative = resolvedCurrentOperative,
+                  let currentUserId = userStore.currentUser?.id else {
+                return []
             }
+            let assignedProjectIds = Set(bookingStore.bookings
+                .filter {
+                    $0.operativeId == operative.id &&
+                    ($0.status == .confirmed || $0.status == .tentative)
+                }
+                .map { $0.projectId })
+            projects = projects.filter {
+                assignedProjectIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId)
+            }
+        } else if let currentUser = userStore.currentUser,
+                  !currentUser.isSuperAdmin,
+                  !currentUser.permissions.adminAccess,
+                  currentUser.permissions.manager {
+            projects = projects.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
         }
         
         return projects

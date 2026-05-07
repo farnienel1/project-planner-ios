@@ -61,7 +61,7 @@ struct OperativesView: View {
             .navigationTitle("Operatives")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button(action: {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                     }) {
@@ -70,7 +70,7 @@ struct OperativesView: View {
                             .font(.system(size: 17, weight: .semibold))
                     }
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button(action: { showingFilterOptions.toggle() }) {
                         Image(systemName: "line.3.horizontal.decrease.circle")
                     }
@@ -211,6 +211,28 @@ struct OperativesView: View {
             return (user, op)
         }
     }
+    
+    private var allOperativeUsers: [AppUser] {
+        userStore.organizationUsers.filter { $0.permissions.operativeMode }
+    }
+    
+    private var hasAnyOperativesInOrganization: Bool {
+        !allOperativeUsers.isEmpty
+    }
+    
+    private var emptyOperativesTitle: String {
+        if !hasAnyOperativesInOrganization {
+            return "No Operatives Added Yet"
+        }
+        switch rosterSegment {
+        case .active:
+            return "No Active Operatives"
+        case .inactive:
+            return "No Inactive Operatives"
+        case .pending:
+            return "No Pending Operatives"
+        }
+    }
 
     private var displayedOperativeUsers: [AppUser] {
         let base = userStore.organizationUsers.filter {
@@ -244,23 +266,7 @@ struct OperativesView: View {
     @ViewBuilder
     private var pendingOperativeInviteesList: some View {
         if pendingOperativeInvitees.isEmpty {
-            VStack(spacing: 20) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 60))
-                    .foregroundColor(.green)
-                
-                Text("No Pending Operatives")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                
-                Text("All operative invitations are complete or there are no pending invitees.")
-                    .font(.body)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-            }
-            .padding()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            emptyOperativesView
         } else {
             List {
                 ForEach(pendingOperativeInvitees) { user in
@@ -360,23 +366,12 @@ struct OperativesView: View {
                 .font(.system(size: 60))
                 .foregroundColor(.gray)
             
-            Text("No Operatives Added Yet")
+            Text(emptyOperativesTitle)
                 .font(.title2)
                 .fontWeight(.semibold)
-            
-            Text("Add operatives to your organisation. Operatives can be assigned to projects and tasks.")
-                .font(.body)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            
-            Text("Operatives must be created via the 'Add User' button in Manage Users.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
         }
         .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 

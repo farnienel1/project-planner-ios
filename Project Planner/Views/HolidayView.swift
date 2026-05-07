@@ -24,7 +24,7 @@ struct HolidayView: View {
         guard let u = userStore.displayUser else { return false }
         if u.permissions.operativeMode { return false }
         if userStore.hasAdminAccess() { return false }
-        return u.permissions.manager
+        return u.permissions.manager && !u.permissions.annualLeaveSelfBook
     }
     private var isRequestMode: Bool { isOperativeMode || isManagerRequestMode }
     // Admins don't show Requests by default. Requests section becomes available only when opened from a notification.
@@ -43,6 +43,7 @@ struct HolidayView: View {
     @State private var successMessage: String?
     @State private var showSuccess = false
     @State private var activeSection: HolidaySection = .calendar
+    @State private var selectedHolidayTimeSlot: HolidayTimeSlot = .fullDay
 
     enum HolidaySection: String, CaseIterable {
         case calendar = "Book"
@@ -53,7 +54,25 @@ struct HolidayView: View {
     private let calendar = Calendar.current
 
     var body: some View {
-        NavigationView {
+        VStack(spacing: 0) {
+            HStack {
+                Button(action: {
+                    NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+                }) {
+                    Image(systemName: "chevron.left")
+                        .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
+                        .font(.system(size: 17, weight: .semibold))
+                }
+                Spacer()
+                Text("Annual Leave")
+                    .font(.headline)
+                Spacer()
+                Color.clear.frame(width: 20, height: 20)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color(.systemBackground))
+
             Group {
                 if holidayStore.isLoading && holidayStore.bookings.isEmpty {
                     VStack(spacing: 12) {
@@ -121,32 +140,25 @@ struct HolidayView: View {
                     }
                 }
             }
-            .navigationTitle("Annual Leave")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Done") {
-                        NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
-                    }
-                }
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarBackButtonHidden(true)
+        .onAppear {
+            if showRequests { activeSection = .requests }
+            if userStore.isOperativeMode() {
+                operativeStore.loadData()
             }
-            .onAppear {
-                if showRequests { activeSection = .requests }
-                if userStore.isOperativeMode() {
-                    operativeStore.loadData()
-                }
-                Task { await holidayStore.loadData() }
-            }
-            .alert("Error", isPresented: $showError) {
-                Button("OK") { showError = false }
-            } message: {
-                if let msg = errorMessage { Text(msg) }
-            }
-            .alert("Success", isPresented: $showSuccess) {
-                Button("OK") { showSuccess = false }
-            } message: {
-                if let msg = successMessage { Text(msg) }
-            }
+            Task { await holidayStore.loadData() }
+        }
+        .alert("Error", isPresented: $showError) {
+            Button("OK") { showError = false }
+        } message: {
+            if let msg = errorMessage { Text(msg) }
+        }
+        .alert("Success", isPresented: $showSuccess) {
+            Button("OK") { showSuccess = false }
+        } message: {
+            if let msg = successMessage { Text(msg) }
         }
     }
 
@@ -281,6 +293,10 @@ struct HolidayView: View {
                         Text("\(sorted.count) days selected (\(first.formatted(date: .abbreviated, time: .omitted)) – \(last.formatted(date: .abbreviated, time: .omitted)))")
                             .font(.subheadline)
                     }
+                    Spacer()
+                    Text(selectedHolidayTimeSlot.rawValue)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
             } else {
                 Text("Tap each day you want to book")
@@ -300,7 +316,7 @@ struct HolidayView: View {
                     .font(.subheadline)
                     .fontWeight(.semibold)
                 ForEach(sorted, id: \.self) { day in
-                    Text(day.formatted(date: .abbreviated, time: .omitted))
+                    Text("\(day.formatted(date: .abbreviated, time: .omitted)) (\(selectedHolidayTimeSlot.rawValue))")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -382,7 +398,8 @@ struct HolidayView: View {
                             operativeId: operativeId,
                             startDate: day,
                             endDate: day,
-                            status: .pending
+                            status: .pending,
+                            timeSlot: selectedHolidayTimeSlot
                         )
                         try await holidayStore.saveBooking(booking)
                         createdBookingIds.append(booking.id)
@@ -424,7 +441,8 @@ struct HolidayView: View {
                             operativeId: nil,
                             startDate: day,
                             endDate: day,
-                            status: isManagerRequestMode ? .pending : .approved
+                            status: isManagerRequestMode ? .pending : .approved,
+                            timeSlot: selectedHolidayTimeSlot
                         )
                         try await holidayStore.saveBooking(booking)
                         firstBookingId = firstBookingId ?? booking.id
@@ -436,6 +454,7 @@ struct HolidayView: View {
                         let requesterName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
                         await notificationService.notifyHolidayRequestSubmittedByUser(
                             bookingId: bookingId,
+                            requesterUserId: uid,
                             requesterName: requesterName,
                             startDate: startDate,
                             endDate: endDate,
@@ -467,6 +486,12 @@ struct HolidayView: View {
 
     private var submitButton: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Picker("Leave duration", selection: $selectedHolidayTimeSlot) {
+                Text("FULL DAY").tag(HolidayTimeSlot.fullDay)
+                Text("AM").tag(HolidayTimeSlot.morning)
+                Text("PM").tag(HolidayTimeSlot.afternoon)
+            }
+            .pickerStyle(.segmented)
             selectedDatesPreview
             Button {
                 submitHoliday()
@@ -592,6 +617,14 @@ struct HolidayView: View {
     private func assignedApproverUserId(for request: HolidayBooking) -> String? {
         if let uid = request.userId,
            let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
+            if requester.permissions.manager &&
+                !requester.permissions.annualLeaveSelfBook &&
+                !requester.permissions.operativeMode &&
+                !requester.isSuperAdmin &&
+                !requester.permissions.adminAccess &&
+                requester.role != .admin {
+                return nil
+            }
             let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
             return (managerId?.isEmpty == false) ? managerId : nil
         }
@@ -646,6 +679,20 @@ struct HolidayView: View {
                 approved: approved,
                 decidedByName: decidedByName
             )
+            if approved,
+               let requester = userStore.organizationUsers.first(where: { $0.id == requesterUserId }),
+               requester.permissions.manager,
+               !requester.permissions.annualLeaveSelfBook,
+               !requester.permissions.operativeMode,
+               !requester.isSuperAdmin,
+               !requester.permissions.adminAccess,
+               requester.role != .admin {
+                await notificationService.notifyAdminAnnualLeaveApproval(
+                    managerName: requester.fullName,
+                    approvedByName: decidedByName,
+                    excludingUserId: firebaseBackend.currentUser?.uid
+                )
+            }
             return
         }
         if let oid = request.operativeId,
@@ -741,6 +788,9 @@ struct HolidayRowView: View {
                 Text("\(booking.startDate.formatted(date: .abbreviated, time: .omitted)) – \(booking.endDate.formatted(date: .abbreviated, time: .omitted))")
                     .font(.subheadline)
                     .fontWeight(.medium)
+                Text(booking.timeSlot.rawValue)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
                 Text(statusText)
                     .font(.caption)
                     .foregroundColor(statusColor)
@@ -808,6 +858,9 @@ struct HolidayRequestRowView: View {
             }
             Text("\(request.startDate.formatted(date: .abbreviated, time: .omitted)) – \(request.endDate.formatted(date: .abbreviated, time: .omitted))")
                 .font(.subheadline)
+                .foregroundColor(.secondary)
+            Text(request.timeSlot.rawValue)
+                .font(.caption2)
                 .foregroundColor(.secondary)
             if canApprove {
                 HStack(spacing: 12) {

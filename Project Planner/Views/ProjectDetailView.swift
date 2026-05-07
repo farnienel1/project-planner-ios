@@ -44,9 +44,12 @@ fileprivate struct TaskFilter {
 struct ProjectDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
     
@@ -60,6 +63,7 @@ struct ProjectDetailView: View {
     
     @State private var selectedWeek: Date = Date()
     @State private var showingScheduleOperative = false
+    @State private var showingScheduleSubcontractor = false
     @State private var showingEditProject = false
     @State private var showingMapOptions = false
     @State private var region: MKCoordinateRegion
@@ -70,6 +74,7 @@ struct ProjectDetailView: View {
     
     private enum DetailTile: String, CaseIterable, Identifiable {
         case scheduling = "Scheduling"
+        case visibility = "View"
         case tasks = "My Tasks"
         case materials = "Materials"
         case siteAudit = "Site Audits"
@@ -80,6 +85,7 @@ struct ProjectDetailView: View {
         var icon: String {
             switch self {
             case .scheduling: return "calendar.badge.clock"
+            case .visibility: return "eye"
             case .tasks: return "checklist"
             case .materials: return "cube.box.fill"
             case .siteAudit: return "doc.text.viewfinder"
@@ -143,8 +149,14 @@ struct ProjectDetailView: View {
                 .environmentObject(bookingStore)
                 .environmentObject(operativeStore)
                 .environmentObject(projectStore)
+                .environmentObject(holidayStore)
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
+                .preference(key: HideBottomMenuKey.self, value: true)
+        }
+        .sheet(isPresented: $showingScheduleSubcontractor) {
+            ScheduleSubcontractorView(project: project)
+                .environmentObject(subcontractorStore)
                 .preference(key: HideBottomMenuKey.self, value: true)
         }
         .sheet(isPresented: $showingEditProject) {
@@ -179,6 +191,9 @@ struct ProjectDetailView: View {
         .onChange(of: selectedWeek) { _, _ in
             loadWeekBookings()
         }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
+            loadWeekBookings()
+        }
         .onDisappear {
             // When leaving, the preference will automatically reset
             // because the view is removed from the hierarchy
@@ -205,11 +220,16 @@ struct ProjectDetailView: View {
         let availableTiles: [DetailTile] = {
             if userStore.isOperativeMode() {
                 if userStore.canViewMaterials() {
-                    return [.tasks, .materials, .siteAudit, .location]
+                    return userStore.canViewSiteAudit() ? [.tasks, .materials, .siteAudit, .location] : [.tasks, .materials, .location]
                 }
-                return [.tasks, .siteAudit, .location]
+                return userStore.canViewSiteAudit() ? [.tasks, .siteAudit, .location] : [.tasks, .location]
             }
-            return DetailTile.allCases
+            var tiles: [DetailTile] = [.scheduling]
+            if userStore.hasAdminAccess() {
+                tiles.append(.visibility)
+            }
+            tiles.append(contentsOf: [.tasks, .materials, .siteAudit, .settings, .location])
+            return tiles
         }()
         
         return LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 16) {
@@ -238,6 +258,10 @@ struct ProjectDetailView: View {
     @ViewBuilder
     private func tileDestination(for tile: DetailTile) -> some View {
         switch tile {
+        case .visibility:
+            ProjectVisibilitySettingsView(projectId: project.id)
+                .environmentObject(projectStore)
+                .environmentObject(userStore)
         case .siteAudit:
             SiteAuditProjectHubView(project: project)
                 .environmentObject(firebaseBackend)
@@ -382,34 +406,48 @@ struct ProjectDetailView: View {
     
     private func dayBubble(for date: Date) -> some View {
         let dayBookings = bookingsForDate(date)
+        let dayManagerBookings = managerBookingsForDate(date)
+        let daySubcontractorBookings = subcontractorBookingsForDate(date)
         let isToday = Calendar.current.isDateInToday(date)
         
-        let dayFormatter = DateFormatter()
-        dayFormatter.dateFormat = "EEEE" // Full day name (Monday, Tuesday, etc.)
-        let dayName = dayFormatter.string(from: date)
-        
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "d MMM" // Day number and month (1 Jan)
-        let dateString = dateFormatter.string(from: date)
+        let fullDateString = formattedFullDate(date)
         
         return VStack(alignment: .leading, spacing: 12) {
-            // Day of week at top left
+            // Full date label
             HStack {
-                Text(dayName)
+                Text(fullDateString)
                     .font(.headline)
                     .fontWeight(.semibold)
                     .foregroundColor(isToday ? .white : .primary)
                 
                 Spacer()
-                
-                Text(dateString)
-                    .font(.subheadline)
-                    .foregroundColor(isToday ? .white.opacity(0.9) : .secondary)
             }
             
-            // Operatives list
-            if !dayBookings.isEmpty {
+            // Managers, operatives and sub contractors list
+            if !dayManagerBookings.isEmpty || !dayBookings.isEmpty || !daySubcontractorBookings.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
+                    ForEach(dayManagerBookings, id: \.id) { booking in
+                        let managerName = userStore.organizationUsers.first(where: { $0.id == booking.userId })?.fullName ?? "Unknown Manager"
+                        let timeSlotText = booking.timeSlot.displayName
+                        
+                        HStack {
+                            Text(managerName)
+                                .font(.body)
+                                .foregroundColor(isToday ? .white : .primary)
+                            
+                            Spacer()
+                            
+                            Text(timeSlotText)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(isToday ? .white.opacity(0.9) : .secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(isToday ? Color.white.opacity(0.2) : Color.purple.opacity(0.15))
+                                .cornerRadius(6)
+                        }
+                    }
+                    
                     ForEach(dayBookings, id: \.id) { booking in
                         let operative = operativeStore.activeOperatives.first { $0.id == booking.operativeId }
                         let operativeName = operative?.name ?? "Unknown Operative"
@@ -429,6 +467,27 @@ struct ProjectDetailView: View {
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
                                 .background(isToday ? Color.white.opacity(0.2) : Color(.systemGray5))
+                                .cornerRadius(6)
+                        }
+                    }
+                    
+                    ForEach(daySubcontractorBookings, id: \.id) { booking in
+                        let subbie = subcontractorStore.subcontractors.first { $0.id == booking.subcontractorId }
+                        let subbieName = subbie?.name ?? "Unknown Sub Contractor"
+                        let timeSlotText = booking.timeSlot.displayName
+                        
+                        HStack {
+                            Text(subbieName)
+                                .font(.body)
+                                .foregroundColor(isToday ? .white : .primary)
+                            Spacer()
+                            Text(timeSlotText)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(isToday ? .white.opacity(0.9) : .secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(isToday ? Color.white.opacity(0.2) : Color.indigo.opacity(0.15))
                                 .cornerRadius(6)
                         }
                     }
@@ -455,21 +514,32 @@ struct ProjectDetailView: View {
     
     private func compactDayBubble(for date: Date) -> some View {
         let dayBookings = bookingsForDate(date)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "E"
-        let shortDay = formatter.string(from: date)
+        let dayManagerBookings = managerBookingsForDate(date)
+        let daySubcontractorBookings = subcontractorBookingsForDate(date)
         let isToday = Calendar.current.isDateInToday(date)
+        let fullDateString = formattedFullDate(date)
         
         return VStack(alignment: .leading, spacing: 6) {
-            Text(shortDay)
-                .font(.headline)
+            Text(fullDateString)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .lineLimit(2)
                 .foregroundColor(isToday ? .white : .primary)
-            Text(date, style: .date)
-                .font(.caption2)
-                .foregroundColor(isToday ? .white.opacity(0.8) : .secondary)
-            if let booking = dayBookings.first {
+            if let managerBooking = dayManagerBookings.first {
+                let managerName = userStore.organizationUsers.first(where: { $0.id == managerBooking.userId })?.fullName ?? "Manager"
+                Text(managerName)
+                    .font(.caption2)
+                    .lineLimit(2)
+                    .foregroundColor(isToday ? .white : .primary)
+            } else if let booking = dayBookings.first {
                 let operative = operativeStore.activeOperatives.first { $0.id == booking.operativeId }
                 Text(operative?.name ?? "Unassigned")
+                    .font(.caption2)
+                    .lineLimit(2)
+                    .foregroundColor(isToday ? .white : .primary)
+            } else if let subbieBooking = daySubcontractorBookings.first {
+                let subbie = subcontractorStore.subcontractors.first { $0.id == subbieBooking.subcontractorId }
+                Text(subbie?.name ?? "Sub Contractor")
                     .font(.caption2)
                     .lineLimit(2)
                     .foregroundColor(isToday ? .white : .primary)
@@ -550,15 +620,31 @@ struct ProjectDetailView: View {
     // MARK: - Schedule Operative Button
     
     private var scheduleOperativeButton: some View {
-        Button(action: { showingScheduleOperative = true }) {
-            Text("Schedule Operative")
-                .font(.headline)
-                .fontWeight(.semibold)
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.theme.primary)
-                .cornerRadius(12)
+        HStack(spacing: 10) {
+            Button(action: { showingScheduleOperative = true }) {
+                Text("Schedule Operative")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.theme.primary)
+                    .cornerRadius(12)
+            }
+            Button(action: { showingScheduleSubcontractor = true }) {
+                Text("Schedule Sub Contractor")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.indigo)
+                    .cornerRadius(12)
+            }
         }
     }
     
@@ -721,6 +807,22 @@ struct ProjectDetailView: View {
         }.sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
     }
     
+    private func subcontractorBookingsForDate(_ date: Date) -> [SubcontractorBooking] {
+        subcontractorStore.bookings.filter { booking in
+            Calendar.current.isDate(booking.date, inSameDayAs: date) &&
+            booking.projectId == project.id &&
+            (booking.status == .confirmed || booking.status == .tentative)
+        }.sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+    }
+    
+    private func managerBookingsForDate(_ date: Date) -> [ManagerSiteBooking] {
+        managerScheduleStore.managerSiteBookings.filter { booking in
+            Calendar.current.isDate(booking.date, inSameDayAs: date) &&
+            booking.locationId == project.id &&
+            (booking.locationType == .project || booking.locationType == .smallWork)
+        }.sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+    }
+    
     // MARK: - Helper Methods
     
     private func changeWeek(by weeks: Int) {
@@ -731,6 +833,28 @@ struct ProjectDetailView: View {
     
     private func loadWeekBookings() {
         bookingStore.loadData()
+        managerScheduleStore.loadData()
+        Task { await subcontractorStore.loadData() }
+    }
+    
+    private func formattedFullDate(_ date: Date) -> String {
+        let calendar = Calendar.current
+        let day = calendar.component(.day, from: date)
+        let weekdayFormatter = DateFormatter()
+        weekdayFormatter.dateFormat = "EEEE"
+        let monthFormatter = DateFormatter()
+        monthFormatter.dateFormat = "MMMM"
+        return "\(weekdayFormatter.string(from: date)) \(day)\(ordinalSuffix(for: day)) \(monthFormatter.string(from: date))"
+    }
+    
+    private func ordinalSuffix(for day: Int) -> String {
+        if (11...13).contains(day % 100) { return "th" }
+        switch day % 10 {
+        case 1: return "st"
+        case 2: return "nd"
+        case 3: return "rd"
+        default: return "th"
+        }
     }
     
     private var weekViewPreferenceKey: String {
@@ -934,17 +1058,19 @@ struct ProjectDetailView: View {
             .cornerRadius(12)
             .shadow(color: .black.opacity(0.05), radius: 3, x: 0, y: 2)
             
-            Button(action: { showingEditProject = true }) {
-                HStack {
-                    Image(systemName: "square.and.pencil")
-                    Text("Edit Project Details")
+            if canEditCurrentWorkItem {
+                Button(action: { showingEditProject = true }) {
+                    HStack {
+                        Image(systemName: "square.and.pencil")
+                        Text("Edit Project Details")
+                    }
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.theme.primary)
+                    .cornerRadius(12)
                 }
-                .font(.headline)
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.theme.primary)
-                .cornerRadius(12)
             }
             
             if let notes = project.notes, !notes.isEmpty {
@@ -960,6 +1086,167 @@ struct ProjectDetailView: View {
                 .cornerRadius(12)
             }
         }
+    }
+    
+    private var canEditCurrentWorkItem: Bool {
+        guard let u = userStore.currentUser else { return false }
+        if u.permissions.operativeMode { return false }
+        if u.isSuperAdmin || u.permissions.adminAccess { return true }
+        guard u.permissions.manager else { return false }
+        return project.jobType == .smallWorks ? u.permissions.smallWorks : u.permissions.projects
+    }
+}
+
+private struct ProjectVisibilitySettingsView: View {
+    @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var userStore: UserStore
+    
+    let projectId: UUID
+    @State private var selectedTab: VisibilityTab = .managers
+    @State private var searchText = ""
+    @State private var filterMode: VisibilityFilterMode = .active
+    @State private var showSearch = false
+    
+    private enum VisibilityTab: String, CaseIterable, Identifiable {
+        case managers = "Managers"
+        case operatives = "Operatives"
+        var id: String { rawValue }
+    }
+    
+    private enum VisibilityFilterMode: String, CaseIterable, Identifiable {
+        case all = "All"
+        case active = "Active"
+        case inactive = "Inactive"
+        case pending = "Pending"
+        var id: String { rawValue }
+    }
+    
+    private var project: Project? {
+        projectStore.projects.first(where: { $0.id == projectId })
+    }
+    
+    private var managers: [AppUser] {
+        filteredUsers(base: userStore.organizationUsers.filter { user in
+            !user.permissions.operativeMode && user.permissions.manager
+        })
+    }
+    
+    private var operatives: [AppUser] {
+        filteredUsers(base: userStore.organizationUsers.filter { $0.permissions.operativeMode })
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("View")
+                .font(.title2.bold())
+            Text("View can be used to hide projects or small works from users, where access to site audits or materials is prohibited for that user on that particular job.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            
+            Picker("Role", selection: $selectedTab) {
+                ForEach(VisibilityTab.allCases) { tab in
+                    Text(tab.rawValue).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            
+            HStack(spacing: 12) {
+                Menu {
+                    ForEach(VisibilityFilterMode.allCases) { mode in
+                        Button(mode.rawValue) { filterMode = mode }
+                    }
+                } label: {
+                    Label("Filter: \(filterMode.rawValue)", systemImage: "line.3.horizontal.decrease.circle")
+                }
+                .buttonStyle(.bordered)
+                
+                Button {
+                    withAnimation { showSearch.toggle() }
+                    if !showSearch { searchText = "" }
+                } label: {
+                    Label("Search", systemImage: "magnifyingglass")
+                }
+                .buttonStyle(.bordered)
+            }
+            
+            if showSearch {
+                TextField("Search user", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+            }
+            
+            List {
+                ForEach(selectedTab == .managers ? managers : operatives) { user in
+                    Button {
+                        toggleVisibility(for: user)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(user.fullName.isEmpty ? user.email : user.fullName)
+                                    .foregroundColor(.primary)
+                                Text(user.email)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: isVisible(user) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(isVisible(user) ? .blue : .gray)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .listStyle(.plain)
+        }
+        .padding()
+        .navigationTitle("View")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+    
+    private func filteredUsers(base: [AppUser]) -> [AppUser] {
+        base.filter { user in
+            switch filterMode {
+            case .all:
+                return true
+            case .active:
+                return user.passwordSet && user.isActive
+            case .inactive:
+                return user.passwordSet && !user.isActive
+            case .pending:
+                return !user.passwordSet
+            }
+        }
+        .filter { user in
+            searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            user.fullName.localizedCaseInsensitiveContains(searchText) ||
+            user.email.localizedCaseInsensitiveContains(searchText)
+        }
+        .sorted { ($0.fullName.isEmpty ? $0.email : $0.fullName) < ($1.fullName.isEmpty ? $1.email : $1.fullName) }
+    }
+    
+    private func isVisible(_ user: AppUser) -> Bool {
+        guard let project else { return false }
+        if selectedTab == .managers {
+            return !project.hiddenManagerUserIds.contains(user.id)
+        }
+        return !project.hiddenOperativeUserIds.contains(user.id)
+    }
+    
+    private func toggleVisibility(for user: AppUser) {
+        guard var project else { return }
+        if selectedTab == .managers {
+            if project.hiddenManagerUserIds.contains(user.id) {
+                project.hiddenManagerUserIds.remove(user.id)
+            } else {
+                project.hiddenManagerUserIds.insert(user.id)
+            }
+        } else {
+            if project.hiddenOperativeUserIds.contains(user.id) {
+                project.hiddenOperativeUserIds.remove(user.id)
+            } else {
+                project.hiddenOperativeUserIds.insert(user.id)
+            }
+        }
+        Task { await projectStore.updateProject(project) }
     }
 }
 

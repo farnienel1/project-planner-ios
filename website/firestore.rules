@@ -459,6 +459,18 @@ service cloud.firestore {
         allow delete: if canAccessOrganization(organizationId);
       }
       
+      match /subcontractors/{subcontractorId} {
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
+        allow delete: if isOrganizationAdmin(organizationId);
+      }
+      
+      match /subcontractorBookings/{bookingId} {
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
+        allow delete: if canAccessOrganization(organizationId);
+      }
+      
       match /holidayBookings/{bookingId} {
         // Temporary: allow any signed-in user to use holiday flow while broader org ACL is stabilized.
         allow read, create, update, delete: if request.auth != null;

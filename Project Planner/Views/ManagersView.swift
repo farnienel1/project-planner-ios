@@ -60,28 +60,50 @@ struct ManagersView: View {
         }
     }
     
+    private var hasAnyManagersInOrganization: Bool {
+        !allManagers.isEmpty
+    }
+    
+    private var emptyManagersTitle: String {
+        if !hasAnyManagersInOrganization {
+            return "No Managers Added Yet"
+        }
+        switch rosterSegment {
+        case .active:
+            return "No Active Managers"
+        case .inactive:
+            return "No Inactive Managers"
+        case .pending:
+            return "No Pending Managers"
+        }
+    }
+    
     var body: some View {
-        managersList
-            .navigationTitle("Managers")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
-                    }) {
-                        Image(systemName: "chevron.left")
-                            .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
-                            .font(.system(size: 17, weight: .semibold))
-                    }
+        VStack(spacing: 0) {
+            HStack {
+                Button(action: {
+                    NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+                }) {
+                    Image(systemName: "chevron.left")
+                        .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
+                        .font(.system(size: 17, weight: .semibold))
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack {
-                        Button(action: { showingFilterOptions.toggle() }) {
-                            Image(systemName: "line.3.horizontal.decrease.circle")
-                        }
-                    }
+                Spacer()
+                Text("Managers")
+                    .font(.headline)
+                Spacer()
+                Button(action: { showingFilterOptions.toggle() }) {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                        .foregroundColor(.primary)
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color(.systemBackground))
+            
+            managersList
+        }
+            .toolbar(.hidden, for: .navigationBar)
             .navigationBarBackButtonHidden(true)
             .sheet(item: $selectedUser) { user in
                 EditUserView(user: user)
@@ -114,45 +136,42 @@ struct ManagersView: View {
     
     @ViewBuilder
     private var managersList: some View {
-        if userStore.isLoading {
-            ProgressView("Loading managers...")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if allManagers.isEmpty {
-            // Safety check - if no managers at all, show empty state
-            emptyManagersView
-        } else if filteredManagers.isEmpty {
-            emptyManagersView
-        } else {
-            VStack(spacing: 0) {
-                // Active / All Managers tab bar (same style as Operatives)
-                HStack(spacing: 0) {
-                    ForEach(UserRosterSegment.allCases) { seg in
-                        OperativeTabButton(title: seg.title, isSelected: rosterSegment == seg) {
-                            rosterSegment = seg
-                        }
+        VStack(spacing: 0) {
+            // Active / Inactive / Pending tab bar stays fixed at top.
+            HStack(spacing: 0) {
+                ForEach(UserRosterSegment.allCases) { seg in
+                    OperativeTabButton(title: seg.title, isSelected: rosterSegment == seg) {
+                        rosterSegment = seg
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
-                .background(Color(.systemGroupedBackground))
-                
-                // Filter bar
-                if !filterText.isEmpty {
-                    HStack {
-                        Text("Filter: \(selectedFilterType.rawValue) - \(filterText)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Button("Clear") {
-                            filterText = ""
-                        }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(Color(.systemGroupedBackground))
+            
+            // Filter bar
+            if !filterText.isEmpty {
+                HStack {
+                    Text("Filter: \(selectedFilterType.rawValue) - \(filterText)")
                         .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button("Clear") {
+                        filterText = ""
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemGray6))
+                    .font(.caption)
                 }
-                
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray6))
+            }
+            
+            if userStore.isLoading {
+                ProgressView("Loading managers...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if filteredManagers.isEmpty {
+                emptyManagersView
+            } else {
                 List(filteredManagers) { user in
                     ManagerUserRowView(user: user) {
                         // Use async to prevent state update during view update
@@ -170,21 +189,16 @@ struct ManagersView: View {
     
     private var emptyManagersView: some View {
         VStack(spacing: 20) {
-            Image(systemName: "person.badge.key.fill")
+            Image(systemName: "person.2.fill")
                 .font(.system(size: 60))
                 .foregroundColor(.gray)
             
-            Text("No Managers Added Yet")
+            Text(emptyManagersTitle)
                 .font(.title2)
                 .fontWeight(.semibold)
-            
-            Text("Managers must be created via the 'Add User' button in Manage Users.")
-                .font(.body)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
         }
         .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
     
 }

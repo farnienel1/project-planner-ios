@@ -138,6 +138,7 @@ class FirebaseBackend: ObservableObject {
             countryCode: (orgData["countryCode"] as? String)?.uppercased() ?? "GB",
             defaultLatitude: orgData["defaultLatitude"] as? Double,
             defaultLongitude: orgData["defaultLongitude"] as? Double,
+            companyLogoURL: orgData["companyLogoURL"] as? String,
             creatorUserId: orgData["creatorUserId"] as? String
         )
         currentOrganization = organization
@@ -406,7 +407,11 @@ class FirebaseBackend: ObservableObject {
             materials: permissionsMap["materials"] as? Bool ?? false,
             projects: permissionsMap["projects"] as? Bool ?? true,
             smallWorks: permissionsMap["smallWorks"] as? Bool ?? true,
-            operativeMode: permissionsMap["operativeMode"] as? Bool ?? false
+            operativeMode: permissionsMap["operativeMode"] as? Bool ?? false,
+            annualLeaveSelfBook: permissionsMap["annualLeaveSelfBook"] as? Bool ?? false,
+            weeklyReports: permissionsMap["weeklyReports"] as? Bool ?? false,
+            subContractors: permissionsMap["subContractors"] as? Bool ?? false,
+            siteAudit: permissionsMap["siteAudit"] as? Bool ?? true
         )
         let invitedBy = currentUser?.uid ?? ""
         let invitationId = UUID().uuidString
@@ -425,7 +430,11 @@ class FirebaseBackend: ObservableObject {
                 "materials": permissions.materials,
                 "projects": permissions.projects,
                 "smallWorks": permissions.smallWorks,
-                "operativeMode": permissions.operativeMode
+                "operativeMode": permissions.operativeMode,
+                "annualLeaveSelfBook": permissions.annualLeaveSelfBook,
+                "weeklyReports": permissions.weeklyReports,
+                "subContractors": permissions.subContractors,
+                "siteAudit": permissions.siteAudit
             ],
             "createdAt": Timestamp(date: Date()),
             "isUsed": false
@@ -736,6 +745,7 @@ class FirebaseBackend: ObservableObject {
                 countryCode: countryCode,
                 defaultLatitude: defaultLatitude,
                 defaultLongitude: defaultLongitude,
+                companyLogoURL: data["companyLogoURL"] as? String,
                 creatorUserId: creatorUserId
             )
             
@@ -1008,6 +1018,8 @@ class FirebaseBackend: ObservableObject {
             "createdAt": Timestamp(date: project.createdAt),
             "updatedAt": Timestamp(date: project.updatedAt)
         ]
+        data["hiddenManagerUserIds"] = Array(project.hiddenManagerUserIds)
+        data["hiddenOperativeUserIds"] = Array(project.hiddenOperativeUserIds)
         
         // Save managerId if available
         if let managerId = project.managerId {
@@ -1111,6 +1123,8 @@ class FirebaseBackend: ObservableObject {
             
             // Load customJobType if available
             let customJobType: String? = data["customJobType"] as? String
+            let hiddenManagerUserIds = Set((data["hiddenManagerUserIds"] as? [String]) ?? [])
+            let hiddenOperativeUserIds = Set((data["hiddenOperativeUserIds"] as? [String]) ?? [])
             
             let client = Client(
                 id: UUID(uuidString: clientIdString) ?? UUID(),
@@ -1141,7 +1155,9 @@ class FirebaseBackend: ObservableObject {
                     manager: manager,
                     managerId: managerId,
                     isLive: data["isLive"] as? Bool ?? true,
-                    description: data["description"] as? String
+                    description: data["description"] as? String,
+                    hiddenManagerUserIds: hiddenManagerUserIds,
+                    hiddenOperativeUserIds: hiddenOperativeUserIds
                 )
             } else {
                 // Legacy format - use old initializer
@@ -1156,7 +1172,9 @@ class FirebaseBackend: ObservableObject {
                     jobType: jobType,
                     manager: manager,
                     isLive: data["isLive"] as? Bool ?? true,
-                    description: data["description"] as? String
+                    description: data["description"] as? String,
+                    hiddenManagerUserIds: hiddenManagerUserIds,
+                    hiddenOperativeUserIds: hiddenOperativeUserIds
                 )
                 // Set managerId and customJobType after initialization since legacy initializer doesn't accept them
                 legacyProject.managerId = managerId
@@ -1331,6 +1349,8 @@ class FirebaseBackend: ObservableObject {
             "createdAt": Timestamp(date: smallWork.createdAt),
             "updatedAt": Timestamp(date: smallWork.updatedAt)
         ]
+        data["hiddenManagerUserIds"] = Array(smallWork.hiddenManagerUserIds)
+        data["hiddenOperativeUserIds"] = Array(smallWork.hiddenOperativeUserIds)
         
         // Save managerId if available
         if let managerId = smallWork.managerId {
@@ -1434,6 +1454,8 @@ class FirebaseBackend: ObservableObject {
             
             // Load customJobType if available
             let customJobType: String? = data["customJobType"] as? String
+            let hiddenManagerUserIds = Set((data["hiddenManagerUserIds"] as? [String]) ?? [])
+            let hiddenOperativeUserIds = Set((data["hiddenOperativeUserIds"] as? [String]) ?? [])
             
             let client = Client(
                 id: UUID(uuidString: clientIdString) ?? UUID(),
@@ -1464,7 +1486,9 @@ class FirebaseBackend: ObservableObject {
                     manager: manager,
                     managerId: managerId,
                     isLive: data["isLive"] as? Bool ?? true,
-                    description: data["description"] as? String
+                    description: data["description"] as? String,
+                    hiddenManagerUserIds: hiddenManagerUserIds,
+                    hiddenOperativeUserIds: hiddenOperativeUserIds
                 )
             } else {
                 // Legacy format - use old initializer
@@ -1479,7 +1503,9 @@ class FirebaseBackend: ObservableObject {
                     jobType: jobType,
                     manager: manager,
                     isLive: data["isLive"] as? Bool ?? true,
-                    description: data["description"] as? String
+                    description: data["description"] as? String,
+                    hiddenManagerUserIds: hiddenManagerUserIds,
+                    hiddenOperativeUserIds: hiddenOperativeUserIds
                 )
                 // Set managerId and customJobType after initialization since legacy initializer doesn't accept them
                 legacySmallWork.managerId = managerId
@@ -1846,8 +1872,103 @@ class FirebaseBackend: ObservableObject {
                 }
             }
         }
+        do {
+            let downloadURL = try await storageRef.downloadURL()
+            return downloadURL.absoluteString
+        } catch {
+            // Do not block Site Audit submission/PDF generation if public URL generation is denied.
+            // We keep a durable Storage URI that can be resolved later with authenticated SDK access.
+            print("⚠️ [SiteAudit] Uploaded image but could not fetch download URL: \(error.localizedDescription)")
+            return "gs://\(storageRef.bucket)/\(storageRef.fullPath)"
+        }
+    }
+
+    func uploadOrganizationLogo(_ image: UIImage, organizationId: String) async throws -> String {
+        guard let userId = currentUser?.uid else {
+            throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
+        }
+        guard let imageData = image.jpegData(compressionQuality: 0.75) else {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Failed to process logo image"])
+        }
+        let path = "organizations/\(organizationId)/branding/company_logo/\(userId)_\(Int(Date().timeIntervalSince1970)).jpg"
+        let storageRef = storage.reference().child(path)
+        let metadata = StorageMetadata()
+        metadata.contentType = "image/jpeg"
+        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+            storageRef.putData(imageData, metadata: metadata) { metadata, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else if let metadata = metadata {
+                    continuation.resume(returning: metadata)
+                } else {
+                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+                }
+            }
+        }
         let downloadURL = try await storageRef.downloadURL()
         return downloadURL.absoluteString
+    }
+    
+    func uploadQualificationDocument(
+        data: Data,
+        organizationId: String,
+        operativeId: UUID,
+        qualificationId: UUID,
+        fileName: String,
+        contentType: String
+    ) async throws -> String {
+        guard let userId = currentUser?.uid else {
+            throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
+        }
+        if data.isEmpty {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "File is empty"])
+        }
+        // Conservative guardrail to avoid excessively large uploads from mobile.
+        if data.count > 10 * 1024 * 1024 {
+            throw NSError(domain: "FirebaseBackend", code: 413, userInfo: [NSLocalizedDescriptionKey: "File is too large. Please upload a file smaller than 10MB."])
+        }
+        
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let sanitizedName = fileName
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "/", with: "_")
+        let path = "organizations/\(organizationId)/operatives/\(operativeId.uuidString)/qualifications/\(qualificationId.uuidString)/certificates/\(userId)_\(timestamp)_\(sanitizedName)"
+        let storageRef = storage.reference().child(path)
+        let metadata = StorageMetadata()
+        metadata.contentType = contentType
+        
+        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+            storageRef.putData(data, metadata: metadata) { metadata, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else if let metadata = metadata {
+                    continuation.resume(returning: metadata)
+                } else {
+                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+                }
+            }
+        }
+        
+        let downloadURL = try await storageRef.downloadURL()
+        return downloadURL.absoluteString
+    }
+
+    func updateOrganizationCompanyLogoURL(_ logoURL: String?) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
+        }
+        var payload: [String: Any] = ["updatedAt": Timestamp(date: Date())]
+        if let logoURL, !logoURL.isEmpty {
+            payload["companyLogoURL"] = logoURL
+        } else {
+            payload["companyLogoURL"] = FieldValue.delete()
+        }
+        try await db.collection("organizations").document(orgId).updateData(payload)
+        guard var org = currentOrganization else { return }
+        org.companyLogoURL = (logoURL?.isEmpty == false) ? logoURL : nil
+        org.updatedAt = Date()
+        currentOrganization = org
+        storeOrganizationLocally(org)
     }
     #else
     func uploadTaskFile(_ fileURL: URL, taskId: UUID, organizationId: String, fileName: String) async throws -> String {
@@ -1859,6 +1980,17 @@ class FirebaseBackend: ObservableObject {
     }
 
     func uploadSiteAuditImage(_ image: UIImage, auditId: UUID, organizationId: String, imageName: String) async throws -> String {
+        throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: "FirebaseStorage is not available."])
+    }
+    
+    func uploadQualificationDocument(
+        data: Data,
+        organizationId: String,
+        operativeId: UUID,
+        qualificationId: UUID,
+        fileName: String,
+        contentType: String
+    ) async throws -> String {
         throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: "FirebaseStorage is not available."])
     }
     #endif
@@ -1899,6 +2031,8 @@ class FirebaseBackend: ObservableObject {
                 "currencySymbol": operative.currencySymbol ?? "£",
             "notes": operative.notes ?? "",
             "dayRate": operative.dayRate ?? 0,
+            "qualificationExpiryDates": Dictionary(uniqueKeysWithValues: operative.qualificationExpiryDates.map { ($0.key.uuidString, Timestamp(date: $0.value)) }),
+            "qualificationCertificateURLs": Dictionary(uniqueKeysWithValues: operative.qualificationCertificateURLs.map { ($0.key.uuidString, $0.value) }),
             "organizationId": organizationId,
             "createdAt": Timestamp(date: operative.createdAt),
             "updatedAt": Timestamp(date: operative.updatedAt)
@@ -1999,6 +2133,32 @@ class FirebaseBackend: ObservableObject {
                 }
             }
             
+            var qualificationExpiryDates: [UUID: Date] = [:]
+            if let expiryMap = data["qualificationExpiryDates"] as? [String: Any] {
+                for (key, rawDate) in expiryMap {
+                    guard let qualificationId = UUID(uuidString: key) else { continue }
+                    if let ts = rawDate as? Timestamp {
+                        qualificationExpiryDates[qualificationId] = ts.dateValue()
+                    } else if let date = rawDate as? Date {
+                        qualificationExpiryDates[qualificationId] = date
+                    }
+                }
+            }
+            
+            var qualificationCertificateURLs: [UUID: String] = [:]
+            if let certificateMap = data["qualificationCertificateURLs"] as? [String: String] {
+                for (key, url) in certificateMap {
+                    guard let qualificationId = UUID(uuidString: key) else { continue }
+                    qualificationCertificateURLs[qualificationId] = url
+                }
+            } else if let certificateMapAny = data["qualificationCertificateURLs"] as? [String: Any] {
+                for (key, rawURL) in certificateMapAny {
+                    guard let qualificationId = UUID(uuidString: key),
+                          let url = rawURL as? String else { continue }
+                    qualificationCertificateURLs[qualificationId] = url
+                }
+            }
+            
                 // Load firstName and lastName if available, otherwise parse from name (backward compatibility)
                 let firstName: String
                 let lastName: String
@@ -2027,6 +2187,8 @@ class FirebaseBackend: ObservableObject {
                     startDate: startDate,
                     skills: skills,
                     qualifications: Array(qualifications),
+                    qualificationExpiryDates: qualificationExpiryDates,
+                    qualificationCertificateURLs: qualificationCertificateURLs,
                     isActive: data["isActive"] as? Bool ?? true,
                     hourlyRate: loadedHourly,
                     dayRate: loadedDay ?? loadedHourly,
@@ -2553,7 +2715,11 @@ class FirebaseBackend: ObservableObject {
             materials: operativeMode ? (data["materials"] as? Bool ?? false) : (data["materials"] as? Bool ?? true),
             projects: operativeMode ? true : (data["projects"] as? Bool ?? false),
             smallWorks: operativeMode ? true : (data["smallWorks"] as? Bool ?? false),
-            operativeMode: operativeMode
+            operativeMode: operativeMode,
+            annualLeaveSelfBook: data["annualLeaveSelfBook"] as? Bool ?? false,
+            weeklyReports: data["weeklyReports"] as? Bool ?? false,
+            subContractors: data["subContractors"] as? Bool ?? false,
+            siteAudit: data["siteAudit"] as? Bool ?? true
         )
         let policyAccepted = data["policyAccepted"] as? Bool ?? false
         let policyAcceptedAt = (data["policyAcceptedAt"] as? Timestamp)?.dateValue()
@@ -2783,6 +2949,10 @@ class FirebaseBackend: ObservableObject {
             "projects": user.permissions.projects,
             "smallWorks": user.permissions.smallWorks,
             "operativeMode": user.permissions.operativeMode,
+            "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
+            "weeklyReports": user.permissions.weeklyReports,
+            "subContractors": user.permissions.subContractors,
+            "siteAudit": user.permissions.siteAudit,
             "isSuperAdmin": isSuperAdminToSave,
             "policyAccepted": user.policyAccepted,
             "updatedAt": Timestamp(date: Date())
@@ -2802,7 +2972,7 @@ class FirebaseBackend: ObservableObject {
             userData["assignedManagerUserId"] = mid
         }
         
-        if user.permissions.operativeMode, let dr = user.dayRate {
+        if (user.permissions.operativeMode || user.permissions.manager), let dr = user.dayRate {
             userData["dayRate"] = dr
         }
         
@@ -2821,6 +2991,18 @@ class FirebaseBackend: ObservableObject {
         } else {
             payload["assignedManagerUserId"] = FieldValue.delete()
         }
+        if let dayRate {
+            payload["dayRate"] = dayRate
+        } else {
+            payload["dayRate"] = FieldValue.delete()
+        }
+        try await db.collection("users").document(userId).updateData(payload)
+    }
+
+    func updateUserDayRateMetadata(userId: String, dayRate: Double?) async throws {
+        var payload: [String: Any] = [
+            "updatedAt": Timestamp(date: Date())
+        ]
         if let dayRate {
             payload["dayRate"] = dayRate
         } else {
@@ -3157,7 +3339,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         
         let emailLower = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3207,7 +3389,11 @@ class FirebaseBackend: ObservableObject {
                     "materials": permissions.materials,
                 "projects": permissions.projects,
                 "smallWorks": permissions.smallWorks,
-                "operativeMode": permissions.operativeMode
+                "operativeMode": permissions.operativeMode,
+                "annualLeaveSelfBook": permissions.annualLeaveSelfBook,
+                "weeklyReports": permissions.weeklyReports,
+                "subContractors": permissions.subContractors,
+                "siteAudit": permissions.siteAudit
             ],
             "createdAt": Timestamp(date: Date()),
             "isUsed": false
@@ -3217,6 +3403,9 @@ class FirebaseBackend: ObservableObject {
             invitationData["assignedManagerUserId"] = mid
         }
         if permissions.operativeMode, let dr = invitedOperativeDayRate {
+            invitationData["dayRate"] = dr
+        }
+        if permissions.manager, let dr = invitedManagerDayRate {
             invitationData["dayRate"] = dr
         }
         
@@ -3264,7 +3453,7 @@ class FirebaseBackend: ObservableObject {
                 permissions: permissions, // Use the permissions from the invitation
                 isSuperAdmin: false,
                 assignedManagerUserId: operativeManagerId,
-                dayRate: permissions.operativeMode ? invitedOperativeDayRate : nil
+                dayRate: permissions.operativeMode ? invitedOperativeDayRate : (permissions.manager ? invitedManagerDayRate : nil)
             )
             
             do {
@@ -3375,6 +3564,10 @@ class FirebaseBackend: ObservableObject {
                     "qualifications": newUser.permissions.qualifications,
                     "materials": newUser.permissions.materials,
                     "operativeMode": newUser.permissions.operativeMode,
+                    "annualLeaveSelfBook": newUser.permissions.annualLeaveSelfBook,
+                    "weeklyReports": newUser.permissions.weeklyReports,
+                    "subContractors": newUser.permissions.subContractors,
+                    "siteAudit": newUser.permissions.siteAudit,
                     "isSuperAdmin": newUser.isSuperAdmin
                 ]
                 if let mobileNumber = newUser.mobileNumber {
@@ -3439,7 +3632,11 @@ class FirebaseBackend: ObservableObject {
                     "materials": permissions.materials,
                     "projects": permissions.projects,
                     "smallWorks": permissions.smallWorks,
-                    "operativeMode": permissions.operativeMode
+                    "operativeMode": permissions.operativeMode,
+                    "annualLeaveSelfBook": permissions.annualLeaveSelfBook,
+                    "weeklyReports": permissions.weeklyReports,
+                    "subContractors": permissions.subContractors,
+                    "siteAudit": permissions.siteAudit
                 ]
                 
                 if permissions.operativeMode, let mid = assignedManagerUserId, !mid.isEmpty {
@@ -3486,9 +3683,7 @@ class FirebaseBackend: ObservableObject {
             You have been invited to join the Project Planner system.
             
             To set up your account and create your password, please visit:
-            https://projectplanner.us/setup-password.html?token=\(invitationId)
-            
-            Or enter this verification code manually: \(invitationId)
+            https://project-planner-f986c.web.app/setup-password.html?token=\(invitationId)
             
             Once you've set up your password, you'll be able to access the Project Planner system.
             
@@ -3660,6 +3855,9 @@ class FirebaseBackend: ObservableObject {
         if let lid = booking.locationId {
             data["locationId"] = lid.uuidString
         }
+        if let customLocationName = booking.customLocationName, !customLocationName.isEmpty {
+            data["customLocationName"] = customLocationName
+        }
         try await db.collection("organizations").document(organizationId).collection("managerSiteBookings").document(booking.id.uuidString).setData(data, merge: true)
     }
 
@@ -3675,9 +3873,10 @@ class FirebaseBackend: ObservableObject {
                   let locationType = ManagerLocationType(rawValue: locationTypeRaw) else { return nil }
             let id = UUID(uuidString: doc.documentID) ?? UUID()
             let locationId = (data["locationId"] as? String).flatMap { UUID(uuidString: $0) }
+            let customLocationName = data["customLocationName"] as? String
             let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
             let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-            return ManagerSiteBooking(id: id, userId: userId, date: date, timeSlot: timeSlot, locationType: locationType, locationId: locationId, createdAt: createdAt, updatedAt: updatedAt)
+            return ManagerSiteBooking(id: id, userId: userId, date: date, timeSlot: timeSlot, locationType: locationType, locationId: locationId, customLocationName: customLocationName, createdAt: createdAt, updatedAt: updatedAt)
         }
     }
 
@@ -3695,6 +3894,7 @@ class FirebaseBackend: ObservableObject {
             "startDate": Timestamp(date: booking.startDate),
             "endDate": Timestamp(date: booking.endDate),
             "status": booking.status.rawValue,
+            "timeSlot": booking.timeSlot.rawValue,
             "createdAt": Timestamp(date: booking.createdAt),
             "updatedAt": Timestamp(date: booking.updatedAt)
         ]
@@ -3744,6 +3944,8 @@ class FirebaseBackend: ObservableObject {
             let operativeId = (data["operativeId"] as? String).flatMap { UUID(uuidString: $0) }
             let approvedByUserId = data["approvedByUserId"] as? String
             let approvedAt = (data["approvedAt"] as? Timestamp)?.dateValue()
+            let timeSlotRaw = data["timeSlot"] as? String
+            let timeSlot = HolidayTimeSlot(rawValue: timeSlotRaw ?? "") ?? .fullDay
             let cancellationRequestedAt = (data["cancellationRequestedAt"] as? Timestamp)?.dateValue()
             let cancellationRequestedByUserId = data["cancellationRequestedByUserId"] as? String
             let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
@@ -3756,6 +3958,7 @@ class FirebaseBackend: ObservableObject {
                 startDate: startDate,
                 endDate: endDate,
                 status: status,
+                timeSlot: timeSlot,
                 approvedByUserId: approvedByUserId,
                 approvedAt: approvedAt,
                 cancellationRequestedAt: cancellationRequestedAt,
@@ -3769,6 +3972,52 @@ class FirebaseBackend: ObservableObject {
     func deleteHolidayBooking(_ booking: HolidayBooking, organizationId: String) async throws {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
         try await db.collection("organizations").document(orgId).collection("holidayBookings").document(booking.id.uuidString).delete()
+    }
+
+    func recordOperativeDayRateChange(
+        organizationId: String,
+        userId: String,
+        dayRate: Double,
+        effectiveAt: Date
+    ) async throws {
+        let payload: [String: Any] = [
+            "userId": userId,
+            "dayRate": dayRate,
+            "effectiveAt": Timestamp(date: effectiveAt),
+            "createdAt": Timestamp(date: Date())
+        ]
+        try await db.collection("organizations")
+            .document(organizationId)
+            .collection("operativeDayRateHistory")
+            .document(UUID().uuidString)
+            .setData(payload, merge: true)
+    }
+
+    func loadOperativeDayRateHistory(organizationId: String) async throws -> [String: [OperativeDayRateHistoryEntry]] {
+        let snapshot = try await db.collection("organizations")
+            .document(organizationId)
+            .collection("operativeDayRateHistory")
+            .getDocuments()
+        var mapped: [String: [OperativeDayRateHistoryEntry]] = [:]
+        for doc in snapshot.documents {
+            let data = doc.data()
+            guard let userId = data["userId"] as? String,
+                  let dayRate = data["dayRate"] as? Double,
+                  let effectiveAt = (data["effectiveAt"] as? Timestamp)?.dateValue() else { continue }
+            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+            let entry = OperativeDayRateHistoryEntry(
+                id: UUID(uuidString: doc.documentID) ?? UUID(),
+                userId: userId,
+                dayRate: dayRate,
+                effectiveAt: effectiveAt,
+                createdAt: createdAt
+            )
+            mapped[userId, default: []].append(entry)
+        }
+        for key in mapped.keys {
+            mapped[key] = mapped[key]?.sorted(by: { $0.effectiveAt < $1.effectiveAt })
+        }
+        return mapped
     }
 
     // MARK: - Data Validation & Safeguards
@@ -3915,6 +4164,10 @@ class FirebaseBackend: ObservableObject {
             "qualifications": data["qualifications"] as? Bool ?? false,
             "materials": data["materials"] as? Bool ?? false,
             "operativeMode": data["operativeMode"] as? Bool ?? false,
+            "annualLeaveSelfBook": data["annualLeaveSelfBook"] as? Bool ?? false,
+            "weeklyReports": data["weeklyReports"] as? Bool ?? false,
+            "subContractors": data["subContractors"] as? Bool ?? false,
+            "siteAudit": data["siteAudit"] as? Bool ?? true,
             "projects": data["projects"] as? Bool ?? true,
             "smallWorks": data["smallWorks"] as? Bool ?? false,
             "isSuperAdmin": data["isSuperAdmin"] as? Bool ?? false,
@@ -4016,6 +4269,9 @@ class FirebaseBackend: ObservableObject {
                                 newUserData["qualifications"] = existing["qualifications"] ?? false
                                 newUserData["materials"] = existing["materials"] ?? false
                                 newUserData["operativeMode"] = existing["operativeMode"] ?? false
+                                newUserData["annualLeaveSelfBook"] = existing["annualLeaveSelfBook"] ?? false
+                                newUserData["weeklyReports"] = existing["weeklyReports"] ?? false
+                                newUserData["subContractors"] = existing["subContractors"] ?? false
                                 newUserData["projects"] = existing["projects"] ?? true
                                 newUserData["smallWorks"] = existing["smallWorks"] ?? false
                                 newUserData["isSuperAdmin"] = existing["isSuperAdmin"] ?? false
@@ -4088,6 +4344,10 @@ class FirebaseBackend: ObservableObject {
                         "skills": data["skills"] as? Bool ?? false,
                         "qualifications": data["qualifications"] as? Bool ?? false,
                         "operativeMode": data["operativeMode"] as? Bool ?? false,
+                        "annualLeaveSelfBook": data["annualLeaveSelfBook"] as? Bool ?? false,
+                        "weeklyReports": data["weeklyReports"] as? Bool ?? false,
+                        "subContractors": data["subContractors"] as? Bool ?? false,
+                        "siteAudit": data["siteAudit"] as? Bool ?? true,
                         "projects": data["projects"] as? Bool ?? true,
                         "smallWorks": data["smallWorks"] as? Bool ?? false,
                         "isSuperAdmin": data["isSuperAdmin"] as? Bool ?? false,
@@ -4160,6 +4420,9 @@ class FirebaseBackend: ObservableObject {
                             newUserData["qualifications"] = existing["qualifications"] ?? false
                             newUserData["materials"] = existing["materials"] ?? false
                             newUserData["operativeMode"] = existing["operativeMode"] ?? false
+                            newUserData["annualLeaveSelfBook"] = existing["annualLeaveSelfBook"] ?? false
+                            newUserData["weeklyReports"] = existing["weeklyReports"] ?? false
+                            newUserData["subContractors"] = existing["subContractors"] ?? false
                             newUserData["projects"] = existing["projects"] ?? true
                             newUserData["smallWorks"] = existing["smallWorks"] ?? false
                             newUserData["isSuperAdmin"] = existing["isSuperAdmin"] ?? false
@@ -5466,6 +5729,149 @@ extension FirebaseBackend {
             "contacts": contactsArray,
             "updatedAt": Timestamp(date: Date())
         ])
+    }
+    
+    // MARK: - Subcontractors
+    
+    func saveSubcontractor(_ subcontractor: Subcontractor, organizationId: String) async throws {
+        let contactsData = subcontractor.contacts.map { contact in
+            [
+                "id": contact.id.uuidString,
+                "name": contact.name,
+                "email": contact.email,
+                "contactNumber": contact.contactNumber,
+                "position": contact.position.rawValue,
+                "createdAt": Timestamp(date: contact.createdAt)
+            ] as [String : Any]
+        }
+        
+        let data: [String: Any] = [
+            "id": subcontractor.id.uuidString,
+            "name": subcontractor.name,
+            "subcontractorType": subcontractor.subcontractorType,
+            "website": subcontractor.website ?? NSNull(),
+            "address": subcontractor.address ?? NSNull(),
+            "contacts": contactsData,
+            "createdAt": Timestamp(date: subcontractor.createdAt),
+            "updatedAt": Timestamp(date: subcontractor.updatedAt)
+        ]
+        
+        try await db.collection("organizations").document(organizationId)
+            .collection("subcontractors")
+            .document(subcontractor.id.uuidString)
+            .setData(data)
+    }
+    
+    func loadSubcontractors(organizationId: String) async throws -> [Subcontractor] {
+        let snapshot = try await db.collection("organizations").document(organizationId)
+            .collection("subcontractors")
+            .getDocuments()
+        
+        var loaded: [Subcontractor] = []
+        for doc in snapshot.documents {
+            let data = doc.data()
+            guard let idString = data["id"] as? String,
+                  let id = UUID(uuidString: idString),
+                  let name = data["name"] as? String,
+                  let subcontractorType = data["subcontractorType"] as? String,
+                  let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
+                  let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() else { continue }
+            let website = data["website"] as? String
+            let address = data["address"] as? String
+            
+            let contactsArray = data["contacts"] as? [[String: Any]] ?? []
+            let contacts: [SubcontractorContact] = contactsArray.compactMap { row in
+                guard let cidString = row["id"] as? String,
+                      let cid = UUID(uuidString: cidString),
+                      let cname = row["name"] as? String,
+                      let cemail = row["email"] as? String,
+                      let number = row["contactNumber"] as? String,
+                      let positionRaw = row["position"] as? String,
+                      let position = SubcontractorContactPosition(rawValue: positionRaw),
+                      let cCreatedAt = (row["createdAt"] as? Timestamp)?.dateValue() else { return nil }
+                return SubcontractorContact(
+                    id: cid,
+                    name: cname,
+                    email: cemail,
+                    contactNumber: number,
+                    position: position,
+                    createdAt: cCreatedAt
+                )
+            }
+            
+            loaded.append(
+                Subcontractor(
+                    id: id,
+                    name: name,
+                    subcontractorType: subcontractorType,
+                    website: website,
+                    address: address,
+                    contacts: contacts,
+                    createdAt: createdAt,
+                    updatedAt: updatedAt
+                )
+            )
+        }
+        return loaded.sorted { $0.name < $1.name }
+    }
+    
+    func saveSubcontractorBooking(_ booking: SubcontractorBooking, organizationId: String) async throws {
+        let data: [String: Any] = [
+            "id": booking.id.uuidString,
+            "subcontractorId": booking.subcontractorId.uuidString,
+            "projectId": booking.projectId.uuidString,
+            "date": Timestamp(date: booking.date),
+            "timeSlot": booking.timeSlot.rawValue,
+            "bookedBy": booking.bookedBy,
+            "status": booking.status.rawValue,
+            "createdAt": Timestamp(date: booking.createdAt),
+            "updatedAt": Timestamp(date: booking.updatedAt)
+        ]
+        
+        try await db.collection("organizations").document(organizationId)
+            .collection("subcontractorBookings")
+            .document(booking.id.uuidString)
+            .setData(data)
+    }
+    
+    func loadSubcontractorBookings(organizationId: String) async throws -> [SubcontractorBooking] {
+        let snapshot = try await db.collection("organizations").document(organizationId)
+            .collection("subcontractorBookings")
+            .getDocuments()
+        
+        var loaded: [SubcontractorBooking] = []
+        for doc in snapshot.documents {
+            let data = doc.data()
+            guard let idString = data["id"] as? String,
+                  let id = UUID(uuidString: idString),
+                  let subcontractorIdString = data["subcontractorId"] as? String,
+                  let subcontractorId = UUID(uuidString: subcontractorIdString),
+                  let projectIdString = data["projectId"] as? String,
+                  let projectId = UUID(uuidString: projectIdString),
+                  let date = (data["date"] as? Timestamp)?.dateValue(),
+                  let timeSlotRaw = data["timeSlot"] as? String,
+                  let timeSlot = TimeSlot(rawValue: timeSlotRaw),
+                  let bookedBy = data["bookedBy"] as? String,
+                  let statusRaw = data["status"] as? String,
+                  let status = BookingStatus(rawValue: statusRaw),
+                  let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
+                  let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() else { continue }
+            
+            loaded.append(
+                SubcontractorBooking(
+                    id: id,
+                    subcontractorId: subcontractorId,
+                    projectId: projectId,
+                    date: date,
+                    timeSlot: timeSlot,
+                    bookedBy: bookedBy,
+                    status: status,
+                    createdAt: createdAt,
+                    updatedAt: updatedAt
+                )
+            )
+        }
+        return loaded.sorted { $0.date < $1.date }
     }
     
     // MARK: - Email Service

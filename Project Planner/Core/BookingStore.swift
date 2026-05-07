@@ -179,8 +179,7 @@ class BookingStore: ObservableObject {
         timeSlot: TimeSlot,
         for project: Project,
         bookedBy: String,
-        notes: String? = nil,
-        notificationService: NotificationService? = nil
+        notes: String? = nil
     ) async {
         // Update updatedAt when creating
         var updatedBooking = Booking(
@@ -194,17 +193,6 @@ class BookingStore: ObservableObject {
         updatedBooking.updatedAt = Date()
         
         await addBooking(updatedBooking)
-        
-        // Send notification to the operative who was booked
-        if let notificationService = notificationService {
-            await notificationService.notifyBookingCreated(
-                bookingId: updatedBooking.id,
-                operativeId: operative.id,
-                projectName: project.siteName,
-                date: date,
-                createdBy: bookedBy
-            )
-        }
     }
     
     func bookOperatives(

@@ -153,10 +153,13 @@ struct OrgSitesMapView: View {
         let targetDate = Calendar.current.startOfDay(for: selectedDate)
         let center = await resolveDefaultCenter()
         await MainActor.run {
-            region = MKCoordinateRegion(
-                center: center,
-                span: defaultMapSpan
-            )
+            // Keep current focus while user is interacting with a selected pin.
+            if selectedPinId == nil {
+                region = MKCoordinateRegion(
+                    center: center,
+                    span: defaultMapSpan
+                )
+            }
         }
 
         let dayBookings = bookingStore.bookings.filter {
@@ -295,6 +298,13 @@ private struct OSMMapView: UIViewRepresentable {
     @Binding var region: MKCoordinateRegion
     let pins: [SiteMapPin]
     @Binding var selectedPinId: String?
+    
+    private func pinSignature(for pins: [SiteMapPin]) -> String {
+        pins
+            .sorted(by: { $0.id < $1.id })
+            .map { "\($0.id)|\($0.coordinate.latitude)|\($0.coordinate.longitude)|\($0.pinKind.displayName)" }
+            .joined(separator: ";")
+    }
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView(frame: .zero)
@@ -320,26 +330,31 @@ private struct OSMMapView: UIViewRepresentable {
 
     func updateUIView(_ map: MKMapView, context: Context) {
         if !context.coordinator.isRegionApproximatelyEqual(lhs: map.region, rhs: region) {
-            map.setRegion(region, animated: true)
+            map.setRegion(region, animated: false)
         }
 
-        let existing = map.annotations.compactMap { $0 as? SitePinAnnotation }
-        map.removeAnnotations(existing)
+        let currentSignature = pinSignature(for: pins)
+        if context.coordinator.lastPinsSignature != currentSignature {
+            context.coordinator.lastPinsSignature = currentSignature
+            let existing = map.annotations.compactMap { $0 as? SitePinAnnotation }
+            map.removeAnnotations(existing)
 
-        let annotations = pins.map { pin in
-            SitePinAnnotation(
-                id: pin.id,
-                coordinate: pin.coordinate,
-                title: "\(pin.jobNumber) \(pin.siteName)",
-                subtitle: pin.clientName,
-                kind: pin.pinKind,
-                coordinateSpanOnSelect: pin.coordinateSpanOnSelect
-            )
+            let annotations = pins.map { pin in
+                SitePinAnnotation(
+                    id: pin.id,
+                    coordinate: pin.coordinate,
+                    title: "\(pin.jobNumber) \(pin.siteName)",
+                    subtitle: pin.clientName,
+                    kind: pin.pinKind,
+                    coordinateSpanOnSelect: pin.coordinateSpanOnSelect
+                )
+            }
+            map.addAnnotations(annotations)
         }
-        map.addAnnotations(annotations)
 
         if let selectedPinId,
-           let annotation = annotations.first(where: { $0.id == selectedPinId }) {
+           let annotation = map.annotations.compactMap({ $0 as? SitePinAnnotation }).first(where: { $0.id == selectedPinId }),
+           map.selectedAnnotations.compactMap({ $0 as? SitePinAnnotation }).first(where: { $0.id == selectedPinId }) == nil {
             map.selectAnnotation(annotation, animated: true)
         }
     }
@@ -351,6 +366,7 @@ private struct OSMMapView: UIViewRepresentable {
     final class Coordinator: NSObject, MKMapViewDelegate {
         @Binding var region: MKCoordinateRegion
         @Binding var selectedPinId: String?
+        var lastPinsSignature: String = ""
 
         init(region: Binding<MKCoordinateRegion>, selectedPinId: Binding<String?>) {
             self._region = region
@@ -377,6 +393,13 @@ private struct OSMMapView: UIViewRepresentable {
             )
             region = focusedRegion
             mapView.setRegion(focusedRegion, animated: true)
+        }
+        
+        func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
+            guard let selected = view.annotation as? SitePinAnnotation else { return }
+            if selectedPinId == selected.id {
+                selectedPinId = nil
+            }
         }
 
         func isRegionApproximatelyEqual(lhs: MKCoordinateRegion, rhs: MKCoordinateRegion) -> Bool {

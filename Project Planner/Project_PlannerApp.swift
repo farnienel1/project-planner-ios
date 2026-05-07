@@ -86,6 +86,7 @@ struct Project_PlannerApp: App {
     @StateObject private var userStore = UserStore()
     @StateObject private var taskStore = ProjectTaskStore()
     @StateObject private var holidayStore = HolidayStore()
+    @StateObject private var subcontractorStore = SubcontractorStore()
     @StateObject private var appSettings = AppSettingsStore()
     @StateObject private var notificationService = NotificationService()
     
@@ -131,6 +132,7 @@ struct Project_PlannerApp: App {
                                 .environmentObject(userStore)
                                 .environmentObject(taskStore)
                                 .environmentObject(holidayStore)
+                                .environmentObject(subcontractorStore)
                                 .environmentObject(appSettings)
                                 .environmentObject(notificationService)
                                 .appColorScheme(appSettings.settings.colorScheme)
@@ -174,6 +176,7 @@ struct Project_PlannerApp: App {
                 
                 taskStore.setFirebaseBackend(firebaseBackend)
                 holidayStore.setFirebaseBackend(firebaseBackend)
+                subcontractorStore.setFirebaseBackend(firebaseBackend)
 
                 notificationService.setFirebaseBackend(firebaseBackend)
                 notificationService.setUserStore(userStore)
@@ -218,6 +221,9 @@ struct Project_PlannerApp: App {
                         bookingStore.loadData()
                         managerScheduleStore.loadData()
                         Task {
+                            await subcontractorStore.loadData()
+                        }
+                        Task {
                             await taskStore.loadData()
                         }
                         Task {
@@ -241,6 +247,9 @@ struct Project_PlannerApp: App {
                                 operativeStore.loadData()
                                 bookingStore.loadData()
                                 managerScheduleStore.loadData()
+                                Task {
+                                    await subcontractorStore.loadData()
+                                }
                                 Task {
                                     await taskStore.loadData()
                                 }

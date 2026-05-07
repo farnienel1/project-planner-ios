@@ -72,7 +72,8 @@ class UserStore: ObservableObject {
                 materials: true,
                 projects: true,
                 smallWorks: true,
-                operativeMode: false
+                operativeMode: false,
+                siteAudit: true
             )
             u.role = .admin
         case .admin:
@@ -86,7 +87,8 @@ class UserStore: ObservableObject {
                 materials: true,
                 projects: true,
                 smallWorks: true,
-                operativeMode: false
+                operativeMode: false,
+                siteAudit: true
             )
             u.role = .admin
         case .manager:
@@ -100,7 +102,8 @@ class UserStore: ObservableObject {
                 materials: true,
                 projects: true,
                 smallWorks: true,
-                operativeMode: false
+                operativeMode: false,
+                siteAudit: true
             )
             u.role = .manager
         case .operative:
@@ -114,7 +117,8 @@ class UserStore: ObservableObject {
                 materials: false,
                 projects: true,
                 smallWorks: true,
-                operativeMode: true
+                operativeMode: true,
+                siteAudit: true
             )
             u.role = .operative
         }
@@ -353,8 +357,19 @@ class UserStore: ObservableObject {
     }
     
     func canEditProjects() -> Bool {
-        if isOperativeMode() { return false }
-        return hasAdminAccess() || hasPermission { $0.permissions.manager }
+        guard let currentUser = displayUser else { return false }
+        if currentUser.permissions.operativeMode { return false }
+        if currentUser.isSuperAdmin || currentUser.permissions.adminAccess { return true }
+        guard currentUser.permissions.manager else { return false }
+        return currentUser.permissions.projects || currentUser.permissions.smallWorks
+    }
+    
+    func canViewSiteAudit() -> Bool {
+        guard let currentUser = displayUser else { return false }
+        if currentUser.permissions.operativeMode {
+            return currentUser.permissions.siteAudit
+        }
+        return true
     }
     
     func canEditOperatives() -> Bool {
@@ -392,6 +407,15 @@ class UserStore: ObservableObject {
     func canBookWork() -> Bool {
         if isOperativeMode() { return false }
         return true
+    }
+    
+    func canManageSubcontractors() -> Bool {
+        if isOperativeMode() { return false }
+        guard let currentUser = displayUser else { return false }
+        if currentUser.isSuperAdmin || currentUser.permissions.adminAccess || currentUser.role == .admin {
+            return true
+        }
+        return currentUser.permissions.manager && currentUser.permissions.subContractors
     }
     
     /// Super admins, admins, and managers may set whether a site audit is visible to operative-mode users.
@@ -515,7 +539,7 @@ class UserStore: ObservableObject {
              // MARK: - User Invitation
              
     /// For operative invitations, pass the line manager's Firebase Auth UID (`users` document id).
-    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil) async -> Bool {
+    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil) async -> Bool {
         print("🔥🔥🔥 DEBUG: inviteUser called with firstName: \(firstName), surname: \(surname), email: \(email)")
         
         errorMessage = nil
@@ -659,7 +683,8 @@ class UserStore: ObservableObject {
                 mobileNumber: mobileNumber,
                 permissions: permissions,
                 assignedManagerUserId: assignedManagerUserId,
-                invitedOperativeDayRate: invitedOperativeDayRate
+                invitedOperativeDayRate: invitedOperativeDayRate,
+                invitedManagerDayRate: invitedManagerDayRate
             )
             print("🔥🔥🔥 DEBUG: createUserInvitation succeeded")
             
@@ -1084,11 +1109,35 @@ class UserStore: ObservableObject {
                 updatedUser.dayRate = dayRate
 
                 do {
+                    let previousDayRate = organizationUsers[index].dayRate
+                    let dayRateChanged = previousDayRate != dayRate
                     try await firebaseBackend.updateOperativeProfileMetadata(
                         userId: updatedUser.id,
                         assignedManagerUserId: assignedManagerUserId,
                         dayRate: dayRate
                     )
+                    if dayRateChanged,
+                       let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                        if let previousDayRate {
+                            let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? [:]
+                            if history[updatedUser.id]?.isEmpty ?? true {
+                                try? await firebaseBackend.recordOperativeDayRateChange(
+                                    organizationId: orgId,
+                                    userId: updatedUser.id,
+                                    dayRate: previousDayRate,
+                                    effectiveAt: updatedUser.createdAt
+                                )
+                            }
+                        }
+                        if let newRate = dayRate {
+                            try? await firebaseBackend.recordOperativeDayRateChange(
+                                organizationId: orgId,
+                                userId: updatedUser.id,
+                                dayRate: newRate,
+                                effectiveAt: Date()
+                            )
+                        }
+                    }
                     clearOperativeProfileOverride(for: updatedUser.id)
                     organizationUsers[index] = updatedUser
                     if let operativeStore {
@@ -1135,6 +1184,26 @@ class UserStore: ObservableObject {
                     }
                 }
              }
+    
+    func updateManagerDayRate(for user: AppUser, dayRate: Double?) async -> Bool {
+        guard let firebaseBackend = firebaseBackend else { return false }
+        guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
+        guard organizationUsers[index].permissions.manager || organizationUsers[index].role == .manager else { return false }
+        
+        var updatedUser = organizationUsers[index]
+        updatedUser.dayRate = dayRate
+        
+        do {
+            try await firebaseBackend.updateUserDayRateMetadata(userId: updatedUser.id, dayRate: dayRate)
+            organizationUsers[index] = updatedUser
+            await loadOrganizationUsers()
+            return true
+        } catch {
+            errorMessage = "Failed to update manager day rate: \(error.localizedDescription)"
+            print("🔥🔥🔥 DEBUG: Error updating manager day rate: \(error)")
+            return false
+        }
+    }
              
              // MARK: - User Active Status
              

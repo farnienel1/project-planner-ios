@@ -37,6 +37,7 @@ struct ContentView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var taskStore: ProjectTaskStore
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
 
@@ -48,6 +49,11 @@ struct ContentView: View {
     @State private var holidaySheetShowRequests = false
     @State private var showingBookingToast = false
     @State private var bookingToastText: String?
+    @State private var isReorderingTabs = false
+    @State private var orderedMovableTabTags: [Int] = []
+    @State private var jiggleTabs = false
+    @State private var jiggleTask: Task<Void, Never>?
+    @State private var tabButtonFrames: [Int: CGRect] = [:]
     
     /// Drives TabView `.id` so the page controller is recreated when role preview adds/removes tabs (avoids UIPageViewController deadlock on invalid selection).
     private var tabViewIdentity: String {
@@ -56,6 +62,7 @@ struct ContentView: View {
         if userStore.canViewProjects() { keys.append(contentsOf: ["1", "2"]) }
         if userStore.canViewOperatives() { keys.append("3") }
         if userStore.hasAdminAccess() { keys.append(contentsOf: ["4", "7"]) }
+        if userStore.canManageSubcontractors() { keys.append("9") }
         let preset = userStore.roleTestingPreset.map(\.rawValue) ?? "none"
         return preset + "|" + keys.sorted().joined(separator: ",")
     }
@@ -97,8 +104,13 @@ struct ContentView: View {
             withTransaction(transaction) {
                 selectedTab = 0
             }
+            syncMovableTabOrderWithCurrentPermissions()
+        }
+        .onChange(of: firebaseBackend.currentUser?.uid) { _, _ in
+            syncMovableTabOrderWithCurrentPermissions()
         }
         .onAppear {
+            syncMovableTabOrderWithCurrentPermissions()
             // Connect Firebase backend to stores first
             print("🔥🔥🔥 DEBUG: Connecting Firebase backend to stores in ContentView...")
             projectStore.setFirebaseBackend(firebaseBackend)
@@ -193,6 +205,26 @@ struct ContentView: View {
                 showingHolidaySheet = true
             }
         }
+        .onChange(of: isReorderingTabs) { _, newValue in
+            if newValue {
+                showMoreMenu = true
+                jiggleTask?.cancel()
+                jiggleTask = Task {
+                    while !Task.isCancelled {
+                        await MainActor.run {
+                            withAnimation(.easeInOut(duration: 0.1)) {
+                                jiggleTabs.toggle()
+                            }
+                        }
+                        try? await Task.sleep(nanoseconds: 120_000_000)
+                    }
+                }
+            } else {
+                jiggleTask?.cancel()
+                jiggleTask = nil
+                jiggleTabs = false
+            }
+        }
         .sheet(isPresented: $showingHolidaySheet) {
             HolidayView(showRequests: holidaySheetShowRequests)
                 .environmentObject(holidayStore)
@@ -234,6 +266,7 @@ struct ContentView: View {
             group.addTask { await appSettings.loadSettings() }
             group.addTask { await taskStore.loadData() }
             group.addTask { await holidayStore.loadData() }
+            group.addTask { await subcontractorStore.loadData() }
         }
         await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
         await notificationService.refreshDailyMaterialCutOffReminder()
@@ -275,6 +308,7 @@ struct ContentView: View {
             if userStore.hasAdminAccess() {
                 NavigationStack {
                     ManagersView()
+                        .toolbar(.hidden, for: .navigationBar)
                 }
                 .tag(4)
                 .id(4) // Add ID to force reset when tab changes
@@ -301,32 +335,71 @@ struct ContentView: View {
                 .tag(7)
                 .id(7) // Add ID to force reset when tab changes
             }
+            
+            if userStore.canManageSubcontractors() {
+                NavigationStack {
+                    SubcontractorsView()
+                        .environmentObject(subcontractorStore)
+                }
+                .tag(9)
+                .id(9)
+            }
 
             NavigationStack {
                 HolidayView(showRequests: false)
+                    .toolbar(.hidden, for: .navigationBar)
             }
             .tag(8)
             .id(8)
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
+        // Use the standard tab style (with hidden system tab bar) so horizontal swipe between tabs is disabled.
+        .tabViewStyle(.automatic)
         .toolbar(.hidden, for: .tabBar)
         .id(tabViewIdentity)
     }
     
     @ViewBuilder
     private var bottomBar: some View {
+        let topSecondary = Array(secondaryTabItems.prefix(2))
+        let bottomSecondary = Array(secondaryTabItems.dropFirst(2))
+        
         VStack(spacing: 8) {
-            if showMoreMenu, !secondaryTabItems.isEmpty {
-                tabRow(for: secondaryTabItems, isSecondary: true)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            if isReorderingTabs {
+                HStack {
+                    Spacer()
+                    Text("Drag icons to reorder")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.theme.primary(for: appSettings.settings.colorScheme).opacity(0.15))
+                        .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
+                        .clipShape(Capsule())
+                }
+                .padding(.horizontal, 12)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
             
-            tabRow(for: primaryTabItems, isSecondary: false)
+            if (showMoreMenu || isReorderingTabs), !secondaryTabItems.isEmpty {
+                if !topSecondary.isEmpty {
+                    tabRow(for: topSecondary, isSecondary: false, showsMoreToggle: false)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                if !bottomSecondary.isEmpty {
+                    tabRow(for: bottomSecondary, isSecondary: true)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            
+            tabRow(for: primaryTabItems, isSecondary: false, showsMoreToggle: true)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
+        .coordinateSpace(name: "tabReorderArea")
+        .onPreferenceChange(TabFramePreferenceKey.self) { frames in
+            tabButtonFrames = frames
+        }
         .background(
             Color(.systemBackground).opacity(0.9)
                 .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: -2)
@@ -367,6 +440,13 @@ struct ContentView: View {
 }
 
 extension ContentView {
+    private struct TabFramePreferenceKey: PreferenceKey {
+        static var defaultValue: [Int: CGRect] = [:]
+        static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
+            value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+        }
+    }
+
     private struct TabButtonConfig: Identifiable {
         let tag: Int
         let title: String
@@ -378,70 +458,54 @@ extension ContentView {
     }
     
     private var primaryTabItems: [TabButtonConfig] {
+        let defaultPrimaryMovableCount = defaultPrimaryTabItems.count - 1
+        let movable = orderedMovableTabItems
+        let primaryMovable = Array(movable.prefix(max(defaultPrimaryMovableCount, 0)))
+        
         var items: [TabButtonConfig] = [
             TabButtonConfig(tag: 0, title: "Home", icon: "house.fill", multilineTitle: false, requiresPermission: true)
         ]
-        
-        // Operative mode: Only show Home, Projects, Small Works, Settings
-        if userStore.isOperativeMode() {
-            if userStore.canViewProjects() {
-                items.append(TabButtonConfig(tag: 1, title: "Projects", icon: "folder.fill", multilineTitle: false, requiresPermission: true))
-                items.append(TabButtonConfig(tag: 2, title: "Small\nWorks", icon: "hammer.fill", multilineTitle: true, requiresPermission: true))
-            }
-        } else {
-            // Full mode: Show all tabs
-            if userStore.canViewProjects() {
-                items.append(TabButtonConfig(tag: 1, title: "Projects", icon: "folder.fill", multilineTitle: false, requiresPermission: true))
-                items.append(TabButtonConfig(tag: 2, title: "Small\nWorks", icon: "hammer.fill", multilineTitle: true, requiresPermission: true))
-            }
-            
-            if userStore.canViewOperatives() {
-                items.append(TabButtonConfig(tag: 3, title: "Operatives", icon: "person.3.fill", multilineTitle: false, requiresPermission: true))
-            }
-        }
-        
+        items.append(contentsOf: primaryMovable)
         return items
     }
     
     private var secondaryTabItems: [TabButtonConfig] {
-        var items: [TabButtonConfig] = []
-        
-        // Operative mode: Holiday + Settings
-        if userStore.isOperativeMode() {
-            items.append(TabButtonConfig(tag: 8, title: "Holiday", icon: "sun.max.fill", multilineTitle: false, requiresPermission: true))
-            items.append(TabButtonConfig(tag: 5, title: "Settings", icon: "gearshape.fill", multilineTitle: false, requiresPermission: true))
-        } else {
-            // Full mode: Show all secondary tabs
-            items.append(TabButtonConfig(tag: 8, title: "Holiday", icon: "sun.max.fill", multilineTitle: false, requiresPermission: true))
-            if userStore.canViewManagers() {
-                items.append(TabButtonConfig(tag: 4, title: "Managers", icon: "person.badge.key.fill", multilineTitle: false, requiresPermission: true))
-            }
-            
-            // Add Wholesalers for admins/managers
-            if userStore.hasAdminAccess() || userStore.canViewManagers() {
-                items.append(TabButtonConfig(tag: 7, title: "Wholesalers", icon: "building.2.fill", multilineTitle: false, requiresPermission: true))
-            }
-            
-            items.append(TabButtonConfig(tag: 5, title: "Settings", icon: "gearshape.fill", multilineTitle: false, requiresPermission: true))
-            
-            items.append(TabButtonConfig(tag: 6, title: "Help", icon: "questionmark.circle.fill", multilineTitle: false, requiresPermission: false))
-        }
-        
-        return items
+        let defaultPrimaryMovableCount = defaultPrimaryTabItems.count - 1
+        let movable = orderedMovableTabItems
+        return Array(movable.dropFirst(max(defaultPrimaryMovableCount, 0)))
     }
     
     @ViewBuilder
-    private func tabRow(for items: [TabButtonConfig], isSecondary: Bool) -> some View {
+    private func tabRow(for items: [TabButtonConfig], isSecondary: Bool, showsMoreToggle: Bool = true) -> some View {
         HStack(spacing: 12) {
             ForEach(items) { item in
                 tabButton(for: item)
             }
             
-            if !isSecondary {
-                if secondaryTabItems.isEmpty {
+            if isSecondary {
+                Button {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+                        isReorderingTabs.toggle()
+                    }
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: isReorderingTabs ? "checkmark.circle.fill" : "pencil.circle")
+                            .font(.title3)
+                        Text(isReorderingTabs ? "Done" : "Edit")
+                            .font(.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .foregroundColor(isReorderingTabs ? Color.theme.primary(for: appSettings.settings.colorScheme) : .primary)
+                }
+            } else {
+                if !showsMoreToggle || secondaryTabItems.isEmpty {
                     Spacer(minLength: 0)
                 } else {
                     Button {
+                        if isReorderingTabs {
+                            return
+                        }
                         withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
                             showMoreMenu.toggle()
                         }
@@ -472,7 +536,11 @@ extension ContentView {
     }
     
     private func tabButton(for config: TabButtonConfig) -> some View {
-        Button {
+        let isMovable = config.tag != 0
+        return Button {
+            if isReorderingTabs && isMovable {
+                return
+            }
             selectTab(config.tag)
         } label: {
             VStack(spacing: 3) {
@@ -491,6 +559,43 @@ extension ContentView {
                     .fill(selectedTab == config.tag ? Color.theme.primary(for: appSettings.settings.colorScheme).opacity(0.18) : Color.clear)
                     .blur(radius: selectedTab == config.tag ? 0 : 0)
             )
+            .rotationEffect(isReorderingTabs && isMovable ? .degrees(jiggleTabs ? 1.4 : -1.4) : .degrees(0))
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: TabFramePreferenceKey.self,
+                        value: [config.tag: geo.frame(in: .named("tabReorderArea"))]
+                    )
+                }
+            )
+        }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 6, coordinateSpace: .named("tabReorderArea"))
+                .onChanged { value in
+                    guard isReorderingTabs, isMovable else { return }
+                    guard let destinationTag = tabButtonFrames.first(where: { _, frame in
+                        frame.contains(value.location)
+                    })?.key else { return }
+                    swapMovableTabs(config.tag, destinationTag)
+                }
+                .onEnded { _ in
+                    // no-op
+                }
+        )
+    }
+
+    private func swapMovableTabs(_ sourceTag: Int, _ destinationTag: Int) {
+        guard sourceTag != destinationTag,
+              let sourceIndex = orderedMovableTabTags.firstIndex(of: sourceTag),
+              let destinationIndex = orderedMovableTabTags.firstIndex(of: destinationTag) else {
+            return
+        }
+        
+        var updated = orderedMovableTabTags
+        updated.swapAt(sourceIndex, destinationIndex)
+        if updated != orderedMovableTabTags {
+            orderedMovableTabTags = updated
+            persistMovableTabOrder(updated)
         }
     }
     
@@ -553,6 +658,103 @@ extension ContentView {
             selectTab(0)
         }
     }
+    
+    private var defaultPrimaryTabItems: [TabButtonConfig] {
+        var items: [TabButtonConfig] = [
+            TabButtonConfig(tag: 0, title: "Home", icon: "house.fill", multilineTitle: false, requiresPermission: true)
+        ]
+        
+        if userStore.canViewProjects() {
+            items.append(TabButtonConfig(tag: 1, title: "Projects", icon: "folder.fill", multilineTitle: false, requiresPermission: true))
+            items.append(TabButtonConfig(tag: 2, title: "Small\nWorks", icon: "hammer.fill", multilineTitle: true, requiresPermission: true))
+        }
+        
+        if !userStore.isOperativeMode(), userStore.canViewOperatives() {
+            items.append(TabButtonConfig(tag: 3, title: "Operatives", icon: "person.3.fill", multilineTitle: false, requiresPermission: true))
+        }
+        
+        return items
+    }
+    
+    private var defaultSecondaryTabItems: [TabButtonConfig] {
+        var items: [TabButtonConfig] = [
+            TabButtonConfig(tag: 8, title: "Holiday", icon: "sun.max.fill", multilineTitle: false, requiresPermission: true)
+        ]
+        
+        if userStore.isOperativeMode() {
+            items.append(TabButtonConfig(tag: 5, title: "Settings", icon: "gearshape.fill", multilineTitle: false, requiresPermission: true))
+            return items
+        }
+        
+        if userStore.canViewManagers() {
+            items.append(TabButtonConfig(tag: 4, title: "Managers", icon: "person.badge.key.fill", multilineTitle: false, requiresPermission: true))
+        }
+        
+        if userStore.hasAdminAccess() || userStore.canViewManagers() {
+            items.append(TabButtonConfig(tag: 7, title: "Wholesalers", icon: "building.2.fill", multilineTitle: false, requiresPermission: true))
+            if userStore.canManageSubcontractors() {
+                items.append(TabButtonConfig(tag: 9, title: "Sub Contractors", icon: "person.2.badge.gearshape.fill", multilineTitle: true, requiresPermission: true))
+            }
+        }
+        
+        items.append(TabButtonConfig(tag: 5, title: "Settings", icon: "gearshape.fill", multilineTitle: false, requiresPermission: true))
+        items.append(TabButtonConfig(tag: 6, title: "Help", icon: "questionmark.circle.fill", multilineTitle: false, requiresPermission: false))
+        return items
+    }
+    
+    private var defaultMovableTabItems: [TabButtonConfig] {
+        let combined = defaultPrimaryTabItems.dropFirst() + defaultSecondaryTabItems
+        var seen: Set<Int> = []
+        var items: [TabButtonConfig] = []
+        for item in combined where !seen.contains(item.tag) {
+            seen.insert(item.tag)
+            items.append(item)
+        }
+        return items
+    }
+    
+    private var orderedMovableTabItems: [TabButtonConfig] {
+        let defaults = defaultMovableTabItems
+        guard !orderedMovableTabTags.isEmpty else { return defaults }
+        
+        let map = Dictionary(uniqueKeysWithValues: defaults.map { ($0.tag, $0) })
+        return orderedMovableTabTags.compactMap { map[$0] }
+    }
+    
+    private var movableTabOrderStorageKey: String {
+        let uid = firebaseBackend.currentUser?.uid ?? "anonymous"
+        return "bottomBarMovableTabOrder.\(uid)"
+    }
+    
+    private func loadPersistedMovableTabOrder() -> [Int] {
+        let raw = UserDefaults.standard.string(forKey: movableTabOrderStorageKey) ?? ""
+        return raw.split(separator: ",").compactMap { Int($0) }
+    }
+    
+    private func persistMovableTabOrder(_ tags: [Int]) {
+        let raw = tags.map(String.init).joined(separator: ",")
+        UserDefaults.standard.set(raw, forKey: movableTabOrderStorageKey)
+    }
+    
+    private func syncMovableTabOrderWithCurrentPermissions() {
+        let defaults = defaultMovableTabItems.map(\.tag)
+        guard !defaults.isEmpty else {
+            orderedMovableTabTags = []
+            UserDefaults.standard.removeObject(forKey: movableTabOrderStorageKey)
+            return
+        }
+        
+        let stored = loadPersistedMovableTabOrder()
+        
+        var filtered: [Int] = stored.filter { defaults.contains($0) }
+        for tag in defaults where !filtered.contains(tag) {
+            filtered.append(tag)
+        }
+        
+        orderedMovableTabTags = filtered
+        persistMovableTabOrder(filtered)
+    }
+    
 }
 
 #Preview {
@@ -561,5 +763,6 @@ extension ContentView {
         .environmentObject(ProjectStore())
         .environmentObject(OperativeStore())
         .environmentObject(BookingStore())
+        .environmentObject(SubcontractorStore())
         .environmentObject(AppSettingsStore())
 }

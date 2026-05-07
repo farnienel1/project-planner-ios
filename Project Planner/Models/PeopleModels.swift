@@ -77,6 +77,7 @@ struct Operative: Identifiable, Codable {
     var skills: Set<String>
     var qualifications: Set<Qualification>
     var qualificationExpiryDates: [UUID: Date]
+    var qualificationCertificateURLs: [UUID: String]
     var isActive: Bool
     var hourlyRate: Double?
     /// Preferred day-rate field (distinct from legacy `hourlyRate` where both exist).
@@ -101,6 +102,7 @@ struct Operative: Identifiable, Codable {
         skills: Set<String> = [],
         qualifications: [Qualification] = [],
         qualificationExpiryDates: [UUID: Date] = [:],
+        qualificationCertificateURLs: [UUID: String] = [:],
         isActive: Bool = true,
         hourlyRate: Double? = nil,
         dayRate: Double? = nil,
@@ -122,6 +124,7 @@ struct Operative: Identifiable, Codable {
         }
         self.qualifications = Set(qualDict.values)
         self.qualificationExpiryDates = qualificationExpiryDates
+        self.qualificationCertificateURLs = qualificationCertificateURLs
         self.isActive = isActive
         self.hourlyRate = hourlyRate
         self.dayRate = dayRate
@@ -141,6 +144,7 @@ struct Operative: Identifiable, Codable {
         skills: Set<String> = [],
         qualifications: [Qualification] = [],
         qualificationExpiryDates: [UUID: Date] = [:],
+        qualificationCertificateURLs: [UUID: String] = [:],
         isActive: Bool = true,
         hourlyRate: Double? = nil,
         dayRate: Double? = nil,
@@ -163,6 +167,7 @@ struct Operative: Identifiable, Codable {
         }
         self.qualifications = Set(qualDict.values)
         self.qualificationExpiryDates = qualificationExpiryDates
+        self.qualificationCertificateURLs = qualificationCertificateURLs
         self.isActive = isActive
         self.hourlyRate = hourlyRate
         self.dayRate = dayRate

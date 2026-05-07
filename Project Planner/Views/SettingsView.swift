@@ -116,7 +116,7 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
+            ToolbarItem(placement: .topBarLeading) {
                 Button(action: {
                     NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                 }) {

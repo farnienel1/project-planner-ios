@@ -84,19 +84,29 @@ private struct SiteAuditProjectAccess {
         operativeStore: OperativeStore
     ) -> [Project] {
         let all = projectStore.projects + projectStore.smallWorks
-        guard userStore.isOperativeMode() else { return all }
+        if !userStore.canViewSiteAudit() {
+            return []
+        }
+        guard userStore.isOperativeMode() else {
+            if let currentUser = userStore.currentUser,
+               !currentUser.isSuperAdmin,
+               !currentUser.permissions.adminAccess,
+               currentUser.permissions.manager {
+                return all.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
+            }
+            return all
+        }
 
         guard let email = userStore.currentUser?.email.lowercased(),
-              let operative = operativeStore.allOperatives.first(where: { $0.email.lowercased() == email }) else {
-            // Fail-safe: never hide everything for operatives if linkage data is temporarily unavailable.
-            return all
+              let operative = operativeStore.allOperatives.first(where: { $0.email.lowercased() == email }),
+              let currentUserId = userStore.currentUser?.id else {
+            return []
         }
 
         let assigned = Set(bookingStore.bookings.filter {
             $0.operativeId == operative.id && ($0.status == .confirmed || $0.status == .tentative)
         }.map(\.projectId))
-        let filtered = all.filter { assigned.contains($0.id) }
-        return filtered.isEmpty ? all : filtered
+        return all.filter { assigned.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId) }
     }
 }
 
@@ -716,6 +726,7 @@ struct SiteAuditCreateFlowView: View {
             }
 
             var savedItems: [SiteAuditItem] = []
+            var uploadFailures = 0
             for draft in drafts {
                 var remoteURL: String?
                 if let image = draft.image {
@@ -727,9 +738,10 @@ struct SiteAuditCreateFlowView: View {
                             imageName: "site_audit_item_\(UUID().uuidString)"
                         )
                     } catch {
-                        isSubmitting = false
-                        errorMessage = "Photo upload failed: \(error.localizedDescription)"
-                        return
+                        // Do not block submit/PDF generation when cloud photo upload is denied.
+                        // Keep local image for PDF output and save the audit item without remote URL.
+                        uploadFailures += 1
+                        remoteURL = nil
                     }
                 }
                 savedItems.append(SiteAuditItem(
@@ -765,14 +777,34 @@ struct SiteAuditCreateFlowView: View {
 
             do {
                 try await firebaseBackend.saveSiteAudit(audit, organizationId: orgId)
-                let pdfURL = SiteAuditPDFBuilder.makePDF(audit: audit, localItems: drafts)
+                let logoImage = await loadOrganizationLogoImage()
+                let pdfURL = SiteAuditPDFBuilder.makePDF(audit: audit, localItems: drafts, organizationName: firebaseBackend.currentOrganization?.name, logoImage: logoImage)
                 submitSuccessPDFURL = pdfURL
                 isSubmitting = false
                 showingSubmitSuccess = true
+                if uploadFailures > 0 {
+                    errorMessage = "Saved successfully. \(uploadFailures) photo\(uploadFailures == 1 ? "" : "s") could not be uploaded to cloud storage, but they are included in this PDF."
+                } else {
+                    errorMessage = nil
+                }
             } catch {
                 isSubmitting = false
                 errorMessage = "Submit failed: \(error.localizedDescription)"
             }
+        }
+    }
+
+    private func loadOrganizationLogoImage() async -> UIImage? {
+        guard let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
+              let url = URL(string: logoURL),
+              url.scheme?.hasPrefix("http") == true else {
+            return nil
+        }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            return UIImage(data: data)
+        } catch {
+            return nil
         }
     }
 }
@@ -1035,7 +1067,7 @@ private enum SiteAuditMediaProcessor {
 }
 
 private enum SiteAuditPDFBuilder {
-    static func makePDF(audit: SiteAudit, localItems: [SiteAuditDraftItem]) -> URL? {
+    static func makePDF(audit: SiteAudit, localItems: [SiteAuditDraftItem], organizationName: String?, logoImage: UIImage?) -> URL? {
         let name = "SiteAudit-\(audit.projectJobNumber)-\(Int(Date().timeIntervalSince1970)).pdf"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         let bounds = CGRect(x: 0, y: 0, width: 595, height: 842)
@@ -1048,7 +1080,17 @@ private enum SiteAuditPDFBuilder {
                 let textAttrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 12)]
                 let subtitleAttrs: [NSAttributedString.Key: Any] = [.font: UIFont.boldSystemFont(ofSize: 13)]
                 "SITE AUDIT REPORT".draw(at: CGPoint(x: 24, y: y), withAttributes: titleAttrs)
+                if let logoImage {
+                    let logoBox = CGRect(x: 455, y: 20, width: 115, height: 48)
+                    if let prepared = compressedImageForPDF(logoImage, maxWidth: 460) {
+                        prepared.draw(in: aspectFitRect(for: prepared.size, in: logoBox))
+                    }
+                }
                 y += 30
+                if let organizationName, !organizationName.isEmpty {
+                    "Organisation: \(organizationName)".draw(at: CGPoint(x: 24, y: y), withAttributes: textAttrs)
+                    y += 16
+                }
                 "Type: \(audit.type.rawValue)".draw(at: CGPoint(x: 24, y: y), withAttributes: textAttrs); y += 16
                 "Project: \(audit.projectJobNumber) \(audit.projectName)".draw(at: CGPoint(x: 24, y: y), withAttributes: textAttrs); y += 16
                 "Author: \(audit.authorName)".draw(at: CGPoint(x: 24, y: y), withAttributes: textAttrs); y += 16
@@ -1062,7 +1104,7 @@ private enum SiteAuditPDFBuilder {
                     "Comments: \(item.comments.isEmpty ? "-" : item.comments)".draw(at: CGPoint(x: 30, y: y), withAttributes: textAttrs); y += 14
                     "Annotations: \(item.annotations.isEmpty ? "-" : item.annotations)".draw(at: CGPoint(x: 30, y: y), withAttributes: textAttrs); y += 14
                     if let image = localItems[safe: idx]?.image {
-                        image.draw(in: CGRect(x: 30, y: y + 6, width: 180, height: 120))
+                        compressedImageForPDF(image, maxWidth: 900)?.draw(in: CGRect(x: 30, y: y + 6, width: 180, height: 120))
                         y += 132
                     }
                     y += 10
@@ -1073,6 +1115,34 @@ private enum SiteAuditPDFBuilder {
             print("PDF generation error: \(error.localizedDescription)")
             return nil
         }
+    }
+
+    private static func compressedImageForPDF(_ image: UIImage, maxWidth: CGFloat) -> UIImage? {
+        let source = image
+        let resized: UIImage
+        if source.size.width > maxWidth {
+            let scale = maxWidth / source.size.width
+            let newSize = CGSize(width: maxWidth, height: source.size.height * scale)
+            let renderer = UIGraphicsImageRenderer(size: newSize)
+            resized = renderer.image { _ in
+                source.draw(in: CGRect(origin: .zero, size: newSize))
+            }
+        } else {
+            resized = source
+        }
+        guard let data = resized.jpegData(compressionQuality: 0.55) else { return resized }
+        return UIImage(data: data) ?? resized
+    }
+
+    private static func aspectFitRect(for imageSize: CGSize, in box: CGRect) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0 else { return box }
+        let widthScale = box.width / imageSize.width
+        let heightScale = box.height / imageSize.height
+        let scale = min(widthScale, heightScale)
+        let fittedSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+        let x = box.minX + (box.width - fittedSize.width) / 2
+        let y = box.minY + (box.height - fittedSize.height) / 2
+        return CGRect(origin: CGPoint(x: x, y: y), size: fittedSize)
     }
 }
 

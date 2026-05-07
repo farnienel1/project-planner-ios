@@ -6,10 +6,10 @@
 
 // Website URLs (update after deployment)
 const WEBSITE_URLS = {
-    base: "https://projectplanner.us",
-    setupPassword: "https://projectplanner.us/setup-password.html",
-    resetPassword: "https://projectplanner.us/reset-password.html",
-    resetPasswordComplete: "https://projectplanner.us/reset-password-complete.html"
+    base: "https://project-planner-f986c.web.app",
+    setupPassword: "https://project-planner-f986c.web.app/setup-password.html",
+    resetPassword: "https://project-planner-f986c.web.app/reset-password.html",
+    resetPasswordComplete: "https://project-planner-f986c.web.app/reset-password-complete.html"
 };
 
 // Web app config — must match Firebase Console → Project settings → Your apps → Web app.

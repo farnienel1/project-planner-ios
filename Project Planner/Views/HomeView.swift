@@ -17,6 +17,7 @@ struct HomeView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var taskStore: ProjectTaskStore
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
     @StateObject private var warningsService = WarningsService()
@@ -33,6 +34,7 @@ struct HomeView: View {
     @State private var showingAddUser = false
     @State private var showingManageUsers = false
     @State private var showingDailyOverview = false
+    @State private var showingWeeklyReport = false
     @State private var showingOrgSitesMap = false
     @State private var showingMySchedule = false
     @State private var showingWarningsDetail = false
@@ -134,6 +136,7 @@ struct HomeView: View {
             OperativeQualificationsReadOnlyView()
                 .environmentObject(operativeStore)
                 .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingJobTypesManagement) {
             JobTypesManagementView()
@@ -154,6 +157,9 @@ struct HomeView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("dismissManageUsersAndSelectTab"))) { notification in
             showingManageUsers = false
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openTasksDetail"))) { _ in
+            showingTasksDetail = true
+        }
         .fullScreenCover(isPresented: $showingClientsView) {
             ClientsView()
                 .environmentObject(projectStore)
@@ -163,11 +169,35 @@ struct HomeView: View {
     // MARK: - Logo and Title Section
     private var logoAndTitleSection: some View {
         VStack(spacing: 8) {
-            Text("Project Planner")
-                .font(.system(size: 34, weight: .bold, design: .default))
-                .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
-                .environment(\.appColorScheme, appSettings.settings.colorScheme)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .center, spacing: 12) {
+                Text("Project Planner")
+                    .font(.system(size: 34, weight: .bold, design: .default))
+                    .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
+                    .environment(\.appColorScheme, appSettings.settings.colorScheme)
+                Spacer()
+                if let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
+                   let url = URL(string: logoURL) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .empty:
+                            ProgressView()
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFit()
+                        case .failure:
+                            Image(systemName: "building.2")
+                                .font(.title3)
+                                .foregroundStyle(.secondary)
+                        @unknown default:
+                            EmptyView()
+                        }
+                    }
+                    .frame(width: 52, height: 52)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             
             Rectangle()
                 .fill(Color.theme.primary.opacity(0.2))
@@ -185,22 +215,38 @@ struct HomeView: View {
             HStack {
                 // User Name
                 if let appUser = userStore.currentUser {
-                    HStack {
-                        Image(systemName: "person.circle.fill")
-                            .foregroundColor(Color.theme.primary)
-                        Text("Welcome, \(appUser.firstName.isEmpty ? (appUser.email.components(separatedBy: "@").first?.capitalized ?? "User") : appUser.firstName)")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundColor(.primary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Image(systemName: "person.circle.fill")
+                                .foregroundColor(Color.theme.primary)
+                            Text("Welcome, \(appUser.firstName.isEmpty ? (appUser.email.components(separatedBy: "@").first?.capitalized ?? "User") : appUser.firstName)")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                        }
+                        if let orgName = firebaseBackend.currentOrganization?.name, !orgName.isEmpty {
+                            Text(orgName)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.leading, 24)
+                        }
                     }
                 } else if let currentUser = firebaseBackend.currentUser?.email {
-                    HStack {
-                        Image(systemName: "person.circle.fill")
-                            .foregroundColor(Color.theme.primary)
-                        Text("Welcome, \(extractNameFromEmail(currentUser))")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundColor(.primary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Image(systemName: "person.circle.fill")
+                                .foregroundColor(Color.theme.primary)
+                            Text("Welcome, \(extractNameFromEmail(currentUser))")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                        }
+                        if let orgName = firebaseBackend.currentOrganization?.name, !orgName.isEmpty {
+                            Text(orgName)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.leading, 24)
+                        }
                     }
                 }
                 
@@ -275,6 +321,7 @@ struct HomeView: View {
             )
             .environmentObject(userStore)
             .environmentObject(firebaseBackend)
+            .environmentObject(appSettings)
         }
     }
     
@@ -569,11 +616,13 @@ struct HomeView: View {
                             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 8])
                         }
                     )
-                    navigationTile(
-                        icon: "doc.text.viewfinder",
-                        title: "Site Audit",
-                        action: { showingSiteAudit = true }
-                    )
+                    if userStore.canViewSiteAudit() {
+                        navigationTile(
+                            icon: "doc.text.viewfinder",
+                            title: "Site Audit",
+                            action: { showingSiteAudit = true }
+                        )
+                    }
                     navigationTile(
                         icon: "calendar",
                         title: "My Schedule",
@@ -594,11 +643,11 @@ struct HomeView: View {
                     GridItem(.flexible(), spacing: 12)
                 ], spacing: 12) {
                     // Row 1: Weekly Report, Daily Overview
-                    if userStore.hasAdminAccess() {
+                    if userStore.hasAdminAccess() || userStore.displayUser?.permissions.weeklyReports == true {
                         navigationTile(
                             icon: "chart.bar.doc.horizontal",
                             title: "Weekly Report",
-                            action: { }
+                            action: { showingWeeklyReport = true }
                         )
                         navigationTile(
                             icon: "calendar.badge.clock",
@@ -640,11 +689,13 @@ struct HomeView: View {
                             action: { showingMySchedule = true }
                         )
                     }
-                    navigationTile(
-                        icon: "doc.text.viewfinder",
-                        title: "Site Audit",
-                        action: { showingSiteAudit = true }
-                    )
+                    if userStore.canViewSiteAudit() {
+                        navigationTile(
+                            icon: "doc.text.viewfinder",
+                            title: "Site Audit",
+                            action: { showingSiteAudit = true }
+                        )
+                    }
 
                     // Row 4: Managers + Operatives
                     if userStore.hasAdminAccess() {
@@ -662,6 +713,16 @@ struct HomeView: View {
                             title: "Operatives",
                             action: {
                                 NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 3])
+                            }
+                        )
+                    }
+                    
+                    if userStore.canManageSubcontractors() {
+                        navigationTile(
+                            icon: "person.2.badge.gearshape.fill",
+                            title: "Sub Contractors",
+                            action: {
+                                NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 9])
                             }
                         )
                     }
@@ -695,6 +756,18 @@ struct HomeView: View {
                 .environmentObject(userStore)
                 .environmentObject(holidayStore)
                 .environmentObject(managerScheduleStore)
+                .environmentObject(subcontractorStore)
+        }
+        .sheet(isPresented: $showingWeeklyReport) {
+            WeeklyReportView()
+                .environmentObject(bookingStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
+                .environmentObject(holidayStore)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(subcontractorStore)
         }
         .sheet(isPresented: $showingOrgSitesMap) {
             OrgSitesMapView()
@@ -713,6 +786,7 @@ struct HomeView: View {
                 .environmentObject(userStore)
                 .environmentObject(managerScheduleStore)
                 .environmentObject(holidayStore)
+                .environmentObject(appSettings)
         }
         .sheet(isPresented: $showingSiteAudit) {
             SiteAuditHubView()
@@ -980,12 +1054,13 @@ struct ProjectCardFromStore: View {
     
 }
 
-// MARK: - Operative qualifications (read-only)
+// MARK: - Operative qualifications
 
 struct OperativeQualificationsReadOnlyView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @State private var isRepairingLink = false
     @State private var repairMessage: String?
     
@@ -998,35 +1073,18 @@ struct OperativeQualificationsReadOnlyView: View {
     }
     
     var body: some View {
-        NavigationStack {
-            Group {
-                if let op = operative {
-                    if op.qualifications.isEmpty {
-                        ContentUnavailableView(
-                            "No qualifications",
-                            systemImage: "graduationcap",
-                            description: Text("Your manager can add qualifications to your profile.")
-                        )
-                    } else {
-                        List {
-                            ForEach(Array(op.qualifications).sorted(by: { $0.name < $1.name })) { q in
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(q.name).font(.headline)
-                                    if let exp = op.qualificationExpiryDates[q.id] {
-                                        Text("Expires: \(exp.formatted(date: .abbreviated, time: .omitted))")
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                    } else {
-                                        Text("No expiry on file")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                .padding(.vertical, 4)
-                            }
-                        }
-                    }
-                } else {
+        Group {
+            if let op = operative {
+                OperativeQualificationsEditorView(
+                    operative: op,
+                    title: "My Qualifications",
+                    canEditAssignments: true
+                )
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+            } else {
+                NavigationStack {
                     ContentUnavailableView(
                         "Profile not linked",
                         systemImage: "person.crop.circle.badge.questionmark",
@@ -1044,17 +1102,17 @@ struct OperativeQualificationsReadOnlyView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(isRepairingLink)
+                    .navigationTitle("My Qualifications")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { dismiss() }
+                        }
+                    }
                 }
-            }
-            .navigationTitle("My Qualifications")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                .task {
+                    await repairOperativeLinkIfNeeded()
                 }
-            }
-            .task {
-                await repairOperativeLinkIfNeeded()
             }
         }
     }
@@ -1121,6 +1179,7 @@ struct OperativeQualificationsReadOnlyView: View {
 struct QuickMenuSheet: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var appSettings: AppSettingsStore
     @Environment(\.dismiss) private var dismiss
 
     @Binding var showingClientsView: Bool
@@ -1161,12 +1220,19 @@ struct QuickMenuSheet: View {
                         actionRow("Job Types", "folder.fill") { showingJobTypesManagement = true }
                         actionRow("Wholesalers", "building.2.fill") { showingWholesalers = true }
                     }
+                    if userStore.canManageSubcontractors() {
+                        actionRow("Sub Contractors", "person.2.badge.gearshape.fill") { selectTab(9) }
+                    }
                 }
 
-                if userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true {
+                if canCreateProject || canCreateSmallWorks {
                     Section("Create") {
-                        actionRow("Create Project", "plus.square.fill") { showingCreateProject = true }
-                        actionRow("Create Small Works", "hammer.fill") { showingCreateSmallWorks = true }
+                        if canCreateProject {
+                            actionRow("Create Project", "plus.square.fill") { showingCreateProject = true }
+                        }
+                        if canCreateSmallWorks {
+                            actionRow("Create Small Works", "hammer.fill") { showingCreateSmallWorks = true }
+                        }
                     }
                 }
 
@@ -1181,6 +1247,22 @@ struct QuickMenuSheet: View {
                         actionRow(userStore.canManageUsers() ? "Manage Users" : "Manage Operatives", "person.2.fill") {
                             showingManageUsers = true
                         }
+                    }
+                }
+                
+                if userStore.hasAdminAccess() {
+                    Section("App Settings") {
+                        actionRow("Settings", "gearshape.fill") { selectTab(5) }
+                        NavigationLink {
+                            GeneralAppSettingsView()
+                                .environmentObject(appSettings)
+                        } label: {
+                            Label("General", systemImage: "slider.horizontal.3")
+                        }
+                    }
+                } else {
+                    Section("App Settings") {
+                        actionRow("Settings", "gearshape.fill") { selectTab(5) }
                     }
                 }
 
@@ -1220,6 +1302,20 @@ struct QuickMenuSheet: View {
     private func selectTab(_ tab: Int) {
         NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": tab])
     }
+    
+    private var canCreateProject: Bool {
+        guard let user = userStore.currentUser else { return false }
+        if user.permissions.operativeMode { return false }
+        if user.isSuperAdmin || user.permissions.adminAccess { return true }
+        return user.permissions.manager && user.permissions.projects
+    }
+    
+    private var canCreateSmallWorks: Bool {
+        guard let user = userStore.currentUser else { return false }
+        if user.permissions.operativeMode { return false }
+        if user.isSuperAdmin || user.permissions.adminAccess { return true }
+        return user.permissions.manager && user.permissions.smallWorks
+    }
 }
 
 #Preview {
@@ -1229,4 +1325,5 @@ struct QuickMenuSheet: View {
         .environmentObject(ProjectStore())
         .environmentObject(OperativeStore())
         .environmentObject(BookingStore())
+        .environmentObject(SubcontractorStore())
 }

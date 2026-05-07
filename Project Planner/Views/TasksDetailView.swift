@@ -208,6 +208,7 @@ struct TasksDetailView: View {
                             HolidayApprovalTaskCard(
                                 request: request,
                                 requesterName: requesterName(for: request),
+                                isCancellationRequest: request.cancellationRequestedAt != nil,
                                 onApprove: { approveHolidayRequest(request) },
                                 onDecline: { declineHolidayRequest(request) }
                             )
@@ -279,6 +280,14 @@ struct TasksDetailView: View {
     private func assignedApproverUserId(for request: HolidayBooking) -> String? {
         if let uid = request.userId,
            let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
+            if requester.permissions.manager &&
+                !requester.permissions.annualLeaveSelfBook &&
+                !requester.permissions.operativeMode &&
+                !requester.isSuperAdmin &&
+                !requester.permissions.adminAccess &&
+                requester.role != .admin {
+                return nil
+            }
             let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
             return (managerId?.isEmpty == false) ? managerId : nil
         }
@@ -309,8 +318,18 @@ struct TasksDetailView: View {
     private func approveHolidayRequest(_ request: HolidayBooking) {
         guard let uid = userStore.currentUser?.id else { return }
         Task {
-            await holidayStore.approveBooking(request, approvedByUserId: uid)
             let name = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
+            if request.cancellationRequestedAt != nil {
+                await holidayStore.deleteBooking(request)
+                await notifyDecision(
+                    to: request,
+                    approved: true,
+                    decidedByName: "\(name) approved your annual leave cancellation"
+                )
+                await notificationService.loadNotifications()
+                return
+            }
+            await holidayStore.approveBooking(request, approvedByUserId: uid)
             await notifyDecision(to: request, approved: true, decidedByName: name)
             await notificationService.loadNotifications()
         }
@@ -319,6 +338,19 @@ struct TasksDetailView: View {
     private func declineHolidayRequest(_ request: HolidayBooking) {
         guard let uid = userStore.currentUser?.id else { return }
         Task {
+            if request.cancellationRequestedAt != nil {
+                var updated = request
+                updated.cancellationRequestedAt = nil
+                updated.cancellationRequestedByUserId = nil
+                updated.updatedAt = Date()
+                do {
+                    try await holidayStore.saveBooking(updated)
+                } catch {
+                    return
+                }
+                await notificationService.loadNotifications()
+                return
+            }
             await holidayStore.rejectBooking(request, rejectedByUserId: uid)
             let name = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
             await notifyDecision(to: request, approved: false, decidedByName: name)
@@ -334,6 +366,20 @@ struct TasksDetailView: View {
                 approved: approved,
                 decidedByName: decidedByName
             )
+            if approved,
+               let requester = userStore.organizationUsers.first(where: { $0.id == requesterUserId }),
+               requester.permissions.manager,
+               !requester.permissions.annualLeaveSelfBook,
+               !requester.permissions.operativeMode,
+               !requester.isSuperAdmin,
+               !requester.permissions.adminAccess,
+               requester.role != .admin {
+                await notificationService.notifyAdminAnnualLeaveApproval(
+                    managerName: requester.fullName,
+                    approvedByName: decidedByName,
+                    excludingUserId: userStore.currentUser?.id
+                )
+            }
             return
         }
         if let oid = request.operativeId,
@@ -355,15 +401,16 @@ struct TasksDetailView: View {
 private struct HolidayApprovalTaskCard: View {
     let request: HolidayBooking
     let requesterName: String
+    let isCancellationRequest: Bool
     let onApprove: () -> Void
     let onDecline: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Image(systemName: "sun.max.fill")
-                    .foregroundColor(.orange)
-                Text("Holiday request")
+                Image(systemName: isCancellationRequest ? "xmark.circle.fill" : "sun.max.fill")
+                    .foregroundColor(isCancellationRequest ? .red : .orange)
+                Text(isCancellationRequest ? "Holiday cancellation request" : "Holiday request")
                     .font(.headline)
                 Spacer()
                 Text("Pending")
@@ -384,10 +431,10 @@ private struct HolidayApprovalTaskCard: View {
                 .foregroundColor(.secondary)
 
             HStack(spacing: 10) {
-                Button("Decline", action: onDecline)
+                Button(isCancellationRequest ? "Keep Booking" : "Decline", action: onDecline)
                     .buttonStyle(.bordered)
                     .tint(.red)
-                Button("Approve", action: onApprove)
+                Button(isCancellationRequest ? "Approve Cancellation" : "Approve", action: onApprove)
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
             }

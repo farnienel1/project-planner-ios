@@ -43,7 +43,7 @@ struct SmallWorksView: View {
             .navigationTitle("Small Works")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button(action: {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                     }) {
@@ -190,17 +190,24 @@ struct SmallWorksView: View {
         var works = smallWorksProjects
         
         if userStore.isOperativeMode() {
-            if let operative = resolvedCurrentOperative {
-                let assignedProjectIds = Set(bookingStore.bookings
-                    .filter {
-                        $0.operativeId == operative.id &&
-                        ($0.status == .confirmed || $0.status == .tentative)
-                    }
-                    .map { $0.projectId })
-                if !assignedProjectIds.isEmpty {
-                    works = works.filter { assignedProjectIds.contains($0.id) }
-                }
+            guard let operative = resolvedCurrentOperative,
+                  let currentUserId = userStore.currentUser?.id else {
+                return []
             }
+            let assignedProjectIds = Set(bookingStore.bookings
+                .filter {
+                    $0.operativeId == operative.id &&
+                    ($0.status == .confirmed || $0.status == .tentative)
+                }
+                .map { $0.projectId })
+            works = works.filter {
+                assignedProjectIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId)
+            }
+        } else if let currentUser = userStore.currentUser,
+                  !currentUser.isSuperAdmin,
+                  !currentUser.permissions.adminAccess,
+                  currentUser.permissions.manager {
+            works = works.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
         }
         
         return works

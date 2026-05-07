@@ -43,6 +43,7 @@ struct AddUserView: View {
     @State private var permissions = UserPermissions()
     @State private var assignedManagerUserId: String?
     @State private var operativeDayRateText = ""
+    @State private var managerDayRateText = ""
     @State private var isCreating = false
     @State private var showSuccess = false
     @State private var errorMessage: String?
@@ -292,14 +293,14 @@ struct AddUserView: View {
                         .keyboardType(.phonePad)
                 }
                 
-                if mode == .managerAddingOperative || invitedAccountType == .operative {
+                if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Day rate (optional)")
                             .font(.headline)
-                        TextField("e.g. 250", text: $operativeDayRateText)
+                        TextField("e.g. 250", text: dayRateBindingForSelectedType)
                             .textFieldStyle(RoundedBorderTextFieldStyle())
                             .keyboardType(.decimalPad)
-                        Text("Stored on the operative profile when their account is linked.")
+                        Text(invitedAccountType == .manager ? "Optional for managers. Leave blank if not needed." : "Stored on the operative profile when their account is linked.")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
@@ -434,6 +435,24 @@ struct AddUserView: View {
                         isDisabled: false
                     )
                     PermissionToggle(
+                        title: "Annual Leave",
+                        description: "Can book their own annual leave. If unselected the manager will need to request annual leave and have this approved.",
+                        isOn: $permissions.annualLeaveSelfBook,
+                        isDisabled: false
+                    )
+                    PermissionToggle(
+                        title: "Weekly Report",
+                        description: "Will be able to pull weekly reports.",
+                        isOn: $permissions.weeklyReports,
+                        isDisabled: false
+                    )
+                    PermissionToggle(
+                        title: "Sub Contractors",
+                        description: "Can add and manage sub contractors. If unselected they will be unable to manage them, they will only be able to book them in.",
+                        isOn: $permissions.subContractors,
+                        isDisabled: false
+                    )
+                    PermissionToggle(
                         title: "Skills & Qualifications (org)",
                         description: "Managers can maintain skills and qualifications unless you change this later in Manage Users.",
                         isOn: .constant(true),
@@ -441,9 +460,15 @@ struct AddUserView: View {
                     )
                     PermissionToggle(
                         title: "Projects & Small Works",
-                        description: "Managers can create and manage projects and small works.",
-                        isOn: .constant(true),
-                        isDisabled: true
+                        description: "Can add and edit projects and small works. If unselected, this manager can still schedule on them.",
+                        isOn: Binding(
+                            get: { permissions.projects && permissions.smallWorks },
+                            set: { newValue in
+                                permissions.projects = newValue
+                                permissions.smallWorks = newValue
+                            }
+                        ),
+                        isDisabled: false
                     )
                     PermissionToggle(
                         title: "Operative Mode",
@@ -462,6 +487,12 @@ struct AddUserView: View {
                             title: "Materials",
                             description: "Allow this operative to see and use Materials inside assigned projects and small works.",
                             isOn: $permissions.materials,
+                            isDisabled: false
+                        )
+                        PermissionToggle(
+                            title: "Site Audit",
+                            description: "Allow this operative to access Site Audits for assigned projects and small works.",
+                            isOn: $permissions.siteAudit,
                             isDisabled: false
                         )
                     }
@@ -548,12 +579,13 @@ struct AddUserView: View {
                         }
                     }
                     
-                    if permissions.operativeMode && !operativeDayRateText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let reviewDayRate = selectedDayRateTextForReview
+                    if !reviewDayRate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         HStack {
                             Text("Day rate:")
                                 .foregroundColor(.secondary)
                             Spacer()
-                            Text(operativeDayRateText)
+                            Text(reviewDayRate)
                                 .fontWeight(.medium)
                         }
                     }
@@ -645,7 +677,11 @@ struct AddUserView: View {
                 materials: true,
                 projects: true,
                 smallWorks: true,
-                operativeMode: false
+                operativeMode: false,
+                annualLeaveSelfBook: false,
+                weeklyReports: false,
+                subContractors: false,
+                siteAudit: true
             )
         case .operative:
             permissions = UserPermissions(
@@ -657,7 +693,8 @@ struct AddUserView: View {
                 materials: false,
                 projects: true,
                 smallWorks: true,
-                operativeMode: true
+                operativeMode: true,
+                siteAudit: true
             )
         }
     }
@@ -703,7 +740,11 @@ struct AddUserView: View {
             ("Materials", permissions.materials),
             ("Projects", permissions.projects),
             ("Small Works", permissions.smallWorks),
-            ("Operative Mode", permissions.operativeMode)
+            ("Operative Mode", permissions.operativeMode),
+            ("Annual Leave Self-Book", permissions.annualLeaveSelfBook),
+            ("Weekly Reports", permissions.weeklyReports),
+            ("Sub Contractors", permissions.subContractors),
+            ("Site Audit", permissions.siteAudit)
         ]
     }
     
@@ -719,12 +760,7 @@ struct AddUserView: View {
         errorMessage = nil
         
         Task {
-            let parsedDayRate: Double? = {
-                let t = operativeDayRateText.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !t.isEmpty else { return nil }
-                let normalized = t.replacingOccurrences(of: ",", with: ".")
-                return Double(normalized)
-            }()
+            let parsedDayRate = parseDayRate(from: selectedDayRateTextForReview)
             let success = await userStore.inviteUser(
                 firstName: firstName,
                 surname: surname,
@@ -732,7 +768,8 @@ struct AddUserView: View {
                 mobileNumber: mobileNumber.isEmpty ? nil : mobileNumber,
                 permissions: permissions,
                 assignedManagerUserId: permissions.operativeMode ? assignedManagerUserId : nil,
-                invitedOperativeDayRate: permissions.operativeMode ? parsedDayRate : nil
+                invitedOperativeDayRate: permissions.operativeMode ? parsedDayRate : nil,
+                invitedManagerDayRate: permissions.manager ? parsedDayRate : nil
             )
             
             await MainActor.run {
@@ -752,6 +789,41 @@ struct AddUserView: View {
         let emailRegex = "[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,64}"
         let emailPredicate = NSPredicate(format: "SELF MATCHES %@", emailRegex)
         return emailPredicate.evaluate(with: email)
+    }
+
+    private var dayRateBindingForSelectedType: Binding<String> {
+        Binding(
+            get: {
+                if mode == .managerAddingOperative || invitedAccountType == .operative {
+                    return operativeDayRateText
+                }
+                return managerDayRateText
+            },
+            set: { newValue in
+                if mode == .managerAddingOperative || invitedAccountType == .operative {
+                    operativeDayRateText = newValue
+                } else {
+                    managerDayRateText = newValue
+                }
+            }
+        )
+    }
+
+    private var selectedDayRateTextForReview: String {
+        if mode == .managerAddingOperative || invitedAccountType == .operative {
+            return operativeDayRateText
+        }
+        if invitedAccountType == .manager {
+            return managerDayRateText
+        }
+        return ""
+    }
+
+    private func parseDayRate(from text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
+        return Double(normalized)
     }
 }
 

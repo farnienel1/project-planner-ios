@@ -201,9 +201,8 @@ struct NotificationsView: View {
                     )
                 case .holidayRequestSubmitted, .holidayRequestApproved, .holidayRequestDeclined:
                     NotificationCenter.default.post(
-                        name: NSNotification.Name("openHoliday"),
-                        object: nil,
-                        userInfo: ["showRequests": true]
+                        name: NSNotification.Name("openTasksDetail"),
+                        object: nil
                     )
                 }
                 
