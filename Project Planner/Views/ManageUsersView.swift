@@ -686,6 +686,8 @@ struct EditUserView: View {
     @Environment(\.dismiss) private var dismiss
     
     let user: AppUser
+    /// When `true` (e.g. opened from the Managers roster shortcut), hide **Admin Access** — grant admin only via Change user type in full Manage Users.
+    let suppressAdminAccessToggle: Bool
     @State private var permissions: UserPermissions
     @State private var isUpdating = false
     @State private var isActive: Bool
@@ -737,8 +739,9 @@ struct EditUserView: View {
     @State private var userTypeChangeMessage: String?
     @State private var showingDeactivateConfirmation = false
 
-    init(user: AppUser) {
+    init(user: AppUser, suppressAdminAccessToggle: Bool = false) {
         self.user = user
+        self.suppressAdminAccessToggle = suppressAdminAccessToggle
         self._permissions = State(initialValue: user.permissions)
         self._isActive = State(initialValue: user.isActive)
         self._selectedAssignedManagerUserId = State(initialValue: user.assignedManagerUserId)
@@ -1158,7 +1161,7 @@ struct EditUserView: View {
                                 iconBackground: ManageUserProfilePalette.chipPurpleBg,
                                 iconForeground: ManageUserProfilePalette.chipPurpleFg,
                                 title: "Operatives",
-                                description: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Operatives tab or full operative profiles.",
+                                description: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Manage Operatives screen or full operative profiles.",
                                 isOn: $managerTransitionOperatives
                             )
                             ManageUserCardDivider()
@@ -1697,8 +1700,10 @@ struct EditUserView: View {
             return
         }
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let all = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? [:]
-        dayRateHistory = (all[user.id] ?? []).sorted(by: { $0.effectiveAt > $1.effectiveAt })
+        let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
+        dayRateHistory = collection
+            .mergedEntries(userId: user.id, operativeId: linkedOperativeForUser?.id)
+            .sorted(by: { $0.effectiveAt > $1.effectiveAt })
     }
 
     private func lastSeenDisplay(for u: AppUser) -> String {
@@ -2028,26 +2033,28 @@ struct EditUserView: View {
     /// Core admin / manager flags (shown for every non–super-admin editable user). Materials & site audit for non-operatives are separate.
     private var adminAndManagerCapabilityPermissionRows: some View {
         Group {
-            Group {
-                ManageUserExpandablePermissionToggleRow(
-                    iconName: "person.badge.key.fill",
-                    iconBackground: ManageUserProfilePalette.chipPurpleBg,
-                    iconForeground: ManageUserProfilePalette.chipPurpleFg,
-                    title: "Admin Access",
-                    description: "Can add and manage users.",
-                    isOn: $permissions.adminAccess,
-                    isDisabled: false
-                )
-            }
-            .onChange(of: permissions.adminAccess) { _, newValue in
-                if newValue {
-                    permissions.manager = true
-                    permissions.projects = true
-                    permissions.smallWorks = true
+            if !suppressAdminAccessToggle {
+                Group {
+                    ManageUserExpandablePermissionToggleRow(
+                        iconName: "person.badge.key.fill",
+                        iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                        iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                        title: "Admin Access",
+                        description: "Can add and manage users.",
+                        isOn: $permissions.adminAccess,
+                        isDisabled: false
+                    )
                 }
-            }
+                .onChange(of: permissions.adminAccess) { _, newValue in
+                    if newValue {
+                        permissions.manager = true
+                        permissions.projects = true
+                        permissions.smallWorks = true
+                    }
+                }
 
-            ManageUserCardDivider()
+                ManageUserCardDivider()
+            }
 
             ManageUserExpandablePermissionToggleRow(
                 iconName: "folder.fill",
@@ -2115,7 +2122,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipPurpleBg,
                 iconForeground: ManageUserProfilePalette.chipPurpleFg,
                 title: "Operatives",
-                description: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Operatives tab or full operative profiles.",
+                description: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Manage Operatives screen or full operative profiles.",
                 isOn: $permissions.operatives,
                 isDisabled: false
             )

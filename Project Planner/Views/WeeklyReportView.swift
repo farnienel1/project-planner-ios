@@ -18,7 +18,7 @@ struct WeeklyReportView: View {
     @State private var generatedCSVURL: URL?
     @State private var showShareSheet = false
     @State private var message: String?
-    @State private var dayRateHistoryByUser: [String: [OperativeDayRateHistoryEntry]] = [:]
+    @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
 
     var body: some View {
         NavigationStack {
@@ -105,7 +105,7 @@ struct WeeklyReportView: View {
         message = nil
         Task {
             if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-                dayRateHistoryByUser = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? [:]
+                dayRateHistoryCollection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
             }
             let csv = buildCSV()
             let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("WeeklyReport-\(Int(Date().timeIntervalSince1970)).csv")
@@ -334,7 +334,10 @@ struct WeeklyReportView: View {
         var totals: [String: LabourRateSummary] = [:]
         for booking in operativeBookings {
             guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else { continue }
-            let user = userStore.organizationUsers.first(where: { $0.email.lowercased() == operative.email.lowercased() })
+            let opEmail = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let user = userStore.organizationUsers.first(where: {
+                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == opEmail
+            })
             let rate = dayRateForOperativeBooking(user: user, operative: operative, on: booking.date)
             let days = bookingDayValue(from: booking.timeSlot)
             let key = labourRateKey(name: operative.name, role: "Operative", rate: rate)
@@ -433,18 +436,19 @@ struct WeeklyReportView: View {
 
     /// Uses day-rate history keyed by user id; compares **calendar days** so a change effective “tomorrow” does not apply to today’s bookings.
     private func dayRateForUserOnDay(userId: String, fallback: Double?, date: Date) -> Double? {
-        let history = (dayRateHistoryByUser[userId] ?? []).sorted(by: { $0.effectiveAt < $1.effectiveAt })
+        let history = (dayRateHistoryCollection.byUserId[userId] ?? []).sorted(by: { $0.effectiveAt < $1.effectiveAt })
         let day = calendarDayStart(date)
         let rateFromHistory = history.last(where: { calendarDayStart($0.effectiveAt) <= day })?.dayRate
         return rateFromHistory ?? fallback
     }
 
     private func dayRateForOperativeBooking(user: AppUser?, operative: Operative, on date: Date) -> Double? {
-        if let user {
-            let fallback = operative.dayRate ?? user.dayRate
-            return dayRateForUserOnDay(userId: user.id, fallback: fallback, date: date) ?? user.dayRate ?? operative.dayRate
-        }
-        return operative.dayRate
+        let merged = dayRateHistoryCollection.mergedEntries(userId: user?.id, operativeId: operative.id)
+        let day = calendarDayStart(date)
+        let history = merged.sorted(by: { $0.effectiveAt < $1.effectiveAt })
+        let rateFromHistory = history.last(where: { calendarDayStart($0.effectiveAt) <= day })?.dayRate
+        let fallback = operative.dayRate ?? user?.dayRate
+        return rateFromHistory ?? fallback ?? user?.dayRate ?? operative.dayRate
     }
 
     private func overlappingDays(for booking: HolidayBooking, calendar: Calendar) -> Double {

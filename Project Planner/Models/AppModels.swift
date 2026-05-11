@@ -168,10 +168,38 @@ struct UserPermissions: Codable, Hashable {
 
 struct OperativeDayRateHistoryEntry: Identifiable, Codable, Hashable {
     let id: UUID
-    var userId: String
+    /// Firebase user id when the change came from (or is linked to) an account.
+    var userId: String?
+    /// Local operative roster id when the change is tracked per-roster-row (including operatives without an app login).
+    var operativeId: UUID?
     var dayRate: Double
     var effectiveAt: Date
     var createdAt: Date
+}
+
+/// Loaded `operativeDayRateHistory` documents bucketed for lookups (a single doc may appear in both maps).
+struct OperativeDayRateHistoryCollection: Sendable {
+    var byUserId: [String: [OperativeDayRateHistoryEntry]]
+    var byOperativeId: [String: [OperativeDayRateHistoryEntry]]
+
+    static let empty = OperativeDayRateHistoryCollection(byUserId: [:], byOperativeId: [:])
+
+    /// Merges history for a linked user account and/or operative roster row, de-duplicated by entry id.
+    func mergedEntries(userId: String?, operativeId: UUID?) -> [OperativeDayRateHistoryEntry] {
+        var seen = Set<UUID>()
+        var out: [OperativeDayRateHistoryEntry] = []
+        if let uid = userId {
+            for e in byUserId[uid] ?? [] where seen.insert(e.id).inserted {
+                out.append(e)
+            }
+        }
+        if let oid = operativeId {
+            for e in byOperativeId[oid.uuidString] ?? [] where seen.insert(e.id).inserted {
+                out.append(e)
+            }
+        }
+        return out.sorted(by: { $0.effectiveAt < $1.effectiveAt })
+    }
 }
 
 /// Simulates app navigation and permission checks for another role while signed in as yourself.

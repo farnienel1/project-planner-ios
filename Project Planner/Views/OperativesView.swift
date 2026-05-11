@@ -58,7 +58,7 @@ struct OperativesView: View {
                 operativesList
             }
         }
-            .navigationTitle("Operatives")
+            .navigationTitle("Manage Operatives")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -792,6 +792,8 @@ struct EditOperativeView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     let operative: Operative
     
     @State private var firstName: String
@@ -1025,9 +1027,45 @@ struct EditOperativeView: View {
         updatedOperative.tradeTypePreset = tp.isEmpty ? nil : tp
         updatedOperative.tradeTypeCustom = tc.isEmpty ? nil : tc
         updatedOperative.updatedAt = Date()
-        
+
+        let previousAmount = operative.dayRate ?? operative.hourlyRate
+        let newAmount = parsedRate.amount
+
         Task {
             await operativeStore.updateOperative(updatedOperative)
+
+            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+               previousAmount != newAmount {
+                let emailNorm = updatedOperative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                let linkedUserId = userStore.organizationUsers.first(where: {
+                    $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
+                })?.id
+                do {
+                    let collection = try await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)
+                    let merged = collection.mergedEntries(userId: linkedUserId, operativeId: operative.id)
+                    if merged.isEmpty, let prev = previousAmount {
+                        try await firebaseBackend.recordOperativeDayRateChange(
+                            organizationId: orgId,
+                            userId: linkedUserId,
+                            operativeId: operative.id,
+                            dayRate: prev,
+                            effectiveAt: operative.createdAt
+                        )
+                    }
+                    if let newRate = newAmount {
+                        try await firebaseBackend.recordOperativeDayRateChange(
+                            organizationId: orgId,
+                            userId: linkedUserId,
+                            operativeId: operative.id,
+                            dayRate: newRate,
+                            effectiveAt: Date()
+                        )
+                    }
+                } catch {
+                    print("🔥🔥🔥 DEBUG: Failed to record operative day rate history: \(error.localizedDescription)")
+                }
+            }
+
             await MainActor.run {
                 dismiss()
             }

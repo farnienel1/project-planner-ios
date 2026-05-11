@@ -4258,16 +4258,27 @@ class FirebaseBackend: ObservableObject {
 
     func recordOperativeDayRateChange(
         organizationId: String,
-        userId: String,
+        userId: String?,
+        operativeId: UUID?,
         dayRate: Double,
         effectiveAt: Date
     ) async throws {
-        let payload: [String: Any] = [
-            "userId": userId,
+        let trimmedUser = userId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let uid = (trimmedUser?.isEmpty == false) ? trimmedUser : nil
+        guard uid != nil || operativeId != nil else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "recordOperativeDayRateChange requires userId and/or operativeId"]
+            )
+        }
+        var payload: [String: Any] = [
             "dayRate": dayRate,
             "effectiveAt": Timestamp(date: effectiveAt),
             "createdAt": Timestamp(date: Date())
         ]
+        if let uid { payload["userId"] = uid }
+        if let operativeId { payload["operativeId"] = operativeId.uuidString }
         try await db.collection("organizations")
             .document(organizationId)
             .collection("operativeDayRateHistory")
@@ -4275,31 +4286,44 @@ class FirebaseBackend: ObservableObject {
             .setData(payload, merge: true)
     }
 
-    func loadOperativeDayRateHistory(organizationId: String) async throws -> [String: [OperativeDayRateHistoryEntry]] {
+    func loadOperativeDayRateHistory(organizationId: String) async throws -> OperativeDayRateHistoryCollection {
         let snapshot = try await db.collection("organizations")
             .document(organizationId)
             .collection("operativeDayRateHistory")
             .getDocuments()
-        var mapped: [String: [OperativeDayRateHistoryEntry]] = [:]
+        var byUserId: [String: [OperativeDayRateHistoryEntry]] = [:]
+        var byOperativeId: [String: [OperativeDayRateHistoryEntry]] = [:]
         for doc in snapshot.documents {
             let data = doc.data()
-            guard let userId = data["userId"] as? String,
-                  let dayRate = data["dayRate"] as? Double,
+            guard let dayRate = data["dayRate"] as? Double,
                   let effectiveAt = (data["effectiveAt"] as? Timestamp)?.dateValue() else { continue }
+            let rawUser = data["userId"] as? String
+            let userId: String? = (rawUser?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+            let operativeId = (data["operativeId"] as? String).flatMap(UUID.init(uuidString:))
+            guard userId != nil || operativeId != nil else { continue }
             let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
             let entry = OperativeDayRateHistoryEntry(
                 id: UUID(uuidString: doc.documentID) ?? UUID(),
                 userId: userId,
+                operativeId: operativeId,
                 dayRate: dayRate,
                 effectiveAt: effectiveAt,
                 createdAt: createdAt
             )
-            mapped[userId, default: []].append(entry)
+            if let userId {
+                byUserId[userId, default: []].append(entry)
+            }
+            if let operativeId {
+                byOperativeId[operativeId.uuidString, default: []].append(entry)
+            }
         }
-        for key in mapped.keys {
-            mapped[key] = mapped[key]?.sorted(by: { $0.effectiveAt < $1.effectiveAt })
+        for key in byUserId.keys {
+            byUserId[key] = byUserId[key]?.sorted(by: { $0.effectiveAt < $1.effectiveAt })
         }
-        return mapped
+        for key in byOperativeId.keys {
+            byOperativeId[key] = byOperativeId[key]?.sorted(by: { $0.effectiveAt < $1.effectiveAt })
+        }
+        return OperativeDayRateHistoryCollection(byUserId: byUserId, byOperativeId: byOperativeId)
     }
 
     // MARK: - Data Validation & Safeguards

@@ -402,8 +402,9 @@ class UserStore: ObservableObject {
     
     func canViewOperatives() -> Bool {
         if isOperativeMode() { return false }
-        return (hasAdminAccess() || hasPermission { $0.permissions.manager }) &&
-               (hasAdminAccess() || hasPermission { $0.permissions.operatives })
+        if hasAdminAccess() { return true }
+        guard let u = displayUser else { return false }
+        return u.permissions.manager && u.permissions.operatives
     }
     
     func canManageSkills() -> Bool {
@@ -447,14 +448,15 @@ class UserStore: ObservableObject {
         return canViewOperatives()
     }
     
+    /// Managers roster tab / shortcuts (not Manage Users). Admin-level only; non-admin managers use Operatives or Manage Users as allowed.
     func canViewManagers() -> Bool {
         if isOperativeMode() { return false }
-        return hasAdminAccess() || hasPermission { $0.permissions.manager }
+        return hasAdminAccess()
     }
     
+    /// Editing the dedicated Managers roster (same gate as `canViewManagers()`).
     func canEditManagers() -> Bool {
-        if isOperativeMode() { return false }
-        return hasAdminAccess() || hasPermission { $0.permissions.manager }
+        canViewManagers()
     }
     
     func canViewSkills() -> Bool {
@@ -585,9 +587,13 @@ class UserStore: ObservableObject {
             """
         }
         var lines: [String] = [previewNote + "Role: " + (u.isSuperAdmin ? "Super Admin" : (u.permissions.adminAccess ? "Admin" : (u.permissions.manager ? "Manager" : "User")))]
-        if hasAdminAccess() { lines.append("Can: Manage users, view all projects/small works, managers, operatives, skills, qualifications, create projects/small works, book work, reports") }
-        else if canViewManagers() { lines.append("Can: View managers, operatives, projects, small works, book work") }
-        else { lines.append("Can: View projects, small works (as permitted)") }
+        if hasAdminAccess() {
+            lines.append("Can: Manage users, managers list, manage operatives, skills, qualifications, projects/small works, book work, reports")
+        } else if canViewOperatives() {
+            lines.append("Can: Manage operatives (roster), projects/small works (as permitted), book work")
+        } else {
+            lines.append("Can: View projects, small works (as permitted)")
+        }
         return lines.joined(separator: "\n")
     }
     
@@ -1301,22 +1307,27 @@ class UserStore: ObservableObject {
                     )
                     if dayRateChanged,
                        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-                        if let previousDayRate {
-                            let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? [:]
-                            if history[updatedUser.id]?.isEmpty ?? true {
-                                try? await firebaseBackend.recordOperativeDayRateChange(
-                                    organizationId: orgId,
-                                    userId: updatedUser.id,
-                                    dayRate: previousDayRate,
-                                    effectiveAt: updatedUser.createdAt
-                                )
-                            }
+                        let emailNorm = updatedUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                        let linkedOperativeId = operativeStore?.operatives.first(where: {
+                            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
+                        })?.id
+                        let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
+                        let merged = collection.mergedEntries(userId: updatedUser.id, operativeId: linkedOperativeId)
+                        if merged.isEmpty, let previousDayRate {
+                            try? await firebaseBackend.recordOperativeDayRateChange(
+                                organizationId: orgId,
+                                userId: updatedUser.id,
+                                operativeId: linkedOperativeId,
+                                dayRate: previousDayRate,
+                                effectiveAt: updatedUser.createdAt
+                            )
                         }
                         if let newRate = dayRate {
                             let effective = dayRateEffectiveAt ?? Date()
                             try? await firebaseBackend.recordOperativeDayRateChange(
                                 organizationId: orgId,
                                 userId: updatedUser.id,
+                                operativeId: linkedOperativeId,
                                 dayRate: newRate,
                                 effectiveAt: effective
                             )
@@ -1471,21 +1482,22 @@ class UserStore: ObservableObject {
             if dayRateChanged,
                let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
                 let effective = effectiveAt ?? Date()
-                if let previousDayRate {
-                    let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? [:]
-                    if history[updatedUser.id]?.isEmpty ?? true {
-                        try? await firebaseBackend.recordOperativeDayRateChange(
-                            organizationId: orgId,
-                            userId: updatedUser.id,
-                            dayRate: previousDayRate,
-                            effectiveAt: updatedUser.createdAt
-                        )
-                    }
+                let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
+                let merged = collection.mergedEntries(userId: updatedUser.id, operativeId: nil)
+                if let previousDayRate, merged.isEmpty {
+                    try? await firebaseBackend.recordOperativeDayRateChange(
+                        organizationId: orgId,
+                        userId: updatedUser.id,
+                        operativeId: nil,
+                        dayRate: previousDayRate,
+                        effectiveAt: updatedUser.createdAt
+                    )
                 }
                 if let newRate = dayRate {
                     try? await firebaseBackend.recordOperativeDayRateChange(
                         organizationId: orgId,
                         userId: updatedUser.id,
+                        operativeId: nil,
                         dayRate: newRate,
                         effectiveAt: effective
                     )

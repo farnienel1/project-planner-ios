@@ -1,0 +1,20 @@
+---
+description: Keep Operatives/Managers roster shortcuts aligned with Manage Users behaviour and naming
+globs: Project Planner/Views/OperativesView.swift,Project Planner/Views/ManagersView.swift,Project Planner/Views/ManageUsersView.swift,Project Planner/ContentView.swift,Project Planner/Views/HomeView.swift,Project Planner/Core/UserStore.swift
+alwaysApply: false
+---
+
+# Roster shortcuts vs Manage Users
+
+## Product rules
+
+1. **Manage Users** (`ManageUsersView`) is the full account editor (permissions matrix, change user type, admin elevation, etc.).
+2. **Manage Operatives** (tab / `OperativesView` / home tiles / quick menu): same underlying people data as Manage Users where it overlaps (roster + `EditUserView` for linked accounts), but UI copy should say **"Manage Operatives"** on this entry path. Bottom tab label uses **"Manage" + newline + "Operatives"** for space.
+3. **Managers** (`ManagersView`): title stays **"Managers"**. This list is **admin-only** (`UserStore.hasAdminAccess()` / super admin). Non-admin managers must **not** get this tab, tile, or quick-menu row — they use **Manage Operatives** or **Manage Users** (when entitled) instead.
+4. **Operatives access**: `UserStore.canViewOperatives()` — **admins** always; **managers** only if they have **`permissions.operatives`**. Operative-mode users never.
+5. **Admin Access toggle**: Do **not** expose the **Admin Access** permission toggle when `EditUserView` is opened from **`ManagersView`**. Use **Change user type** from full **Manage Users** to grant admin. Pass `suppressAdminAccessToggle: true` from `ManagersView` only unless product explicitly extends this.
+6. When changing gates, keep **ContentView** `isValidTabTag`, `tabViewIdentity`, **HomeView** tiles, **QuickMenuSheet**, and **NotificationService** permission keys in sync with `UserStore` helpers.
+
+## Implementation hint
+
+- Prefer a single source of truth in **`UserStore`** (`canViewOperatives()`, `canViewManagers()`, `hasAdminAccess()`) and call those from navigation and sheets.
