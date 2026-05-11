@@ -8,6 +8,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import UIKit
 import FirebaseAuth
 import FirebaseFirestore
 
@@ -559,7 +560,7 @@ class UserStore: ObservableObject {
              // MARK: - User Invitation
              
     /// For operative invitations, pass the line manager's Firebase Auth UID (`users` document id).
-    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil) async -> Bool {
+    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil) async -> Bool {
         print("🔥🔥🔥 DEBUG: inviteUser called with firstName: \(firstName), surname: \(surname), email: \(email)")
         
         errorMessage = nil
@@ -704,7 +705,9 @@ class UserStore: ObservableObject {
                 permissions: permissions,
                 assignedManagerUserId: assignedManagerUserId,
                 invitedOperativeDayRate: invitedOperativeDayRate,
-                invitedManagerDayRate: invitedManagerDayRate
+                invitedManagerDayRate: invitedManagerDayRate,
+                invitedTradeTypePreset: invitedTradeTypePreset,
+                invitedTradeTypeCustom: invitedTradeTypeCustom
             )
             print("🔥🔥🔥 DEBUG: createUserInvitation succeeded")
             
@@ -1074,24 +1077,26 @@ class UserStore: ObservableObject {
                  print("🔥🔥🔥 DEBUG: ========== DELETE USER COMPLETE ==========")
              }
              
-             func updateUserPermissions(userId: String, permissions: UserPermissions) async -> Bool {
+             func updateUserPermissions(
+                 userId: String,
+                 permissions: UserPermissions,
+                 holidayStore: HolidayStore? = nil,
+                 linkedOperativeUUID: UUID? = nil
+             ) async -> Bool {
                  guard let firebaseBackend = firebaseBackend else { return false }
-                 
+
                  do {
-                     // Find user and update permissions
                      if let index = organizationUsers.firstIndex(where: { $0.id == userId }) {
                          var updatedUser = organizationUsers[index]
-                         
-                         // Prevent editing the organisation creator (sole super admin) via permission matrix
+                         let previousPermissions = updatedUser.permissions
+
                          if updatedUser.isSuperAdmin && isOrganizationCreator(userId: updatedUser.id) {
                              print("🔥🔥🔥 DEBUG: Cannot update permissions for organization creator super admin")
                              return false
                          }
-                         
-                        // Update permissions
+
                         updatedUser.permissions = permissions
-                        
-                        // Update role to match permissions (so managers stay managers when adding access)
+
                         if permissions.adminAccess {
                             updatedUser.role = .admin
                         } else if permissions.manager {
@@ -1101,9 +1106,21 @@ class UserStore: ObservableObject {
                         } else {
                             updatedUser.role = .viewer
                         }
-                        
+
                         try await firebaseBackend.saveUser(updatedUser)
                          organizationUsers[index] = updatedUser
+
+                         if let holidayStore,
+                            UserRoleTransitionPolicy.shouldClearPendingAnnualLeave(
+                                old: previousPermissions,
+                                new: permissions
+                            ) {
+                             await holidayStore.deletePendingHolidayRequestsFor(
+                                 userId: userId,
+                                 operativeId: linkedOperativeUUID
+                             )
+                         }
+
                          return true
                      }
                      return false
@@ -1205,6 +1222,86 @@ class UserStore: ObservableObject {
                 }
              }
     
+    /// Persists trade type on the user document and mirrors it to linked operative or manager roster rows (matched by email).
+    /// Uploads a new profile image and writes `profilePhotoURL` on the user document.
+    func updateUserProfilePhoto(for user: AppUser, image: UIImage) async -> Bool {
+        guard let firebaseBackend = firebaseBackend else { return false }
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            errorMessage = "No organization loaded."
+            return false
+        }
+        do {
+            let url = try await firebaseBackend.uploadUserProfilePhoto(image, userId: user.id, organizationId: orgId)
+            try await firebaseBackend.updateUserProfilePhotoURL(userId: user.id, url: url)
+            if let idx = organizationUsers.firstIndex(where: { $0.id == user.id }) {
+                organizationUsers[idx].profilePhotoURL = url
+            }
+            if var cu = currentUser, cu.id == user.id {
+                cu.profilePhotoURL = url
+                currentUser = cu
+            }
+            return true
+        } catch {
+            errorMessage = "Could not upload profile photo: \(error.localizedDescription)"
+            return false
+        }
+    }
+    
+    func updateUserStaffTrade(for user: AppUser, tradeTypePreset: String?, tradeTypeCustom: String?, operativeStore: OperativeStore) async -> Bool {
+        guard let firebaseBackend = firebaseBackend else { return false }
+        guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
+        guard user.permissions.operativeMode || user.role == .operative || user.permissions.manager || user.role == .manager else {
+            return false
+        }
+        var updated = organizationUsers[index]
+        updated.tradeTypePreset = tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.tradeTypeCustom = tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if updated.tradeTypePreset?.isEmpty == true { updated.tradeTypePreset = nil }
+        if updated.tradeTypeCustom?.isEmpty == true { updated.tradeTypeCustom = nil }
+        do {
+            try await firebaseBackend.updateUserStaffTradeMetadata(
+                userId: updated.id,
+                tradeTypePreset: updated.tradeTypePreset,
+                tradeTypeCustom: updated.tradeTypeCustom
+            )
+            organizationUsers[index] = updated
+            await syncStaffTradeFromUserToRoster(user: updated, operativeStore: operativeStore)
+            await loadOrganizationUsers()
+            return true
+        } catch {
+            errorMessage = "Failed to update trade type: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func syncStaffTradeFromUserToRoster(user: AppUser, operativeStore: OperativeStore) async {
+        let email = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !email.isEmpty else { return }
+        if user.permissions.operativeMode || user.role == .operative,
+           let idx = operativeStore.operatives.firstIndex(where: {
+               $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+           }) {
+            var op = operativeStore.operatives[idx]
+            guard op.tradeTypePreset != user.tradeTypePreset || op.tradeTypeCustom != user.tradeTypeCustom else { return }
+            op.tradeTypePreset = user.tradeTypePreset
+            op.tradeTypeCustom = user.tradeTypeCustom
+            op.updatedAt = Date()
+            await operativeStore.updateOperative(op)
+            return
+        }
+        if user.permissions.manager || user.role == .manager,
+           let idx = operativeStore.managers.firstIndex(where: {
+               $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+           }) {
+            var m = operativeStore.managers[idx]
+            guard m.tradeTypePreset != user.tradeTypePreset || m.tradeTypeCustom != user.tradeTypeCustom else { return }
+            m.tradeTypePreset = user.tradeTypePreset
+            m.tradeTypeCustom = user.tradeTypeCustom
+            m.updatedAt = Date()
+            await operativeStore.updateManager(m)
+        }
+    }
+
     func updateManagerDayRate(for user: AppUser, dayRate: Double?) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
@@ -1365,6 +1462,11 @@ class UserStore: ObservableObject {
             }
             if let dr = user.dayRate, op.dayRate != dr {
                 op.dayRate = dr
+                changed = true
+            }
+            if op.tradeTypePreset != user.tradeTypePreset || op.tradeTypeCustom != user.tradeTypeCustom {
+                op.tradeTypePreset = user.tradeTypePreset
+                op.tradeTypeCustom = user.tradeTypeCustom
                 changed = true
             }
             if changed {

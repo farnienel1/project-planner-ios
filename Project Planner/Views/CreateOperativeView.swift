@@ -18,6 +18,8 @@ struct CreateOperativeView: View {
     @State private var operativeEmail = ""
     @State private var operativePhone = ""
     @State private var operativeDayRate = ""
+    @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
+    @State private var tradeCustomText = ""
     @State private var selectedSkills: Set<String> = []
     @State private var isLoading = false
     @State private var isSaving = false
@@ -60,6 +62,13 @@ struct CreateOperativeView: View {
                         TextField("Phone *", text: $operativePhone)
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.phonePad)
+                        
+                        StaffTradeTypeFormSection(
+                            presetRaw: $tradePresetRaw,
+                            customText: $tradeCustomText,
+                            title: "Trade type *",
+                            footnote: "Required. Choose Other to enter a custom trade."
+                        )
                         
                         TextField("Day Rate (Optional)", text: $operativeDayRate)
                             .textFieldStyle(.roundedBorder)
@@ -141,7 +150,8 @@ struct CreateOperativeView: View {
         !operativeFirstName.isEmpty &&
         !operativeSurname.isEmpty &&
         !operativeEmail.isEmpty &&
-        !operativePhone.isEmpty
+        !operativePhone.isEmpty &&
+        StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText)
     }
     
     private func createOperative() {
@@ -167,6 +177,8 @@ struct CreateOperativeView: View {
         errorMessage = nil
         
         let parsedRate = operativeDayRate.isEmpty ? nil : Double(operativeDayRate.replacingOccurrences(of: ",", with: "."))
+        let tp = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tc = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
         let operative = Operative(
             firstName: operativeFirstName.trimmingCharacters(in: .whitespaces),
             lastName: operativeSurname.trimmingCharacters(in: .whitespaces),
@@ -175,7 +187,9 @@ struct CreateOperativeView: View {
             startDate: Date(),
             skills: selectedSkills,
             hourlyRate: parsedRate,
-            dayRate: parsedRate
+            dayRate: parsedRate,
+            tradeTypePreset: tp.isEmpty ? nil : tp,
+            tradeTypeCustom: tc.isEmpty ? nil : tc
         )
         
         Task {

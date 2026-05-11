@@ -244,6 +244,12 @@ struct ManagerUserRowView: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     
+                    if user.displayTradeType != "—" {
+                        Text(user.displayTradeType)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
                     if let mobileNumber = user.mobileNumber, !mobileNumber.isEmpty {
                         HStack {
                             Image(systemName: "phone")

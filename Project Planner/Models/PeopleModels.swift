@@ -84,6 +84,9 @@ struct Operative: Identifiable, Codable {
     var dayRate: Double?
     var currencySymbol: String?
     var notes: String?
+    /// Stored `StaffTradeType.rawValue`, or "Other" when using `tradeTypeCustom`.
+    var tradeTypePreset: String?
+    var tradeTypeCustom: String?
     var createdAt: Date
     var updatedAt: Date
     
@@ -108,6 +111,8 @@ struct Operative: Identifiable, Codable {
         dayRate: Double? = nil,
         currencySymbol: String? = nil,
         notes: String? = nil,
+        tradeTypePreset: String? = nil,
+        tradeTypeCustom: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -130,6 +135,8 @@ struct Operative: Identifiable, Codable {
         self.dayRate = dayRate
         self.currencySymbol = currencySymbol
         self.notes = notes
+        self.tradeTypePreset = tradeTypePreset
+        self.tradeTypeCustom = tradeTypeCustom
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -150,6 +157,8 @@ struct Operative: Identifiable, Codable {
         dayRate: Double? = nil,
         currencySymbol: String? = nil,
         notes: String? = nil,
+        tradeTypePreset: String? = nil,
+        tradeTypeCustom: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -173,6 +182,8 @@ struct Operative: Identifiable, Codable {
         self.dayRate = dayRate
         self.currencySymbol = currencySymbol
         self.notes = notes
+        self.tradeTypePreset = tradeTypePreset
+        self.tradeTypeCustom = tradeTypeCustom
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -286,6 +297,8 @@ struct Manager: Identifiable, Codable, Hashable {
     var department: String?
     var isActive: Bool
     var notes: String?
+    var tradeTypePreset: String?
+    var tradeTypeCustom: String?
     var createdAt: Date
     var updatedAt: Date
     
@@ -297,7 +310,9 @@ struct Manager: Identifiable, Codable, Hashable {
         mobileNumber: String,
         department: String? = nil,
         isActive: Bool = true,
-        notes: String? = nil
+        notes: String? = nil,
+        tradeTypePreset: String? = nil,
+        tradeTypeCustom: String? = nil
     ) {
         self.id = id
         self.firstName = firstName
@@ -307,6 +322,8 @@ struct Manager: Identifiable, Codable, Hashable {
         self.department = department
         self.isActive = isActive
         self.notes = notes
+        self.tradeTypePreset = tradeTypePreset
+        self.tradeTypeCustom = tradeTypeCustom
         self.createdAt = Date()
         self.updatedAt = Date()
     }

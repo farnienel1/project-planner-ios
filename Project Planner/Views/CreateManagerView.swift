@@ -19,6 +19,8 @@ struct CreateManagerView: View {
     @State private var managerMobileNumber = ""
     @State private var managerDepartment = ""
     @State private var managerNotes = ""
+    @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
+    @State private var tradeCustomText = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
     
@@ -59,6 +61,13 @@ struct CreateManagerView: View {
                         TextField("Mobile Number *", text: $managerMobileNumber)
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.phonePad)
+                        
+                        StaffTradeTypeFormSection(
+                            presetRaw: $tradePresetRaw,
+                            customText: $tradeCustomText,
+                            title: "Trade type *",
+                            footnote: "Required. Choose Other to enter a custom trade."
+                        )
                         
                         TextField("Department (Optional)", text: $managerDepartment)
                             .textFieldStyle(.roundedBorder)
@@ -102,20 +111,25 @@ struct CreateManagerView: View {
         !managerFirstName.isEmpty &&
         !managerLastName.isEmpty &&
         !managerEmail.isEmpty &&
-        !managerMobileNumber.isEmpty
+        !managerMobileNumber.isEmpty &&
+        StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText)
     }
     
     private func createManager() {
         isLoading = true
         errorMessage = nil
         
+        let tp = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tc = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
         let manager = Manager(
             firstName: managerFirstName,
             lastName: managerLastName,
             email: managerEmail,
             mobileNumber: managerMobileNumber,
             department: managerDepartment.isEmpty ? nil : managerDepartment,
-            notes: managerNotes.isEmpty ? nil : managerNotes
+            notes: managerNotes.isEmpty ? nil : managerNotes,
+            tradeTypePreset: tp.isEmpty ? nil : tp,
+            tradeTypeCustom: tc.isEmpty ? nil : tc
         )
         
         Task {

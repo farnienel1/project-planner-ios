@@ -40,6 +40,7 @@ struct ContentView: View {
     @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var selectedTab = 0
     @State private var showMoreMenu = false
@@ -185,7 +186,15 @@ struct ContentView: View {
             }
         }
         .onChange(of: userStore.currentUser?.id) { _, _ in
-            Task { await notificationService.refreshDailyMaterialCutOffReminder() }
+            Task {
+                await notificationService.refreshDailyMaterialCutOffReminder()
+                await notificationService.refreshQualificationExpiryReminders()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                Task { await notificationService.refreshQualificationExpiryReminders() }
+            }
         }
         .onChange(of: appSettings.settings.notifications.materialOrderCutOff) { _, _ in
             Task { await notificationService.refreshDailyMaterialCutOffReminder() }
@@ -210,6 +219,9 @@ struct ContentView: View {
                 holidaySheetShowRequests = (notification.userInfo?["showRequests"] as? Bool) ?? false
                 showingHolidaySheet = true
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .qualificationExpiryScheduleRefresh)) { _ in
+            Task { await notificationService.refreshQualificationExpiryReminders() }
         }
         .onChange(of: isReorderingTabs) { _, newValue in
             if newValue {
@@ -276,6 +288,7 @@ struct ContentView: View {
         }
         await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
         await notificationService.refreshDailyMaterialCutOffReminder()
+        await notificationService.refreshQualificationExpiryReminders()
     }
     
     /// Single visible root (no `TabView`). Hiding the system tab bar + `TabView` left the main area blank on recent iOS SDKs; we already use a custom bottom bar.

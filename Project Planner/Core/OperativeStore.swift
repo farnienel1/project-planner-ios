@@ -330,6 +330,7 @@ class OperativeStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: ❌ Could not verify operative save: \(error.localizedDescription)")
             }
         }
+        NotificationCenter.default.post(name: .qualificationExpiryScheduleRefresh, object: nil)
         print("🔥🔥🔥 DEBUG: ========== ADD OPERATIVE END ==========")
     }
     
@@ -338,6 +339,7 @@ class OperativeStore: ObservableObject {
             operatives[index] = operative
             // CRITICAL: Save immediately with retry logic
             _ = await saveDataWithRetry(description: "updating operative \(operative.name)")
+            NotificationCenter.default.post(name: .qualificationExpiryScheduleRefresh, object: nil)
         }
     }
     

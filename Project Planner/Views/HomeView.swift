@@ -1099,10 +1099,10 @@ struct OperativeQualificationsReadOnlyView: View {
                 OperativeQualificationsEditorView(
                     operative: op,
                     title: "My Qualifications",
-                    canEditAssignments: true
+                    canEditAssignments: true,
+                    presentation: .myQualifications
                 )
                 .environmentObject(operativeStore)
-                .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
             } else {
                 NavigationStack {
@@ -1190,7 +1190,9 @@ struct OperativeQualificationsReadOnlyView: View {
             qualifications: [],
             qualificationExpiryDates: [:],
             isActive: u.isActive,
-            dayRate: u.dayRate
+            dayRate: u.dayRate,
+            tradeTypePreset: u.tradeTypePreset,
+            tradeTypeCustom: u.tradeTypeCustom
         )
         await operativeStore.addOperative(newOperative)
         repairMessage = "Created and linked operative profile."

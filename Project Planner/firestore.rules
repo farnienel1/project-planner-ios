@@ -257,6 +257,12 @@ service cloud.firestore {
     }
     
     // Users collection - with better validation
+    //
+    // Role / permission coherence when promoting or demoting accounts (operative ↔ manager ↔ admin)
+    // is enforced in the iOS client via `UserRoleTransitionPolicy` + `UserStore.updateUserPermissions`.
+    // That flow keeps `role`, boolean permission flags, and annual-leave behaviour aligned with the
+    // Add user presets; pending holiday *requests* are deleted client-side when switching onto the
+    // self-book path. Approved bookings are never deleted by that transition.
     match /users/{userId} {
       allow read: if request.auth != null;
       allow list: if request.auth != null;

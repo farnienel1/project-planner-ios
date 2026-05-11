@@ -430,7 +430,8 @@ struct HolidayView: View {
                             operativeName: operativeDisplayName,
                             startDate: startDate,
                             endDate: endDate,
-                            assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser()
+                            assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser(),
+                            excludeUserIdMatchingRequester: uid
                         )
                     }
                     await MainActor.run {
@@ -767,7 +768,8 @@ struct HolidayView: View {
                 operativeName: requesterName(for: booking),
                 startDate: booking.startDate,
                 endDate: booking.endDate,
-                assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser()
+                assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser(),
+                excludeUserIdMatchingRequester: uid
             )
         }
     }

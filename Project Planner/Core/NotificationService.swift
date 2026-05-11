@@ -85,6 +85,95 @@ class NotificationService: ObservableObject {
 
         await LocalNotificationService.shared.scheduleDailyMaterialCutOffReminder(hour: 16, minute: 0)
     }
+
+    /// Schedules local notifications 3 months and 1 month before each qualification expiry (09:00 on that day).
+    /// Operative accounts get reminders for their own linked operative record; line managers get one set per managed operative (`assignedManagerUserId`).
+    func refreshQualificationExpiryReminders() async {
+        guard let firebaseBackend,
+              firebaseBackend.currentOrganization != nil,
+              let userStore,
+              let operativeStore,
+              let currentUser = userStore.currentUser else {
+            await LocalNotificationService.shared.removeQualificationExpiryReminders()
+            return
+        }
+
+        await userStore.loadOrganizationUsers()
+        let orgUsers = userStore.organizationUsers
+
+        await LocalNotificationService.shared.removeQualificationExpiryReminders()
+        let authorized = await LocalNotificationService.shared.requestAuthorization()
+        guard authorized else { return }
+
+        let myCanonicalId = await resolvedRecipientUserIdResolvingStaleIds(currentUser.id)
+
+        if currentUser.permissions.operativeMode {
+            let email = Self.normalizedEmail(currentUser.email)
+            guard !email.isEmpty,
+                  let op = operativeStore.allOperatives.first(where: { Self.normalizedEmail($0.email) == email }) else {
+                return
+            }
+            await scheduleQualificationExpiryReminders(for: op, audience: .operative)
+            return
+        }
+
+        for op in operativeStore.allOperatives {
+            let opEmail = Self.normalizedEmail(op.email)
+            guard let linked = orgUsers.first(where: { Self.normalizedEmail($0.email) == opEmail }) else { continue }
+            guard let rawMgr = linked.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !rawMgr.isEmpty else { continue }
+            let managerCanon = await resolvedRecipientUserIdResolvingStaleIds(rawMgr)
+            guard managerCanon == myCanonicalId else { continue }
+            await scheduleQualificationExpiryReminders(for: op, audience: .lineManager)
+        }
+    }
+
+    private enum QualificationExpiryReminderAudience {
+        case operative
+        case lineManager
+    }
+
+    private static func normalizedEmail(_ raw: String) -> String {
+        raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func scheduleQualificationExpiryReminders(
+        for operative: Operative,
+        audience: QualificationExpiryReminderAudience
+    ) async {
+        let cal = Calendar.current
+        let now = Date()
+        let prefix = LocalNotificationService.qualificationExpiryIdentifierPrefix
+
+        for (qualId, expiryDate) in operative.qualificationExpiryDates {
+            let qualName = operative.qualifications.first(where: { $0.id == qualId })?.name ?? "Qualification"
+            let expiryStart = cal.startOfDay(for: expiryDate)
+
+            for monthsBefore in [3, 1] {
+                guard let reminderDay = cal.date(byAdding: .month, value: -monthsBefore, to: expiryStart) else { continue }
+                guard let fireAt = cal.date(bySettingHour: 9, minute: 0, second: 0, of: reminderDay) else { continue }
+                guard fireAt > now else { continue }
+
+                let windowWords = monthsBefore == 3 ? "3 months" : "1 month"
+                let expiryFormatted = expiryDate.formatted(date: .abbreviated, time: .omitted)
+                let title = "Qualification expiring in \(windowWords)"
+                let body: String
+                switch audience {
+                case .operative:
+                    body = "\(qualName) expires on \(expiryFormatted). Please renew before the expiry date."
+                case .lineManager:
+                    body = "\(operative.name): \(qualName) expires on \(expiryFormatted)."
+                }
+                let roleTag = audience == .operative ? "op" : "lm"
+                let ident = "\(prefix)\(operative.id.uuidString)-\(qualId.uuidString)-\(monthsBefore)m-\(roleTag)"
+                await LocalNotificationService.shared.scheduleQualificationExpiryOneShot(
+                    identifier: ident,
+                    title: title,
+                    body: body,
+                    fireAt: fireAt
+                )
+            }
+        }
+    }
     
     // MARK: - Notification Creation
     
@@ -380,14 +469,17 @@ class NotificationService: ObservableObject {
         await saveNotification(adminManagerNotification)
     }
 
-    func notifyHolidayRequestSubmitted(bookingId: UUID, operativeName: String, startDate: Date, endDate: Date, assignedManagerUserId: String?) async {
+    /// `excludeUserIdMatchingRequester` should be the Firebase Auth uid (or app user id) of the person who submitted the request.
+    /// They must not receive the "someone requested leave" admin notification or OS banner.
+    func notifyHolidayRequestSubmitted(bookingId: UUID, operativeName: String, startDate: Date, endDate: Date, assignedManagerUserId: String?, excludeUserIdMatchingRequester: String? = nil) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let dateRange = "\(startDate.formatted(date: .abbreviated, time: .omitted)) – \(endDate.formatted(date: .abbreviated, time: .omitted))"
 
         let recipients = await holidayRequestRecipients(assignedManagerUserId: assignedManagerUserId)
-        print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY SUBMIT] bookingId=\(bookingId.uuidString) operative=\(operativeName) assignedManager=\(assignedManagerUserId ?? "nil") resolvedRecipients=\(recipients)")
-        for mid in recipients {
+        let filteredRecipients = await filterRecipientsExcludingRequester(recipients, requesterId: excludeUserIdMatchingRequester)
+        print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY SUBMIT] bookingId=\(bookingId.uuidString) operative=\(operativeName) assignedManager=\(assignedManagerUserId ?? "nil") resolvedRecipients=\(filteredRecipients)")
+        for mid in filteredRecipients {
             let targetId = await resolvedRecipientUserIdResolvingStaleIds(mid)
             print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY SUBMIT] writing notification target=\(targetId) original=\(mid)")
             let toManager = AppNotification(
@@ -418,8 +510,9 @@ class NotificationService: ObservableObject {
             assignedManagerUserId: assignedManagerUserId,
             requesterUserId: requesterUserId
         )
-        print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY SUBMIT_BY_USER] bookingId=\(bookingId.uuidString) requester=\(requesterName) assignedManager=\(assignedManagerUserId ?? "nil") resolvedRecipients=\(recipients)")
-        for managerId in recipients {
+        let filteredRecipients = await filterRecipientsExcludingRequester(recipients, requesterId: requesterUserId)
+        print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY SUBMIT_BY_USER] bookingId=\(bookingId.uuidString) requester=\(requesterName) assignedManager=\(assignedManagerUserId ?? "nil") resolvedRecipients=\(filteredRecipients)")
+        for managerId in filteredRecipients {
             let targetId = await resolvedRecipientUserIdResolvingStaleIds(managerId)
             print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY SUBMIT_BY_USER] writing notification target=\(targetId) original=\(managerId)")
             let toManager = AppNotification(
@@ -539,7 +632,7 @@ class NotificationService: ObservableObject {
             shouldShowNotification(notification, for: currentUser)
         }
         let synthetic = syntheticAnnualLeaveNotifications(for: currentUser, organizationId: organizationId)
-        let merged = (filteredNotifications + synthetic).sorted { $0.createdAt > $1.createdAt }
+        let merged = dedupeHolidayNotificationRows((filteredNotifications + synthetic).sorted { $0.createdAt > $1.createdAt })
         let targetedToCurrent = allNotifications.filter { $0.userId == currentUser.id }.count
         let broadcastCount = allNotifications.filter { $0.userId == nil }.count
         print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] targetedToCurrent=\(targetedToCurrent) broadcasts=\(broadcastCount) filteredVisible=\(filteredNotifications.count)")
@@ -692,7 +785,7 @@ class NotificationService: ObservableObject {
                 let filtered = parsed.filter { self.shouldShowNotification($0, for: currentUser) }
                 let sorted = filtered.sorted { $0.createdAt > $1.createdAt }
                 let synthetic = self.syntheticAnnualLeaveNotifications(for: currentUser, organizationId: organizationId)
-                let merged = (sorted + synthetic).sorted { $0.createdAt > $1.createdAt }
+                let merged = self.dedupeHolidayNotificationRows((sorted + synthetic).sorted { $0.createdAt > $1.createdAt })
                 let changedParsed = (snapshot?.documentChanges ?? [])
                     .compactMap { change -> AppNotification? in
                         // Alert only for newly added notifications after the stream is primed.
@@ -804,7 +897,7 @@ class NotificationService: ObservableObject {
         }
     }
 
-    private func scheduleLocalHolidayRequestAlert(title: String, message: String) {
+    private func scheduleLocalHolidayRequestAlert(title: String, message: String, dedupeIdentifier: String) {
         Task {
             let granted = await LocalNotificationService.shared.requestAuthorization()
             guard granted else {
@@ -815,8 +908,11 @@ class NotificationService: ObservableObject {
             content.title = title
             content.body = message
             content.sound = .default
+            let sanitizedId = String(dedupeIdentifier
+                .replacingOccurrences(of: "/", with: "-")
+                .prefix(200))
             let request = UNNotificationRequest(
-                identifier: "holiday-request-\(UUID().uuidString)",
+                identifier: "holiday-local-\(sanitizedId)",
                 content: content,
                 trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
             )
@@ -942,6 +1038,72 @@ class NotificationService: ObservableObject {
         Array(Set(ids.map { resolvedRecipientUserId($0) }))
     }
 
+    /// Removes the requester from approver/admin recipient lists so they are not targeted by FCM or in-app “incoming request” rows for their own submission.
+    private func filterRecipientsExcludingRequester(_ recipients: [String], requesterId: String?) async -> [String] {
+        guard let raw = requesterId?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return recipients
+        }
+        let requesterCanonical = await resolvedRecipientUserIdResolvingStaleIds(raw)
+        var out: [String] = []
+        for r in recipients {
+            let trimmed = r.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            if trimmed == raw { continue }
+            let canon = await resolvedRecipientUserIdResolvingStaleIds(trimmed)
+            if canon == requesterCanonical { continue }
+            out.append(trimmed)
+        }
+        return uniqueCanonicalUserIds(from: out)
+    }
+
+    /// Prefer persisted Firestore notifications over derived synthetic rows for the same holiday event + user.
+    private func dedupeHolidayNotificationRows(_ items: [AppNotification]) -> [AppNotification] {
+        let nonSynthetic = items.filter { $0.requiresPermission != "syntheticAnnualLeave" }
+        let synthetic = items.filter { $0.requiresPermission == "syntheticAnnualLeave" }
+        var keys = Set(nonSynthetic.compactMap { holidayEventDedupeKey($0) })
+        var kept = nonSynthetic
+        for s in synthetic {
+            guard let k = holidayEventDedupeKey(s) else {
+                kept.append(s)
+                continue
+            }
+            if keys.contains(k) { continue }
+            keys.insert(k)
+            kept.append(s)
+        }
+        return kept.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func holidayEventDedupeKey(_ n: AppNotification) -> String? {
+        guard let rid = n.relatedId else { return nil }
+        let uid = n.userId ?? ""
+        switch n.type {
+        case .holidayRequestSubmitted:
+            return "holiday_submitted|\(rid.uuidString)|\(uid)"
+        case .holidayRequestApproved, .holidayRequestDeclined:
+            return "holiday_decision|\(rid.uuidString)|\(uid)"
+        default:
+            return nil
+        }
+    }
+
+    private func isCurrentUserHolidayRequester(request: HolidayBooking, user: AppUser) -> Bool {
+        if let uid = request.userId?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty {
+            if uid == user.id { return true }
+            let canonicalRequester = resolvedRecipientUserId(uid)
+            let canonicalUser = resolvedRecipientUserId(user.id)
+            if canonicalRequester == canonicalUser { return true }
+        }
+        if let oid = request.operativeId,
+           let operativeStore,
+           let op = operativeStore.allOperatives.first(where: { $0.id == oid }) {
+            let oEmail = op.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let uEmail = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            if !oEmail.isEmpty, oEmail == uEmail { return true }
+        }
+        return false
+    }
+
     private func scheduleLocalBookingAlert(message: String) {
         requestLocalNotificationPermissionIfNeeded()
         let content = UNMutableNotificationContent()
@@ -1013,7 +1175,7 @@ class NotificationService: ObservableObject {
         let key = notificationDedupKey(for: notification)
         guard !seenLocalAlertNotificationKeys.contains(key) else { return }
         recordLocalAlertDedupKey(key)
-        scheduleLocalHolidayRequestAlert(title: notification.title, message: notification.message)
+        scheduleLocalHolidayRequestAlert(title: notification.title, message: notification.message, dedupeIdentifier: key)
     }
 
     private func loadPersistedLocalAlertDedupKeysIfNeeded() {
@@ -1081,6 +1243,9 @@ class NotificationService: ObservableObject {
 
         if !user.permissions.operativeMode && (user.permissions.manager || user.permissions.adminAccess || user.isSuperAdmin || user.role == .admin) {
             let pending = holidayStore.pendingRequests.filter { request in
+                if isCurrentUserHolidayRequester(request: request, user: user) {
+                    return false
+                }
                 let approver = approverUserId(for: request)
                 if user.permissions.manager && !user.permissions.adminAccess && !user.isSuperAdmin && user.role != .admin {
                     return approver == user.id
@@ -1151,6 +1316,10 @@ class NotificationService: ObservableObject {
         }
         return "Operative"
     }
+}
+
+extension Notification.Name {
+    static let qualificationExpiryScheduleRefresh = Notification.Name("qualificationExpiryScheduleRefresh")
 }
 
 

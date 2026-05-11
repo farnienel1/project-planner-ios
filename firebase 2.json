@@ -1,0 +1,30 @@
+{
+  "firestore": {
+    "rules": "website/firestore.rules"
+  },
+  "storage": {
+    "rules": "Project Planner/storage.rules"
+  },
+  "functions": [
+    {
+      "source": "website/functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log"
+      ]
+    },
+    {
+      "source": "website/functions-push",
+      "codebase": "push",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log"
+      ]
+    }
+  ]
+}

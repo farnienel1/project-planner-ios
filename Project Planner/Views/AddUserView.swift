@@ -44,6 +44,8 @@ struct AddUserView: View {
     @State private var assignedManagerUserId: String?
     @State private var operativeDayRateText = ""
     @State private var managerDayRateText = ""
+    @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
+    @State private var tradeCustomText = ""
     @State private var isCreating = false
     @State private var showSuccess = false
     @State private var errorMessage: String?
@@ -294,6 +296,15 @@ struct AddUserView: View {
                 }
                 
                 if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
+                    StaffTradeTypeFormSection(
+                        presetRaw: $tradePresetRaw,
+                        customText: $tradeCustomText,
+                        title: "Trade type *",
+                        footnote: "Required for operatives and managers."
+                    )
+                }
+                
+                if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Day rate (optional)")
                             .font(.headline)
@@ -331,7 +342,10 @@ struct AddUserView: View {
                     Text("Operative mode")
                         .font(.headline)
                 }
-                Text("They can see assigned projects and small works, tasks, holiday (requests), schedule (view only), and their qualifications.")
+                Text("Operative mode provides very limited access to the platform. It allows access to their schedule, request annual leave and maintain their qualifications.")
+                    .font(.subheadline)
+                    .foregroundColor(.primary)
+                Text("The below features are additional options, which need to be selected to provide access.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -478,11 +492,24 @@ struct AddUserView: View {
                     )
                 case .operative:
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Operative permissions are fixed")
-                            .font(.headline)
-                        Text("Operative mode is on; admin, manager, skills, and organisation qualification editing are off. Projects and small works access is limited to assigned work in the app.")
+                        Text("Operative mode provides very limited access to the platform. It allows access to their schedule, request annual leave and maintain their qualifications.")
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        Text("The below features are additional options, which need to be selected to provide access.")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                        PermissionToggle(
+                            title: "Projects",
+                            description: "Can create and manage projects.",
+                            isOn: .constant(false),
+                            isDisabled: true
+                        )
+                        PermissionToggle(
+                            title: "Small Works",
+                            description: "Can create and manage small works.",
+                            isOn: .constant(false),
+                            isDisabled: true
+                        )
                         PermissionToggle(
                             title: "Materials",
                             description: "Allow this operative to see and use Materials inside assigned projects and small works.",
@@ -586,6 +613,16 @@ struct AddUserView: View {
                                 .foregroundColor(.secondary)
                             Spacer()
                             Text(reviewDayRate)
+                                .fontWeight(.medium)
+                        }
+                    }
+                    
+                    if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
+                        HStack {
+                            Text("Trade:")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text(StaffTradeType.displayLabel(presetRaw: tradePresetRaw, custom: tradeCustomText))
                                 .fontWeight(.medium)
                         }
                     }
@@ -699,11 +736,18 @@ struct AddUserView: View {
         }
     }
     
+    private var tradeRequiredAndValid: Bool {
+        guard mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager else {
+            return true
+        }
+        return StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText)
+    }
+    
     private var canProceed: Bool {
         if mode == .managerAddingOperative {
             switch currentStep {
             case 1:
-                return !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email)
+                return !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email) && tradeRequiredAndValid
             case 2:
                 return assignedManagerUserId != nil && !(assignedManagerUserId?.isEmpty ?? true)
             case 3:
@@ -716,7 +760,7 @@ struct AddUserView: View {
         case 1:
             return true
         case 2:
-            let base = !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email)
+            let base = !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email) && tradeRequiredAndValid
             if invitedAccountType == .operative {
                 return base && assignedManagerUserId != nil && !(assignedManagerUserId?.isEmpty ?? true)
             }
@@ -761,6 +805,12 @@ struct AddUserView: View {
         
         Task {
             let parsedDayRate = parseDayRate(from: selectedDayRateTextForReview)
+            let needsTrade = mode == .managerAddingOperative || permissions.operativeMode || permissions.manager
+            let tCustom: String? = {
+                guard tradePresetRaw == StaffTradeType.other.rawValue else { return nil }
+                let t = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
+                return t.isEmpty ? nil : t
+            }()
             let success = await userStore.inviteUser(
                 firstName: firstName,
                 surname: surname,
@@ -769,7 +819,9 @@ struct AddUserView: View {
                 permissions: permissions,
                 assignedManagerUserId: permissions.operativeMode ? assignedManagerUserId : nil,
                 invitedOperativeDayRate: permissions.operativeMode ? parsedDayRate : nil,
-                invitedManagerDayRate: permissions.manager ? parsedDayRate : nil
+                invitedManagerDayRate: permissions.manager ? parsedDayRate : nil,
+                invitedTradeTypePreset: needsTrade ? tradePresetRaw : nil,
+                invitedTradeTypeCustom: needsTrade ? tCustom : nil
             )
             
             await MainActor.run {

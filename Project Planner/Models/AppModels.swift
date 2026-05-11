@@ -258,6 +258,11 @@ struct AppUser: Identifiable, Codable, Hashable {
     var assignedManagerUserId: String?
     /// Default day rate for this operative (optional; copied to roster when the operative profile is created).
     var dayRate: Double?
+    /// `StaffTradeType.rawValue`, or "Other" with `tradeTypeCustom` for free text.
+    var tradeTypePreset: String?
+    var tradeTypeCustom: String?
+    /// Firebase Storage download URL for profile photo (set from Manage Users).
+    var profilePhotoURL: String?
     
     init(
         id: String,
@@ -275,7 +280,10 @@ struct AppUser: Identifiable, Codable, Hashable {
         policyAccepted: Bool = false,
         policyAcceptedAt: Date? = nil,
         assignedManagerUserId: String? = nil,
-        dayRate: Double? = nil
+        dayRate: Double? = nil,
+        tradeTypePreset: String? = nil,
+        tradeTypeCustom: String? = nil,
+        profilePhotoURL: String? = nil
     ) {
         self.id = id
         self.email = email
@@ -293,6 +301,9 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.policyAcceptedAt = policyAcceptedAt
         self.assignedManagerUserId = assignedManagerUserId
         self.dayRate = dayRate
+        self.tradeTypePreset = tradeTypePreset
+        self.tradeTypeCustom = tradeTypeCustom
+        self.profilePhotoURL = profilePhotoURL
     }
     
     var fullName: String {

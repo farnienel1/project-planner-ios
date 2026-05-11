@@ -481,6 +481,12 @@ struct OperativeDetailRowView: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     
+                    if operative.displayTradeType != "—" {
+                        Text(operative.displayTradeType)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
                     if let dayRate = (operative.dayRate ?? operative.hourlyRate), dayRate > 0 {
                         let currencySymbol = operative.currencySymbol ?? defaultCurrencySymbol()
                         Text("\(currencySymbol)\(String(format: "%.0f", dayRate))/day")
@@ -600,6 +606,8 @@ struct AddOperativeView: View {
     @State private var selectedQualifications: Set<Qualification> = []
     @State private var hourlyRate = ""
     @State private var notes = ""
+    @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
+    @State private var tradeCustomText = ""
     
     var body: some View {
         NavigationView {
@@ -684,6 +692,15 @@ struct AddOperativeView: View {
                     }
                 }
                 
+                Section {
+                    StaffTradeTypeFormSection(
+                        presetRaw: $tradePresetRaw,
+                        customText: $tradeCustomText,
+                        title: "Trade type *",
+                        footnote: "Required."
+                    )
+                }
+                
                 Section("Additional Info") {
                     TextField("Day Rate (e.g., £45, $50)", text: $hourlyRate)
                     TextField("Notes", text: $notes, axis: .vertical)
@@ -710,12 +727,15 @@ struct AddOperativeView: View {
     }
     
     private var isFormValid: Bool {
-        !firstName.isEmpty && !lastName.isEmpty && !email.isEmpty
+        !firstName.isEmpty && !lastName.isEmpty && !email.isEmpty &&
+        StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText)
     }
     
     private func saveOperative() {
         // Parse the hourly rate, preserving currency symbols
         let parsedRate = parseCurrencyAmount(hourlyRate)
+        let tp = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tc = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
         
         let operative = Operative(
             firstName: firstName.trimmingCharacters(in: .whitespaces),
@@ -727,7 +747,9 @@ struct AddOperativeView: View {
             qualifications: Array(selectedQualifications),
             hourlyRate: parsedRate.amount,
             dayRate: parsedRate.amount,
-            currencySymbol: parsedRate.symbol
+            currencySymbol: parsedRate.symbol,
+            tradeTypePreset: tp.isEmpty ? nil : tp,
+            tradeTypeCustom: tc.isEmpty ? nil : tc
         )
         
         Task {
@@ -778,6 +800,8 @@ struct EditOperativeView: View {
     @State private var notes: String
     @State private var isActive: Bool
     @State private var showingDeleteConfirmation = false
+    @State private var tradePresetRaw: String
+    @State private var tradeCustomText: String
     
     init(operative: Operative) {
         self.operative = operative
@@ -796,6 +820,8 @@ struct EditOperativeView: View {
         }())
         self._notes = State(initialValue: operative.notes ?? "")
         self._isActive = State(initialValue: operative.isActive)
+        self._tradePresetRaw = State(initialValue: operative.tradeTypePreset ?? "")
+        self._tradeCustomText = State(initialValue: operative.tradeTypeCustom ?? "")
         
         print("🔥🔥🔥 DEBUG: EditOperativeView initialized for operative: \(operative.name)")
         print("🔥🔥🔥 DEBUG: Operative skills: \(operative.skills)")
@@ -906,6 +932,12 @@ struct EditOperativeView: View {
                 }
                 
                 Section("Additional Info") {
+                    StaffTradeTypeFormSection(
+                        presetRaw: $tradePresetRaw,
+                        customText: $tradeCustomText,
+                        title: "Trade type *",
+                        footnote: "Required."
+                    )
                     TextField("Day Rate (e.g., £45, $50)", text: $dayRate)
                     TextField("Notes", text: $notes, axis: .vertical)
                         .lineLimit(3...6)
@@ -962,12 +994,15 @@ struct EditOperativeView: View {
     }
     
     private var isFormValid: Bool {
-        !firstName.isEmpty && !lastName.isEmpty && !email.isEmpty
+        !firstName.isEmpty && !lastName.isEmpty && !email.isEmpty &&
+        StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText)
     }
     
     private func updateOperative() {
         // Parse the hourly rate, preserving currency symbols
         let parsedRate = parseCurrencyAmount(dayRate)
+        let tp = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tc = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
         
         var updatedOperative = operative
         updatedOperative.firstName = firstName.trimmingCharacters(in: .whitespaces)
@@ -982,6 +1017,8 @@ struct EditOperativeView: View {
         updatedOperative.currencySymbol = parsedRate.symbol
         updatedOperative.notes = notes.isEmpty ? nil : notes
         updatedOperative.isActive = isActive
+        updatedOperative.tradeTypePreset = tp.isEmpty ? nil : tp
+        updatedOperative.tradeTypeCustom = tc.isEmpty ? nil : tc
         updatedOperative.updatedAt = Date()
         
         Task {

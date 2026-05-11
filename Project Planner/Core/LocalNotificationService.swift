@@ -12,6 +12,7 @@ import UserNotifications
 class LocalNotificationService {
     static let shared = LocalNotificationService()
     static let dailyMaterialCutoffIdentifier = "daily-material-order-cutoff-16h"
+    static let qualificationExpiryIdentifierPrefix = "qual-exp-v2-"
     
     private init() {}
     
@@ -168,6 +169,33 @@ class LocalNotificationService {
     func removeDailyMaterialCutOffReminder() {
         UNUserNotificationCenter.current()
             .removePendingNotificationRequests(withIdentifiers: [Self.dailyMaterialCutoffIdentifier])
+    }
+
+    /// Clears all pending one-shot qualification expiry reminders (3-month and 1-month) before rescheduling.
+    func removeQualificationExpiryReminders() async {
+        let center = UNUserNotificationCenter.current()
+        let pending = await center.pendingNotificationRequests()
+        let ids = pending.map(\.identifier).filter { $0.hasPrefix(Self.qualificationExpiryIdentifierPrefix) }
+        center.removePendingNotificationRequests(withIdentifiers: ids)
+    }
+
+    func scheduleQualificationExpiryOneShot(identifier: String, title: String, body: String, fireAt: Date) async {
+        guard fireAt > Date() else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+
+        var cal = Calendar.current
+        cal.timeZone = TimeZone.current
+        let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: fireAt)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+        } catch {
+            print("🔥🔥🔥 DEBUG: Error scheduling qualification expiry notification \(identifier): \(error.localizedDescription)")
+        }
     }
 }
 

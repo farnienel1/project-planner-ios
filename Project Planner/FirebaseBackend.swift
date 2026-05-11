@@ -1994,6 +1994,33 @@ class FirebaseBackend: ObservableObject {
         }
     }
 
+    /// Profile photo for a user (managed from Manage Users). Overwrites prior object at this path.
+    func uploadUserProfilePhoto(_ image: UIImage, userId: String, organizationId: String) async throws -> String {
+        guard currentUser?.uid != nil else {
+            throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
+        }
+        guard let imageData = image.jpegData(compressionQuality: 0.82) else {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Failed to process image"])
+        }
+        let path = "organizations/\(organizationId)/userProfiles/\(userId)/profile.jpg"
+        let storageRef = storage.reference().child(path)
+        let metadata = StorageMetadata()
+        metadata.contentType = "image/jpeg"
+        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+            storageRef.putData(imageData, metadata: metadata) { metadata, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else if let metadata = metadata {
+                    continuation.resume(returning: metadata)
+                } else {
+                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+                }
+            }
+        }
+        let downloadURL = try await storageRef.downloadURL()
+        return downloadURL.absoluteString
+    }
+
     func uploadOrganizationLogo(_ image: UIImage, organizationId: String) async throws -> String {
         guard let userId = currentUser?.uid else {
             throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
@@ -2093,6 +2120,10 @@ class FirebaseBackend: ObservableObject {
     func uploadSiteAuditImage(_ image: UIImage, auditId: UUID, organizationId: String, imageName: String) async throws -> String {
         throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: "FirebaseStorage is not available."])
     }
+
+    func uploadUserProfilePhoto(_ image: UIImage, userId: String, organizationId: String) async throws -> String {
+        throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: "FirebaseStorage is not available."])
+    }
     
     func uploadQualificationDocument(
         data: Data,
@@ -2142,6 +2173,8 @@ class FirebaseBackend: ObservableObject {
                 "currencySymbol": operative.currencySymbol ?? "£",
             "notes": operative.notes ?? "",
             "dayRate": operative.dayRate ?? 0,
+            "tradeTypePreset": operative.tradeTypePreset ?? "",
+            "tradeTypeCustom": operative.tradeTypeCustom ?? "",
             "qualificationExpiryDates": Dictionary(uniqueKeysWithValues: operative.qualificationExpiryDates.map { ($0.key.uuidString, Timestamp(date: $0.value)) }),
             "qualificationCertificateURLs": Dictionary(uniqueKeysWithValues: operative.qualificationCertificateURLs.map { ($0.key.uuidString, $0.value) }),
             "organizationId": organizationId,
@@ -2289,6 +2322,8 @@ class FirebaseBackend: ObservableObject {
                 
                 let loadedHourly = data["hourlyRate"] as? Double
                 let loadedDay = data["dayRate"] as? Double
+                let tp = (data["tradeTypePreset"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let tc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let operative = Operative(
                     id: UUID(uuidString: doc.documentID) ?? UUID(),
                     firstName: firstName,
@@ -2305,6 +2340,8 @@ class FirebaseBackend: ObservableObject {
                     dayRate: loadedDay ?? loadedHourly,
                     currencySymbol: data["currencySymbol"] as? String,
                     notes: data["notes"] as? String,
+                    tradeTypePreset: (tp?.isEmpty == false) ? tp : nil,
+                    tradeTypeCustom: (tc?.isEmpty == false) ? tc : nil,
                     createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
                     updatedAt: (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
                 )
@@ -2528,6 +2565,8 @@ class FirebaseBackend: ObservableObject {
                 "department": manager.department ?? "",
                 "isActive": manager.isActive,
                 "notes": manager.notes ?? "",
+                "tradeTypePreset": manager.tradeTypePreset ?? "",
+                "tradeTypeCustom": manager.tradeTypeCustom ?? "",
                 "organizationId": organizationId,
                 "createdAt": Timestamp(date: manager.createdAt),
                 "updatedAt": Timestamp(date: Date())
@@ -2566,6 +2605,8 @@ class FirebaseBackend: ObservableObject {
                 let department = data["department"] as? String
                 let notes = data["notes"] as? String
                 
+                let mtp = (data["tradeTypePreset"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let mtc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                 var manager = Manager(
                     id: id,
                     firstName: firstName,
@@ -2574,7 +2615,9 @@ class FirebaseBackend: ObservableObject {
                     mobileNumber: mobileNumber,
                     department: department,
                     isActive: isActive,
-                    notes: notes
+                    notes: notes,
+                    tradeTypePreset: (mtp?.isEmpty == false) ? mtp : nil,
+                    tradeTypeCustom: (mtc?.isEmpty == false) ? mtc : nil
                 )
                 
                 // Set the actual dates from Firebase
@@ -2840,6 +2883,9 @@ class FirebaseBackend: ObservableObject {
         
         let assignedManagerUserId = data["assignedManagerUserId"] as? String
         let dayRate = data["dayRate"] as? Double
+        let utp = (data["tradeTypePreset"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let utc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let profilePhotoRaw = (data["profilePhotoURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         
         return AppUser(
             id: userId,
@@ -2857,7 +2903,10 @@ class FirebaseBackend: ObservableObject {
             policyAccepted: policyAccepted,
             policyAcceptedAt: policyAcceptedAt,
             assignedManagerUserId: assignedManagerUserId,
-            dayRate: dayRate
+            dayRate: dayRate,
+            tradeTypePreset: (utp?.isEmpty == false) ? utp : nil,
+            tradeTypeCustom: (utc?.isEmpty == false) ? utc : nil,
+            profilePhotoURL: (profilePhotoRaw?.isEmpty == false) ? profilePhotoRaw : nil
         )
     }
     
@@ -3087,7 +3136,51 @@ class FirebaseBackend: ObservableObject {
             userData["dayRate"] = dr
         }
         
+        if user.permissions.operativeMode || user.permissions.manager {
+            if let p = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
+                userData["tradeTypePreset"] = p
+            }
+            if let c = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines), !c.isEmpty {
+                userData["tradeTypeCustom"] = c
+            }
+        }
+        
+        if let photo = user.profilePhotoURL?.trimmingCharacters(in: .whitespacesAndNewlines), !photo.isEmpty {
+            userData["profilePhotoURL"] = photo
+        } else {
+            userData["profilePhotoURL"] = FieldValue.delete()
+        }
+        
         try await db.collection("users").document(user.id).setData(userData)
+    }
+    
+    func updateUserProfilePhotoURL(userId: String, url: String?) async throws {
+        var payload: [String: Any] = ["updatedAt": Timestamp(date: Date())]
+        if let url = url?.trimmingCharacters(in: .whitespacesAndNewlines), !url.isEmpty {
+            payload["profilePhotoURL"] = url
+        } else {
+            payload["profilePhotoURL"] = FieldValue.delete()
+        }
+        try await db.collection("users").document(userId).updateData(payload)
+    }
+
+    func updateUserStaffTradeMetadata(userId: String, tradeTypePreset: String?, tradeTypeCustom: String?) async throws {
+        var payload: [String: Any] = [
+            "updatedAt": Timestamp(date: Date())
+        ]
+        let p = tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let c = tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let p, !p.isEmpty {
+            payload["tradeTypePreset"] = p
+        } else {
+            payload["tradeTypePreset"] = FieldValue.delete()
+        }
+        if let c, !c.isEmpty {
+            payload["tradeTypeCustom"] = c
+        } else {
+            payload["tradeTypeCustom"] = FieldValue.delete()
+        }
+        try await db.collection("users").document(userId).updateData(payload)
     }
 
     /// Patch-only update for operative profile metadata managed from Manage Users.
@@ -3450,7 +3543,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         
         let emailLower = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3519,6 +3612,16 @@ class FirebaseBackend: ObservableObject {
         if permissions.manager, let dr = invitedManagerDayRate {
             invitationData["dayRate"] = dr
         }
+        if permissions.operativeMode || permissions.manager {
+            let tp = invitedTradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let tc = invitedTradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let tp, !tp.isEmpty {
+                invitationData["tradeTypePreset"] = tp
+            }
+            if let tc, !tc.isEmpty {
+                invitationData["tradeTypeCustom"] = tc
+            }
+        }
         
         if let mobileNumber = mobileNumber, !mobileNumber.isEmpty {
             invitationData["mobileNumber"] = mobileNumber
@@ -3550,6 +3653,8 @@ class FirebaseBackend: ObservableObject {
                 return m
             }()
             
+            let inviteTp = invitedTradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let inviteTc = invitedTradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines)
             let newUser = AppUser(
                 id: userId,
                 email: emailLower, // store lowercase for Firestore rule (userEmails claim)
@@ -3564,7 +3669,9 @@ class FirebaseBackend: ObservableObject {
                 permissions: permissions, // Use the permissions from the invitation
                 isSuperAdmin: false,
                 assignedManagerUserId: operativeManagerId,
-                dayRate: permissions.operativeMode ? invitedOperativeDayRate : (permissions.manager ? invitedManagerDayRate : nil)
+                dayRate: permissions.operativeMode ? invitedOperativeDayRate : (permissions.manager ? invitedManagerDayRate : nil),
+                tradeTypePreset: (permissions.operativeMode || permissions.manager) && inviteTp?.isEmpty == false ? inviteTp : nil,
+                tradeTypeCustom: (permissions.operativeMode || permissions.manager) && inviteTc?.isEmpty == false ? inviteTc : nil
             )
             
             do {

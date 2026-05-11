@@ -132,7 +132,7 @@ struct WeeklyReportView: View {
         rows.append(["From", formatDate(startDate), "To", formatDate(endDate)])
         rows.append([])
         rows.append(["PROJECT BREAKDOWN"])
-        rows.append(["Project", "Job Number", "Person", "Role", "Days"])
+        rows.append(["Project", "Job Number", "Person", "Trade", "Role", "Days"])
 
         let operativeRows = operativeProjectRows()
         let managerRows = managerProjectRows()
@@ -143,15 +143,16 @@ struct WeeklyReportView: View {
         for key in grouped.keys.sorted() {
             guard let group = grouped[key] else { continue }
             var projectTotal = 0.0
-            for row in group.sorted(by: { $0.personName < $1.personName }) {
-                rows.append([row.projectName, row.jobNumber, row.personName, row.role, formatDays(row.days)])
+            for row in group.sorted(by: projectWorkRowSort) {
+                let tradeCell = row.tradeDisplay == "—" ? "" : row.tradeDisplay
+                rows.append([row.projectName, row.jobNumber, row.personName, tradeCell, row.role, formatDays(row.days)])
                 projectTotal += row.days
                 projectGrandTotal += row.days
             }
-            rows.append(["", "", "", "Project Total", formatDays(projectTotal)])
+            rows.append(["", "", "", "", "Project Total", formatDays(projectTotal)])
             rows.append([])
         }
-        rows.append(["", "", "", "All Project Work Total", formatDays(projectGrandTotal)])
+        rows.append(["", "", "", "", "All Project Work Total", formatDays(projectGrandTotal)])
         rows.append([])
         
         rows.append(["SUB CONTRACTORS"])
@@ -217,6 +218,13 @@ struct WeeklyReportView: View {
         return rows.map { $0.map(csvEscape).joined(separator: ",") }.joined(separator: "\n")
     }
 
+    private func projectWorkRowSort(_ lhs: ProjectWorkRow, _ rhs: ProjectWorkRow) -> Bool {
+        if lhs.tradeSortKey != rhs.tradeSortKey {
+            return lhs.tradeSortKey < rhs.tradeSortKey
+        }
+        return lhs.personName.localizedCaseInsensitiveCompare(rhs.personName) == .orderedAscending
+    }
+
     private func operativeProjectRows() -> [ProjectWorkRow] {
         let cal = Calendar.current
         let filtered = bookingStore.bookings.filter { booking in
@@ -237,7 +245,15 @@ struct WeeklyReportView: View {
             let key = "\(projectName)|\(jobNumber)|\(personName)|Operative"
             let dayValue = bookingDayValue(from: booking.timeSlot)
             totals[key, default: 0] += dayValue
-            rowsMap[key] = ProjectWorkRow(projectName: projectName, jobNumber: jobNumber, personName: personName, role: "Operative", days: totals[key] ?? 0)
+            rowsMap[key] = ProjectWorkRow(
+                projectName: projectName,
+                jobNumber: jobNumber,
+                personName: personName,
+                tradeDisplay: operative.displayTradeType,
+                tradeSortKey: StaffTradeType.sortKey(presetRaw: operative.tradeTypePreset, custom: operative.tradeTypeCustom),
+                role: "Operative",
+                days: totals[key] ?? 0
+            )
         }
         return Array(rowsMap.values)
     }
@@ -262,7 +278,15 @@ struct WeeklyReportView: View {
             let key = "\(projectName)|\(jobNumber)|\(personName)|Manager"
             let dayValue = managerDayValue(from: booking.timeSlot)
             totals[key, default: 0] += dayValue
-            rowsMap[key] = ProjectWorkRow(projectName: projectName, jobNumber: jobNumber, personName: personName, role: "Manager", days: totals[key] ?? 0)
+            rowsMap[key] = ProjectWorkRow(
+                projectName: projectName,
+                jobNumber: jobNumber,
+                personName: personName,
+                tradeDisplay: user.displayTradeType,
+                tradeSortKey: StaffTradeType.sortKey(presetRaw: user.tradeTypePreset, custom: user.tradeTypeCustom),
+                role: "Manager",
+                days: totals[key] ?? 0
+            )
         }
         return Array(rowsMap.values)
     }
@@ -465,6 +489,8 @@ private struct ProjectWorkRow {
     let projectName: String
     let jobNumber: String
     let personName: String
+    let tradeDisplay: String
+    let tradeSortKey: String
     let role: String
     var days: Double
 }
