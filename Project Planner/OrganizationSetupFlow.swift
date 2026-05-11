@@ -57,8 +57,8 @@ struct OrganisationSetupFlow: View {
     ]
     
     var body: some View {
-        NavigationView {
-            VStack {
+        NavigationStack {
+            VStack(spacing: 0) {
                 // Progress indicator
                 HStack {
                     ForEach(0..<steps.count, id: \.self) { index in
@@ -109,6 +109,8 @@ struct OrganisationSetupFlow: View {
                         .tag(6)
                 }
                 .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
+                // Without an explicit flexible height, `TabView` in a `VStack` often collapses to 0pt on recent iOS → blank white setup screen.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 
                 // Navigation buttons
                 HStack {
@@ -156,6 +158,8 @@ struct OrganisationSetupFlow: View {
                 }
                 .padding()
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("Organisation Setup")
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarBackButtonHidden(true)

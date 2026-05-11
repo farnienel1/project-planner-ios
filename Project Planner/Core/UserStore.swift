@@ -50,6 +50,11 @@ class UserStore: ObservableObject {
         guard let preset = roleTestingPreset else { return base }
         return Self.applyRoleTesting(preset, to: base)
     }
+
+    /// Firebase Auth session exists but the org `AppUser` isn’t in memory yet. Home shouldn’t hide admin/manager tiles during this window.
+    var isHomeProfileLoading: Bool {
+        Auth.auth().currentUser != nil && currentUser == nil
+    }
     
     /// Whether the signed-in account may open role testing (not available in real operative-only login).
     var canConfigureRoleTesting: Bool {
@@ -128,7 +133,10 @@ class UserStore: ObservableObject {
     // MARK: - User Management
     
     func loadCurrentUser() async {
-        guard let firebaseBackend = firebaseBackend else { return }
+        guard let firebaseBackend = firebaseBackend else {
+            print("🔥🔥🔥 DEBUG: loadCurrentUser skipped — FirebaseBackend not wired yet")
+            return
+        }
         
         isLoading = true
         errorMessage = nil
@@ -137,6 +145,13 @@ class UserStore: ObservableObject {
             if let firebaseUser = Auth.auth().currentUser {
                 // Load user data from Firestore
                 var userData = try await firebaseBackend.getUserData(userId: firebaseUser.uid)
+
+                // Org load runs in parallel from the auth listener; first profile fetch can win the race and see no org.
+                if userData == nil, firebaseBackend.currentOrganization == nil {
+                    print("🔥🔥🔥 DEBUG: Profile/org race — loading organization before user document")
+                    await firebaseBackend.loadUserOrganizationWithRecovery(userId: firebaseUser.uid)
+                    userData = try await firebaseBackend.getUserData(userId: firebaseUser.uid)
+                }
                 
                 // If user doesn't exist or isn't a super admin, check if they created the organization
                 if userData == nil {
@@ -236,8 +251,8 @@ class UserStore: ObservableObject {
                 
                 self.currentUser = userData
                 
-                // Always load organization users (will be filtered by permissions in UI)
-                await loadOrganizationUsers()
+                // Load org roster in the background so a slow / stuck org query cannot block the main shell.
+                Task { await self.loadOrganizationUsers() }
             }
         } catch {
             errorMessage = "Failed to load user data: \(error.localizedDescription)"
@@ -307,8 +322,11 @@ class UserStore: ObservableObject {
     // MARK: - Permission Checks
     
     func hasPermission(_ permission: (AppUser) -> Bool) -> Bool {
-        // If user hasn't loaded yet, assume they have permissions (show everything until loaded)
-        guard let user = displayUser else { return true }
+        // Firestore profile not loaded yet but Auth session exists — keep gates open so admin/manager shells
+        // (Manage Users, holiday, etc.) don’t flash “access denied” or empty permission state during startup.
+        guard let user = displayUser else {
+            return Auth.auth().currentUser != nil
+        }
         return permission(user)
     }
     
@@ -320,7 +338,9 @@ class UserStore: ObservableObject {
     func hasAdminAccess() -> Bool {
         guard let currentUser = displayUser else { return false }
         if currentUser.permissions.operativeMode { return false }
-        return currentUser.isSuperAdmin || currentUser.permissions.adminAccess
+        return currentUser.isSuperAdmin
+            || currentUser.permissions.adminAccess
+            || currentUser.role == .admin
     }
     
     // Simplified permission checks using user.permissions. Operatives get restricted access.

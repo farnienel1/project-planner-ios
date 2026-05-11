@@ -18,6 +18,8 @@ struct PolicyAcceptanceView: View {
         PrivacyPolicyView(isAcceptanceRequired: .constant(true)) {
             acceptPolicy()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemGroupedBackground))
         .overlay(alignment: .bottom) {
             if isAccepting {
                 ProgressView("Saving acceptance…")

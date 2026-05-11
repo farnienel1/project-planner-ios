@@ -46,6 +46,7 @@ struct HomeView: View {
     // Navigation states for menu items
     @State private var showingClientsView = false
     @State private var showingQuickMenu = false
+    @State private var warningsRefreshTask: Task<Void, Never>?
     
     var body: some View {
         ScrollView {
@@ -60,8 +61,10 @@ struct HomeView: View {
                     maintenanceSection
                 }
             }
+            .frame(maxWidth: .infinity)
         }
-        .navigationBarHidden(true)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .toolbar(.hidden, for: .navigationBar)
         .background(
             LinearGradient(
                 gradient: Gradient(colors: [
@@ -96,11 +99,10 @@ struct HomeView: View {
                 .environmentObject(bookingStore)
                 .environmentObject(taskStore)
         }
-        .onAppear {
-            // Load notifications when view appears
-            Task {
-                await notificationService.loadNotifications()
-            }
+        .task {
+            // Defer slightly so Home can render before notification work; ContentView also refreshes periodically.
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            await notificationService.loadNotifications()
         }
         .sheet(isPresented: $showingCreateClient) {
             CreateClientView()
@@ -153,6 +155,15 @@ struct HomeView: View {
         .sheet(isPresented: $showingManageUsers) {
             ManageUsersView()
                 .environmentObject(userStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(holidayStore)
+                .environmentObject(firebaseBackend)
+        }
+        .sheet(isPresented: $showingWholesalers) {
+            WholesalersView()
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("dismissManageUsersAndSelectTab"))) { notification in
             showingManageUsers = false
@@ -180,7 +191,9 @@ struct HomeView: View {
                     AsyncImage(url: url) { phase in
                         switch phase {
                         case .empty:
-                            ProgressView()
+                            Image(systemName: "building.2")
+                                .font(.title3)
+                                .foregroundStyle(.secondary)
                         case .success(let image):
                             image
                                 .resizable()
@@ -335,7 +348,7 @@ struct HomeView: View {
     // MARK: - Warnings and Tasks Section
     private var warningsAndTasksSection: some View {
         HStack(spacing: 16) {
-            if userStore.hasAdminAccess() {
+            if userStore.hasAdminAccess() || userStore.isHomeProfileLoading {
                 // Warnings Tile (Super Admin / Admin only)
                 Button(action: {
                     DispatchQueue.main.async {
@@ -429,32 +442,33 @@ struct HomeView: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 20)
         .onAppear {
-            if userStore.hasAdminAccess() {
-                updateWarnings()
-            }
-            Task {
-                await taskStore.loadData()
-            }
+            scheduleWarningsRefresh()
         }
         .onChange(of: operativeStore.allOperatives) { _, _ in
-            if userStore.hasAdminAccess() {
-                updateWarnings()
-            }
+            scheduleWarningsRefresh()
         }
         .onChange(of: bookingStore.bookings) { _, _ in
-            if userStore.hasAdminAccess() {
-                updateWarnings()
-            }
+            scheduleWarningsRefresh()
         }
         .onChange(of: projectStore.projects) { _, _ in
-            if userStore.hasAdminAccess() {
-                updateWarnings()
-            }
+            scheduleWarningsRefresh()
         }
         .onChange(of: projectStore.smallWorks) { _, _ in
-            if userStore.hasAdminAccess() {
-                updateWarnings()
-            }
+            scheduleWarningsRefresh()
+        }
+    }
+    
+    /// Debounce: bulk store updates during startup were calling `updateWarnings` repeatedly and freezing the main thread.
+    private func scheduleWarningsRefresh() {
+        guard userStore.hasAdminAccess() || userStore.isHomeProfileLoading else { return }
+        warningsRefreshTask?.cancel()
+        warningsRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            guard userStore.hasAdminAccess() else { return }
+            updateWarnings()
         }
     }
     
@@ -543,6 +557,7 @@ struct HomeView: View {
     
     private var taskLimitWarningBanner: some View {
         Group {
+            // Avoid scanning every project’s task count while `currentUser` is nil — that can freeze the main thread during startup.
             if userStore.hasAdminAccess() {
                 let projectsAtLimit = projectStore.projects.filter { project in
                     taskStore.taskCount(for: project.id) >= 500
@@ -586,6 +601,15 @@ struct HomeView: View {
         }
     }
     
+    /// Presents annual leave in a sheet (same path as notification deep links). Avoids swapping `mainTabContent` to tab 8’s nested `NavigationStack`, which has been crashing on some iOS builds.
+    private func presentAnnualLeaveFromHome(showPendingRequests: Bool = false) {
+        NotificationCenter.default.post(
+            name: NSNotification.Name("openHoliday"),
+            object: nil,
+            userInfo: ["showRequests": showPendingRequests]
+        )
+    }
+
     // MARK: - Navigation Tiles Grid
     private var navigationTilesGrid: some View {
         VStack(spacing: 16) {
@@ -612,11 +636,9 @@ struct HomeView: View {
                     navigationTile(
                         icon: "sun.max.fill",
                         title: "Annual Leave",
-                        action: {
-                            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 8])
-                        }
+                        action: { presentAnnualLeaveFromHome() }
                     )
-                    if userStore.canViewSiteAudit() {
+                    if userStore.canViewSiteAudit() || userStore.isHomeProfileLoading {
                         navigationTile(
                             icon: "doc.text.viewfinder",
                             title: "Site Audit",
@@ -643,7 +665,7 @@ struct HomeView: View {
                     GridItem(.flexible(), spacing: 12)
                 ], spacing: 12) {
                     // Row 1: Weekly Report, Daily Overview
-                    if userStore.hasAdminAccess() || userStore.displayUser?.permissions.weeklyReports == true {
+                    if userStore.hasAdminAccess() || userStore.displayUser?.permissions.weeklyReports == true || userStore.isHomeProfileLoading {
                         navigationTile(
                             icon: "chart.bar.doc.horizontal",
                             title: "Weekly Report",
@@ -673,13 +695,11 @@ struct HomeView: View {
                         )
                     }
                     // Row 3: Annual Leave + My Schedule
-                    if userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true {
+                    if userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true || userStore.isHomeProfileLoading {
                         navigationTile(
                             icon: "sun.max.fill",
                             title: "Annual Leave",
-                            action: {
-                                NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 8])
-                            }
+                            action: { presentAnnualLeaveFromHome() }
                         )
                     }
                     if userStore.canViewProjects() || userStore.isOperativeMode() {
@@ -689,7 +709,7 @@ struct HomeView: View {
                             action: { showingMySchedule = true }
                         )
                     }
-                    if userStore.canViewSiteAudit() {
+                    if userStore.canViewSiteAudit() || userStore.isHomeProfileLoading {
                         navigationTile(
                             icon: "doc.text.viewfinder",
                             title: "Site Audit",
@@ -819,6 +839,7 @@ struct HomeView: View {
             .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
         }
         .buttonStyle(PlainButtonStyle())
+        .contentShape(Rectangle())
     }
     
     // MARK: - Maintenance Section

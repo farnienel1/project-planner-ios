@@ -71,12 +71,15 @@ class FirebaseBackend: ObservableObject {
     @Published var shouldShowSetupFlow = false
     var isNewOrganization = false
     
-    private let auth = Auth.auth()
-    private let db = Firestore.firestore()
+    /// Lazy so `FirebaseBackend` can be constructed before `application(_:didFinishLaunchingWithOptions:)` calls `FirebaseApp.configure()`.
+    private lazy var auth: Auth = Auth.auth()
+    private lazy var db: Firestore = Firestore.firestore()
     #if canImport(FirebaseStorage)
-    private let storage = Storage.storage()
+    private lazy var storage: Storage = Storage.storage()
     #endif
     private var authHandle: AuthStateDidChangeListenerHandle?
+    /// Single-flight attach: `await` yields MainActor, so a second caller must wait instead of starting a parallel `perform` (duplicate listeners / races).
+    private var authAttachInProgress = false
     
     // Local storage keys
     private let organizationIdKey = "cached_organizationId"
@@ -149,57 +152,133 @@ class FirebaseBackend: ObservableObject {
     }
     
     init() {
-        print("🔥🔥🔥 DEBUG: FirebaseBackend initializing...")
-        // Listen for authentication state changes
+        print("🔥🔥🔥 DEBUG: FirebaseBackend init — deferring Auth/Firestore until default app exists")
+        Task { @MainActor [self] in
+            await self.attachAuthStateListenerWhenReady()
+        }
+    }
+
+    /// Call immediately before any `Auth`/`Firestore` use if launch-time configure was skipped (e.g. bad plist path).
+    private func ensureFirebaseAppConfigured() {
+        guard FirebaseApp.app() == nil else { return }
+        let names = ["GoogleService-Info", "GoogleService-Info 2"]
+        for name in names {
+            if let path = Bundle.main.path(forResource: name, ofType: "plist"),
+               let options = FirebaseOptions(contentsOfFile: path) {
+                FirebaseApp.configure(options: options)
+                print("🔥🔥🔥 DEBUG: ensureFirebaseAppConfigured — using \(name).plist")
+                print("🔥🔥🔥 DEBUG: ensureFirebaseAppConfigured — default app exists: \(FirebaseApp.app() != nil)")
+                return
+            }
+        }
+        FirebaseApp.configure()
+        print("🔥🔥🔥 DEBUG: ensureFirebaseAppConfigured — default app exists: \(FirebaseApp.app() != nil)")
+    }
+
+    /// Binds Auth after `FirebaseApp.configure()` (SwiftUI may create this object before `application(_:didFinishLaunchingWithOptions:)` returns).
+    private func attachAuthStateListenerWhenReady() async {
+        if authHandle != nil { return }
+        if authAttachInProgress {
+            while authAttachInProgress {
+                try? await Task.sleep(nanoseconds: 40_000_000)
+            }
+            if authHandle != nil { return }
+            // Fall through: first attempt failed to attach — try once more (no recursion).
+        }
+        authAttachInProgress = true
+        defer { authAttachInProgress = false }
+        await performAuthStateListenerAttach()
+    }
+
+    private func performAuthStateListenerAttach() async {
+        guard authHandle == nil else { return }
+        ensureFirebaseAppConfigured()
+        var attempts = 0
+        while FirebaseApp.app() == nil && attempts < 320 {
+            try? await Task.sleep(nanoseconds: 16_000_000)
+            attempts += 1
+        }
+        guard FirebaseApp.app() != nil else {
+            print("🔥🔥🔥 DEBUG: ❌ Firebase default app still nil after wait — check GoogleService-Info.plist is in the built app (target membership).")
+            return
+        }
+
+        let sessionUser = auth.currentUser
+        currentUser = sessionUser
+        isAuthenticated = sessionUser != nil
+
         authHandle = auth.addStateDidChangeListener { [weak self] _, user in
-            DispatchQueue.main.async {
-                self?.currentUser = user
-                self?.isAuthenticated = user != nil
-                       if let user = user {
-                           print("🔥🔥🔥 Firebase user signed in: \(user.email ?? "N/A")")
-                           
-                           // Preserve setup flow flag if it was already set (e.g., during sign-up)
-                           let shouldPreserveSetupFlow = self?.shouldShowSetupFlow == true && self?.isNewOrganization == true
-                           
-                           // If organization is already set (e.g., during signup), don't reload it
-                           // This prevents race conditions where signup sets org but auth listener clears it
-                           if self?.currentOrganization != nil {
-                               print("🔥🔥🔥 DEBUG: Organization already set, skipping reload from auth listener")
-                               // Still post notification to ensure stores reload data
-                               NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
-                           } else {
-                               // Load organization immediately using async method with recovery
-                               Task { [weak self] in
-                                   await self?.loadUserOrganizationWithRecovery(userId: user.uid)
-                               }
-                           }
-                           
-                           // After a short delay, re-confirm setup flow if it was a new organization
-                           if shouldPreserveSetupFlow {
-                               DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                   self?.shouldShowSetupFlow = true
-                                   self?.isNewOrganization = true
-                                   print("🔥🔥🔥 DEBUG: Auth state changed - preserved shouldShowSetupFlow for new sign-up")
-                               }
-                           }
-                           
-                           NotificationCenter.default.post(name: .userDidSignIn, object: user.email)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.currentUser = user
+                self.isAuthenticated = user != nil
+                if let user = user {
+                    print("🔥🔥🔥 Firebase user signed in: \(user.email ?? "N/A")")
+
+                    let shouldPreserveSetupFlow = self.shouldShowSetupFlow && self.isNewOrganization
+
+                    if self.currentOrganization != nil {
+                        print("🔥🔥🔥 DEBUG: Organization already set, skipping reload from auth listener")
+                        NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
+                    } else {
+                        Task { [weak self] in
+                            await self?.loadUserOrganizationWithRecovery(userId: user.uid)
+                        }
+                    }
+
+                    if shouldPreserveSetupFlow {
+                        Task { @MainActor [weak self] in
+                            try? await Task.sleep(nanoseconds: 300_000_000)
+                            guard let self else { return }
+                            self.shouldShowSetupFlow = true
+                            self.isNewOrganization = true
+                            print("🔥🔥🔥 DEBUG: Auth state changed - preserved shouldShowSetupFlow for new sign-up")
+                        }
+                    }
+
+                    NotificationCenter.default.post(name: .userDidSignIn, object: user.email)
                 } else {
                     print("Firebase user signed out.")
-                    self?.currentOrganization = nil
-                    self?.userRole = .basic
-                    self?.shouldShowSetupFlow = false
-                    self?.isNewOrganization = false
-                    self?.clearLocalOrganizationCache()
+                    self.currentOrganization = nil
+                    self.userRole = .basic
+                    self.shouldShowSetupFlow = false
+                    self.isNewOrganization = false
+                    self.clearLocalOrganizationCache()
                     NotificationCenter.default.post(name: .userDidSignOut, object: nil)
                 }
             }
         }
     }
-    
+
+    /// Call before sign-in / sign-up if the launch-time listener attach failed or hasn’t run yet.
+    private func ensureAuthStateListenerAttached() async {
+        if authHandle != nil { return }
+        await attachAuthStateListenerWhenReady()
+    }
+
+    /// Pushes `Auth.auth().currentUser` into `@Published` immediately (no listener required). Use so UI gates don’t spin forever while attach runs.
+    func syncPublishedAuthFromAuthSession() {
+        ensureFirebaseAppConfigured()
+        guard FirebaseApp.app() != nil else { return }
+        let user = auth.currentUser
+        currentUser = user
+        isAuthenticated = user != nil
+    }
+
+    /// After launch, re-attach the auth listener if needed and align `isAuthenticated` with Firebase’s session (e.g. persisted login).
+    func syncAuthStateFromSessionIfNeeded() async {
+        ensureFirebaseAppConfigured()
+        syncPublishedAuthFromAuthSession()
+        await ensureAuthStateListenerAttached()
+        guard FirebaseApp.app() != nil else { return }
+        let user = auth.currentUser
+        currentUser = user
+        isAuthenticated = user != nil
+    }
+
     deinit {
         if let handle = authHandle {
-            auth.removeStateDidChangeListener(handle)
+            Auth.auth().removeStateDidChangeListener(handle)
         }
     }
     
@@ -207,9 +286,16 @@ class FirebaseBackend: ObservableObject {
     
     func signUp(email: String, password: String, organizationName: String) async throws {
         print("🔥🔥🔥 DEBUG: FirebaseBackend.signUp() called with email: \(email), organization: \(organizationName)")
+        ensureFirebaseAppConfigured()
         isLoading = true
         errorMessage = nil
-        
+        guard FirebaseApp.app() != nil else {
+            isLoading = false
+            let msg = "Firebase did not start (missing or invalid GoogleService-Info.plist in the app). Add the plist from Firebase Console to the app target, then clean build."
+            errorMessage = msg
+            throw NSError(domain: "FirebaseBackend", code: 500, userInfo: [NSLocalizedDescriptionKey: msg])
+        }
+
         do {
             // Create user account
             print("🔥🔥🔥 DEBUG: Creating Firebase user with email: \(email)")
@@ -310,7 +396,10 @@ class FirebaseBackend: ObservableObject {
             }
             
             print("🔥🔥🔥 DEBUG: User sign-up completed successfully")
+            currentUser = auth.currentUser
+            isAuthenticated = currentUser != nil
             isLoading = false
+            Task { await self.ensureAuthStateListenerAttached() }
             
         } catch {
             print("🔥🔥🔥 DEBUG: Error during sign-up: \(error.localizedDescription)")
@@ -338,16 +427,38 @@ class FirebaseBackend: ObservableObject {
     }
     
     func signIn(email: String, password: String) async throws {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedEmail.isEmpty else {
+            errorMessage = "Please enter your email address."
+            throw NSError(domain: "AuthError", code: 400, userInfo: [NSLocalizedDescriptionKey: "Please enter your email address."])
+        }
+
+        ensureFirebaseAppConfigured()
         isLoading = true
         errorMessage = nil
-        
-        do {
-            _ = try await auth.signIn(withEmail: email, password: password)
+        // Never block sign-in on listener attach (can stall the MainActor); attach after session exists.
+        guard FirebaseApp.app() != nil else {
             isLoading = false
+            let msg = "Firebase did not start (missing or invalid GoogleService-Info.plist in the app). Add the plist from Firebase Console to the app target, then clean build."
+            errorMessage = msg
+            throw NSError(domain: "FirebaseBackend", code: 500, userInfo: [NSLocalizedDescriptionKey: msg])
+        }
+
+        do {
+            _ = try await auth.signIn(withEmail: trimmedEmail, password: password)
+            try? await auth.currentUser?.reload()
+            currentUser = auth.currentUser
+            isAuthenticated = currentUser != nil
+            if !isAuthenticated {
+                let msg = "Sign-in returned without an active user. Try again, or check Keychain access in Settings if using a device profile."
+                errorMessage = msg
+                isLoading = false
+                throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: msg])
+            }
+            isLoading = false
+            Task { await self.ensureAuthStateListenerAttached() }
         } catch {
             isLoading = false
-            // Sign-in failures should show Firebase’s message (wrong password, user not found, etc.).
-            // "Session expired" is for an already-signed-in user whose refresh token is invalid.
             errorMessage = error.localizedDescription
             throw error
         }

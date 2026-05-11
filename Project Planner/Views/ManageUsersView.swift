@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import FirebaseAuth
 import FirebaseFirestore
 
 struct ManageUsersView: View {
@@ -13,6 +14,7 @@ struct ManageUsersView: View {
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @Environment(\.dismiss) private var dismiss
     
     @State private var showingAddUser = false
@@ -35,11 +37,27 @@ struct ManageUsersView: View {
         if userStore.hasAdminAccess() { return false }
         return u.permissions.manager && u.permissions.operatives
     }
+
+    /// Signed in with Firebase Auth but org user doc not in memory yet — show spinner instead of “access denied”.
+    private var needsProfileBeforeManageUsersGate: Bool {
+        Auth.auth().currentUser != nil && userStore.currentUser == nil
+    }
     
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if !userStore.canManageUsers() {
+                if needsProfileBeforeManageUsersGate {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                        Text("Loading profile…")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .task {
+                        await userStore.loadCurrentUser()
+                    }
+                } else if !userStore.canManageUsers() {
                     if isManagerOperativeManagement {
                         // Managers with Operative Management can manage operatives only
                         VStack(spacing: 0) {
@@ -115,13 +133,6 @@ struct ManageUsersView: View {
             }
             .navigationTitle(isManagerOperativeManagement && !userStore.canManageUsers() ? "Manage Operatives" : "Manage Users")
             .navigationBarTitleDisplayMode(.inline)
-            .task {
-                // Always load fresh from Firebase when opening so deleted-in-console users disappear
-                await userStore.loadOrganizationUsers()
-            }
-            .refreshable {
-                await userStore.loadOrganizationUsers()
-            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") {
@@ -149,6 +160,7 @@ struct ManageUsersView: View {
                     .environmentObject(bookingStore)
                     .environmentObject(operativeStore)
                     .environmentObject(holidayStore)
+                    .environmentObject(firebaseBackend)
             }
             .alert("Delete User", isPresented: $showingDeleteConfirmation) {
                 Button("Cancel", role: .cancel) {
@@ -186,8 +198,7 @@ struct ManageUsersView: View {
                         } else if isOperative {
                             // Count bookings for this operative (by operativeId matching user email or name)
                             let operativeBookings = bookingStore.bookings.filter { booking in
-                                // Try to match by finding operative with matching email
-                                if let operative = operativeStore.operatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+                                if let operative = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
                                     return booking.operativeId == operative.id
                                 }
                                 return false
@@ -208,19 +219,15 @@ struct ManageUsersView: View {
         }
         .task {
             await userStore.loadOrganizationUsers()
-            // Set initial tab if provided
             if initialTab >= 0 && initialTab <= 2 {
                 selectedTab = initialTab
             }
-            // Scroll to highlighted user if provided
-            if let userToHighlight = userToHighlight {
+            if let userToHighlight {
                 selectedUser = userToHighlight
-                // Small delay to ensure list is rendered
-                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                try? await Task.sleep(nanoseconds: 300_000_000)
             }
         }
         .onAppear {
-            // Set initial tab if provided
             if initialTab >= 0 && initialTab <= 2 {
                 selectedTab = initialTab
             }
@@ -768,7 +775,7 @@ struct EditUserView: View {
     }
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ScrollView {
                 VStack(spacing: 0) {
                     // User Info Header
@@ -1703,4 +1710,8 @@ struct TabButton: View {
 #Preview {
     ManageUsersView()
         .environmentObject(UserStore())
+        .environmentObject(BookingStore())
+        .environmentObject(OperativeStore())
+        .environmentObject(HolidayStore())
+        .environmentObject(FirebaseBackend())
 }

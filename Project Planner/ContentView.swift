@@ -77,11 +77,13 @@ struct ContentView: View {
                 roleTestingBanner(preset: preset)
             }
             mainTabContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .preference(key: HideBottomMenuKey.self, value: false)
             if !hideBottomMenu {
                 bottomBar
             }
         }
+        .background(Color(.systemGroupedBackground))
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .tint(Color.theme.primary(for: appSettings.settings.colorScheme))
         .onPreferenceChange(HideBottomMenuKey.self) { value in
@@ -102,7 +104,9 @@ struct ContentView: View {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
-                selectedTab = 0
+                if !isValidTabTag(selectedTab) {
+                    selectedTab = 0
+                }
             }
             syncMovableTabOrderWithCurrentPermissions()
         }
@@ -145,9 +149,11 @@ struct ContentView: View {
         }
         .task(id: firebaseBackend.isAuthenticated) {
             guard firebaseBackend.isAuthenticated else { return }
+            // Defer first poll so startup Firestore traffic and home layout aren’t all fighting the main actor.
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             while firebaseBackend.isAuthenticated {
                 await notificationService.loadNotifications()
-                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
             }
         }
         .onChange(of: notificationService.bookingToastMessage) { _, newValue in
@@ -226,7 +232,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showingHolidaySheet) {
-            HolidayView(showRequests: holidaySheetShowRequests)
+            HolidayView(showRequests: holidaySheetShowRequests, presentedAsSheet: true)
                 .environmentObject(holidayStore)
                 .environmentObject(userStore)
                 .environmentObject(operativeStore)
@@ -272,90 +278,84 @@ struct ContentView: View {
         await notificationService.refreshDailyMaterialCutOffReminder()
     }
     
+    /// Single visible root (no `TabView`). Hiding the system tab bar + `TabView` left the main area blank on recent iOS SDKs; we already use a custom bottom bar.
     @ViewBuilder
     private var mainTabContent: some View {
-        TabView(selection: $selectedTab) {
-            NavigationStack {
-                HomeView()
-            }
-            .tag(0)
-            .id(0) // Add ID to force reset when tab changes
-            
-            if userStore.canViewProjects() {
+        Group {
+            switch selectedTab {
+            case 0:
                 NavigationStack {
-                    ProjectsView()
+                    HomeView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .tag(1)
-                .id(1) // Add ID to force reset when tab changes
-            }
-            
-            if userStore.canViewProjects() {
-                NavigationStack {
-                    SmallWorksView()
+            case 1:
+                if userStore.canViewProjects() {
+                    NavigationStack { ProjectsView() }
+                } else {
+                    NavigationStack { HomeView() }
                 }
-                .tag(2)
-                .id(2) // Add ID to force reset when tab changes
-            }
-            
-            if userStore.canViewOperatives() {
-                NavigationStack {
-                    OperativesView()
+            case 2:
+                if userStore.canViewProjects() {
+                    NavigationStack { SmallWorksView() }
+                } else {
+                    NavigationStack { HomeView() }
                 }
-                .tag(3)
-                .id(3) // Add ID to force reset when tab changes
-            }
-            
-            if userStore.hasAdminAccess() {
+            case 3:
+                if userStore.canViewOperatives() {
+                    NavigationStack { OperativesView() }
+                } else {
+                    NavigationStack { HomeView() }
+                }
+            case 4:
+                if userStore.hasAdminAccess() {
+                    NavigationStack {
+                        ManagersView()
+                            .toolbar(.hidden, for: .navigationBar)
+                    }
+                } else {
+                    NavigationStack { HomeView() }
+                }
+            case 5:
+                NavigationStack { SettingsView() }
+            case 6:
+                if !userStore.isOperativeMode() {
+                    NavigationStack { HelpView() }
+                } else {
+                    NavigationStack { HomeView() }
+                }
+            case 7:
+                if userStore.hasAdminAccess() {
+                    NavigationStack { WholesalersView() }
+                } else {
+                    NavigationStack { HomeView() }
+                }
+            case 8:
                 NavigationStack {
-                    ManagersView()
+                    HolidayView(showRequests: false)
+                        .environmentObject(holidayStore)
+                        .environmentObject(userStore)
+                        .environmentObject(operativeStore)
+                        .environmentObject(firebaseBackend)
+                        .environmentObject(notificationService)
+                        .environmentObject(appSettings)
                         .toolbar(.hidden, for: .navigationBar)
                 }
-                .tag(4)
-                .id(4) // Add ID to force reset when tab changes
-            }
-            
-            NavigationStack {
-                SettingsView()
-            }
-            .tag(5)
-            .id(5) // Add ID to force reset when tab changes
-            
-            if !userStore.isOperativeMode() {
-                NavigationStack {
-                    HelpView()
+            case 9:
+                if userStore.canManageSubcontractors() {
+                    NavigationStack {
+                        SubcontractorsView()
+                            .environmentObject(subcontractorStore)
+                    }
+                } else {
+                    NavigationStack { HomeView() }
                 }
-                .tag(6)
-                .id(6) // Add ID to force reset when tab changes
+            default:
+                NavigationStack { HomeView() }
             }
-            
-            if userStore.hasAdminAccess() {
-                NavigationStack {
-                    WholesalersView()
-                }
-                .tag(7)
-                .id(7) // Add ID to force reset when tab changes
-            }
-            
-            if userStore.canManageSubcontractors() {
-                NavigationStack {
-                    SubcontractorsView()
-                        .environmentObject(subcontractorStore)
-                }
-                .tag(9)
-                .id(9)
-            }
-
-            NavigationStack {
-                HolidayView(showRequests: false)
-                    .toolbar(.hidden, for: .navigationBar)
-            }
-            .tag(8)
-            .id(8)
         }
-        // Use the standard tab style (with hidden system tab bar) so horizontal swipe between tabs is disabled.
-        .tabViewStyle(.automatic)
-        .toolbar(.hidden, for: .tabBar)
-        .id(tabViewIdentity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Avoid `.id(tabViewIdentity)` here: when the profile loads, permissions change and rebuilding the entire
+        // `NavigationStack` for every tab can freeze the home shell on iOS 18+ (we no longer use `TabView`).
     }
     
     @ViewBuilder
@@ -599,7 +599,22 @@ extension ContentView {
         }
     }
     
+    /// Whether `tag` exists on `mainTabContent`'s `TabView` (keep in sync with conditional tabs there).
+    private func isValidTabTag(_ tag: Int) -> Bool {
+        switch tag {
+        case 0, 5, 8: return true
+        case 1, 2: return userStore.canViewProjects()
+        case 3: return userStore.canViewOperatives()
+        case 4: return userStore.hasAdminAccess()
+        case 6: return !userStore.isOperativeMode()
+        case 7: return userStore.hasAdminAccess()
+        case 9: return userStore.canManageSubcontractors()
+        default: return false
+        }
+    }
+    
     private func selectTab(_ tag: Int) {
+        let tag = isValidTabTag(tag) ? tag : 0
         // Prevent infinite loops - don't process if already on this tab (unless it's home)
         if selectedTab == tag && tag != 0 {
             // Already on this tab, just reset navigation if needed
@@ -763,6 +778,10 @@ extension ContentView {
         .environmentObject(ProjectStore())
         .environmentObject(OperativeStore())
         .environmentObject(BookingStore())
+        .environmentObject(UserStore())
+        .environmentObject(ProjectTaskStore())
+        .environmentObject(HolidayStore())
         .environmentObject(SubcontractorStore())
         .environmentObject(AppSettingsStore())
+        .environmentObject(NotificationService())
 }

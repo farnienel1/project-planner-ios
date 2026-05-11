@@ -18,6 +18,8 @@ struct HolidayView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
 
     var showRequests: Bool = false
+    /// When `true`, the back chevron calls `dismiss()` (sheet from home / notifications). When `false`, posts `goBackToPreviousTab` (bottom-bar Holiday tab).
+    var presentedAsSheet: Bool = false
 
     private var isOperativeMode: Bool { userStore.isOperativeMode() }
     private var isManagerRequestMode: Bool {
@@ -57,7 +59,11 @@ struct HolidayView: View {
         VStack(spacing: 0) {
             HStack {
                 Button(action: {
-                    NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+                    if presentedAsSheet {
+                        dismiss()
+                    } else {
+                        NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+                    }
                 }) {
                     Image(systemName: "chevron.left")
                         .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
@@ -129,8 +135,10 @@ struct HolidayView: View {
                                 holidayRequestsSection
                             }
                         }
+                        .frame(maxWidth: .infinity)
                         .padding()
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .refreshable {
                         if userStore.isOperativeMode() {
                             operativeStore.loadData()
@@ -140,15 +148,25 @@ struct HolidayView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
         .onAppear {
             if showRequests { activeSection = .requests }
+            // Segmented control hidden for this mode — stay on Book so we never drive a Picker with a stale selection.
+            if !(isRequestMode || canApproveRequests), activeSection != .calendar {
+                activeSection = .calendar
+            }
             if userStore.isOperativeMode() {
                 operativeStore.loadData()
             }
             Task { await holidayStore.loadData() }
+        }
+        .onChange(of: userStore.currentUser?.id) { _, _ in
+            if !(isRequestMode || canApproveRequests), activeSection != .calendar {
+                activeSection = .calendar
+            }
         }
         .alert("Error", isPresented: $showError) {
             Button("OK") { showError = false }
@@ -727,7 +745,7 @@ struct HolidayView: View {
         if let latest = userStore.organizationUsers.first(where: { $0.id == current.id }) {
             let managerId = latest.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
             if managerId?.isEmpty == false {
-                print("🔥🔥🔥 DEBUG: [HOLIDAY MANAGER RESOLVE] user=\(current.id) manager(from org users)=\(managerId!)")
+                print("🔥🔥🔥 DEBUG: [HOLIDAY MANAGER RESOLVE] user=\(current.id) manager(from org users)=\(managerId ?? "")")
                 return managerId
             }
         }

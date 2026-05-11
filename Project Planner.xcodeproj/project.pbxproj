@@ -279,7 +279,9 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = RTUL47LH55;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_FirebaseAppDelegateProxyEnabled = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access to capture timestamped snag completion photos.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving and attaching snag completion photos.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow selecting photos to attach to task and snag completions.";
@@ -317,7 +319,9 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = RTUL47LH55;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_FirebaseAppDelegateProxyEnabled = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access to capture timestamped snag completion photos.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving and attaching snag completion photos.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow selecting photos to attach to task and snag completions.";

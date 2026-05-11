@@ -6,9 +6,11 @@
 //
 
 import SwiftUI
+import FirebaseAuth
 
 struct AuthenticationView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var userStore: UserStore
     @State private var isSignUp = false
     @State private var email = ""
     @State private var password = ""
@@ -17,8 +19,11 @@ struct AuthenticationView: View {
     @State private var showingForgotPassword = false
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 30) {
+        ZStack {
+            Color(.systemGroupedBackground).ignoresSafeArea()
+            NavigationStack {
+                ScrollView {
+                    VStack(spacing: 30) {
                 // Header
                 VStack(spacing: 16) {
                     Image(systemName: "building.2.crop.circle.fill")
@@ -93,12 +98,18 @@ struct AuthenticationView: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 40)
                 }
+                if let errorMessage = userStore.errorMessage, !errorMessage.isEmpty, firebaseBackend.errorMessage == nil {
+                    Text(errorMessage)
+                        .foregroundColor(.red)
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                }
                 
                 // Action Buttons
                 VStack(spacing: 16) {
                     // Primary Action Button
                     Button(action: {
-                        print("DEBUG: Button tapped - isSignUp: \(isSignUp)")
                         if isSignUp {
                             signUp()
                         } else {
@@ -134,86 +145,85 @@ struct AuthenticationView: View {
                         .foregroundColor(.blue)
                     }
                 }
-                
-                Spacer()
-                
-                // Toggle Sign Up / Sign In
-                Button(action: {
-                    isSignUp.toggle()
-                }) {
-                    Text(isSignUp ? "Already have an account? Sign In" : "Don't have an account? Sign Up")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
+
+                        // Toggle Sign Up / Sign In
+                        Button(action: {
+                            isSignUp.toggle()
+                        }) {
+                            Text(isSignUp ? "Already have an account? Sign In" : "Don't have an account? Sign Up")
+                                .font(.callout)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.bottom, 20)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(.bottom, 20)
+                .scrollDismissesKeyboard(.interactively)
+                .navigationTitle(isSignUp ? "Sign Up" : "Sign In")
+                .sheet(isPresented: $showingForgotPassword) {
+                    PasswordResetView(email: $email)
+                        .environmentObject(firebaseBackend)
+                }
             }
-            .navigationTitle(isSignUp ? "Sign Up" : "Sign In")
-            .sheet(isPresented: $showingForgotPassword) {
-                PasswordResetView(email: $email)
-                    .environmentObject(firebaseBackend)
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
     
     private var isFormValid: Bool {
         if isSignUp {
-            let valid = !email.isEmpty && password.count >= 6 && password == confirmPassword && !organizationName.isEmpty
-            print("DEBUG: Form validation (signup) - email: '\(email)', password length: \(password.count), passwords match: \(password == confirmPassword), org: '\(organizationName)', valid: \(valid)")
-            return valid
-        } else {
-            let valid = !email.isEmpty && password.count >= 6
-            print("DEBUG: Form validation (signin) - email: '\(email)', password length: \(password.count), valid: \(valid)")
-            return valid
+            return !email.isEmpty && password.count >= 6 && password == confirmPassword && !organizationName.isEmpty
         }
+        return !email.isEmpty && password.count >= 6
     }
     
     private func signUp() {
-        print("DEBUG: signUp() called with email: \(email), password length: \(password.count), organization: \(organizationName)")
-        Task {
+        userStore.errorMessage = nil
+        Task { @MainActor in
             do {
-                // BEFORE sign up, ensure setup flow will show
-                await MainActor.run {
-                    firebaseBackend.shouldShowSetupFlow = true
-                    firebaseBackend.isNewOrganization = true
-                    print("DEBUG: Pre-signup: shouldShowSetupFlow set to true")
-                }
-                
+                firebaseBackend.shouldShowSetupFlow = true
+                firebaseBackend.isNewOrganization = true
+
                 try await firebaseBackend.signUp(
                     email: email,
                     password: password,
                     organizationName: organizationName
                 )
-                
-                // AFTER sign up, explicitly set it again to ensure it persists
-                await MainActor.run {
-                    firebaseBackend.shouldShowSetupFlow = true
-                    firebaseBackend.isNewOrganization = true
-                    print("DEBUG: Post-signup: shouldShowSetupFlow confirmed as true")
+
+                if let uid = Auth.auth().currentUser?.uid, !uid.isEmpty {
+                    NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: ["uid": uid])
                 }
-                
-                print("DEBUG: signUp() completed successfully")
+
+                await userStore.loadCurrentUser()
+
+                firebaseBackend.shouldShowSetupFlow = true
+                firebaseBackend.isNewOrganization = true
             } catch {
-                print("DEBUG: signUp() failed with error: \(error)")
-                // Error is handled by firebaseBackend.errorMessage
+                // firebaseBackend.errorMessage set by backend
             }
         }
     }
     
     private func signIn() {
-        Task {
+        userStore.errorMessage = nil
+        Task { @MainActor in
             do {
                 try await firebaseBackend.signIn(
                     email: email,
                     password: password
                 )
+                if let uid = Auth.auth().currentUser?.uid, !uid.isEmpty {
+                    NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: ["uid": uid])
+                }
+                // Don’t block leaving the login screen on Firestore; profile loads on the main shell.
+                Task { await userStore.loadCurrentUser() }
             } catch {
-                // Error is handled by firebaseBackend.errorMessage
+                // firebaseBackend.errorMessage set by backend
             }
         }
     }
     
     private func resetPassword() {
-        Task {
+        Task { @MainActor in
             do {
                 try await firebaseBackend.resetPassword(email: email)
             } catch {
@@ -226,4 +236,5 @@ struct AuthenticationView: View {
 #Preview {
     AuthenticationView()
         .environmentObject(FirebaseBackend())
+        .environmentObject(UserStore())
 }

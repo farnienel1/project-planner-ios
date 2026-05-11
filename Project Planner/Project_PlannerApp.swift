@@ -6,21 +6,78 @@
 //
 
 import SwiftUI
-import Firebase
 import FirebaseAuth
+import FirebaseCore
 #if canImport(FirebaseMessaging)
 import FirebaseMessaging
 #endif
 import UIKit
 import UserNotifications
 
+extension Notification.Name {
+    /// Main-thread only. `userInfo["uid"]` is a non-empty String when signed in; absent when signed out.
+    static let firebaseAuthUIDChanged = Notification.Name("app.firebaseAuthUIDChanged")
+}
+
+/// Runs before any `@StateObject` on `App` — SwiftUI can construct those before `application(_:didFinishLaunchingWithOptions:)` returns.
+/// **Xcode / plist:** follow `IOS_FIREBASE_XCODE_SETUP.md` in this folder so `GoogleService-Info.plist` is in the app bundle.
+private enum FirebaseStartup {
+    /// Xcode sometimes adds `GoogleService-Info 2.plist`; Firebase only auto-finds `GoogleService-Info.plist`.
+    private static let googleServicePlistNames = ["GoogleService-Info", "GoogleService-Info 2"]
+
+    @discardableResult
+    static func configureIfNeeded() -> Bool {
+        if FirebaseApp.app() != nil { return true }
+        for name in googleServicePlistNames {
+            if let path = Bundle.main.path(forResource: name, ofType: "plist"),
+               let options = FirebaseOptions(contentsOfFile: path) {
+                FirebaseApp.configure(options: options)
+                print("🔥🔥🔥 DEBUG: Firebase configured from \(name).plist")
+                let ok = FirebaseApp.app() != nil
+                print("🔥🔥🔥 DEBUG: Firebase configureIfNeeded — defaultApp exists: \(ok)")
+                return ok
+            }
+        }
+        print("🔥🔥🔥 DEBUG: ⚠️ No GoogleService-Info plist in bundle (tried: \(googleServicePlistNames.joined(separator: ", "))). Add one with target membership, then clean build.")
+        FirebaseApp.configure()
+        let ok = FirebaseApp.app() != nil
+        print("🔥🔥🔥 DEBUG: Firebase configureIfNeeded — defaultApp exists: \(ok)")
+        return ok
+    }
+}
+
+/// Subclass `NSObject` (not `UIResponder` alone) so GoogleUtilities’ Obj‑C swizzler sees a real `UIApplicationDelegate` and stops **I-SWZ001014** with `@UIApplicationDelegateAdaptor`.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     var onPushToken: ((String) -> Void)?
+    private var firebaseAuthStateHandle: AuthStateDidChangeListenerHandle?
+
+    /// Runs before `didFinishLaunching` — configures Firebase before Messaging / Auth swizzler touches the default app (fixes I-COR000003 noise and bad first-frame auth).
+    func application(
+        _ application: UIApplication,
+        willFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        _ = FirebaseStartup.configureIfNeeded()
+        print("🔥🔥🔥 DEBUG: Firebase configured in willFinishLaunching (defaultApp: \(FirebaseApp.app() != nil))")
+        return true
+    }
 
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        _ = FirebaseStartup.configureIfNeeded()
+        print("🔥🔥🔥 DEBUG: Firebase ready in didFinishLaunching (defaultApp: \(FirebaseApp.app() != nil))")
+
+        firebaseAuthStateHandle = Auth.auth().addStateDidChangeListener { _, user in
+            DispatchQueue.main.async {
+                if let uid = user?.uid, !uid.isEmpty {
+                    NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: ["uid": uid])
+                } else {
+                    NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: [:])
+                }
+            }
+        }
+
         UNUserNotificationCenter.current().delegate = self
         requestRemoteNotificationRegistration(application: application)
 #if canImport(FirebaseMessaging)
@@ -34,7 +91,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        // Ensure local notifications are shown as real banners while app is foregrounded.
         completionHandler([.banner, .sound, .badge, .list])
     }
 
@@ -77,6 +133,13 @@ extension AppDelegate: MessagingDelegate {
 @main
 struct Project_PlannerApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
+    init() {
+        _ = FirebaseStartup.configureIfNeeded()
+        // Avoid a plain white UIKit window before the first SwiftUI frame (especially during Firebase / store init).
+        UIWindow.appearance().backgroundColor = UIColor.systemGroupedBackground
+    }
+
     @StateObject private var firebaseBackend = FirebaseBackend()
     @StateObject private var smartCache = SmartCacheService()
     @StateObject private var projectStore = ProjectStore()
@@ -89,185 +152,26 @@ struct Project_PlannerApp: App {
     @StateObject private var subcontractorStore = SubcontractorStore()
     @StateObject private var appSettings = AppSettingsStore()
     @StateObject private var notificationService = NotificationService()
-    
-    init() {
-        // Configure Firebase
-        FirebaseApp.configure()
-        print("🔥🔥🔥 DEBUG: Firebase configured in Project_PlannerApp")
-    }
-    
-    var body: some Scene {
-        print("🔥🔥🔥 DEBUG: App body is being called!")
-        return WindowGroup {
-            Group {
-                if firebaseBackend.isAuthenticated {
-                    if firebaseBackend.shouldShowSetupFlow {
-                        OrganisationSetupFlow()
-                            .environmentObject(firebaseBackend)
-                            .environmentObject(projectStore)
-                            .environmentObject(operativeStore)
-                            .environmentObject(userStore)
-                            .environmentObject(taskStore)
-                            .preferredColorScheme(.light) // Force light mode always
-                            .onDisappear {
-                                print("🔥🔥🔥 DEBUG: OrganisationSetupFlow disappeared, setting shouldShowSetupFlow to false")
-                                firebaseBackend.shouldShowSetupFlow = false
-                            }
-                    } else {
-                        // Check if user needs to accept privacy policy (first login or existing user who hasn't accepted)
-                        // This will show for:
-                        // 1. New users who haven't accepted yet
-                        // 2. Existing users (like farnienelyt@gmail.com) who don't have policyAccepted set to true
-                        if let currentUser = userStore.currentUser, !currentUser.policyAccepted {
-                            PolicyAcceptanceView()
-                                .environmentObject(firebaseBackend)
-                                .environmentObject(userStore)
-                        } else {
-                            ContentView()
-                                .environmentObject(firebaseBackend)
-                                .environmentObject(projectStore)
-                                .environmentObject(operativeStore)
-                                .environmentObject(bookingStore)
-                                .environmentObject(managerScheduleStore)
-                                .environmentObject(userStore)
-                                .environmentObject(taskStore)
-                                .environmentObject(holidayStore)
-                                .environmentObject(subcontractorStore)
-                                .environmentObject(appSettings)
-                                .environmentObject(notificationService)
-                                .appColorScheme(appSettings.settings.colorScheme)
-                                .preferredColorScheme(.light) // Force light mode always
-                        }
-                    }
-                } else {
-                        AuthenticationView()
-                        .environmentObject(firebaseBackend)
-                        .preferredColorScheme(.light) // Force light mode always
-                }
-            }
-            .preferredColorScheme(.light) // Force light mode for entire app - overrides system settings
-            .onAppear {
-                print("🔥🔥🔥 DEBUG: App appeared - isAuthenticated: \(firebaseBackend.isAuthenticated), shouldShowSetupFlow: \(firebaseBackend.shouldShowSetupFlow)")
-                
-                // Force light mode at window level to override system settings
-                DispatchQueue.main.async {
-                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                        windowScene.windows.forEach { window in
-                            window.overrideUserInterfaceStyle = .light
-                        }
-                    }
-                }
-                
-                // Set up smart cache for all stores
-                projectStore.setFirebaseBackend(firebaseBackend)
-                projectStore.setNotificationService(notificationService)
-                projectStore.setSmartCache(smartCache)
-                
-                operativeStore.setFirebaseBackend(firebaseBackend)
-                operativeStore.setSmartCache(smartCache)
-                
-                bookingStore.setFirebaseBackend(firebaseBackend)
-                bookingStore.setSmartCache(smartCache)
-                
-                managerScheduleStore.setFirebaseBackend(firebaseBackend)
-                
-                userStore.setFirebaseBackend(firebaseBackend)
-                userStore.setSmartCache(smartCache)
-                
-                taskStore.setFirebaseBackend(firebaseBackend)
-                holidayStore.setFirebaseBackend(firebaseBackend)
-                subcontractorStore.setFirebaseBackend(firebaseBackend)
 
-                notificationService.setFirebaseBackend(firebaseBackend)
-                notificationService.setUserStore(userStore)
-                notificationService.setOperativeStore(operativeStore)
-                notificationService.setProjectStore(projectStore)
-                notificationService.setAppSettingsStore(appSettings)
-                notificationService.setHolidayStore(holidayStore)
-                appDelegate.onPushToken = { token in
-                    Task {
-                        await firebaseBackend.registerPushToken(token)
-                    }
-                }
-#if canImport(FirebaseMessaging)
-                Messaging.messaging().token { token, error in
-                    if let error {
-                        print("🔥🔥🔥 DEBUG: Failed to fetch current FCM token: \(error.localizedDescription)")
-                        return
-                    }
-                    guard let token, !token.isEmpty else { return }
-                    Task {
-                        await firebaseBackend.registerPushToken(token)
-                    }
-                }
-#endif
-                
-                // Wait for organization to load, then load all data
-                Task {
-                    // Wait for organization to be loaded (with retries)
-                    var waitCount = 0
-                    while firebaseBackend.currentOrganization == nil && waitCount < 10 {
-                        print("🔥🔥🔥 DEBUG: Waiting for organization to load... (\(waitCount + 1)/10)")
-                        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                        waitCount += 1
-                    }
-                    
-                    if let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-                        print("🔥🔥🔥 DEBUG: ✅ Organization loaded: \(organizationId), starting data load...")
-                        
-                        // Load all data stores in parallel
-                        projectStore.loadData()
-                        operativeStore.loadData()
-                        bookingStore.loadData()
-                        managerScheduleStore.loadData()
-                        Task {
-                            await subcontractorStore.loadData()
-                        }
-                        Task {
-                            await taskStore.loadData()
-                        }
-                        Task {
-                            await holidayStore.loadData()
-                        }
-                        Task {
-                            await notificationService.loadNotifications()
-                        }
-                        
-                        print("🔥🔥🔥 DEBUG: ✅ All data loading complete!")
-                        print("🔥🔥🔥 DEBUG: Projects: \(projectStore.projects.count), Operatives: \(operativeStore.operatives.count), Managers: \(operativeStore.managers.count), Bookings: \(bookingStore.bookings.count), Tasks: \(taskStore.tasks.count)")
-                    } else {
-                        print("🔥🔥🔥 DEBUG: ⚠️ Organization not loaded after waiting, attempting recovery...")
-                        // Try to trigger organization load
-                        if let userId = firebaseBackend.currentUser?.uid,
-                           let userEmail = firebaseBackend.currentUser?.email {
-                            let recovered = await firebaseBackend.recoverMissingOrganizationLink(userId: userId, userEmail: userEmail)
-                            if recovered {
-                                print("🔥🔥🔥 DEBUG: ✅ Organization recovered, loading data...")
-                                projectStore.loadData()
-                                operativeStore.loadData()
-                                bookingStore.loadData()
-                                managerScheduleStore.loadData()
-                                Task {
-                                    await subcontractorStore.loadData()
-                                }
-                                Task {
-                                    await taskStore.loadData()
-                                }
-                                Task {
-                                    await notificationService.loadNotifications()
-                                }
-                            } else {
-                                print("🔥🔥🔥 DEBUG: ❌ Could not recover organization - data may not load")
-                            }
-                        }
-                    }
-                }
-                
-                // Set up observers for settings
-                Task { @MainActor in
-                    appSettings.setupObservers()
-                }
+    var body: some Scene {
+        WindowGroup {
+            ZStack {
+                Color(.systemGroupedBackground).ignoresSafeArea()
+                ProjectPlannerRootView(appDelegate: appDelegate)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(smartCache)
+                    .environmentObject(projectStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(userStore)
+                    .environmentObject(taskStore)
+                    .environmentObject(holidayStore)
+                    .environmentObject(subcontractorStore)
+                    .environmentObject(appSettings)
+                    .environmentObject(notificationService)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
