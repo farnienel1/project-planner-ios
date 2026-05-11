@@ -2891,6 +2891,7 @@ class FirebaseBackend: ObservableObject {
         let utp = (data["tradeTypePreset"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let utc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let profilePhotoRaw = (data["profilePhotoURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lastSeenAt = (data["lastSeenAt"] as? Timestamp)?.dateValue()
         
         return AppUser(
             id: userId,
@@ -2911,7 +2912,8 @@ class FirebaseBackend: ObservableObject {
             dayRate: dayRate,
             tradeTypePreset: (utp?.isEmpty == false) ? utp : nil,
             tradeTypeCustom: (utc?.isEmpty == false) ? utc : nil,
-            profilePhotoURL: (profilePhotoRaw?.isEmpty == false) ? profilePhotoRaw : nil
+            profilePhotoURL: (profilePhotoRaw?.isEmpty == false) ? profilePhotoRaw : nil,
+            lastSeenAt: lastSeenAt
         )
     }
     
@@ -3264,6 +3266,17 @@ class FirebaseBackend: ObservableObject {
             payload["dayRate"] = FieldValue.delete()
         }
         try await db.collection("users").document(userId).updateData(payload)
+    }
+
+    /// Client heartbeat for “last seen”; merge-only so other writes are not replaced.
+    func updateUserLastSeenAt(userId: String) async throws {
+        try await db.collection("users").document(userId).setData(
+            [
+                "lastSeenAt": Timestamp(date: Date()),
+                "updatedAt": Timestamp(date: Date()),
+            ],
+            merge: true
+        )
     }
 
     /// Cloud fallback for operative metadata when direct users/{userId} updates are denied by rules.

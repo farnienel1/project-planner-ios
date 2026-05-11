@@ -335,7 +335,7 @@ struct WeeklyReportView: View {
         for booking in operativeBookings {
             guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else { continue }
             let user = userStore.organizationUsers.first(where: { $0.email.lowercased() == operative.email.lowercased() })
-            let rate = dayRate(for: user, operative: operative, on: booking.date)
+            let rate = dayRateForOperativeBooking(user: user, operative: operative, on: booking.date)
             let days = bookingDayValue(from: booking.timeSlot)
             let key = labourRateKey(name: operative.name, role: "Operative", rate: rate)
             var summary = totals[key] ?? LabourRateSummary(name: operative.name, role: "Operative", rate: rate, days: 0)
@@ -346,7 +346,7 @@ struct WeeklyReportView: View {
         for booking in managerBookings {
             guard let manager = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { continue }
             let managerName = manager.fullName.isEmpty ? manager.email : manager.fullName
-            let rate = manager.dayRate
+            let rate = dayRateForUserOnDay(userId: manager.id, fallback: manager.dayRate, date: booking.date)
             let days = managerDayValue(from: booking.timeSlot)
             let key = labourRateKey(name: managerName, role: "Manager", rate: rate)
             var summary = totals[key] ?? LabourRateSummary(name: managerName, role: "Manager", rate: rate, days: 0)
@@ -427,11 +427,22 @@ struct WeeklyReportView: View {
         return "\(name)|\(role)|NO_RATE"
     }
 
-    private func dayRate(for user: AppUser?, operative: Operative, on date: Date) -> Double? {
+    private func calendarDayStart(_ date: Date) -> Date {
+        Calendar.current.startOfDay(for: date)
+    }
+
+    /// Uses day-rate history keyed by user id; compares **calendar days** so a change effective “tomorrow” does not apply to today’s bookings.
+    private func dayRateForUserOnDay(userId: String, fallback: Double?, date: Date) -> Double? {
+        let history = (dayRateHistoryByUser[userId] ?? []).sorted(by: { $0.effectiveAt < $1.effectiveAt })
+        let day = calendarDayStart(date)
+        let rateFromHistory = history.last(where: { calendarDayStart($0.effectiveAt) <= day })?.dayRate
+        return rateFromHistory ?? fallback
+    }
+
+    private func dayRateForOperativeBooking(user: AppUser?, operative: Operative, on date: Date) -> Double? {
         if let user {
-            let history = (dayRateHistoryByUser[user.id] ?? []).sorted(by: { $0.effectiveAt < $1.effectiveAt })
-            let rateFromHistory = history.last(where: { $0.effectiveAt <= date })?.dayRate
-            return rateFromHistory ?? user.dayRate ?? operative.dayRate
+            let fallback = operative.dayRate ?? user.dayRate
+            return dayRateForUserOnDay(userId: user.id, fallback: fallback, date: date) ?? user.dayRate ?? operative.dayRate
         }
         return operative.dayRate
     }

@@ -25,6 +25,8 @@ class UserStore: ObservableObject {
     private var smartCache: SmartCacheService?
     @Published var isOffline: Bool = false
     private let operativeProfileOverridesKey = "operative_profile_overrides_v1"
+    /// Throttle `lastSeenAt` writes (foreground heartbeats).
+    private var lastSeenAtWriteTime: Date?
 
     private struct OperativeProfileOverride: Codable {
         var assignedManagerUserId: String?
@@ -43,6 +45,54 @@ class UserStore: ObservableObject {
     func setSmartCache(_ smartCache: SmartCacheService) {
         self.smartCache = smartCache
         self.isOffline = !smartCache.isOnline
+    }
+
+    /// Writes `users/{uid}.lastSeenAt` (merge). Call from app foreground; throttled to ~2 minutes.
+    func recordCurrentUserLastSeenIfDue() async {
+        guard let firebaseBackend = firebaseBackend else { return }
+        guard let uid = firebaseBackend.currentUser?.uid, !uid.isEmpty else { return }
+        let now = Date()
+        if let t = lastSeenAtWriteTime, now.timeIntervalSince(t) < 120 { return }
+        lastSeenAtWriteTime = now
+        do {
+            try await firebaseBackend.updateUserLastSeenAt(userId: uid)
+            if var cu = currentUser, cu.id == uid {
+                cu.lastSeenAt = now
+                currentUser = cu
+            }
+            if let idx = organizationUsers.firstIndex(where: { $0.id == uid }) {
+                organizationUsers[idx].lastSeenAt = now
+            }
+        } catch {
+            print("🔥🔥🔥 DEBUG: lastSeenAt heartbeat failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Ensures an `operatives` roster row exists for this app user (matched by email) so skills/qualifications can attach.
+    func ensureOperativeProfileForAppUser(_ user: AppUser, operativeStore: OperativeStore) async -> Operative? {
+        let emailNorm = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !emailNorm.isEmpty else { return nil }
+        if let existing = operativeStore.allOperatives.first(where: {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
+        }) {
+            return existing
+        }
+        let first = user.firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? (String(user.email.split(separator: "@").first ?? "User"))
+            : user.firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let last = user.surname.trimmingCharacters(in: .whitespacesAndNewlines)
+        let op = Operative(
+            firstName: first,
+            lastName: last,
+            email: user.email.trimmingCharacters(in: .whitespacesAndNewlines),
+            phone: user.mobileNumber,
+            startDate: Calendar.current.startOfDay(for: Date()),
+            dayRate: user.dayRate,
+            tradeTypePreset: user.tradeTypePreset,
+            tradeTypeCustom: user.tradeTypeCustom
+        )
+        await operativeStore.addOperative(op)
+        return operativeStore.allOperatives.first(where: { $0.id == op.id }) ?? op
     }
     
     /// Effective user for UI and permission helpers (respects role testing).
@@ -1230,7 +1280,8 @@ class UserStore: ObservableObject {
                 for user: AppUser,
                 assignedManagerUserId: String?,
                 dayRate: Double?,
-                operativeStore: OperativeStore?
+                operativeStore: OperativeStore?,
+                dayRateEffectiveAt: Date? = nil
              ) async -> Bool {
                 guard let firebaseBackend = firebaseBackend else { return false }
                 guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
@@ -1262,11 +1313,12 @@ class UserStore: ObservableObject {
                             }
                         }
                         if let newRate = dayRate {
+                            let effective = dayRateEffectiveAt ?? Date()
                             try? await firebaseBackend.recordOperativeDayRateChange(
                                 organizationId: orgId,
                                 userId: updatedUser.id,
                                 dayRate: newRate,
-                                effectiveAt: Date()
+                                effectiveAt: effective
                             )
                         }
                     }
@@ -1397,24 +1449,72 @@ class UserStore: ObservableObject {
         }
     }
 
-    func updateManagerDayRate(for user: AppUser, dayRate: Double?) async -> Bool {
+    func updateManagerDayRate(
+        for user: AppUser,
+        dayRate: Double?,
+        effectiveAt: Date? = nil,
+        operativeStore: OperativeStore? = nil
+    ) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
-        guard organizationUsers[index].permissions.manager || organizationUsers[index].role == .manager else { return false }
+        let row = organizationUsers[index]
+        let isStaffDayRate = row.permissions.manager || row.role == .manager || row.permissions.adminAccess || row.role == .admin
+        guard isStaffDayRate, !row.permissions.operativeMode else { return false }
         
         var updatedUser = organizationUsers[index]
+        let previousDayRate = updatedUser.dayRate
+        let dayRateChanged = previousDayRate != dayRate
         updatedUser.dayRate = dayRate
         
         do {
             try await firebaseBackend.updateUserDayRateMetadata(userId: updatedUser.id, dayRate: dayRate)
+            if dayRateChanged,
+               let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                let effective = effectiveAt ?? Date()
+                if let previousDayRate {
+                    let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? [:]
+                    if history[updatedUser.id]?.isEmpty ?? true {
+                        try? await firebaseBackend.recordOperativeDayRateChange(
+                            organizationId: orgId,
+                            userId: updatedUser.id,
+                            dayRate: previousDayRate,
+                            effectiveAt: updatedUser.createdAt
+                        )
+                    }
+                }
+                if let newRate = dayRate {
+                    try? await firebaseBackend.recordOperativeDayRateChange(
+                        organizationId: orgId,
+                        userId: updatedUser.id,
+                        dayRate: newRate,
+                        effectiveAt: effective
+                    )
+                }
+            }
             organizationUsers[index] = updatedUser
+            if let operativeStore {
+                await syncOperativeDayRateFromStaffUser(updatedUser, operativeStore: operativeStore)
+            }
             await loadOrganizationUsers()
             return true
         } catch {
-            errorMessage = "Failed to update manager day rate: \(error.localizedDescription)"
-            print("🔥🔥🔥 DEBUG: Error updating manager day rate: \(error)")
+            errorMessage = "Failed to update day rate: \(error.localizedDescription)"
+            print("🔥🔥🔥 DEBUG: Error updating staff day rate: \(error)")
             return false
         }
+    }
+
+    private func syncOperativeDayRateFromStaffUser(_ user: AppUser, operativeStore: OperativeStore) async {
+        let em = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !em.isEmpty,
+              let idx = operativeStore.operatives.firstIndex(where: {
+                  $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
+              }) else { return }
+        var op = operativeStore.operatives[idx]
+        guard op.dayRate != user.dayRate else { return }
+        op.dayRate = user.dayRate
+        op.updatedAt = Date()
+        await operativeStore.updateOperative(op)
     }
              
              // MARK: - User Active Status

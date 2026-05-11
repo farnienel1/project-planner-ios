@@ -263,6 +263,8 @@ struct AppUser: Identifiable, Codable, Hashable {
     var tradeTypeCustom: String?
     /// Firebase Storage download URL for profile photo (set from Manage Users).
     var profilePhotoURL: String?
+    /// Last time this account had app activity (foreground); updated with merge on `users/{id}`.
+    var lastSeenAt: Date?
     
     init(
         id: String,
@@ -283,7 +285,8 @@ struct AppUser: Identifiable, Codable, Hashable {
         dayRate: Double? = nil,
         tradeTypePreset: String? = nil,
         tradeTypeCustom: String? = nil,
-        profilePhotoURL: String? = nil
+        profilePhotoURL: String? = nil,
+        lastSeenAt: Date? = nil
     ) {
         self.id = id
         self.email = email
@@ -304,6 +307,7 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.tradeTypePreset = tradeTypePreset
         self.tradeTypeCustom = tradeTypeCustom
         self.profilePhotoURL = profilePhotoURL
+        self.lastSeenAt = lastSeenAt
     }
     
     var fullName: String {

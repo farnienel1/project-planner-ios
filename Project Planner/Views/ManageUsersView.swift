@@ -706,6 +706,9 @@ struct EditUserView: View {
     @State private var dayRateText: String
     @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
     @State private var showingQualificationsEditor = false
+    @State private var operativeForSkillsEditor: Operative?
+    @State private var openingSkillsEditor = false
+    @State private var showingDayRateEffectiveChoice = false
     @State private var tradePresetRaw: String
     @State private var tradeCustomText: String
     @State private var editFirstName: String
@@ -917,7 +920,7 @@ struct EditUserView: View {
         if userStore.isOrganizationCreator(userId: user.id) {
             return false
         }
-        let dayRateEligible = permissions.operativeMode || permissions.manager
+        let dayRateEligible = permissions.operativeMode || permissions.manager || permissions.adminAccess
         let trimmedTradeP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTradeC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
         let origTradeP = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -927,16 +930,17 @@ struct EditUserView: View {
             (selectedAssignedManagerUserId ?? "") != (user.assignedManagerUserId ?? "") ||
             parseDayRate(dayRateText) != user.dayRate
         )
-        let managerDayRateChanged = permissions.manager && !permissions.operativeMode && parseDayRate(dayRateText) != user.dayRate
+        let staffDayRateChanged = !permissions.operativeMode && (permissions.manager || permissions.adminAccess)
+            && parseDayRate(dayRateText) != user.dayRate
         if canUseAdminAccountTools {
             return identityDirty ||
                 permissions != user.permissions ||
                 isActive != user.isActive ||
                 operativeProfileChanged ||
-                managerDayRateChanged ||
+                staffDayRateChanged ||
                 tradeChanged
         }
-        if canEditPermissionsMatrix && (identityDirty || operativeProfileChanged || tradeChanged) {
+        if canEditPermissionsMatrix && (identityDirty || operativeProfileChanged || tradeChanged || staffDayRateChanged) {
             return true
         }
         if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative) {
@@ -1053,8 +1057,23 @@ struct EditUserView: View {
                     Text(msg)
                 }
             }
-            .sheet(isPresented: $showingQualificationsEditor) {
-                if let operative = linkedOperativeForUser {
+            .confirmationDialog(
+                "Day rate change",
+                isPresented: $showingDayRateEffectiveChoice,
+                titleVisibility: .visible
+            ) {
+                Button("Today") {
+                    Task { await runPersistUserEdits(dayRateEffectiveAt: calendarStartOfDay(Date())) }
+                }
+                Button("Tomorrow") {
+                    Task { await runPersistUserEdits(dayRateEffectiveAt: calendarStartOfTomorrow()) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("When the day rate is changed, the weekly report and invoicing (invoicing will be available in a future update) use the new rate from the working day you choose. If you want the new rate to apply from tomorrow, choose Tomorrow.")
+            }
+            .sheet(isPresented: $showingQualificationsEditor, onDismiss: { operativeForSkillsEditor = nil }) {
+                if let operative = operativeForSkillsEditor ?? linkedOperativeForUser {
                     OperativeQualificationsEditorView(
                         operative: operative,
                         title: "Skills & Qualifications",
@@ -1544,7 +1563,7 @@ struct EditUserView: View {
                         iconBackground: ManageUserProfilePalette.chipAmberBg,
                         iconForeground: ManageUserProfilePalette.chipAmberFg,
                         label: "Last active",
-                        value: "—"
+                        value: lastSeenDisplay(for: displayedUser)
                     )
                 }
             }
@@ -1561,11 +1580,11 @@ struct EditUserView: View {
                 ManageUserDayRateEditRow(dayRateText: $dayRateText, currencySymbol: localeCurrencySymbol())
                 ManageUserCardDivider()
                 tradeTypePickSection
-                if permissions.operativeMode && !dayRateHistory.isEmpty {
+                if (permissions.operativeMode || permissions.manager || permissions.adminAccess) && !dayRateHistory.isEmpty {
                     ManageUserCardDivider()
                     dayRateHistoryChromeBlock
                 }
-                if linkedOperativeForUser != nil, canEditPermissionsMatrix,
+                if canEditPermissionsMatrix,
                    permissions.operativeMode || permissions.manager || permissions.adminAccess {
                     ManageUserCardDivider()
                     ManageUserNavigationSubtitleRow(
@@ -1573,9 +1592,10 @@ struct EditUserView: View {
                         iconBackground: ManageUserProfilePalette.chipBlueBg,
                         iconForeground: ManageUserProfilePalette.chipBlueFg,
                         title: "Skills & qualifications",
-                        subtitle: "Manage certifications",
-                        action: { showingQualificationsEditor = true }
+                        subtitle: openingSkillsEditor ? "Opening…" : "Manage certifications",
+                        action: { openSkillsAndQualifications() }
                     )
+                    .disabled(openingSkillsEditor)
                 }
             }
         }
@@ -1672,13 +1692,60 @@ struct EditUserView: View {
     }
     
     private func loadDayRateHistory() async {
-        guard permissions.operativeMode else {
+        guard permissions.operativeMode || permissions.manager || permissions.adminAccess else {
             dayRateHistory = []
             return
         }
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let all = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? [:]
         dayRateHistory = (all[user.id] ?? []).sorted(by: { $0.effectiveAt > $1.effectiveAt })
+    }
+
+    private func lastSeenDisplay(for u: AppUser) -> String {
+        guard userStore.canManageUsers() else { return "—" }
+        guard let t = u.lastSeenAt else { return "Never recorded" }
+        return t.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private func calendarStartOfDay(_ date: Date) -> Date {
+        Calendar.current.startOfDay(for: date)
+    }
+
+    private func calendarStartOfTomorrow() -> Date {
+        let cal = Calendar.current
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        return cal.startOfDay(for: tomorrow)
+    }
+
+    private func shouldPromptDayRateEffectiveChoice(subjectUser: AppUser) -> Bool {
+        guard canEditPermissionsMatrix else { return false }
+        guard parseDayRate(dayRateText) != subjectUser.dayRate else { return false }
+        if permissions.operativeMode { return true }
+        if !permissions.operativeMode && (permissions.manager || permissions.adminAccess) { return true }
+        return false
+    }
+
+    private func openSkillsAndQualifications() {
+        guard canEditPermissionsMatrix else { return }
+        openingSkillsEditor = true
+        Task {
+            let subject = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+            let op: Operative?
+            if let linked = linkedOperativeForUser {
+                op = linked
+            } else {
+                op = await userStore.ensureOperativeProfileForAppUser(subject, operativeStore: operativeStore)
+            }
+            await MainActor.run {
+                openingSkillsEditor = false
+                operativeForSkillsEditor = op
+                if op != nil {
+                    showingQualificationsEditor = true
+                } else {
+                    saveErrorMessage = "Could not create a linked operative profile for skills. Check email and try again."
+                }
+            }
+        }
     }
     
     private var activeToggleChromeSection: some View {
@@ -2106,7 +2173,6 @@ struct EditUserView: View {
     
     private func saveChanges() {
         isUpdating = true
-        
         Task {
             if canEditIdentityDetails && identityDirty {
                 guard isValidEmail(editEmail) else {
@@ -2118,117 +2184,143 @@ struct EditUserView: View {
                 }
             }
 
-            var identitySuccess = true
-            if canEditIdentityDetails && identityDirty {
-                identitySuccess = await userStore.updateUserIdentityProfile(
-                    userId: user.id,
-                    firstName: editFirstName,
-                    surname: editSurname,
-                    email: editEmail,
-                    mobileNumber: editMobile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? nil
-                        : editMobile.trimmingCharacters(in: .whitespacesAndNewlines),
-                    operativeStore: operativeStore
-                )
-            }
-
-            let subjectUser = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
-            let linkedOpId = operativeStore.allOperatives.first(where: {
-                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
-                subjectUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            })?.id
-
-            let dayRateEligible = permissions.operativeMode || permissions.manager
-            if canEditPermissionsMatrix && dayRateEligible && !StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText) {
+            let rateSubject = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+            if shouldPromptDayRateEffectiveChoice(subjectUser: rateSubject) {
                 await MainActor.run {
                     isUpdating = false
-                    saveErrorMessage = "Please choose a trade type. If you select Other, enter the trade name."
+                    showingDayRateEffectiveChoice = true
                 }
                 return
             }
-            
-            var permissionsSuccess = true
-            var didPersistPermissions = false
-            if canEditPermissionsMatrix && !userStore.isOrganizationCreator(userId: user.id) {
-                if canUseAdminAccountTools && permissions != subjectUser.permissions {
-                    didPersistPermissions = true
-                    var outgoing = permissions
-                    if !outgoing.adminAccess && !outgoing.operativeMode {
-                        outgoing.manager = true
-                    }
-                    permissionsSuccess = await userStore.updateUserPermissions(
-                        userId: user.id,
-                        permissions: outgoing,
-                        holidayStore: holidayStore,
-                        linkedOperativeUUID: linkedOpId
-                    )
-                } else if isManagerOperativeOnly && (subjectUser.permissions.operativeMode || subjectUser.role == .operative),
-                          (permissions.materials != subjectUser.permissions.materials || permissions.siteAudit != subjectUser.permissions.siteAudit) {
-                    didPersistPermissions = true
-                    var merged = subjectUser.permissions
-                    merged.materials = permissions.materials
-                    merged.siteAudit = permissions.siteAudit
-                    permissionsSuccess = await userStore.updateUserPermissions(
-                        userId: user.id,
-                        permissions: merged,
-                        holidayStore: holidayStore,
-                        linkedOperativeUUID: linkedOpId
-                    )
-                }
-            }
-            
-            var activeSuccess = true
-            if canUseAdminAccountTools && isActive != subjectUser.isActive {
-                activeSuccess = await userStore.updateUserActiveStatus(for: subjectUser, isActive: isActive)
-            }
 
-            var operativeDetailsSuccess = true
-            let operativeProfileChanged = permissions.operativeMode && (
-                (selectedAssignedManagerUserId ?? "") != (subjectUser.assignedManagerUserId ?? "") ||
-                parseDayRate(dayRateText) != subjectUser.dayRate
+            await runPersistUserEdits(dayRateEffectiveAt: nil)
+        }
+    }
+
+    /// Persists edit-user changes. When `dayRateEffectiveAt` is non-nil, day-rate history uses that calendar day as the effective start (weekly report / future invoicing).
+    private func runPersistUserEdits(dayRateEffectiveAt: Date?) async {
+        await MainActor.run { isUpdating = true }
+
+        var identitySuccess = true
+        if canEditIdentityDetails && identityDirty {
+            identitySuccess = await userStore.updateUserIdentityProfile(
+                userId: user.id,
+                firstName: editFirstName,
+                surname: editSurname,
+                email: editEmail,
+                mobileNumber: editMobile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil
+                    : editMobile.trimmingCharacters(in: .whitespacesAndNewlines),
+                operativeStore: operativeStore
             )
-            if canEditPermissionsMatrix && operativeProfileChanged {
-                let parsedDayRate = parseDayRate(dayRateText)
-                operativeDetailsSuccess = await userStore.updateOperativeProfileFields(
-                    for: subjectUser,
-                    assignedManagerUserId: selectedAssignedManagerUserId,
-                    dayRate: parsedDayRate,
-                    operativeStore: operativeStore
-                )
-            }
-            
-            var managerDayRateSuccess = true
-            let managerDayRateChanged = permissions.manager && !permissions.operativeMode && parseDayRate(dayRateText) != subjectUser.dayRate
-            if canEditPermissionsMatrix && managerDayRateChanged {
-                managerDayRateSuccess = await userStore.updateManagerDayRate(for: subjectUser, dayRate: parseDayRate(dayRateText))
-            }
-            
-            var tradeSuccess = true
-            let trimmedP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-            let trimmedC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
-            let origP = subjectUser.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let origC = subjectUser.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let tradeDirty = dayRateEligible && (trimmedP != origP || trimmedC != origC)
-            if canEditPermissionsMatrix && tradeDirty {
-                tradeSuccess = await userStore.updateUserStaffTrade(
-                    for: subjectUser,
-                    tradeTypePreset: trimmedP.isEmpty ? nil : trimmedP,
-                    tradeTypeCustom: trimmedC.isEmpty ? nil : trimmedC,
-                    operativeStore: operativeStore
-                )
-            }
+        }
 
-            if didPersistPermissions && permissionsSuccess {
-                await holidayStore.loadData()
-            }
-            
+        let subjectUser = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let linkedOpId = operativeStore.allOperatives.first(where: {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
+            subjectUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        })?.id
+
+        let dayRateEligible = permissions.operativeMode || permissions.manager || permissions.adminAccess
+        if canEditPermissionsMatrix && dayRateEligible && !StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText) {
             await MainActor.run {
                 isUpdating = false
-                if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess {
-                    dismiss()
-                } else {
-                    saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."
+                saveErrorMessage = "Please choose a trade type. If you select Other, enter the trade name."
+            }
+            return
+        }
+
+        var permissionsSuccess = true
+        var didPersistPermissions = false
+        if canEditPermissionsMatrix && !userStore.isOrganizationCreator(userId: user.id) {
+            if canUseAdminAccountTools && permissions != subjectUser.permissions {
+                didPersistPermissions = true
+                var outgoing = permissions
+                if !outgoing.adminAccess && !outgoing.operativeMode {
+                    outgoing.manager = true
                 }
+                permissionsSuccess = await userStore.updateUserPermissions(
+                    userId: user.id,
+                    permissions: outgoing,
+                    holidayStore: holidayStore,
+                    linkedOperativeUUID: linkedOpId
+                )
+            } else if isManagerOperativeOnly && (subjectUser.permissions.operativeMode || subjectUser.role == .operative),
+                      (permissions.materials != subjectUser.permissions.materials || permissions.siteAudit != subjectUser.permissions.siteAudit) {
+                didPersistPermissions = true
+                var merged = subjectUser.permissions
+                merged.materials = permissions.materials
+                merged.siteAudit = permissions.siteAudit
+                permissionsSuccess = await userStore.updateUserPermissions(
+                    userId: user.id,
+                    permissions: merged,
+                    holidayStore: holidayStore,
+                    linkedOperativeUUID: linkedOpId
+                )
+            }
+        }
+
+        var activeSuccess = true
+        if canUseAdminAccountTools && isActive != subjectUser.isActive {
+            activeSuccess = await userStore.updateUserActiveStatus(for: subjectUser, isActive: isActive)
+        }
+
+        var operativeDetailsSuccess = true
+        let managerAssignmentChanged = (selectedAssignedManagerUserId ?? "") != (subjectUser.assignedManagerUserId ?? "")
+        let operativeDayRateChanged = parseDayRate(dayRateText) != subjectUser.dayRate
+        let operativeProfileChanged = permissions.operativeMode && (managerAssignmentChanged || operativeDayRateChanged)
+        if canEditPermissionsMatrix && operativeProfileChanged {
+            let parsedDayRate = parseDayRate(dayRateText)
+            let effectiveForHistory: Date? = operativeDayRateChanged ? (dayRateEffectiveAt ?? calendarStartOfDay(Date())) : nil
+            operativeDetailsSuccess = await userStore.updateOperativeProfileFields(
+                for: subjectUser,
+                assignedManagerUserId: selectedAssignedManagerUserId,
+                dayRate: parsedDayRate,
+                operativeStore: operativeStore,
+                dayRateEffectiveAt: effectiveForHistory
+            )
+        }
+
+        var managerDayRateSuccess = true
+        let staffDayRateChanged = !permissions.operativeMode && (permissions.manager || permissions.adminAccess)
+            && parseDayRate(dayRateText) != subjectUser.dayRate
+        if canEditPermissionsMatrix && staffDayRateChanged {
+            let parsed = parseDayRate(dayRateText)
+            let effective = dayRateEffectiveAt ?? calendarStartOfDay(Date())
+            managerDayRateSuccess = await userStore.updateManagerDayRate(
+                for: subjectUser,
+                dayRate: parsed,
+                effectiveAt: effective,
+                operativeStore: operativeStore
+            )
+        }
+
+        var tradeSuccess = true
+        let trimmedP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let origP = subjectUser.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let origC = subjectUser.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let tradeDirty = dayRateEligible && (trimmedP != origP || trimmedC != origC)
+        if canEditPermissionsMatrix && tradeDirty {
+            tradeSuccess = await userStore.updateUserStaffTrade(
+                for: subjectUser,
+                tradeTypePreset: trimmedP.isEmpty ? nil : trimmedP,
+                tradeTypeCustom: trimmedC.isEmpty ? nil : trimmedC,
+                operativeStore: operativeStore
+            )
+        }
+
+        if didPersistPermissions && permissionsSuccess {
+            await holidayStore.loadData()
+        }
+
+        await MainActor.run {
+            isUpdating = false
+            showingDayRateEffectiveChoice = false
+            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess {
+                dismiss()
+            } else {
+                saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."
             }
         }
     }

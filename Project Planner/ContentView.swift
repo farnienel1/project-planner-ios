@@ -193,7 +193,10 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                Task { await notificationService.refreshQualificationExpiryReminders() }
+                Task {
+                    await userStore.recordCurrentUserLastSeenIfDue()
+                    await notificationService.refreshQualificationExpiryReminders()
+                }
             }
         }
         .onChange(of: appSettings.settings.notifications.materialOrderCutOff) { _, _ in
