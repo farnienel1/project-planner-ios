@@ -18,6 +18,8 @@ struct CreateOperativeView: View {
     @State private var operativeEmail = ""
     @State private var operativePhone = ""
     @State private var operativeDayRate = ""
+    @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
+    @State private var tradeCustomText = ""
     @State private var selectedSkills: Set<String> = []
     @State private var isLoading = false
     @State private var isSaving = false
@@ -61,6 +63,13 @@ struct CreateOperativeView: View {
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.phonePad)
                         
+                        StaffTradeTypeFormSection(
+                            presetRaw: $tradePresetRaw,
+                            customText: $tradeCustomText,
+                            title: "Trade type *",
+                            footnote: "Required. Choose Other to enter a custom trade."
+                        )
+                        
                         TextField("Day Rate (Optional)", text: $operativeDayRate)
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.decimalPad)
@@ -70,7 +79,7 @@ struct CreateOperativeView: View {
                             Text("Skills")
                                 .font(.headline)
                             
-                            if operativeStore.skills.isEmpty {
+                            if operativeStore.organizationSkills.isEmpty {
                                 Text("No skills available. Add skills in the Skills Management section.")
                                     .foregroundColor(.secondary)
                                     .padding(.horizontal, 12)
@@ -81,24 +90,25 @@ struct CreateOperativeView: View {
                                 LazyVGrid(columns: [
                                     GridItem(.adaptive(minimum: 120))
                                 ], spacing: 8) {
-                                    ForEach(Array(operativeStore.skills.sorted()), id: \.self) { skill in
+                                    ForEach(operativeStore.organizationSkills) { skill in
                                         Button(action: {
-                                            if selectedSkills.contains(skill) {
-                                                selectedSkills.remove(skill)
+                                            if selectedSkills.contains(skill.id) {
+                                                selectedSkills.remove(skill.id)
                                             } else {
-                                                selectedSkills.insert(skill)
+                                                selectedSkills.insert(skill.id)
                                             }
                                         }) {
                                             HStack {
-                                                Image(systemName: selectedSkills.contains(skill) ? "checkmark.circle.fill" : "circle")
-                                                    .foregroundColor(selectedSkills.contains(skill) ? .blue : .gray)
-                                                Text(skill)
+                                                Image(systemName: selectedSkills.contains(skill.id) ? "checkmark.circle.fill" : "circle")
+                                                    .foregroundColor(selectedSkills.contains(skill.id) ? .blue : .gray)
+                                                Text(skill.listTitle)
                                                     .font(.caption)
-                                                    .foregroundColor(selectedSkills.contains(skill) ? .blue : .primary)
+                                                    .foregroundColor(selectedSkills.contains(skill.id) ? .blue : .primary)
+                                                    .multilineTextAlignment(.leading)
                                             }
                                             .padding(.horizontal, 12)
                                             .padding(.vertical, 6)
-                                            .background(selectedSkills.contains(skill) ? Color.blue.opacity(0.1) : Color.gray.opacity(0.1))
+                                            .background(selectedSkills.contains(skill.id) ? Color.blue.opacity(0.1) : Color.gray.opacity(0.1))
                                             .cornerRadius(8)
                                         }
                                     }
@@ -141,7 +151,8 @@ struct CreateOperativeView: View {
         !operativeFirstName.isEmpty &&
         !operativeSurname.isEmpty &&
         !operativeEmail.isEmpty &&
-        !operativePhone.isEmpty
+        !operativePhone.isEmpty &&
+        StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText)
     }
     
     private func createOperative() {
@@ -167,6 +178,8 @@ struct CreateOperativeView: View {
         errorMessage = nil
         
         let parsedRate = operativeDayRate.isEmpty ? nil : Double(operativeDayRate.replacingOccurrences(of: ",", with: "."))
+        let tp = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tc = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
         let operative = Operative(
             firstName: operativeFirstName.trimmingCharacters(in: .whitespaces),
             lastName: operativeSurname.trimmingCharacters(in: .whitespaces),
@@ -175,7 +188,9 @@ struct CreateOperativeView: View {
             startDate: Date(),
             skills: selectedSkills,
             hourlyRate: parsedRate,
-            dayRate: parsedRate
+            dayRate: parsedRate,
+            tradeTypePreset: tp.isEmpty ? nil : tp,
+            tradeTypeCustom: tc.isEmpty ? nil : tc
         )
         
         Task {

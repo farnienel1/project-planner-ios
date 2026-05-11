@@ -58,7 +58,7 @@ struct OperativesView: View {
                 operativesList
             }
         }
-            .navigationTitle("Operatives")
+            .navigationTitle("Manage Operatives")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -151,7 +151,11 @@ struct OperativesView: View {
             formatter.dateStyle = .medium
             return formatter.string(from: operative.startDate).localizedCaseInsensitiveContains(filterText)
         case .skills:
-            return operative.skills.contains { $0.localizedCaseInsensitiveContains(filterText) }
+            return operative.skills.contains { token in
+                let label = operativeStore.skillCatalogEntry(skillId: token)?.listTitle ?? token
+                return label.localizedCaseInsensitiveContains(filterText)
+                    || token.localizedCaseInsensitiveContains(filterText)
+            }
         case .qualifications:
             return operative.qualifications.contains { $0.name.localizedCaseInsensitiveContains(filterText) }
         case .dayRate:
@@ -467,6 +471,7 @@ struct OperativeFilterOptionsView: View {
 
 struct OperativeDetailRowView: View {
     let operative: Operative
+    @EnvironmentObject private var operativeStore: OperativeStore
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -480,6 +485,12 @@ struct OperativeDetailRowView: View {
                     Text(operative.email)
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+                    
+                    if operative.displayTradeType != "—" {
+                        Text(operative.displayTradeType)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                     
                     if let dayRate = (operative.dayRate ?? operative.hourlyRate), dayRate > 0 {
                         let currencySymbol = operative.currencySymbol ?? defaultCurrencySymbol()
@@ -519,8 +530,8 @@ struct OperativeDetailRowView: View {
                         .foregroundColor(.secondary)
                     
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 4) {
-                        ForEach(Array(operative.skills.prefix(4)), id: \.self) { skill in
-                            Text(skill)
+                        ForEach(Array(operative.skills.prefix(4)), id: \.self) { skillToken in
+                            Text(operativeStore.skillCatalogEntry(skillId: skillToken)?.listTitle ?? skillToken)
                                 .font(.caption)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
@@ -600,6 +611,8 @@ struct AddOperativeView: View {
     @State private var selectedQualifications: Set<Qualification> = []
     @State private var hourlyRate = ""
     @State private var notes = ""
+    @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
+    @State private var tradeCustomText = ""
     
     var body: some View {
         NavigationView {
@@ -616,26 +629,26 @@ struct AddOperativeView: View {
                 }
                 
                 Section("Skills") {
-                    if operativeStore.skills.isEmpty {
+                    if operativeStore.organizationSkills.isEmpty {
                         Text("No skills added yet.")
                             .foregroundColor(.secondary)
                             .font(.subheadline)
                     } else {
-                        ForEach(Array(operativeStore.skills.sorted()), id: \.self) { skill in
+                        ForEach(operativeStore.organizationSkills) { skill in
                             HStack {
-                                Text(skill)
+                                Text(skill.listTitle)
                                 Spacer()
-                                if selectedSkills.contains(skill) {
+                                if selectedSkills.contains(skill.id) {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundColor(.blue)
                                 }
                             }
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                if selectedSkills.contains(skill) {
-                                    selectedSkills.remove(skill)
+                                if selectedSkills.contains(skill.id) {
+                                    selectedSkills.remove(skill.id)
                                 } else {
-                                    selectedSkills.insert(skill)
+                                    selectedSkills.insert(skill.id)
                                 }
                             }
                         }
@@ -684,6 +697,15 @@ struct AddOperativeView: View {
                     }
                 }
                 
+                Section {
+                    StaffTradeTypeFormSection(
+                        presetRaw: $tradePresetRaw,
+                        customText: $tradeCustomText,
+                        title: "Trade type *",
+                        footnote: "Required."
+                    )
+                }
+                
                 Section("Additional Info") {
                     TextField("Day Rate (e.g., £45, $50)", text: $hourlyRate)
                     TextField("Notes", text: $notes, axis: .vertical)
@@ -710,12 +732,15 @@ struct AddOperativeView: View {
     }
     
     private var isFormValid: Bool {
-        !firstName.isEmpty && !lastName.isEmpty && !email.isEmpty
+        !firstName.isEmpty && !lastName.isEmpty && !email.isEmpty &&
+        StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText)
     }
     
     private func saveOperative() {
         // Parse the hourly rate, preserving currency symbols
         let parsedRate = parseCurrencyAmount(hourlyRate)
+        let tp = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tc = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
         
         let operative = Operative(
             firstName: firstName.trimmingCharacters(in: .whitespaces),
@@ -727,7 +752,9 @@ struct AddOperativeView: View {
             qualifications: Array(selectedQualifications),
             hourlyRate: parsedRate.amount,
             dayRate: parsedRate.amount,
-            currencySymbol: parsedRate.symbol
+            currencySymbol: parsedRate.symbol,
+            tradeTypePreset: tp.isEmpty ? nil : tp,
+            tradeTypeCustom: tc.isEmpty ? nil : tc
         )
         
         Task {
@@ -765,6 +792,8 @@ struct EditOperativeView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     let operative: Operative
     
     @State private var firstName: String
@@ -778,6 +807,8 @@ struct EditOperativeView: View {
     @State private var notes: String
     @State private var isActive: Bool
     @State private var showingDeleteConfirmation = false
+    @State private var tradePresetRaw: String
+    @State private var tradeCustomText: String
     
     init(operative: Operative) {
         self.operative = operative
@@ -796,6 +827,8 @@ struct EditOperativeView: View {
         }())
         self._notes = State(initialValue: operative.notes ?? "")
         self._isActive = State(initialValue: operative.isActive)
+        self._tradePresetRaw = State(initialValue: operative.tradeTypePreset ?? "")
+        self._tradeCustomText = State(initialValue: operative.tradeTypeCustom ?? "")
         
         print("🔥🔥🔥 DEBUG: EditOperativeView initialized for operative: \(operative.name)")
         print("🔥🔥🔥 DEBUG: Operative skills: \(operative.skills)")
@@ -803,7 +836,7 @@ struct EditOperativeView: View {
     }
     
     var body: some View {
-        let _ = print("🔥🔥🔥 DEBUG: EditOperativeView body called - skills count: \(operativeStore.skills.count), qualifications count: \(operativeStore.qualifications.count)")
+        let _ = print("🔥🔥🔥 DEBUG: EditOperativeView body called - skills count: \(operativeStore.organizationSkills.count), qualifications count: \(operativeStore.qualifications.count)")
         let _ = print("🔥🔥🔥 DEBUG: EditOperativeView - operative name: \(operative.name)")
         let _ = print("🔥🔥🔥 DEBUG: EditOperativeView - operative email: \(operative.email)")
         
@@ -813,7 +846,7 @@ struct EditOperativeView: View {
                     .font(.headline)
                     .padding()
                 
-                Text("Skills: \(operativeStore.skills.count), Qualifications: \(operativeStore.qualifications.count)")
+                Text("Skills: \(operativeStore.organizationSkills.count), Qualifications: \(operativeStore.qualifications.count)")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.bottom)
@@ -837,26 +870,26 @@ struct EditOperativeView: View {
                     }
                 
                 Section("Skills") {
-                    if operativeStore.skills.isEmpty {
+                    if operativeStore.organizationSkills.isEmpty {
                         Text("No skills added yet.")
                             .foregroundColor(.secondary)
                             .font(.subheadline)
                     } else {
-                        ForEach(Array(operativeStore.skills.sorted()), id: \.self) { skill in
+                        ForEach(operativeStore.organizationSkills) { skill in
                             HStack {
-                                Text(skill)
+                                Text(skill.listTitle)
                                 Spacer()
-                                if selectedSkills.contains(skill) {
+                                if selectedSkills.contains(skill.id) {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundColor(.blue)
                                 }
                             }
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                if selectedSkills.contains(skill) {
-                                    selectedSkills.remove(skill)
+                                if selectedSkills.contains(skill.id) {
+                                    selectedSkills.remove(skill.id)
                                 } else {
-                                    selectedSkills.insert(skill)
+                                    selectedSkills.insert(skill.id)
                                 }
                             }
                         }
@@ -906,6 +939,12 @@ struct EditOperativeView: View {
                 }
                 
                 Section("Additional Info") {
+                    StaffTradeTypeFormSection(
+                        presetRaw: $tradePresetRaw,
+                        customText: $tradeCustomText,
+                        title: "Trade type *",
+                        footnote: "Required."
+                    )
                     TextField("Day Rate (e.g., £45, $50)", text: $dayRate)
                     TextField("Notes", text: $notes, axis: .vertical)
                         .lineLimit(3...6)
@@ -962,12 +1001,15 @@ struct EditOperativeView: View {
     }
     
     private var isFormValid: Bool {
-        !firstName.isEmpty && !lastName.isEmpty && !email.isEmpty
+        !firstName.isEmpty && !lastName.isEmpty && !email.isEmpty &&
+        StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText)
     }
     
     private func updateOperative() {
         // Parse the hourly rate, preserving currency symbols
         let parsedRate = parseCurrencyAmount(dayRate)
+        let tp = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tc = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
         
         var updatedOperative = operative
         updatedOperative.firstName = firstName.trimmingCharacters(in: .whitespaces)
@@ -982,10 +1024,48 @@ struct EditOperativeView: View {
         updatedOperative.currencySymbol = parsedRate.symbol
         updatedOperative.notes = notes.isEmpty ? nil : notes
         updatedOperative.isActive = isActive
+        updatedOperative.tradeTypePreset = tp.isEmpty ? nil : tp
+        updatedOperative.tradeTypeCustom = tc.isEmpty ? nil : tc
         updatedOperative.updatedAt = Date()
-        
+
+        let previousAmount = operative.dayRate ?? operative.hourlyRate
+        let newAmount = parsedRate.amount
+
         Task {
             await operativeStore.updateOperative(updatedOperative)
+
+            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+               previousAmount != newAmount {
+                let emailNorm = updatedOperative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                let linkedUserId = userStore.organizationUsers.first(where: {
+                    $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
+                })?.id
+                do {
+                    let collection = try await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)
+                    let merged = collection.mergedEntries(userId: linkedUserId, operativeId: operative.id)
+                    if merged.isEmpty, let prev = previousAmount {
+                        try await firebaseBackend.recordOperativeDayRateChange(
+                            organizationId: orgId,
+                            userId: linkedUserId,
+                            operativeId: operative.id,
+                            dayRate: prev,
+                            effectiveAt: operative.createdAt
+                        )
+                    }
+                    if let newRate = newAmount {
+                        try await firebaseBackend.recordOperativeDayRateChange(
+                            organizationId: orgId,
+                            userId: linkedUserId,
+                            operativeId: operative.id,
+                            dayRate: newRate,
+                            effectiveAt: Date()
+                        )
+                    }
+                } catch {
+                    print("🔥🔥🔥 DEBUG: Failed to record operative day rate history: \(error.localizedDescription)")
+                }
+            }
+
             await MainActor.run {
                 dismiss()
             }

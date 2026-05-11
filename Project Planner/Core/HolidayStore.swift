@@ -111,6 +111,20 @@ class HolidayStore: ObservableObject {
         }
     }
 
+    /// Removes **pending** holiday rows for a person moving off the approval/request flow (see `UserRoleTransitionPolicy`).
+    func deletePendingHolidayRequestsFor(userId: String, operativeId: UUID?) async {
+        let trimmedUid = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pendingForPerson = bookings.filter { booking in
+            guard booking.status == .pending else { return false }
+            if booking.userId == trimmedUid { return true }
+            if let oid = operativeId, booking.operativeId == oid { return true }
+            return false
+        }
+        for booking in pendingForPerson {
+            await deleteBooking(booking)
+        }
+    }
+
     func approveBooking(_ booking: HolidayBooking, approvedByUserId: String) async {
         var updated = booking
         updated.status = .approved

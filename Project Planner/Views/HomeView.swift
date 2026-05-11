@@ -730,7 +730,7 @@ struct HomeView: View {
                     if userStore.canViewOperatives() {
                         navigationTile(
                             icon: "person.3.fill",
-                            title: "Operatives",
+                            title: "Manage Operatives",
                             action: {
                                 NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 3])
                             }
@@ -1099,10 +1099,10 @@ struct OperativeQualificationsReadOnlyView: View {
                 OperativeQualificationsEditorView(
                     operative: op,
                     title: "My Qualifications",
-                    canEditAssignments: true
+                    canEditAssignments: true,
+                    presentation: .myQualifications
                 )
                 .environmentObject(operativeStore)
-                .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
             } else {
                 NavigationStack {
@@ -1190,7 +1190,9 @@ struct OperativeQualificationsReadOnlyView: View {
             qualifications: [],
             qualificationExpiryDates: [:],
             isActive: u.isActive,
-            dayRate: u.dayRate
+            dayRate: u.dayRate,
+            tradeTypePreset: u.tradeTypePreset,
+            tradeTypeCustom: u.tradeTypeCustom
         )
         await operativeStore.addOperative(newOperative)
         repairMessage = "Created and linked operative profile."
@@ -1223,7 +1225,7 @@ struct QuickMenuSheet: View {
                     }
                     actionRow("Projects", "folder.fill") { selectTab(1) }
                     actionRow("Small Works", "hammer.fill") { selectTab(2) }
-                    if userStore.canViewOperatives() { actionRow("Operatives", "person.3.fill") { selectTab(3) } }
+                    if userStore.canViewOperatives() { actionRow("Manage Operatives", "person.3.fill") { selectTab(3) } }
                     if userStore.canViewManagers() { actionRow("Managers", "person.badge.key.fill") { selectTab(4) } }
                 }
 

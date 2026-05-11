@@ -168,10 +168,38 @@ struct UserPermissions: Codable, Hashable {
 
 struct OperativeDayRateHistoryEntry: Identifiable, Codable, Hashable {
     let id: UUID
-    var userId: String
+    /// Firebase user id when the change came from (or is linked to) an account.
+    var userId: String?
+    /// Local operative roster id when the change is tracked per-roster-row (including operatives without an app login).
+    var operativeId: UUID?
     var dayRate: Double
     var effectiveAt: Date
     var createdAt: Date
+}
+
+/// Loaded `operativeDayRateHistory` documents bucketed for lookups (a single doc may appear in both maps).
+struct OperativeDayRateHistoryCollection: Sendable {
+    var byUserId: [String: [OperativeDayRateHistoryEntry]]
+    var byOperativeId: [String: [OperativeDayRateHistoryEntry]]
+
+    static let empty = OperativeDayRateHistoryCollection(byUserId: [:], byOperativeId: [:])
+
+    /// Merges history for a linked user account and/or operative roster row, de-duplicated by entry id.
+    func mergedEntries(userId: String?, operativeId: UUID?) -> [OperativeDayRateHistoryEntry] {
+        var seen = Set<UUID>()
+        var out: [OperativeDayRateHistoryEntry] = []
+        if let uid = userId {
+            for e in byUserId[uid] ?? [] where seen.insert(e.id).inserted {
+                out.append(e)
+            }
+        }
+        if let oid = operativeId {
+            for e in byOperativeId[oid.uuidString] ?? [] where seen.insert(e.id).inserted {
+                out.append(e)
+            }
+        }
+        return out.sorted(by: { $0.effectiveAt < $1.effectiveAt })
+    }
 }
 
 /// Simulates app navigation and permission checks for another role while signed in as yourself.
@@ -258,6 +286,13 @@ struct AppUser: Identifiable, Codable, Hashable {
     var assignedManagerUserId: String?
     /// Default day rate for this operative (optional; copied to roster when the operative profile is created).
     var dayRate: Double?
+    /// `StaffTradeType.rawValue`, or "Other" with `tradeTypeCustom` for free text.
+    var tradeTypePreset: String?
+    var tradeTypeCustom: String?
+    /// Firebase Storage download URL for profile photo (set from Manage Users).
+    var profilePhotoURL: String?
+    /// Last time this account had app activity (foreground); updated with merge on `users/{id}`.
+    var lastSeenAt: Date?
     
     init(
         id: String,
@@ -275,7 +310,11 @@ struct AppUser: Identifiable, Codable, Hashable {
         policyAccepted: Bool = false,
         policyAcceptedAt: Date? = nil,
         assignedManagerUserId: String? = nil,
-        dayRate: Double? = nil
+        dayRate: Double? = nil,
+        tradeTypePreset: String? = nil,
+        tradeTypeCustom: String? = nil,
+        profilePhotoURL: String? = nil,
+        lastSeenAt: Date? = nil
     ) {
         self.id = id
         self.email = email
@@ -293,6 +332,10 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.policyAcceptedAt = policyAcceptedAt
         self.assignedManagerUserId = assignedManagerUserId
         self.dayRate = dayRate
+        self.tradeTypePreset = tradeTypePreset
+        self.tradeTypeCustom = tradeTypeCustom
+        self.profilePhotoURL = profilePhotoURL
+        self.lastSeenAt = lastSeenAt
     }
     
     var fullName: String {

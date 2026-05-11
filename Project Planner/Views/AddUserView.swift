@@ -44,6 +44,8 @@ struct AddUserView: View {
     @State private var assignedManagerUserId: String?
     @State private var operativeDayRateText = ""
     @State private var managerDayRateText = ""
+    @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
+    @State private var tradeCustomText = ""
     @State private var isCreating = false
     @State private var showSuccess = false
     @State private var errorMessage: String?
@@ -294,6 +296,15 @@ struct AddUserView: View {
                 }
                 
                 if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
+                    StaffTradeTypeFormSection(
+                        presetRaw: $tradePresetRaw,
+                        customText: $tradeCustomText,
+                        title: "Trade type *",
+                        footnote: "Required for operatives and managers."
+                    )
+                }
+                
+                if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Day rate (optional)")
                             .font(.headline)
@@ -331,7 +342,10 @@ struct AddUserView: View {
                     Text("Operative mode")
                         .font(.headline)
                 }
-                Text("They can see assigned projects and small works, tasks, holiday (requests), schedule (view only), and their qualifications.")
+                Text("Operative mode provides very limited access to the platform. It allows access to their schedule, request annual leave and maintain their qualifications.")
+                    .font(.subheadline)
+                    .foregroundColor(.primary)
+                Text("The below features are additional options, which need to be selected to provide access.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -370,6 +384,19 @@ struct AddUserView: View {
         }
     }
     
+    private var invitePermissionDivider: some View {
+        Rectangle()
+            .fill(Color(.separator).opacity(0.35))
+            .frame(height: 0.5)
+            .padding(.leading, 16)
+    }
+
+    private func permissionInviteCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .background(Color(.systemGray6))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
     private var stepPermissionsControlled: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text(permissionsDescriptionHeader)
@@ -379,127 +406,154 @@ struct AddUserView: View {
             VStack(spacing: 16) {
                 switch invitedAccountType {
                 case .admin:
-                    PermissionToggle(
-                        title: "Admin Access",
-                        description: "Full organisation administration (excluding super-admin-only ownership actions).",
-                        isOn: .constant(true),
-                        isDisabled: true
-                    )
-                    PermissionToggle(
-                        title: "Manager",
-                        description: "Scheduling, clients, skills, qualifications, warnings, tasks.",
-                        isOn: .constant(true),
-                        isDisabled: true
-                    )
-                    PermissionToggle(
-                        title: "Operative Management",
-                        description: "Can open the Operatives tab and manage operative profiles.",
-                        isOn: .constant(true),
-                        isDisabled: true
-                    )
-                    PermissionToggle(
-                        title: "Skills & Qualifications (org)",
-                        description: "Can maintain organisation skills and qualifications catalogues.",
-                        isOn: .constant(true),
-                        isDisabled: true
-                    )
-                    PermissionToggle(
-                        title: "Projects & Small Works",
-                        description: "Can create and manage projects and small works.",
-                        isOn: .constant(true),
-                        isDisabled: true
-                    )
-                    PermissionToggle(
-                        title: "Operative Mode",
-                        description: "Off for admin accounts.",
-                        isOn: .constant(false),
-                        isDisabled: true
-                    )
+                    permissionInviteCard {
+                        VStack(spacing: 0) {
+                            PermissionToggle(
+                                title: "Admin Access",
+                                description: "Full organisation administration (excluding super-admin-only ownership actions).",
+                                isOn: .constant(true),
+                                isDisabled: true,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Operative Management",
+                                description: "Can open the Operatives tab and manage operative profiles.",
+                                isOn: .constant(true),
+                                isDisabled: true,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Skills & Qualifications (org)",
+                                description: "Can maintain organisation skills and qualifications catalogues.",
+                                isOn: .constant(true),
+                                isDisabled: true,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Projects",
+                                description: "Can create and manage projects.",
+                                isOn: .constant(true),
+                                isDisabled: true,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Small Works",
+                                description: "Can create and manage small works.",
+                                isOn: .constant(true),
+                                isDisabled: true,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Operative Mode",
+                                description: "Off for admin accounts.",
+                                isOn: .constant(false),
+                                isDisabled: true,
+                                style: .plainInset
+                            )
+                        }
+                    }
                 case .manager:
-                    PermissionToggle(
-                        title: "Admin Access",
-                        description: "Not available for manager accounts.",
-                        isOn: .constant(false),
-                        isDisabled: true
-                    )
-                    PermissionToggle(
-                        title: "Manager",
-                        description: "Manager capabilities are enabled.",
-                        isOn: .constant(true),
-                        isDisabled: true
-                    )
-                    PermissionToggle(
-                        title: "Operative Management",
-                        description: "Can manage operatives and view their details. If turned off, this user can still assign operatives to projects and small works, but will not see the Operatives tab or full operative profiles.",
-                        isOn: $permissions.operatives,
-                        isDisabled: false
-                    )
-                    PermissionToggle(
-                        title: "Annual Leave",
-                        description: "Can book their own annual leave. If unselected the manager will need to request annual leave and have this approved.",
-                        isOn: $permissions.annualLeaveSelfBook,
-                        isDisabled: false
-                    )
-                    PermissionToggle(
-                        title: "Weekly Report",
-                        description: "Will be able to pull weekly reports.",
-                        isOn: $permissions.weeklyReports,
-                        isDisabled: false
-                    )
-                    PermissionToggle(
-                        title: "Sub Contractors",
-                        description: "Can add and manage sub contractors. If unselected they will be unable to manage them, they will only be able to book them in.",
-                        isOn: $permissions.subContractors,
-                        isDisabled: false
-                    )
-                    PermissionToggle(
-                        title: "Skills & Qualifications (org)",
-                        description: "Managers can maintain skills and qualifications unless you change this later in Manage Users.",
-                        isOn: .constant(true),
-                        isDisabled: true
-                    )
-                    PermissionToggle(
-                        title: "Projects & Small Works",
-                        description: "Can add and edit projects and small works. If unselected, this manager can still schedule on them.",
-                        isOn: Binding(
-                            get: { permissions.projects && permissions.smallWorks },
-                            set: { newValue in
-                                permissions.projects = newValue
-                                permissions.smallWorks = newValue
-                            }
-                        ),
-                        isDisabled: false
-                    )
-                    PermissionToggle(
-                        title: "Operative Mode",
-                        description: "Off for manager accounts.",
-                        isOn: .constant(false),
-                        isDisabled: true
-                    )
+                    permissionInviteCard {
+                        VStack(spacing: 0) {
+                            PermissionToggle(
+                                title: "Operatives",
+                                description: "Can manage operatives and view their details. If turned off, this user can still assign operatives to projects and small works, but will not see the Operatives tab or full operative profiles.",
+                                isOn: $permissions.operatives,
+                                isDisabled: false,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Annual Leave",
+                                description: "Can book their own annual leave. If unselected the manager will need to request annual leave and have this approved.",
+                                isOn: $permissions.annualLeaveSelfBook,
+                                isDisabled: false,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Weekly Report",
+                                description: "Can open and pull weekly reports.",
+                                isOn: $permissions.weeklyReports,
+                                isDisabled: false,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Sub Contractors",
+                                description: "Can add and manage sub contractors. If unselected they can still book sub contractors in, but not manage their records.",
+                                isOn: $permissions.subContractors,
+                                isDisabled: false,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Skills & Qualifications (org)",
+                                description: "Managers can maintain skills and qualifications unless you change this later in Manage Users.",
+                                isOn: .constant(true),
+                                isDisabled: true,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Projects",
+                                description: "Can create and manage projects. If unselected, this manager can still schedule operatives and sub contractors.",
+                                isOn: $permissions.projects,
+                                isDisabled: false,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Small Works",
+                                description: "Can create and manage small works. If unselected, this manager can still schedule operatives and sub contractors.",
+                                isOn: $permissions.smallWorks,
+                                isDisabled: false,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Operative Mode",
+                                description: "Off for manager accounts.",
+                                isOn: .constant(false),
+                                isDisabled: true,
+                                style: .plainInset
+                            )
+                        }
+                    }
                 case .operative:
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Operative permissions are fixed")
-                            .font(.headline)
-                        Text("Operative mode is on; admin, manager, skills, and organisation qualification editing are off. Projects and small works access is limited to assigned work in the app.")
+                        Text("Operative mode provides very limited access to the platform. It allows access to their schedule, request annual leave and maintain their qualifications.")
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        Text("The below features are additional options, which need to be selected to provide access.")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        PermissionToggle(
-                            title: "Materials",
-                            description: "Allow this operative to see and use Materials inside assigned projects and small works.",
-                            isOn: $permissions.materials,
-                            isDisabled: false
-                        )
-                        PermissionToggle(
-                            title: "Site Audit",
-                            description: "Allow this operative to access Site Audits for assigned projects and small works.",
-                            isOn: $permissions.siteAudit,
-                            isDisabled: false
-                        )
+                        permissionInviteCard {
+                            VStack(spacing: 0) {
+                                PermissionToggle(
+                                    title: "Materials",
+                                    description: "Can access material lists in projects and small works. They will not be able to send quotes or place orders.",
+                                    isOn: $permissions.materials,
+                                    isDisabled: false,
+                                    style: .plainInset
+                                )
+                                invitePermissionDivider
+                                PermissionToggle(
+                                    title: "Site Audit",
+                                    description: "Can view and submit site audits.",
+                                    isOn: $permissions.siteAudit,
+                                    isDisabled: false,
+                                    style: .plainInset
+                                )
+                            }
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(12)
                 }
             }
         }
@@ -513,7 +567,7 @@ struct AddUserView: View {
         case .admin:
             return "Administrator template — all access except operative mode."
         case .manager:
-            return "Choose whether this manager can open the Operatives tab and manage operative profiles."
+            return "Choose optional manager access. Anything left off can be enabled later in Manage Users."
         case .operative:
             return ""
         }
@@ -586,6 +640,16 @@ struct AddUserView: View {
                                 .foregroundColor(.secondary)
                             Spacer()
                             Text(reviewDayRate)
+                                .fontWeight(.medium)
+                        }
+                    }
+                    
+                    if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
+                        HStack {
+                            Text("Trade:")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text(StaffTradeType.displayLabel(presetRaw: tradePresetRaw, custom: tradeCustomText))
                                 .fontWeight(.medium)
                         }
                     }
@@ -671,12 +735,12 @@ struct AddUserView: View {
             permissions = UserPermissions(
                 adminAccess: false,
                 manager: true,
-                operatives: true,
+                operatives: false,
                 skills: true,
                 qualifications: true,
                 materials: true,
-                projects: true,
-                smallWorks: true,
+                projects: false,
+                smallWorks: false,
                 operativeMode: false,
                 annualLeaveSelfBook: false,
                 weeklyReports: false,
@@ -699,11 +763,18 @@ struct AddUserView: View {
         }
     }
     
+    private var tradeRequiredAndValid: Bool {
+        guard mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager else {
+            return true
+        }
+        return StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText)
+    }
+    
     private var canProceed: Bool {
         if mode == .managerAddingOperative {
             switch currentStep {
             case 1:
-                return !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email)
+                return !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email) && tradeRequiredAndValid
             case 2:
                 return assignedManagerUserId != nil && !(assignedManagerUserId?.isEmpty ?? true)
             case 3:
@@ -716,7 +787,7 @@ struct AddUserView: View {
         case 1:
             return true
         case 2:
-            let base = !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email)
+            let base = !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email) && tradeRequiredAndValid
             if invitedAccountType == .operative {
                 return base && assignedManagerUserId != nil && !(assignedManagerUserId?.isEmpty ?? true)
             }
@@ -761,6 +832,12 @@ struct AddUserView: View {
         
         Task {
             let parsedDayRate = parseDayRate(from: selectedDayRateTextForReview)
+            let needsTrade = mode == .managerAddingOperative || permissions.operativeMode || permissions.manager
+            let tCustom: String? = {
+                guard tradePresetRaw == StaffTradeType.other.rawValue else { return nil }
+                let t = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
+                return t.isEmpty ? nil : t
+            }()
             let success = await userStore.inviteUser(
                 firstName: firstName,
                 surname: surname,
@@ -769,7 +846,9 @@ struct AddUserView: View {
                 permissions: permissions,
                 assignedManagerUserId: permissions.operativeMode ? assignedManagerUserId : nil,
                 invitedOperativeDayRate: permissions.operativeMode ? parsedDayRate : nil,
-                invitedManagerDayRate: permissions.manager ? parsedDayRate : nil
+                invitedManagerDayRate: permissions.manager ? parsedDayRate : nil,
+                invitedTradeTypePreset: needsTrade ? tradePresetRaw : nil,
+                invitedTradeTypeCustom: needsTrade ? tCustom : nil
             )
             
             await MainActor.run {
@@ -834,27 +913,60 @@ struct PermissionToggle: View {
     let description: String
     @Binding var isOn: Bool
     var isDisabled: Bool = false
-    
+    var style: Style = .filledRow
+
+    enum Style {
+        case filledRow
+        case plainInset
+    }
+
+    @State private var expanded = false
+
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundColor(isDisabled ? .secondary : .primary)
-                Text(description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+        let row = HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+                } label: {
+                    HStack(alignment: .center, spacing: 6) {
+                        Text(title)
+                            .font(.headline)
+                            .foregroundColor(isDisabled ? .secondary : .primary)
+                            .multilineTextAlignment(.leading)
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+                            .rotationEffect(.degrees(expanded ? 0 : -90))
+                    }
+                }
+                .buttonStyle(.plain)
+                if expanded {
+                    Text(description)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            
-            Spacer()
-            
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             Toggle("", isOn: $isOn)
                 .tint(.indigo)
                 .disabled(isDisabled)
         }
-        .padding()
-        .background(isDisabled ? Color(.systemGray5) : Color(.systemGray6))
-        .cornerRadius(12)
+
+        Group {
+            switch style {
+            case .filledRow:
+                row
+                    .padding()
+                    .background(isDisabled ? Color(.systemGray5) : Color(.systemGray6))
+                    .cornerRadius(12)
+            case .plainInset:
+                row
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
+            }
+        }
         .opacity(isDisabled ? 0.6 : 1.0)
     }
 }

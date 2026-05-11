@@ -686,6 +686,8 @@ struct EditUserView: View {
     @Environment(\.dismiss) private var dismiss
     
     let user: AppUser
+    /// When `true` (e.g. opened from the Managers roster shortcut), hide **Admin Access** — grant admin only via Change user type in full Manage Users.
+    let suppressAdminAccessToggle: Bool
     @State private var permissions: UserPermissions
     @State private var isUpdating = false
     @State private var isActive: Bool
@@ -706,8 +708,15 @@ struct EditUserView: View {
     @State private var dayRateText: String
     @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
     @State private var showingQualificationsEditor = false
+    @State private var operativeForSkillsEditor: Operative?
+    @State private var openingSkillsEditor = false
+    @State private var showingDayRateEffectiveChoice = false
     @State private var tradePresetRaw: String
     @State private var tradeCustomText: String
+    @State private var editFirstName: String
+    @State private var editSurname: String
+    @State private var editEmail: String
+    @State private var editMobile: String
     @State private var showingProfilePhotoSourcePicker = false
     @State private var profilePhotoPickerSource: UIImagePickerController.SourceType = .photoLibrary
     @State private var showingProfileImagePicker = false
@@ -717,26 +726,32 @@ struct EditUserView: View {
     @State private var showingChangeUserType = false
     @State private var changeUserTypeDraft: ManagedAccountKind = .operative
     @State private var managerSelfBookDraft = false
-    @State private var managerTransitionOperatives = true
+    @State private var managerTransitionOperatives = false
     @State private var managerTransitionSkills = true
     @State private var managerTransitionQualifications = true
     @State private var managerTransitionWeeklyReports = false
     @State private var managerTransitionSubContractors = false
-    @State private var managerTransitionProjects = true
-    @State private var managerTransitionSmallWorks = true
+    @State private var managerTransitionProjects = false
+    @State private var managerTransitionSmallWorks = false
     @State private var operativeTransitionMaterials = false
     @State private var operativeTransitionSiteAudit = true
     @State private var isApplyingUserType = false
     @State private var userTypeChangeMessage: String?
+    @State private var showingDeactivateConfirmation = false
 
-    init(user: AppUser) {
+    init(user: AppUser, suppressAdminAccessToggle: Bool = false) {
         self.user = user
+        self.suppressAdminAccessToggle = suppressAdminAccessToggle
         self._permissions = State(initialValue: user.permissions)
         self._isActive = State(initialValue: user.isActive)
         self._selectedAssignedManagerUserId = State(initialValue: user.assignedManagerUserId)
         self._dayRateText = State(initialValue: user.dayRate.map { String(format: "%.2f", $0) } ?? "")
         self._tradePresetRaw = State(initialValue: user.tradeTypePreset ?? "")
         self._tradeCustomText = State(initialValue: user.tradeTypeCustom ?? "")
+        self._editFirstName = State(initialValue: user.firstName)
+        self._editSurname = State(initialValue: user.surname)
+        self._editEmail = State(initialValue: user.email)
+        self._editMobile = State(initialValue: user.mobileNumber ?? "")
     }
     
     private var isManagerOperativeOnly: Bool {
@@ -758,9 +773,16 @@ struct EditUserView: View {
     }
     
     private var linkedOperativeForUser: Operative? {
-        operativeStore.allOperatives.first {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
-            user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let key: String
+        if canEditIdentityDetails {
+            let emailKey = editEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let fallback = displayedUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            key = emailKey.isEmpty ? fallback : emailKey
+        } else {
+            key = displayedUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return operativeStore.allOperatives.first {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == key
         }
     }
     
@@ -773,12 +795,52 @@ struct EditUserView: View {
         canEditPermissionsMatrix
     }
 
+    private var canEditIdentityDetails: Bool {
+        canEditPermissionsMatrix && !userStore.isOrganizationCreator(userId: user.id)
+    }
+
+    private var identityDirty: Bool {
+        guard canEditIdentityDetails else { return false }
+        let f = editFirstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let s = editSurname.trimmingCharacters(in: .whitespacesAndNewlines)
+        let e = editEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let m = editMobile.trimmingCharacters(in: .whitespacesAndNewlines)
+        let origM = user.mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return f != user.firstName.trimmingCharacters(in: .whitespacesAndNewlines) ||
+            s != user.surname.trimmingCharacters(in: .whitespacesAndNewlines) ||
+            e != user.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ||
+            m != origM
+    }
+
+    private var headerDisplayName: String {
+        guard canEditIdentityDetails else { return displayedUser.fullName }
+        let combined = "\(editFirstName) \(editSurname)".trimmingCharacters(in: .whitespacesAndNewlines)
+        return combined.isEmpty ? displayedUser.fullName : combined
+    }
+
+    private var profileInitialsLetters: String {
+        let f = canEditIdentityDetails ? editFirstName : displayedUser.firstName
+        let s = canEditIdentityDetails ? editSurname : displayedUser.surname
+        let a = String(f.prefix(1)).uppercased()
+        let b = String(s.prefix(1)).uppercased()
+        if a.isEmpty && b.isEmpty {
+            return "\(String(displayedUser.firstName.prefix(1)))\(String(displayedUser.surname.prefix(1)))".uppercased()
+        }
+        return "\(a)\(b)"
+    }
+
+    private func isValidEmail(_ raw: String) -> Bool {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, t.contains("@"), t.contains(".") else { return false }
+        return true
+    }
+
     private var editNavigationTitle: String {
         permissions.operativeMode ? "Edit operative" : "Edit user"
     }
 
     private var showOperativeSetupCard: Bool {
-        let eligible = permissions.operativeMode || permissions.manager
+        let eligible = permissions.operativeMode || permissions.manager || permissions.adminAccess
         return eligible && canEditPermissionsMatrix
     }
 
@@ -795,7 +857,10 @@ struct EditUserView: View {
     }
 
     private var operativeSetupSectionTitle: String {
-        permissions.manager && !permissions.operativeMode ? "Manager setup" : "Operative setup"
+        if permissions.operativeMode { return "Operative setup" }
+        if permissions.manager { return "Manager setup" }
+        if permissions.adminAccess { return "Administrator setup" }
+        return "User setup"
     }
 
     private var roleHeaderIconName: String {
@@ -858,7 +923,7 @@ struct EditUserView: View {
         if userStore.isOrganizationCreator(userId: user.id) {
             return false
         }
-        let dayRateEligible = permissions.operativeMode || permissions.manager
+        let dayRateEligible = permissions.operativeMode || permissions.manager || permissions.adminAccess
         let trimmedTradeP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTradeC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
         let origTradeP = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -868,15 +933,22 @@ struct EditUserView: View {
             (selectedAssignedManagerUserId ?? "") != (user.assignedManagerUserId ?? "") ||
             parseDayRate(dayRateText) != user.dayRate
         )
-        let managerDayRateChanged = permissions.manager && !permissions.operativeMode && parseDayRate(dayRateText) != user.dayRate
+        let staffDayRateChanged = !permissions.operativeMode && (permissions.manager || permissions.adminAccess)
+            && parseDayRate(dayRateText) != user.dayRate
         if canUseAdminAccountTools {
-            return permissions != user.permissions || isActive != user.isActive || operativeProfileChanged || managerDayRateChanged || tradeChanged
+            return identityDirty ||
+                permissions != user.permissions ||
+                isActive != user.isActive ||
+                operativeProfileChanged ||
+                staffDayRateChanged ||
+                tradeChanged
         }
-        if canEditPermissionsMatrix && (operativeProfileChanged || tradeChanged) {
+        if canEditPermissionsMatrix && (identityDirty || operativeProfileChanged || tradeChanged || staffDayRateChanged) {
             return true
         }
         if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative) {
-            return permissions.materials != user.permissions.materials ||
+            return identityDirty ||
+                permissions.materials != user.permissions.materials ||
                 permissions.siteAudit != user.permissions.siteAudit ||
                 tradeChanged
         }
@@ -917,6 +989,13 @@ struct EditUserView: View {
                 .padding(.horizontal, 18)
                 .padding(.bottom, 32)
             }
+            .onAppear {
+                let u = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+                editFirstName = u.firstName
+                editSurname = u.surname
+                editEmail = u.email
+                editMobile = u.mobileNumber ?? ""
+            }
             .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
             .navigationTitle(editNavigationTitle)
             .navigationBarTitleDisplayMode(.inline)
@@ -948,7 +1027,7 @@ struct EditUserView: View {
                     }
                 }
             }
-            .alert("Delete User", isPresented: $showingDeleteConfirmation) {
+            .alert("Delete user?", isPresented: $showingDeleteConfirmation) {
                 Button("Cancel", role: .cancel) { }
                 Button("Delete", role: .destructive) {
                     deleteUser()
@@ -958,13 +1037,21 @@ struct EditUserView: View {
                 if isManager {
                     let bookingCount = bookingStore.bookings.filter { $0.bookedBy == user.fullName }.count
                     if bookingCount > 0 {
-                        Text("Are you sure you want to delete \(user.fullName)?\n\nThis manager has \(bookingCount) booking\(bookingCount == 1 ? "" : "s"). All bookings will be reassigned to the super admin.\n\nThis action cannot be undone.")
+                        Text("Are you sure you want to permanently delete \(user.fullName)? This cannot be undone.\n\nThis manager has \(bookingCount) booking\(bookingCount == 1 ? "" : "s"). All bookings will be reassigned to the super admin.")
                     } else {
-                        Text("Are you sure you want to delete \(user.fullName)? This action cannot be undone.")
+                        Text("Are you sure you want to permanently delete \(user.fullName)? This cannot be undone.")
                     }
                 } else {
-                    Text("Are you sure you want to delete \(user.fullName)? This action cannot be undone.")
+                    Text("Are you sure you want to permanently delete \(user.fullName)? This cannot be undone.")
                 }
+            }
+            .alert("Deactivate user?", isPresented: $showingDeactivateConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Deactivate", role: .destructive) {
+                    toggleActiveStatus()
+                }
+            } message: {
+                Text("Are you sure you want to deactivate \(user.fullName)? They will not be able to sign in until an administrator reactivates them.")
             }
             .alert("Could Not Save", isPresented: .constant(saveErrorMessage != nil)) {
                 Button("OK") { saveErrorMessage = nil }
@@ -973,12 +1060,27 @@ struct EditUserView: View {
                     Text(msg)
                 }
             }
-            .sheet(isPresented: $showingQualificationsEditor) {
-                if let operative = linkedOperativeForUser {
+            .confirmationDialog(
+                "Day rate change",
+                isPresented: $showingDayRateEffectiveChoice,
+                titleVisibility: .visible
+            ) {
+                Button("Today") {
+                    Task { await runPersistUserEdits(dayRateEffectiveAt: calendarStartOfDay(Date())) }
+                }
+                Button("Tomorrow") {
+                    Task { await runPersistUserEdits(dayRateEffectiveAt: calendarStartOfTomorrow()) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("When the day rate is changed, the weekly report and invoicing (invoicing will be available in a future update) use the new rate from the working day you choose. If you want the new rate to apply from tomorrow, choose Tomorrow.")
+            }
+            .sheet(isPresented: $showingQualificationsEditor, onDismiss: { operativeForSkillsEditor = nil }) {
+                if let operative = operativeForSkillsEditor ?? linkedOperativeForUser {
                     OperativeQualificationsEditorView(
                         operative: operative,
                         title: "Skills & Qualifications",
-                        canEditAssignments: canEditPermissionsMatrix && (user.permissions.operativeMode || user.role == .operative)
+                        canEditAssignments: canEditPermissionsMatrix
                     )
                     .environmentObject(operativeStore)
                     .environmentObject(firebaseBackend)
@@ -1054,78 +1156,76 @@ struct EditUserView: View {
                             .foregroundStyle(ManageUserProfilePalette.textPrimary)
 
                         VStack(spacing: 0) {
-                            ManageUserPermissionToggleRow(
+                            ManageUserExpandablePermissionToggleRow(
                                 iconName: "person.crop.rectangle.stack.fill",
                                 iconBackground: ManageUserProfilePalette.chipPurpleBg,
                                 iconForeground: ManageUserProfilePalette.chipPurpleFg,
                                 title: "Operatives",
-                                subtitle: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Operatives tab or full operative profiles.",
+                                description: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Manage Operatives screen or full operative profiles.",
                                 isOn: $managerTransitionOperatives
                             )
                             ManageUserCardDivider()
-                            ManageUserPermissionToggleRow(
+                            ManageUserExpandablePermissionToggleRow(
                                 iconName: "beach.umbrella.fill",
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
                                 title: "Annual Leave",
-                                subtitle: "Can book their own annual leave. If off, this manager requests leave for approval.",
+                                description: "Can book their own annual leave. If off, this manager requests leave for approval.",
                                 isOn: $managerSelfBookDraft
                             )
                             ManageUserCardDivider()
-                            ManageUserPermissionToggleRow(
+                            ManageUserExpandablePermissionToggleRow(
                                 iconName: "doc.text.fill",
                                 iconBackground: ManageUserProfilePalette.chipTealBg,
                                 iconForeground: ManageUserProfilePalette.chipTealFg,
                                 title: "Weekly Report",
-                                subtitle: "Will be able to pull weekly reports.",
+                                description: "Can open and pull weekly reports.",
                                 isOn: $managerTransitionWeeklyReports
                             )
                             ManageUserCardDivider()
-                            ManageUserPermissionToggleRow(
+                            ManageUserExpandablePermissionToggleRow(
                                 iconName: "person.2.wave.2.fill",
                                 iconBackground: ManageUserProfilePalette.chipTealBg,
                                 iconForeground: ManageUserProfilePalette.chipTealFg,
                                 title: "Sub Contractors",
-                                subtitle: "Can add and manage sub contractors. If unselected they will be unable to manage them, they will only be able to book them in.",
+                                description: "Can add and manage sub contractors. If unselected they can still book sub contractors in, but not manage their records.",
                                 isOn: $managerTransitionSubContractors
                             )
                             ManageUserCardDivider()
-                            ManageUserPermissionToggleRow(
+                            ManageUserExpandablePermissionToggleRow(
                                 iconName: "wrench.and.screwdriver.fill",
                                 iconBackground: ManageUserProfilePalette.chipPinkBg,
                                 iconForeground: ManageUserProfilePalette.chipPinkFg,
                                 title: "Skills",
-                                subtitle: "Can create and alter existing skills.",
+                                description: "Can create and alter existing skills.",
                                 isOn: $managerTransitionSkills
                             )
                             ManageUserCardDivider()
-                            ManageUserPermissionToggleRow(
+                            ManageUserExpandablePermissionToggleRow(
                                 iconName: "rosette",
                                 iconBackground: ManageUserProfilePalette.chipPinkBg,
                                 iconForeground: ManageUserProfilePalette.chipPinkFg,
                                 title: "Qualifications",
-                                subtitle: "Can create and alter existing qualifications.",
+                                description: "Can create and alter existing qualifications.",
                                 isOn: $managerTransitionQualifications
                             )
                             ManageUserCardDivider()
-                            ManageUserPermissionToggleRow(
+                            ManageUserExpandablePermissionToggleRow(
                                 iconName: "folder.fill",
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
                                 title: "Projects",
-                                subtitle: "Can create and manage projects.",
-                                isOn: $managerTransitionProjects,
-                                isDisabled: false
+                                description: "Can create and manage projects. If unselected, this manager can still schedule operatives and sub contractors.",
+                                isOn: $managerTransitionProjects
                             )
                             ManageUserCardDivider()
-                            ManageUserPermissionToggleRow(
+                            ManageUserExpandablePermissionToggleRow(
                                 iconName: "hammer.fill",
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
                                 title: "Small Works",
-                                subtitle: "Can create and manage small works.",
-                                isOn: $managerTransitionSmallWorks,
-                                isDisabled: false
+                                description: "Can create and manage small works. If unselected, this manager can still schedule operatives and sub contractors.",
+                                isOn: $managerTransitionSmallWorks
                             )
                         }
                         .background(Color.white)
@@ -1146,21 +1246,21 @@ struct EditUserView: View {
                             .foregroundStyle(ManageUserProfilePalette.textPrimary)
 
                         VStack(spacing: 0) {
-                            ManageUserPermissionToggleRow(
+                            ManageUserExpandablePermissionToggleRow(
                                 iconName: "shippingbox.fill",
                                 iconBackground: ManageUserProfilePalette.chipAmberBg,
                                 iconForeground: ManageUserProfilePalette.chipAmberFg,
                                 title: "Materials",
-                                subtitle: "Order & track stock",
+                                description: "Can access material lists in projects and small works. They will not be able to send quotes or place orders.",
                                 isOn: $operativeTransitionMaterials
                             )
                             ManageUserCardDivider()
-                            ManageUserPermissionToggleRow(
+                            ManageUserExpandablePermissionToggleRow(
                                 iconName: "checklist",
                                 iconBackground: ManageUserProfilePalette.chipTealBg,
                                 iconForeground: ManageUserProfilePalette.chipTealFg,
                                 title: "Site audit",
-                                subtitle: "Submit safety checks",
+                                description: "Can view and submit site audits.",
                                 isOn: $operativeTransitionSiteAudit
                             )
                         }
@@ -1325,13 +1425,9 @@ struct EditUserView: View {
                 }
 
                 VStack(spacing: 4) {
-                    Text(user.fullName)
+                    Text(headerDisplayName)
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(ManageUserProfilePalette.textPrimary)
-
-                    Text(user.email)
-                        .font(.system(size: 13))
-                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
 
                     HStack(spacing: 6) {
                         roleStatusChip(
@@ -1397,7 +1493,7 @@ struct EditUserView: View {
                 )
             )
             .overlay(
-                Text("\(String(displayedUser.firstName.prefix(1)))\(String(displayedUser.surname.prefix(1)))".uppercased())
+                Text(profileInitialsLetters)
                     .font(.system(size: 26, weight: .medium))
                     .foregroundStyle(.white)
                     .tracking(0.5)
@@ -1410,31 +1506,67 @@ struct EditUserView: View {
             ManageUserSectionTitle(text: "User details")
             ManageUserCard {
                 VStack(spacing: 0) {
-                    ManageUserDetailStaticRow(
-                        iconName: "envelope.fill",
-                        iconBackground: ManageUserProfilePalette.chipBlueBg,
-                        iconForeground: ManageUserProfilePalette.chipBlueFg,
-                        label: "Email",
-                        value: user.email
-                    )
-                    ManageUserCardDivider()
-                    ManageUserDetailStaticRow(
-                        iconName: "phone.fill",
-                        iconBackground: ManageUserProfilePalette.chipTealBg,
-                        iconForeground: ManageUserProfilePalette.chipTealFg,
-                        label: "Mobile number",
-                        value: {
-                            if let mobileNumber = user.mobileNumber, !mobileNumber.isEmpty { return mobileNumber }
-                            return "—"
-                        }()
-                    )
+                    if canEditIdentityDetails {
+                        ManageUserNameEditRow(firstName: $editFirstName, surname: $editSurname)
+                        ManageUserCardDivider()
+                        ManageUserDetailTextFieldRow(
+                            iconName: "envelope.fill",
+                            iconBackground: ManageUserProfilePalette.chipBlueBg,
+                            iconForeground: ManageUserProfilePalette.chipBlueFg,
+                            label: "Email",
+                            placeholder: "name@company.com",
+                            text: $editEmail,
+                            keyboard: .emailAddress,
+                            contentType: .emailAddress,
+                            autocapitalization: .never
+                        )
+                        ManageUserCardDivider()
+                        ManageUserDetailTextFieldRow(
+                            iconName: "phone.fill",
+                            iconBackground: ManageUserProfilePalette.chipTealBg,
+                            iconForeground: ManageUserProfilePalette.chipTealFg,
+                            label: "Mobile number",
+                            placeholder: "Optional",
+                            text: $editMobile,
+                            keyboard: .phonePad,
+                            contentType: .telephoneNumber,
+                            autocapitalization: .never
+                        )
+                    } else {
+                        ManageUserDetailStaticRow(
+                            iconName: "person.fill",
+                            iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                            iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                            label: "Name",
+                            value: displayedUser.fullName
+                        )
+                        ManageUserCardDivider()
+                        ManageUserDetailStaticRow(
+                            iconName: "envelope.fill",
+                            iconBackground: ManageUserProfilePalette.chipBlueBg,
+                            iconForeground: ManageUserProfilePalette.chipBlueFg,
+                            label: "Email",
+                            value: displayedUser.email
+                        )
+                        ManageUserCardDivider()
+                        ManageUserDetailStaticRow(
+                            iconName: "phone.fill",
+                            iconBackground: ManageUserProfilePalette.chipTealBg,
+                            iconForeground: ManageUserProfilePalette.chipTealFg,
+                            label: "Mobile number",
+                            value: {
+                                if let mobileNumber = displayedUser.mobileNumber, !mobileNumber.isEmpty { return mobileNumber }
+                                return "—"
+                            }()
+                        )
+                    }
                     ManageUserCardDivider()
                     ManageUserDetailStaticRow(
                         iconName: "calendar",
                         iconBackground: ManageUserProfilePalette.chipAmberBg,
                         iconForeground: ManageUserProfilePalette.chipAmberFg,
                         label: "Last active",
-                        value: "—"
+                        value: lastSeenDisplay(for: displayedUser)
                     )
                 }
             }
@@ -1451,20 +1583,22 @@ struct EditUserView: View {
                 ManageUserDayRateEditRow(dayRateText: $dayRateText, currencySymbol: localeCurrencySymbol())
                 ManageUserCardDivider()
                 tradeTypePickSection
-                if permissions.operativeMode && !dayRateHistory.isEmpty {
+                if (permissions.operativeMode || permissions.manager || permissions.adminAccess) && !dayRateHistory.isEmpty {
                     ManageUserCardDivider()
                     dayRateHistoryChromeBlock
                 }
-                if permissions.operativeMode, linkedOperativeForUser != nil, canEditPermissionsMatrix {
+                if canEditPermissionsMatrix,
+                   permissions.operativeMode || permissions.manager || permissions.adminAccess {
                     ManageUserCardDivider()
                     ManageUserNavigationSubtitleRow(
                         iconName: "graduationcap.fill",
                         iconBackground: ManageUserProfilePalette.chipBlueBg,
                         iconForeground: ManageUserProfilePalette.chipBlueFg,
                         title: "Skills & qualifications",
-                        subtitle: "Manage certifications",
-                        action: { showingQualificationsEditor = true }
+                        subtitle: openingSkillsEditor ? "Opening…" : "Manage certifications",
+                        action: { openSkillsAndQualifications() }
                     )
+                    .disabled(openingSkillsEditor)
                 }
             }
         }
@@ -1561,13 +1695,62 @@ struct EditUserView: View {
     }
     
     private func loadDayRateHistory() async {
-        guard permissions.operativeMode else {
+        guard permissions.operativeMode || permissions.manager || permissions.adminAccess else {
             dayRateHistory = []
             return
         }
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let all = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? [:]
-        dayRateHistory = (all[user.id] ?? []).sorted(by: { $0.effectiveAt > $1.effectiveAt })
+        let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
+        dayRateHistory = collection
+            .mergedEntries(userId: user.id, operativeId: linkedOperativeForUser?.id)
+            .sorted(by: { $0.effectiveAt > $1.effectiveAt })
+    }
+
+    private func lastSeenDisplay(for u: AppUser) -> String {
+        guard userStore.canManageUsers() else { return "—" }
+        guard let t = u.lastSeenAt else { return "Never recorded" }
+        return t.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private func calendarStartOfDay(_ date: Date) -> Date {
+        Calendar.current.startOfDay(for: date)
+    }
+
+    private func calendarStartOfTomorrow() -> Date {
+        let cal = Calendar.current
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        return cal.startOfDay(for: tomorrow)
+    }
+
+    private func shouldPromptDayRateEffectiveChoice(subjectUser: AppUser) -> Bool {
+        guard canEditPermissionsMatrix else { return false }
+        guard parseDayRate(dayRateText) != subjectUser.dayRate else { return false }
+        if permissions.operativeMode { return true }
+        if !permissions.operativeMode && (permissions.manager || permissions.adminAccess) { return true }
+        return false
+    }
+
+    private func openSkillsAndQualifications() {
+        guard canEditPermissionsMatrix else { return }
+        openingSkillsEditor = true
+        Task {
+            let subject = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+            let op: Operative?
+            if let linked = linkedOperativeForUser {
+                op = linked
+            } else {
+                op = await userStore.ensureOperativeProfileForAppUser(subject, operativeStore: operativeStore)
+            }
+            await MainActor.run {
+                openingSkillsEditor = false
+                operativeForSkillsEditor = op
+                if op != nil {
+                    showingQualificationsEditor = true
+                } else {
+                    saveErrorMessage = "Could not create a linked operative profile for skills. Check email and try again."
+                }
+            }
+        }
     }
     
     private var activeToggleChromeSection: some View {
@@ -1669,7 +1852,7 @@ struct EditUserView: View {
                    canEditPermissionsMatrix,
                    !userStore.isOrganizationCreator(userId: user.id) {
                     ManageUserAccountActionButton(
-                        iconName: "person.crop.circle.badge.arrow.left.and.arrow.right",
+                        iconName: "arrow.left.arrow.right.circle.fill",
                         iconBackground: ManageUserProfilePalette.chipPurpleBg,
                         iconForeground: ManageUserProfilePalette.chipPurpleFg,
                         title: "Change user type",
@@ -1694,7 +1877,13 @@ struct EditUserView: View {
                         titleColor: ManageUserProfilePalette.chipAmberFg,
                         borderColor: ManageUserProfilePalette.chipAmberBg,
                         showsChevron: false,
-                        action: { toggleActiveStatus() },
+                        action: {
+                            if isActive {
+                                showingDeactivateConfirmation = true
+                            } else {
+                                toggleActiveStatus()
+                            }
+                        },
                         isBusy: isUpdatingActiveStatus
                     )
 
@@ -1744,8 +1933,9 @@ struct EditUserView: View {
         isUpdatingActiveStatus = true
         activeStatusMessage = nil
         let newValue = !isActive
+        let target = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
         Task {
-            let ok = await userStore.updateUserActiveStatus(for: user, isActive: newValue)
+            let ok = await userStore.updateUserActiveStatus(for: target, isActive: newValue)
             await MainActor.run {
                 isUpdatingActiveStatus = false
                 if ok {
@@ -1789,7 +1979,7 @@ struct EditUserView: View {
             } else if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative) {
                 VStack(alignment: .leading, spacing: 8) {
                     ManageUserSectionTitle(text: "Permissions")
-                    Text("You can adjust materials access for this operative. Other permissions are managed by an admin.")
+                    Text("You can adjust materials and site audit for this operative. Other permissions are managed by an admin.")
                         .font(.system(size: 11))
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
                         .padding(.leading, 4)
@@ -1800,13 +1990,17 @@ struct EditUserView: View {
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     ManageUserSectionTitle(text: "Permissions")
-                    if canUseAdminAccountTools && permissions.operativeMode {
-                        ManageUserCard {
-                            operativeMaterialsAndSiteAuditRows
-                        }
-                    } else {
-                        ManageUserCard {
-                            fullAdminPermissionMatrixRows
+                    ManageUserCard {
+                        VStack(spacing: 0) {
+                            if permissions.operativeMode {
+                                operativeMaterialsAndSiteAuditRows
+                            } else {
+                                adminAndManagerCapabilityPermissionRows
+                                if !permissions.adminAccess {
+                                    ManageUserCardDivider()
+                                    nonOperativeMaterialsAndSiteAuditSummaryRows
+                                }
+                            }
                         }
                     }
                 }
@@ -1816,115 +2010,106 @@ struct EditUserView: View {
 
     private var operativeMaterialsAndSiteAuditRows: some View {
         VStack(spacing: 0) {
-            ManageUserPermissionToggleRow(
+            ManageUserExpandablePermissionToggleRow(
                 iconName: "shippingbox.fill",
                 iconBackground: ManageUserProfilePalette.chipAmberBg,
                 iconForeground: ManageUserProfilePalette.chipAmberFg,
                 title: "Materials",
-                subtitle: "Order & track stock",
+                description: "Can access material lists in projects and small works. They will not be able to send quotes or place orders.",
                 isOn: $permissions.materials
             )
             ManageUserCardDivider()
-            ManageUserPermissionToggleRow(
+            ManageUserExpandablePermissionToggleRow(
                 iconName: "checklist",
                 iconBackground: ManageUserProfilePalette.chipTealBg,
                 iconForeground: ManageUserProfilePalette.chipTealFg,
                 title: "Site audit",
-                subtitle: "Submit safety checks",
+                description: "Can view and submit site audits.",
                 isOn: $permissions.siteAudit
             )
         }
     }
 
-    private var fullAdminPermissionMatrixRows: some View {
+    /// Core admin / manager flags (shown for every non–super-admin editable user). Materials & site audit for non-operatives are separate.
+    private var adminAndManagerCapabilityPermissionRows: some View {
         Group {
-            Group {
-                ManageUserPermissionToggleRow(
-                    iconName: "person.badge.key.fill",
-                    iconBackground: ManageUserProfilePalette.chipPurpleBg,
-                    iconForeground: ManageUserProfilePalette.chipPurpleFg,
-                    title: "Admin Access",
-                    subtitle: "Can add and manage users.",
-                    isOn: $permissions.adminAccess,
-                    isDisabled: false
-                )
-            }
-            .onChange(of: permissions.adminAccess) { _, newValue in
-                if newValue {
-                    permissions.manager = true
-                    permissions.projects = true
-                    permissions.smallWorks = true
+            if !suppressAdminAccessToggle {
+                Group {
+                    ManageUserExpandablePermissionToggleRow(
+                        iconName: "person.badge.key.fill",
+                        iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                        iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                        title: "Admin Access",
+                        description: "Can add and manage users.",
+                        isOn: $permissions.adminAccess,
+                        isDisabled: false
+                    )
                 }
+                .onChange(of: permissions.adminAccess) { _, newValue in
+                    if newValue {
+                        permissions.manager = true
+                        permissions.projects = true
+                        permissions.smallWorks = true
+                    }
+                }
+
+                ManageUserCardDivider()
             }
 
-            ManageUserCardDivider()
-
-            ManageUserPermissionToggleRow(
-                iconName: "person.3.fill",
-                iconBackground: ManageUserProfilePalette.chipPurpleBg,
-                iconForeground: ManageUserProfilePalette.chipPurpleFg,
-                title: "Manager",
-                subtitle: "Managers will be able to schedule operatives, create new clients, skills, and qualifications, view warnings and manage tasks.",
-                isOn: $permissions.manager,
-                isDisabled: permissions.adminAccess
-            )
-
-            ManageUserCardDivider()
-
-            ManageUserPermissionToggleRow(
+            ManageUserExpandablePermissionToggleRow(
                 iconName: "folder.fill",
                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                 iconForeground: ManageUserProfilePalette.chipBlueFg,
                 title: "Projects",
-                subtitle: "Can create and manage projects.",
+                description: "Can create and manage projects. If unselected, this manager can still schedule operatives and sub contractors.",
                 isOn: $permissions.projects,
-                isDisabled: !permissions.manager && !permissions.adminAccess
+                isDisabled: false
             )
 
             ManageUserCardDivider()
 
-            ManageUserPermissionToggleRow(
+            ManageUserExpandablePermissionToggleRow(
                 iconName: "hammer.fill",
                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                 iconForeground: ManageUserProfilePalette.chipBlueFg,
                 title: "Small Works",
-                subtitle: "Can create and manage small works.",
+                description: "Can create and manage small works. If unselected, this manager can still schedule operatives and sub contractors.",
                 isOn: $permissions.smallWorks,
-                isDisabled: !permissions.manager && !permissions.adminAccess
+                isDisabled: false
             )
 
             ManageUserCardDivider()
 
-            ManageUserPermissionToggleRow(
+            ManageUserExpandablePermissionToggleRow(
                 iconName: "doc.text.fill",
                 iconBackground: ManageUserProfilePalette.chipTealBg,
                 iconForeground: ManageUserProfilePalette.chipTealFg,
                 title: "Weekly Report",
-                subtitle: "Will be able to pull weekly reports.",
+                description: "Can open and pull weekly reports.",
                 isOn: $permissions.weeklyReports,
-                isDisabled: !permissions.manager && !permissions.adminAccess
+                isDisabled: false
             )
 
             ManageUserCardDivider()
 
-            ManageUserPermissionToggleRow(
+            ManageUserExpandablePermissionToggleRow(
                 iconName: "person.2.wave.2.fill",
                 iconBackground: ManageUserProfilePalette.chipTealBg,
                 iconForeground: ManageUserProfilePalette.chipTealFg,
                 title: "Sub Contractors",
-                subtitle: "Can add and manage sub contractors. If unselected they will be unable to manage them, they will only be able to book them in.",
+                description: "Can add and manage sub contractors. If unselected they can still book sub contractors in, but not manage their records.",
                 isOn: $permissions.subContractors,
-                isDisabled: !permissions.manager && !permissions.adminAccess
+                isDisabled: false
             )
 
-            if permissions.manager && !permissions.adminAccess {
+            if !permissions.adminAccess && !permissions.operativeMode {
                 ManageUserCardDivider()
-                ManageUserPermissionToggleRow(
+                ManageUserExpandablePermissionToggleRow(
                     iconName: "beach.umbrella.fill",
                     iconBackground: ManageUserProfilePalette.chipBlueBg,
                     iconForeground: ManageUserProfilePalette.chipBlueFg,
                     title: "Annual Leave",
-                    subtitle: "Can book their own annual leave. If off, this manager requests leave for approval.",
+                    description: "Can book their own annual leave. If off, this manager requests leave for approval.",
                     isOn: $permissions.annualLeaveSelfBook,
                     isDisabled: false
                 )
@@ -1932,60 +2117,61 @@ struct EditUserView: View {
 
             ManageUserCardDivider()
 
-            ManageUserPermissionToggleRow(
+            ManageUserExpandablePermissionToggleRow(
                 iconName: "person.crop.rectangle.stack.fill",
                 iconBackground: ManageUserProfilePalette.chipPurpleBg,
                 iconForeground: ManageUserProfilePalette.chipPurpleFg,
                 title: "Operatives",
-                subtitle: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Operatives tab or full operative profiles.",
+                description: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Manage Operatives screen or full operative profiles.",
                 isOn: $permissions.operatives,
                 isDisabled: false
             )
 
             ManageUserCardDivider()
 
-            ManageUserPermissionToggleRow(
+            ManageUserExpandablePermissionToggleRow(
                 iconName: "wrench.and.screwdriver.fill",
                 iconBackground: ManageUserProfilePalette.chipPinkBg,
                 iconForeground: ManageUserProfilePalette.chipPinkFg,
                 title: "Skills",
-                subtitle: "Can create and alter existing skills.",
+                description: "Can create and alter existing skills.",
                 isOn: $permissions.skills,
                 isDisabled: false
             )
 
             ManageUserCardDivider()
 
-            ManageUserPermissionToggleRow(
+            ManageUserExpandablePermissionToggleRow(
                 iconName: "rosette",
                 iconBackground: ManageUserProfilePalette.chipPinkBg,
                 iconForeground: ManageUserProfilePalette.chipPinkFg,
                 title: "Qualifications",
-                subtitle: "Can create and alter existing qualifications.",
+                description: "Can create and alter existing qualifications.",
                 isOn: $permissions.qualifications,
                 isDisabled: false
             )
+        }
+    }
 
-            ManageUserCardDivider()
-
-            ManageUserPermissionToggleRow(
+    /// Read-only view of operative-only flags when editing a manager/admin account (not in operative mode).
+    private var nonOperativeMaterialsAndSiteAuditSummaryRows: some View {
+        Group {
+            ManageUserExpandablePermissionToggleRow(
                 iconName: "shippingbox.fill",
                 iconBackground: ManageUserProfilePalette.chipAmberBg,
                 iconForeground: ManageUserProfilePalette.chipAmberFg,
-                title: "Materials",
-                subtitle: "For operatives: can view/use materials in assigned projects and small works.",
+                title: "Materials (operative)",
+                description: "Shown for reference on this account. Turn on operative mode to edit, or use Change user type.",
                 isOn: $permissions.materials,
                 isDisabled: true
             )
-
             ManageUserCardDivider()
-
-            ManageUserPermissionToggleRow(
+            ManageUserExpandablePermissionToggleRow(
                 iconName: "checklist",
                 iconBackground: ManageUserProfilePalette.chipTealBg,
                 iconForeground: ManageUserProfilePalette.chipTealFg,
-                title: "Site Audit",
-                subtitle: "For operatives: can open Site Audits in assigned projects and small works.",
+                title: "Site Audit (operative)",
+                description: "Shown for reference on this account. Turn on operative mode to edit, or use Change user type.",
                 isOn: $permissions.siteAudit,
                 isDisabled: true
             )
@@ -1994,95 +2180,154 @@ struct EditUserView: View {
     
     private func saveChanges() {
         isUpdating = true
-        
         Task {
-            let dayRateEligible = permissions.operativeMode || permissions.manager
-            if canEditPermissionsMatrix && dayRateEligible && !StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText) {
+            if canEditIdentityDetails && identityDirty {
+                guard isValidEmail(editEmail) else {
+                    await MainActor.run {
+                        isUpdating = false
+                        saveErrorMessage = "Please enter a valid email address."
+                    }
+                    return
+                }
+            }
+
+            let rateSubject = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+            if shouldPromptDayRateEffectiveChoice(subjectUser: rateSubject) {
                 await MainActor.run {
                     isUpdating = false
-                    saveErrorMessage = "Please choose a trade type. If you select Other, enter the trade name."
+                    showingDayRateEffectiveChoice = true
                 }
                 return
             }
-            
-            var permissionsSuccess = true
-            var didPersistPermissions = false
-            if canEditPermissionsMatrix && !userStore.isOrganizationCreator(userId: user.id) {
-                if canUseAdminAccountTools && permissions != user.permissions {
-                    didPersistPermissions = true
-                    permissionsSuccess = await userStore.updateUserPermissions(
-                        userId: user.id,
-                        permissions: permissions,
-                        holidayStore: holidayStore,
-                        linkedOperativeUUID: linkedOperativeForUser?.id
-                    )
-                } else if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative),
-                          (permissions.materials != user.permissions.materials || permissions.siteAudit != user.permissions.siteAudit) {
-                    didPersistPermissions = true
-                    var merged = user.permissions
-                    merged.materials = permissions.materials
-                    merged.siteAudit = permissions.siteAudit
-                    permissionsSuccess = await userStore.updateUserPermissions(
-                        userId: user.id,
-                        permissions: merged,
-                        holidayStore: holidayStore,
-                        linkedOperativeUUID: linkedOperativeForUser?.id
-                    )
-                }
-            }
-            
-            var activeSuccess = true
-            if canUseAdminAccountTools && isActive != user.isActive {
-                activeSuccess = await userStore.updateUserActiveStatus(for: user, isActive: isActive)
-            }
 
-            var operativeDetailsSuccess = true
-            let operativeProfileChanged = permissions.operativeMode && (
-                (selectedAssignedManagerUserId ?? "") != (user.assignedManagerUserId ?? "") ||
-                parseDayRate(dayRateText) != user.dayRate
+            await runPersistUserEdits(dayRateEffectiveAt: nil)
+        }
+    }
+
+    /// Persists edit-user changes. When `dayRateEffectiveAt` is non-nil, day-rate history uses that calendar day as the effective start (weekly report / future invoicing).
+    private func runPersistUserEdits(dayRateEffectiveAt: Date?) async {
+        await MainActor.run { isUpdating = true }
+
+        var identitySuccess = true
+        if canEditIdentityDetails && identityDirty {
+            identitySuccess = await userStore.updateUserIdentityProfile(
+                userId: user.id,
+                firstName: editFirstName,
+                surname: editSurname,
+                email: editEmail,
+                mobileNumber: editMobile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil
+                    : editMobile.trimmingCharacters(in: .whitespacesAndNewlines),
+                operativeStore: operativeStore
             )
-            if canEditPermissionsMatrix && operativeProfileChanged {
-                let parsedDayRate = parseDayRate(dayRateText)
-                operativeDetailsSuccess = await userStore.updateOperativeProfileFields(
-                    for: user,
-                    assignedManagerUserId: selectedAssignedManagerUserId,
-                    dayRate: parsedDayRate,
-                    operativeStore: operativeStore
-                )
-            }
-            
-            var managerDayRateSuccess = true
-            let managerDayRateChanged = permissions.manager && !permissions.operativeMode && parseDayRate(dayRateText) != user.dayRate
-            if canEditPermissionsMatrix && managerDayRateChanged {
-                managerDayRateSuccess = await userStore.updateManagerDayRate(for: user, dayRate: parseDayRate(dayRateText))
-            }
-            
-            var tradeSuccess = true
-            let trimmedP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-            let trimmedC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
-            let origP = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let origC = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let tradeDirty = dayRateEligible && (trimmedP != origP || trimmedC != origC)
-            if canEditPermissionsMatrix && tradeDirty {
-                tradeSuccess = await userStore.updateUserStaffTrade(
-                    for: user,
-                    tradeTypePreset: trimmedP.isEmpty ? nil : trimmedP,
-                    tradeTypeCustom: trimmedC.isEmpty ? nil : trimmedC,
-                    operativeStore: operativeStore
-                )
-            }
+        }
 
-            if didPersistPermissions && permissionsSuccess {
-                await holidayStore.loadData()
-            }
-            
+        let subjectUser = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let linkedOpId = operativeStore.allOperatives.first(where: {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
+            subjectUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        })?.id
+
+        let dayRateEligible = permissions.operativeMode || permissions.manager || permissions.adminAccess
+        if canEditPermissionsMatrix && dayRateEligible && !StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText) {
             await MainActor.run {
                 isUpdating = false
-                if permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess {
-                    dismiss()
-                } else {
-                    saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."
+                saveErrorMessage = "Please choose a trade type. If you select Other, enter the trade name."
+            }
+            return
+        }
+
+        var permissionsSuccess = true
+        var didPersistPermissions = false
+        if canEditPermissionsMatrix && !userStore.isOrganizationCreator(userId: user.id) {
+            if canUseAdminAccountTools && permissions != subjectUser.permissions {
+                didPersistPermissions = true
+                var outgoing = permissions
+                if !outgoing.adminAccess && !outgoing.operativeMode {
+                    outgoing.manager = true
                 }
+                permissionsSuccess = await userStore.updateUserPermissions(
+                    userId: user.id,
+                    permissions: outgoing,
+                    holidayStore: holidayStore,
+                    linkedOperativeUUID: linkedOpId
+                )
+            } else if isManagerOperativeOnly && (subjectUser.permissions.operativeMode || subjectUser.role == .operative),
+                      (permissions.materials != subjectUser.permissions.materials || permissions.siteAudit != subjectUser.permissions.siteAudit) {
+                didPersistPermissions = true
+                var merged = subjectUser.permissions
+                merged.materials = permissions.materials
+                merged.siteAudit = permissions.siteAudit
+                permissionsSuccess = await userStore.updateUserPermissions(
+                    userId: user.id,
+                    permissions: merged,
+                    holidayStore: holidayStore,
+                    linkedOperativeUUID: linkedOpId
+                )
+            }
+        }
+
+        var activeSuccess = true
+        if canUseAdminAccountTools && isActive != subjectUser.isActive {
+            activeSuccess = await userStore.updateUserActiveStatus(for: subjectUser, isActive: isActive)
+        }
+
+        var operativeDetailsSuccess = true
+        let managerAssignmentChanged = (selectedAssignedManagerUserId ?? "") != (subjectUser.assignedManagerUserId ?? "")
+        let operativeDayRateChanged = parseDayRate(dayRateText) != subjectUser.dayRate
+        let operativeProfileChanged = permissions.operativeMode && (managerAssignmentChanged || operativeDayRateChanged)
+        if canEditPermissionsMatrix && operativeProfileChanged {
+            let parsedDayRate = parseDayRate(dayRateText)
+            let effectiveForHistory: Date? = operativeDayRateChanged ? (dayRateEffectiveAt ?? calendarStartOfDay(Date())) : nil
+            operativeDetailsSuccess = await userStore.updateOperativeProfileFields(
+                for: subjectUser,
+                assignedManagerUserId: selectedAssignedManagerUserId,
+                dayRate: parsedDayRate,
+                operativeStore: operativeStore,
+                dayRateEffectiveAt: effectiveForHistory
+            )
+        }
+
+        var managerDayRateSuccess = true
+        let staffDayRateChanged = !permissions.operativeMode && (permissions.manager || permissions.adminAccess)
+            && parseDayRate(dayRateText) != subjectUser.dayRate
+        if canEditPermissionsMatrix && staffDayRateChanged {
+            let parsed = parseDayRate(dayRateText)
+            let effective = dayRateEffectiveAt ?? calendarStartOfDay(Date())
+            managerDayRateSuccess = await userStore.updateManagerDayRate(
+                for: subjectUser,
+                dayRate: parsed,
+                effectiveAt: effective,
+                operativeStore: operativeStore
+            )
+        }
+
+        var tradeSuccess = true
+        let trimmedP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let origP = subjectUser.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let origC = subjectUser.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let tradeDirty = dayRateEligible && (trimmedP != origP || trimmedC != origC)
+        if canEditPermissionsMatrix && tradeDirty {
+            tradeSuccess = await userStore.updateUserStaffTrade(
+                for: subjectUser,
+                tradeTypePreset: trimmedP.isEmpty ? nil : trimmedP,
+                tradeTypeCustom: trimmedC.isEmpty ? nil : trimmedC,
+                operativeStore: operativeStore
+            )
+        }
+
+        if didPersistPermissions && permissionsSuccess {
+            await holidayStore.loadData()
+        }
+
+        await MainActor.run {
+            isUpdating = false
+            showingDayRateEffectiveChoice = false
+            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess {
+                dismiss()
+            } else {
+                saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."
             }
         }
     }

@@ -106,7 +106,7 @@ struct ManagersView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationBarBackButtonHidden(true)
             .sheet(item: $selectedUser) { user in
-                EditUserView(user: user)
+                EditUserView(user: user, suppressAdminAccessToggle: true)
                     .environmentObject(userStore)
                     .environmentObject(bookingStore)
                     .environmentObject(operativeStore)
@@ -243,6 +243,12 @@ struct ManagerUserRowView: View {
                     Text(user.email)
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+                    
+                    if user.displayTradeType != "—" {
+                        Text(user.displayTradeType)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                     
                     if let mobileNumber = user.mobileNumber, !mobileNumber.isEmpty {
                         HStack {

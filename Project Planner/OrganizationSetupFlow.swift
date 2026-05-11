@@ -20,6 +20,8 @@ struct OrganisationSetupFlow: View {
     @State private var managerMobileNumber = ""
     @State private var managerDepartment = ""
     @State private var managerNotes = ""
+    @State private var managerTradePresetRaw = ""
+    @State private var managerTradeCustomText = ""
     
     // Client form fields
     @State private var clientName = ""
@@ -33,6 +35,8 @@ struct OrganisationSetupFlow: View {
     @State private var operativeEmail = ""
     @State private var operativePhone = ""
     @State private var operativeDayRate = ""
+    @State private var operativeTradePresetRaw = ""
+    @State private var operativeTradeCustomText = ""
     
     // Project form fields
     @State private var projectJobNumber = ""
@@ -252,6 +256,13 @@ struct OrganisationSetupFlow: View {
                     TextField("Notes (Optional)", text: $managerNotes, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                         .lineLimit(3...6)
+                    
+                    StaffTradeTypeFormSection(
+                        presetRaw: $managerTradePresetRaw,
+                        customText: $managerTradeCustomText,
+                        title: "Trade type *",
+                        footnote: "Required."
+                    )
                 }
                 .padding(.horizontal)
             }
@@ -328,6 +339,13 @@ struct OrganisationSetupFlow: View {
                     .padding(.vertical, 8)
                     .background(Color.gray.opacity(0.1))
                     .cornerRadius(8)
+                    
+                    StaffTradeTypeFormSection(
+                        presetRaw: $operativeTradePresetRaw,
+                        customText: $operativeTradeCustomText,
+                        title: "Trade type *",
+                        footnote: "Required."
+                    )
                     
                     TextField("Day Rate (Optional)", text: $operativeDayRate)
                         .textFieldStyle(.roundedBorder)
@@ -468,14 +486,16 @@ struct OrganisationSetupFlow: View {
             return !managerFirstName.isEmpty &&
                    !managerLastName.isEmpty &&
                    !managerEmail.isEmpty &&
-                   !managerMobileNumber.isEmpty
+                   !managerMobileNumber.isEmpty &&
+                   StaffTradeTypeFormSection.isValid(presetRaw: managerTradePresetRaw, customText: managerTradeCustomText)
         case 2: // Client step - only mandatory fields (excluding Email, Phone, Address which are optional)
             return !clientName.isEmpty
         case 3: // Operative step - only mandatory fields (excluding Day Rate which is optional)
             return !operativeFirstName.isEmpty &&
                    !operativeSurname.isEmpty &&
                    !operativeEmail.isEmpty &&
-                   !operativePhone.isEmpty
+                   !operativePhone.isEmpty &&
+                   StaffTradeTypeFormSection.isValid(presetRaw: operativeTradePresetRaw, customText: operativeTradeCustomText)
         case 4: // Project step - only mandatory fields (excluding Description which is optional)
             return !projectJobNumber.isEmpty &&
                    !projectSiteName.isEmpty &&
@@ -499,6 +519,8 @@ struct OrganisationSetupFlow: View {
         
         Task {
             // Create manager
+            let mtp = managerTradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let mtc = managerTradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
             let manager = Manager(
                 firstName: managerFirstName,
                 lastName: managerLastName,
@@ -506,7 +528,9 @@ struct OrganisationSetupFlow: View {
                 mobileNumber: managerMobileNumber.isEmpty ? "" : managerMobileNumber,
                 department: managerDepartment.isEmpty ? nil : managerDepartment,
                 isActive: true,
-                notes: managerNotes.isEmpty ? nil : managerNotes
+                notes: managerNotes.isEmpty ? nil : managerNotes,
+                tradeTypePreset: mtp.isEmpty ? nil : mtp,
+                tradeTypeCustom: mtc.isEmpty ? nil : mtc
             )
             await operativeStore.addManager(manager)
             
@@ -520,13 +544,17 @@ struct OrganisationSetupFlow: View {
             await projectStore.addClient(client)
             
             // Create operative
+            let otp = operativeTradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let otc = operativeTradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
             let operative = Operative(
                 name: "\(operativeFirstName) \(operativeSurname)",
                 email: operativeEmail,
                 phone: operativePhone,
                 startDate: Date(),
                 skills: [], // Start with empty skills set
-                hourlyRate: operativeDayRate.isEmpty ? nil : Double(operativeDayRate)
+                hourlyRate: operativeDayRate.isEmpty ? nil : Double(operativeDayRate),
+                tradeTypePreset: otp.isEmpty ? nil : otp,
+                tradeTypeCustom: otc.isEmpty ? nil : otc
             )
             await operativeStore.addOperative(operative)
             

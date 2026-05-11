@@ -40,6 +40,7 @@ struct ContentView: View {
     @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var selectedTab = 0
     @State private var showMoreMenu = false
@@ -185,7 +186,18 @@ struct ContentView: View {
             }
         }
         .onChange(of: userStore.currentUser?.id) { _, _ in
-            Task { await notificationService.refreshDailyMaterialCutOffReminder() }
+            Task {
+                await notificationService.refreshDailyMaterialCutOffReminder()
+                await notificationService.refreshQualificationExpiryReminders()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                Task {
+                    await userStore.recordCurrentUserLastSeenIfDue()
+                    await notificationService.refreshQualificationExpiryReminders()
+                }
+            }
         }
         .onChange(of: appSettings.settings.notifications.materialOrderCutOff) { _, _ in
             Task { await notificationService.refreshDailyMaterialCutOffReminder() }
@@ -210,6 +222,9 @@ struct ContentView: View {
                 holidaySheetShowRequests = (notification.userInfo?["showRequests"] as? Bool) ?? false
                 showingHolidaySheet = true
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .qualificationExpiryScheduleRefresh)) { _ in
+            Task { await notificationService.refreshQualificationExpiryReminders() }
         }
         .onChange(of: isReorderingTabs) { _, newValue in
             if newValue {
@@ -276,6 +291,7 @@ struct ContentView: View {
         }
         await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
         await notificationService.refreshDailyMaterialCutOffReminder()
+        await notificationService.refreshQualificationExpiryReminders()
     }
     
     /// Single visible root (no `TabView`). Hiding the system tab bar + `TabView` left the main area blank on recent iOS SDKs; we already use a custom bottom bar.
@@ -685,7 +701,7 @@ extension ContentView {
         }
         
         if !userStore.isOperativeMode(), userStore.canViewOperatives() {
-            items.append(TabButtonConfig(tag: 3, title: "Operatives", icon: "person.3.fill", multilineTitle: false, requiresPermission: true))
+            items.append(TabButtonConfig(tag: 3, title: "Manage\nOperatives", icon: "person.3.fill", multilineTitle: true, requiresPermission: true))
         }
         
         return items
@@ -705,7 +721,7 @@ extension ContentView {
             items.append(TabButtonConfig(tag: 4, title: "Managers", icon: "person.badge.key.fill", multilineTitle: false, requiresPermission: true))
         }
         
-        if userStore.hasAdminAccess() || userStore.canViewManagers() {
+        if userStore.hasAdminAccess() {
             items.append(TabButtonConfig(tag: 7, title: "Wholesalers", icon: "building.2.fill", multilineTitle: false, requiresPermission: true))
             if userStore.canManageSubcontractors() {
                 items.append(TabButtonConfig(tag: 9, title: "Sub Contractors", icon: "person.2.badge.gearshape.fill", multilineTitle: true, requiresPermission: true))

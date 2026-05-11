@@ -154,10 +154,15 @@ struct ScheduleOperativeView: View {
         return active.isEmpty ? operativeStore.allOperatives : active
     }
     
-    private var selectedOperativeNames: [String] {
+    private func operativeScheduleLabel(_ op: Operative) -> String {
+        let t = op.displayTradeType
+        return t == "—" ? op.name : "\(op.name) · \(t)"
+    }
+    
+    private var selectedOperativeDisplayLines: [String] {
         selectableOperatives
             .filter { selectedOperatives.contains($0.id) }
-            .map(\.name)
+            .map(operativeScheduleLabel)
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
     
@@ -242,7 +247,7 @@ struct ScheduleOperativeView: View {
                             if selectedOperatives.count <= 3 {
                                 let names = selectableOperatives
                                     .filter { selectedOperatives.contains($0.id) }
-                                    .map { $0.name }
+                                    .map(operativeScheduleLabel)
                                     .prefix(3)
                                 Text(names.joined(separator: ", "))
                                     .font(.caption)
@@ -625,7 +630,7 @@ struct ScheduleOperativeView: View {
                         .foregroundColor(Color.theme.primary)
                 }
                 
-                if !selectedOperativeNames.isEmpty {
+                if !selectedOperativeDisplayLines.isEmpty {
                     Divider()
                     
                     VStack(alignment: .leading, spacing: 8) {
@@ -633,7 +638,7 @@ struct ScheduleOperativeView: View {
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                         
-                        ForEach(selectedOperativeNames, id: \.self) { name in
+                        ForEach(selectedOperativeDisplayLines, id: \.self) { name in
                             Text(name)
                                 .font(.subheadline)
                                 .foregroundColor(.primary)

@@ -38,6 +38,7 @@ struct MyScheduleView: View {
                         .environmentObject(operativeStore)
                         .environmentObject(userStore)
                         .environmentObject(holidayStore)
+                        .environmentObject(managerScheduleStore)
                 } else if canBookManagerSiteAttendance {
                     ManagerScheduleContentView()
                         .environmentObject(firebaseBackend)
@@ -762,6 +763,7 @@ struct OperativeScheduleContentView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
 
     private let calendar = Calendar.current
     @State private var weekStart: Date = Date()
@@ -784,6 +786,29 @@ struct OperativeScheduleContentView: View {
             (b.status == .confirmed || b.status == .tentative) &&
             weekDates.contains { calendar.isDate(b.date, inSameDayAs: $0) }
         }
+    }
+
+    /// Office / site self-bookings from when this account was a manager or admin (same Firebase Auth uid).
+    private var myManagerAttendanceThisWeek: [ManagerSiteBooking] {
+        guard let uid = userStore.currentUser?.id else { return [] }
+        return managerScheduleStore.managerSiteBookings.filter { booking in
+            booking.userId == uid &&
+            weekDates.contains { calendar.isDate(booking.date, inSameDayAs: $0) }
+        }
+    }
+
+    private func managerSelfBookingTitle(_ b: ManagerSiteBooking) -> String {
+        if b.locationType == .office || b.locationType == .workingFromHome || b.locationType == .siteSurvey {
+            return b.locationType.displayName
+        }
+        if b.locationType == .custom {
+            return (b.customLocationName?.isEmpty == false) ? (b.customLocationName ?? "Custom") : "Custom"
+        }
+        if let id = b.locationId,
+           let p = projectStore.projects.first(where: { $0.id == id }) ?? projectStore.smallWorks.first(where: { $0.id == id }) {
+            return "\(p.jobNumber) \(p.siteName)"
+        }
+        return "Site"
     }
 
     private var myApprovedHolidays: [HolidayBooking] {
@@ -861,6 +886,7 @@ struct OperativeScheduleContentView: View {
 
     private func dayRow(date: Date) -> some View {
         let dayBookings = myBookingsThisWeek.filter { calendar.isDate($0.date, inSameDayAs: date) }
+        let dayManagerBookings = myManagerAttendanceThisWeek.filter { calendar.isDate($0.date, inSameDayAs: date) }
         let isOnHoliday = holidayCoversDay(date)
         let f = DateFormatter()
         f.dateFormat = "EEEE, d MMM"
@@ -872,22 +898,48 @@ struct OperativeScheduleContentView: View {
                     .font(.subheadline)
                     .foregroundColor(.orange)
             }
-            if dayBookings.isEmpty && !isOnHoliday {
+            if dayBookings.isEmpty && dayManagerBookings.isEmpty && !isOnHoliday {
                 Text("No bookings")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             } else {
-                ForEach(dayBookings) { b in
-                    if let project = projectStore.projects.first(where: { $0.id == b.projectId }) ??
-                        projectStore.smallWorks.first(where: { $0.id == b.projectId }) {
-                        HStack {
-                            Text(b.timeSlot.displayName)
-                                .font(.caption)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.blue.opacity(0.2))
-                                .cornerRadius(4)
-                            Text("\(project.jobNumber) \(project.siteName)")
+                if !dayManagerBookings.isEmpty {
+                    Text("Your attendance (from schedule)")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.secondary)
+                }
+                ForEach(dayManagerBookings) { b in
+                    HStack {
+                        Text(b.timeSlot.displayName)
+                            .font(.caption)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.teal.opacity(0.22))
+                            .cornerRadius(4)
+                        Text(managerSelfBookingTitle(b))
+                    }
+                }
+                if !dayBookings.isEmpty {
+                    if !dayManagerBookings.isEmpty {
+                        Text("On-site bookings")
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 4)
+                    }
+                    ForEach(dayBookings) { b in
+                        if let project = projectStore.projects.first(where: { $0.id == b.projectId }) ??
+                            projectStore.smallWorks.first(where: { $0.id == b.projectId }) {
+                            HStack {
+                                Text(b.timeSlot.displayName)
+                                    .font(.caption)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.blue.opacity(0.2))
+                                    .cornerRadius(4)
+                                Text("\(project.jobNumber) \(project.siteName)")
+                            }
                         }
                     }
                 }
@@ -956,6 +1008,20 @@ struct OperativeScheduleContentView: View {
             guard let project = projectStore.projects.first(where: { $0.id == b.projectId }) else { continue }
             let event = EKEvent(eventStore: eventStore)
             event.title = "\(project.jobNumber) \(project.siteName) – \(b.timeSlot.displayName)"
+            event.startDate = b.date
+            event.endDate = cal.date(byAdding: .hour, value: 8, to: b.date) ?? b.date
+            event.calendar = eventStore.defaultCalendarForNewEvents
+            do {
+                try eventStore.save(event, span: .thisEvent)
+                added += 1
+            } catch {
+                addToCalendarMessage = "Could not add some events: \(error.localizedDescription)"
+                return
+            }
+        }
+        for b in myManagerAttendanceThisWeek {
+            let event = EKEvent(eventStore: eventStore)
+            event.title = "\(managerSelfBookingTitle(b)) – \(b.timeSlot.displayName)"
             event.startDate = b.date
             event.endDate = cal.date(byAdding: .hour, value: 8, to: b.date) ?? b.date
             event.calendar = eventStore.defaultCalendarForNewEvents

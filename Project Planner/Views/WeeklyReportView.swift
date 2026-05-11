@@ -18,7 +18,7 @@ struct WeeklyReportView: View {
     @State private var generatedCSVURL: URL?
     @State private var showShareSheet = false
     @State private var message: String?
-    @State private var dayRateHistoryByUser: [String: [OperativeDayRateHistoryEntry]] = [:]
+    @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
 
     var body: some View {
         NavigationStack {
@@ -105,7 +105,7 @@ struct WeeklyReportView: View {
         message = nil
         Task {
             if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-                dayRateHistoryByUser = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? [:]
+                dayRateHistoryCollection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
             }
             let csv = buildCSV()
             let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("WeeklyReport-\(Int(Date().timeIntervalSince1970)).csv")
@@ -132,7 +132,7 @@ struct WeeklyReportView: View {
         rows.append(["From", formatDate(startDate), "To", formatDate(endDate)])
         rows.append([])
         rows.append(["PROJECT BREAKDOWN"])
-        rows.append(["Project", "Job Number", "Person", "Role", "Days"])
+        rows.append(["Project", "Job Number", "Person", "Trade", "Role", "Days"])
 
         let operativeRows = operativeProjectRows()
         let managerRows = managerProjectRows()
@@ -143,15 +143,16 @@ struct WeeklyReportView: View {
         for key in grouped.keys.sorted() {
             guard let group = grouped[key] else { continue }
             var projectTotal = 0.0
-            for row in group.sorted(by: { $0.personName < $1.personName }) {
-                rows.append([row.projectName, row.jobNumber, row.personName, row.role, formatDays(row.days)])
+            for row in group.sorted(by: projectWorkRowSort) {
+                let tradeCell = row.tradeDisplay == "—" ? "" : row.tradeDisplay
+                rows.append([row.projectName, row.jobNumber, row.personName, tradeCell, row.role, formatDays(row.days)])
                 projectTotal += row.days
                 projectGrandTotal += row.days
             }
-            rows.append(["", "", "", "Project Total", formatDays(projectTotal)])
+            rows.append(["", "", "", "", "Project Total", formatDays(projectTotal)])
             rows.append([])
         }
-        rows.append(["", "", "", "All Project Work Total", formatDays(projectGrandTotal)])
+        rows.append(["", "", "", "", "All Project Work Total", formatDays(projectGrandTotal)])
         rows.append([])
         
         rows.append(["SUB CONTRACTORS"])
@@ -217,6 +218,13 @@ struct WeeklyReportView: View {
         return rows.map { $0.map(csvEscape).joined(separator: ",") }.joined(separator: "\n")
     }
 
+    private func projectWorkRowSort(_ lhs: ProjectWorkRow, _ rhs: ProjectWorkRow) -> Bool {
+        if lhs.tradeSortKey != rhs.tradeSortKey {
+            return lhs.tradeSortKey < rhs.tradeSortKey
+        }
+        return lhs.personName.localizedCaseInsensitiveCompare(rhs.personName) == .orderedAscending
+    }
+
     private func operativeProjectRows() -> [ProjectWorkRow] {
         let cal = Calendar.current
         let filtered = bookingStore.bookings.filter { booking in
@@ -237,7 +245,15 @@ struct WeeklyReportView: View {
             let key = "\(projectName)|\(jobNumber)|\(personName)|Operative"
             let dayValue = bookingDayValue(from: booking.timeSlot)
             totals[key, default: 0] += dayValue
-            rowsMap[key] = ProjectWorkRow(projectName: projectName, jobNumber: jobNumber, personName: personName, role: "Operative", days: totals[key] ?? 0)
+            rowsMap[key] = ProjectWorkRow(
+                projectName: projectName,
+                jobNumber: jobNumber,
+                personName: personName,
+                tradeDisplay: operative.displayTradeType,
+                tradeSortKey: StaffTradeType.sortKey(presetRaw: operative.tradeTypePreset, custom: operative.tradeTypeCustom),
+                role: "Operative",
+                days: totals[key] ?? 0
+            )
         }
         return Array(rowsMap.values)
     }
@@ -262,7 +278,15 @@ struct WeeklyReportView: View {
             let key = "\(projectName)|\(jobNumber)|\(personName)|Manager"
             let dayValue = managerDayValue(from: booking.timeSlot)
             totals[key, default: 0] += dayValue
-            rowsMap[key] = ProjectWorkRow(projectName: projectName, jobNumber: jobNumber, personName: personName, role: "Manager", days: totals[key] ?? 0)
+            rowsMap[key] = ProjectWorkRow(
+                projectName: projectName,
+                jobNumber: jobNumber,
+                personName: personName,
+                tradeDisplay: user.displayTradeType,
+                tradeSortKey: StaffTradeType.sortKey(presetRaw: user.tradeTypePreset, custom: user.tradeTypeCustom),
+                role: "Manager",
+                days: totals[key] ?? 0
+            )
         }
         return Array(rowsMap.values)
     }
@@ -310,8 +334,11 @@ struct WeeklyReportView: View {
         var totals: [String: LabourRateSummary] = [:]
         for booking in operativeBookings {
             guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else { continue }
-            let user = userStore.organizationUsers.first(where: { $0.email.lowercased() == operative.email.lowercased() })
-            let rate = dayRate(for: user, operative: operative, on: booking.date)
+            let opEmail = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let user = userStore.organizationUsers.first(where: {
+                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == opEmail
+            })
+            let rate = dayRateForOperativeBooking(user: user, operative: operative, on: booking.date)
             let days = bookingDayValue(from: booking.timeSlot)
             let key = labourRateKey(name: operative.name, role: "Operative", rate: rate)
             var summary = totals[key] ?? LabourRateSummary(name: operative.name, role: "Operative", rate: rate, days: 0)
@@ -322,7 +349,7 @@ struct WeeklyReportView: View {
         for booking in managerBookings {
             guard let manager = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { continue }
             let managerName = manager.fullName.isEmpty ? manager.email : manager.fullName
-            let rate = manager.dayRate
+            let rate = dayRateForUserOnDay(userId: manager.id, fallback: manager.dayRate, date: booking.date)
             let days = managerDayValue(from: booking.timeSlot)
             let key = labourRateKey(name: managerName, role: "Manager", rate: rate)
             var summary = totals[key] ?? LabourRateSummary(name: managerName, role: "Manager", rate: rate, days: 0)
@@ -403,13 +430,25 @@ struct WeeklyReportView: View {
         return "\(name)|\(role)|NO_RATE"
     }
 
-    private func dayRate(for user: AppUser?, operative: Operative, on date: Date) -> Double? {
-        if let user {
-            let history = (dayRateHistoryByUser[user.id] ?? []).sorted(by: { $0.effectiveAt < $1.effectiveAt })
-            let rateFromHistory = history.last(where: { $0.effectiveAt <= date })?.dayRate
-            return rateFromHistory ?? user.dayRate ?? operative.dayRate
-        }
-        return operative.dayRate
+    private func calendarDayStart(_ date: Date) -> Date {
+        Calendar.current.startOfDay(for: date)
+    }
+
+    /// Uses day-rate history keyed by user id; compares **calendar days** so a change effective “tomorrow” does not apply to today’s bookings.
+    private func dayRateForUserOnDay(userId: String, fallback: Double?, date: Date) -> Double? {
+        let history = (dayRateHistoryCollection.byUserId[userId] ?? []).sorted(by: { $0.effectiveAt < $1.effectiveAt })
+        let day = calendarDayStart(date)
+        let rateFromHistory = history.last(where: { calendarDayStart($0.effectiveAt) <= day })?.dayRate
+        return rateFromHistory ?? fallback
+    }
+
+    private func dayRateForOperativeBooking(user: AppUser?, operative: Operative, on date: Date) -> Double? {
+        let merged = dayRateHistoryCollection.mergedEntries(userId: user?.id, operativeId: operative.id)
+        let day = calendarDayStart(date)
+        let history = merged.sorted(by: { $0.effectiveAt < $1.effectiveAt })
+        let rateFromHistory = history.last(where: { calendarDayStart($0.effectiveAt) <= day })?.dayRate
+        let fallback = operative.dayRate ?? user?.dayRate
+        return rateFromHistory ?? fallback ?? user?.dayRate ?? operative.dayRate
     }
 
     private func overlappingDays(for booking: HolidayBooking, calendar: Calendar) -> Double {
@@ -465,6 +504,8 @@ private struct ProjectWorkRow {
     let projectName: String
     let jobNumber: String
     let personName: String
+    let tradeDisplay: String
+    let tradeSortKey: String
     let role: String
     var days: Double
 }

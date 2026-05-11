@@ -15,6 +15,7 @@ struct SelectOperativesView: View {
     let unavailableOperativeIds: Set<UUID>
     @State private var searchText = ""
     @State private var selectedFilter: AvailabilityFilter = .all
+    @State private var tradeFilterPreset: String? = nil
     
     enum AvailabilityFilter: String, CaseIterable, Identifiable {
         case all = "All"
@@ -43,6 +44,13 @@ struct SelectOperativesView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                    Picker("Trade", selection: $tradeFilterPreset) {
+                        Text("All trades").tag(Optional<String>.none)
+                        ForEach(StaffTradeType.pickerCases) { trade in
+                            Text(trade.rawValue).tag(Optional(trade.rawValue))
+                        }
+                    }
                     .padding(.horizontal)
                     .padding(.bottom, 8)
                 }
@@ -125,13 +133,24 @@ struct SelectOperativesView: View {
             }
         }
         
-        if searchText.isEmpty {
-            return operatives
+        let tradeFiltered: [Operative]
+        if let fp = tradeFilterPreset?.trimmingCharacters(in: .whitespacesAndNewlines), !fp.isEmpty {
+            tradeFiltered = operatives.filter { op in
+                let preset = op.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return preset == fp
+            }
+        } else {
+            tradeFiltered = operatives
         }
         
-        return operatives.filter { operative in
+        if searchText.isEmpty {
+            return tradeFiltered
+        }
+        
+        return tradeFiltered.filter { operative in
             operative.name.localizedCaseInsensitiveContains(searchText) ||
-            operative.email.localizedCaseInsensitiveContains(searchText)
+            operative.email.localizedCaseInsensitiveContains(searchText) ||
+            operative.displayTradeType.localizedCaseInsensitiveContains(searchText)
         }
     }
 }
@@ -179,6 +198,12 @@ struct OperativeSelectionRow: View {
                     Text(operative.email)
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+                    
+                    if operative.displayTradeType != "—" {
+                        Text(operative.displayTradeType)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                     
                     // Qualifications and skills tags
                     HStack(spacing: 8) {

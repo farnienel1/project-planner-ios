@@ -80,13 +80,13 @@ enum UserRoleTransitionPolicy {
             // Match `AddUserView.applyPermissionsForInvitedType` for `.manager`.
             return ManagerUserTypeTransitionConfig(
                 annualLeaveSelfBook: false,
-                operatives: true,
+                operatives: false,
                 skills: true,
                 qualifications: true,
                 weeklyReports: false,
                 subContractors: false,
-                projects: true,
-                smallWorks: true
+                projects: false,
+                smallWorks: false
             )
         }
     }
