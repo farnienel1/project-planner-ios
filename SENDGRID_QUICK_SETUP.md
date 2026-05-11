@@ -3,7 +3,7 @@
 ## Current Status
 
 Your app already has SendGrid configured with:
-- API Key: SG.REDACTED_SET_VIA_SECURE_CONFIG
+- API Key: `<SENDGRID_API_KEY>`
 - From Email: noreply@projectplanner.app
 
 ## What You Need to Do

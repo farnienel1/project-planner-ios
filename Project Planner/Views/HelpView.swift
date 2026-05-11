@@ -35,7 +35,7 @@ struct HelpView: View {
         .navigationTitle("Help & FAQs")
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
+            ToolbarItem(placement: .topBarLeading) {
                 Button(action: {
                     // Post notification to go back to previous tab
                     NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)

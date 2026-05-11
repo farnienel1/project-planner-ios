@@ -1,2 +1,8 @@
 # Local Netlify folder
 .netlify
+
+# Local secret/config files
+Secrets.plist
+**/Secrets.plist
+*.local.xcconfig
+*.secrets.xcconfig

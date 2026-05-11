@@ -19,6 +19,8 @@ struct AdminManagerMaterialsView: View {
     @State private var showingAddMaterial = false
     @State private var showingSendToWholesaler = false
     @State private var selectedMaterials: Set<UUID> = []
+    @State private var deleteErrorMessage = ""
+    @State private var showingDeleteErrorAlert = false
     
     var body: some View {
         VStack(spacing: 0) {
@@ -31,6 +33,7 @@ struct AdminManagerMaterialsView: View {
             // Materials List for Selected Day
             materialsListView
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingAddMaterial) {
             AddMaterialView(
                 project: project,
@@ -49,6 +52,11 @@ struct AdminManagerMaterialsView: View {
             )
             .environmentObject(userStore)
             .environmentObject(firebaseBackend)
+        }
+        .alert("Could Not Delete Material", isPresented: $showingDeleteErrorAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(deleteErrorMessage)
         }
     }
     
@@ -163,9 +171,15 @@ struct AdminManagerMaterialsView: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     if !materials.isEmpty {
-                        Text("(\(materials.count) total materials for this project)")
+                        Text("(\(materials.count) total for this project — none on this day)")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                        Text("Use the week arrows to move to the week when those materials were booked, or tap the day that matches the “needed” date.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 8)
                     } else {
                         Text("No materials found for this project")
                             .font(.caption)
@@ -175,16 +189,27 @@ struct AdminManagerMaterialsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.vertical, 40)
             } else {
-                ScrollView {
-                    VStack(spacing: 12) {
-                        ForEach(filtered.sorted(by: { $0.addedAt > $1.addedAt })) { material in
-                            MaterialItemRow(material: material)
-                                .environmentObject(userStore)
-                                .environmentObject(firebaseBackend)
-                        }
+                let sorted = filtered.sorted(by: { $0.addedAt > $1.addedAt })
+                List {
+                    ForEach(sorted) { material in
+                        MaterialItemRow(material: material)
+                            .environmentObject(userStore)
+                            .environmentObject(firebaseBackend)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    deleteMaterial(material)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                     }
-                    .padding()
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -206,6 +231,10 @@ struct AdminManagerMaterialsView: View {
                 // Post notification to reload
                 NotificationCenter.default.post(name: NSNotification.Name("reloadMaterials"), object: nil)
             } catch {
+                await MainActor.run {
+                    deleteErrorMessage = error.localizedDescription
+                    showingDeleteErrorAlert = true
+                }
                 print("Error deleting material: \(error.localizedDescription)")
             }
         }
@@ -236,9 +265,7 @@ struct AdminManagerMaterialsView: View {
     }
     
     private func changeWeek(by weeks: Int) {
-        if let newWeek = Calendar.current.date(byAdding: .weekOfYear, value: weeks, to: currentWeek) {
-            currentWeek = newWeek
-        }
+        MaterialsWeekNavigation.applyWeekDelta(weeks, currentWeek: &currentWeek, selectedDate: &selectedDate)
     }
     
     private var weekDays: [Date] {

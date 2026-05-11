@@ -315,11 +315,9 @@ struct AdminPasswordResetView: View {
                     .foregroundColor(.secondary)
                 
                 VStack(spacing: 15) {
-                    SecureField("New Password", text: $newPassword)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                    CustomSecureField(title: "New Password", text: $newPassword)
                     
-                    SecureField("Confirm Password", text: $confirmPassword)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                    CustomSecureField(title: "Confirm Password", text: $confirmPassword)
                 }
                 
                 Button("Reset Password") {

@@ -42,12 +42,12 @@ struct WholesalersView: View {
             .navigationTitle("Wholesalers")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button("Done") {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                     }
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button(action: {
                         showingAddWholesaler = true
                     }) {
@@ -55,6 +55,7 @@ struct WholesalersView: View {
                     }
                 }
             }
+            .navigationBarBackButtonHidden(true)
             .sheet(isPresented: $showingAddWholesaler) {
                 AddWholesalerView(isPresented: $showingAddWholesaler)
                     .environmentObject(userStore)

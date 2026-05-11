@@ -276,23 +276,13 @@ struct OrganizationSetupView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Password")
                             .font(.headline)
-                        SecureField("Enter password", text: $password)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .textContentType(.oneTimeCode)
-                            .autocorrectionDisabled()
-                            .disableAutocorrection(true)
-                            .textInputAutocapitalization(.never)
+                        CustomSecureField(title: "Enter password", text: $password)
                     }
                     
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Confirm Password")
                             .font(.headline)
-                        SecureField("Confirm password", text: $confirmPassword)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .textContentType(.oneTimeCode)
-                            .autocorrectionDisabled()
-                            .disableAutocorrection(true)
-                            .textInputAutocapitalization(.never)
+                        CustomSecureField(title: "Confirm password", text: $confirmPassword)
                     }
                 }
                 

@@ -111,8 +111,15 @@ class BookingStore: ObservableObject {
                 self.errorMessage = error.localizedDescription
                 self.isLoading = false
                 print("🔥🔥🔥 DEBUG: Error loading bookings: \(error.localizedDescription)")
-                // For new users, start with empty data
-                self.bookings = []
+                // Fallback to local cache when Firebase denies/ fails so operative visibility does not fully disappear.
+                do {
+                    let cached = try await self.persistenceService.loadBookingData()
+                    self.bookings = cached
+                    print("🔥🔥🔥 DEBUG: Loaded \(cached.count) cached bookings after Firebase error")
+                } catch {
+                    print("🔥🔥🔥 DEBUG: Local bookings fallback failed: \(error.localizedDescription)")
+                    // Keep previous in-memory bookings if any; do not forcibly clear.
+                }
             }
         }
     }
@@ -172,8 +179,7 @@ class BookingStore: ObservableObject {
         timeSlot: TimeSlot,
         for project: Project,
         bookedBy: String,
-        notes: String? = nil,
-        notificationService: NotificationService? = nil
+        notes: String? = nil
     ) async {
         // Update updatedAt when creating
         var updatedBooking = Booking(
@@ -187,17 +193,6 @@ class BookingStore: ObservableObject {
         updatedBooking.updatedAt = Date()
         
         await addBooking(updatedBooking)
-        
-        // Send notification to the operative who was booked
-        if let notificationService = notificationService {
-            await notificationService.notifyBookingCreated(
-                bookingId: updatedBooking.id,
-                operativeId: operative.id,
-                projectName: project.siteName,
-                date: date,
-                createdBy: bookedBy
-            )
-        }
     }
     
     func bookOperatives(
@@ -376,15 +371,22 @@ class BookingStore: ObservableObject {
                 // Save bookings to Firebase (only save changes, not all bookings every time)
                 // For now, save all bookings - can be optimized later
                 let bookingsToSave = bookings
+                var failedCount = 0
                 for booking in bookingsToSave {
                     do {
                         try await firebaseBackend.saveBooking(booking, organizationId: organizationId)
                     } catch {
+                        failedCount += 1
                         print("🔥🔥🔥 DEBUG: Error saving booking \(booking.id.uuidString): \(error)")
                     }
                 }
                 
-                print("🔥🔥🔥 DEBUG: Successfully saved \(bookingsToSave.count) bookings to Firebase")
+                if failedCount > 0 {
+                    errorMessage = "Some bookings could not be synced to cloud (\(failedCount))."
+                    print("🔥🔥🔥 DEBUG: Saved \(bookingsToSave.count - failedCount)/\(bookingsToSave.count) bookings to Firebase")
+                } else {
+                    print("🔥🔥🔥 DEBUG: Successfully saved \(bookingsToSave.count) bookings to Firebase")
+                }
             } else {
                 print("🔥🔥🔥 DEBUG: Saved \(bookings.count) bookings locally (Firebase not available or not authenticated)")
                 print("🔥🔥🔥 DEBUG: Firebase backend: \(firebaseBackend != nil)")

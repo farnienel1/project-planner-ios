@@ -126,9 +126,14 @@ struct UserPermissions: Codable, Hashable {
     var operatives: Bool   // Can see operatives list and details on home screen (Operative Management)
     var skills: Bool       // Can create/alter skills
     var qualifications: Bool // Can create/alter qualifications
+    var materials: Bool    // Operative materials visibility/access inside project detail
     var projects: Bool     // Can create and manage projects
     var smallWorks: Bool   // Can create and manage small works
     var operativeMode: Bool // Operative mode - limited view of app
+    var annualLeaveSelfBook: Bool // Managers can self-book annual leave without approval
+    var weeklyReports: Bool // Managers can access weekly reports
+    var subContractors: Bool // Managers can add/manage sub contractors
+    var siteAudit: Bool // Operative can access site audits
     
     init(
         adminAccess: Bool = false,
@@ -136,19 +141,37 @@ struct UserPermissions: Codable, Hashable {
         operatives: Bool = false,
         skills: Bool = false,
         qualifications: Bool = false,
+        materials: Bool = false,
         projects: Bool = false,
         smallWorks: Bool = false,
-        operativeMode: Bool = false
+        operativeMode: Bool = false,
+        annualLeaveSelfBook: Bool = false,
+        weeklyReports: Bool = false,
+        subContractors: Bool = false,
+        siteAudit: Bool = true
     ) {
         self.adminAccess = adminAccess
         self.manager = manager
         self.operatives = operatives
         self.skills = skills
         self.qualifications = qualifications
+        self.materials = materials
         self.projects = projects
         self.smallWorks = smallWorks
         self.operativeMode = operativeMode
+        self.annualLeaveSelfBook = annualLeaveSelfBook
+        self.weeklyReports = weeklyReports
+        self.subContractors = subContractors
+        self.siteAudit = siteAudit
     }
+}
+
+struct OperativeDayRateHistoryEntry: Identifiable, Codable, Hashable {
+    let id: UUID
+    var userId: String
+    var dayRate: Double
+    var effectiveAt: Date
+    var createdAt: Date
 }
 
 /// Simulates app navigation and permission checks for another role while signed in as yourself.
@@ -231,6 +254,10 @@ struct AppUser: Identifiable, Codable, Hashable {
     var isSuperAdmin: Bool
     var policyAccepted: Bool // GDPR privacy policy acceptance
     var policyAcceptedAt: Date? // When policy was accepted
+    /// For operative accounts: Firebase Auth UID of their line manager (holiday requests route here).
+    var assignedManagerUserId: String?
+    /// Default day rate for this operative (optional; copied to roster when the operative profile is created).
+    var dayRate: Double?
     
     init(
         id: String,
@@ -246,7 +273,9 @@ struct AppUser: Identifiable, Codable, Hashable {
         permissions: UserPermissions = UserPermissions(),
         isSuperAdmin: Bool = false,
         policyAccepted: Bool = false,
-        policyAcceptedAt: Date? = nil
+        policyAcceptedAt: Date? = nil,
+        assignedManagerUserId: String? = nil,
+        dayRate: Double? = nil
     ) {
         self.id = id
         self.email = email
@@ -262,6 +291,8 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.isSuperAdmin = isSuperAdmin
         self.policyAccepted = policyAccepted
         self.policyAcceptedAt = policyAcceptedAt
+        self.assignedManagerUserId = assignedManagerUserId
+        self.dayRate = dayRate
     }
     
     var fullName: String {
@@ -286,6 +317,7 @@ struct Organization: Identifiable, Codable, Hashable {
     var countryCode: String
     var defaultLatitude: Double?
     var defaultLongitude: Double?
+    var companyLogoURL: String?
     var createdAt: Date
     var updatedAt: Date
     /// Firebase Auth UID of the organization creator. Only this user may be super admin.
@@ -302,6 +334,7 @@ struct Organization: Identifiable, Codable, Hashable {
         countryCode: String = "GB",
         defaultLatitude: Double? = nil,
         defaultLongitude: Double? = nil,
+        companyLogoURL: String? = nil,
         creatorUserId: String? = nil
     ) {
         self.id = id
@@ -318,6 +351,7 @@ struct Organization: Identifiable, Codable, Hashable {
         self.countryCode = countryCode
         self.defaultLatitude = defaultLatitude
         self.defaultLongitude = defaultLongitude
+        self.companyLogoURL = companyLogoURL
         self.createdAt = Date()
         self.updatedAt = Date()
         self.creatorUserId = creatorUserId
@@ -325,7 +359,7 @@ struct Organization: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, firestoreDocumentId, name, settings, officeAddressLine1, officeCity, officePostcode
-        case countryCode, defaultLatitude, defaultLongitude, createdAt, updatedAt, creatorUserId
+        case countryCode, defaultLatitude, defaultLongitude, companyLogoURL, createdAt, updatedAt, creatorUserId
     }
 
     init(from decoder: Decoder) throws {
@@ -339,6 +373,7 @@ struct Organization: Identifiable, Codable, Hashable {
         countryCode = try c.decodeIfPresent(String.self, forKey: .countryCode) ?? "GB"
         defaultLatitude = try c.decodeIfPresent(Double.self, forKey: .defaultLatitude)
         defaultLongitude = try c.decodeIfPresent(Double.self, forKey: .defaultLongitude)
+        companyLogoURL = try c.decodeIfPresent(String.self, forKey: .companyLogoURL)
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         creatorUserId = try c.decodeIfPresent(String.self, forKey: .creatorUserId)
@@ -357,6 +392,7 @@ struct Organization: Identifiable, Codable, Hashable {
         try c.encode(countryCode, forKey: .countryCode)
         try c.encodeIfPresent(defaultLatitude, forKey: .defaultLatitude)
         try c.encodeIfPresent(defaultLongitude, forKey: .defaultLongitude)
+        try c.encodeIfPresent(companyLogoURL, forKey: .companyLogoURL)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encodeIfPresent(creatorUserId, forKey: .creatorUserId)
@@ -497,6 +533,7 @@ struct AppSettings: Codable, Sendable {
     var lastSyncDate: Date?
     var autoSync: Bool
     var notifications: NotificationSettings
+    var myScheduleOptions: MyScheduleOptions
     
     nonisolated init(
         theme: ThemePreference = .light, // Default to light mode always
@@ -504,7 +541,8 @@ struct AppSettings: Codable, Sendable {
         organizationId: UUID? = nil,
         lastSyncDate: Date? = nil,
         autoSync: Bool = true,
-        notifications: NotificationSettings = NotificationSettings()
+        notifications: NotificationSettings = NotificationSettings(),
+        myScheduleOptions: MyScheduleOptions = MyScheduleOptions()
     ) {
         self.theme = theme
         self.colorScheme = colorScheme
@@ -512,10 +550,11 @@ struct AppSettings: Codable, Sendable {
         self.lastSyncDate = lastSyncDate
         self.autoSync = autoSync
         self.notifications = notifications
+        self.myScheduleOptions = myScheduleOptions
     }
     
     nonisolated enum CodingKeys: String, CodingKey {
-        case theme, colorScheme, organizationId, lastSyncDate, autoSync, notifications
+        case theme, colorScheme, organizationId, lastSyncDate, autoSync, notifications, myScheduleOptions
     }
     
     nonisolated init(from decoder: Decoder) throws {
@@ -527,6 +566,7 @@ struct AppSettings: Codable, Sendable {
         lastSyncDate = try container.decodeIfPresent(Date.self, forKey: .lastSyncDate)
         autoSync = try container.decode(Bool.self, forKey: .autoSync)
         notifications = try container.decode(NotificationSettings.self, forKey: .notifications)
+        myScheduleOptions = try container.decodeIfPresent(MyScheduleOptions.self, forKey: .myScheduleOptions) ?? MyScheduleOptions()
     }
     
     nonisolated func encode(to encoder: Encoder) throws {
@@ -537,6 +577,26 @@ struct AppSettings: Codable, Sendable {
         try container.encodeIfPresent(lastSyncDate, forKey: .lastSyncDate)
         try container.encode(autoSync, forKey: .autoSync)
         try container.encode(notifications, forKey: .notifications)
+        try container.encode(myScheduleOptions, forKey: .myScheduleOptions)
+    }
+}
+
+struct MyScheduleOptions: Codable, Sendable, Hashable {
+    var showOffice: Bool
+    var showWorkingFromHome: Bool
+    var showSiteSurvey: Bool
+    var customItems: [String]
+    
+    nonisolated init(
+        showOffice: Bool = true,
+        showWorkingFromHome: Bool = true,
+        showSiteSurvey: Bool = true,
+        customItems: [String] = []
+    ) {
+        self.showOffice = showOffice
+        self.showWorkingFromHome = showWorkingFromHome
+        self.showSiteSurvey = showSiteSurvey
+        self.customItems = customItems
     }
 }
 
@@ -545,29 +605,33 @@ struct NotificationSettings: Codable, Sendable {
     var projectDeadlines: Bool
     var operativeAvailability: Bool
     var dailyReports: Bool
+    var materialOrderCutOff: Bool
     
     nonisolated init(
         bookingConflicts: Bool = true,
         projectDeadlines: Bool = true,
         operativeAvailability: Bool = false,
-        dailyReports: Bool = false
+        dailyReports: Bool = false,
+        materialOrderCutOff: Bool = true
     ) {
         self.bookingConflicts = bookingConflicts
         self.projectDeadlines = projectDeadlines
         self.operativeAvailability = operativeAvailability
         self.dailyReports = dailyReports
+        self.materialOrderCutOff = materialOrderCutOff
     }
     
     nonisolated enum CodingKeys: String, CodingKey {
-        case bookingConflicts, projectDeadlines, operativeAvailability, dailyReports
+        case bookingConflicts, projectDeadlines, operativeAvailability, dailyReports, materialOrderCutOff
     }
     
     nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        bookingConflicts = try container.decode(Bool.self, forKey: .bookingConflicts)
-        projectDeadlines = try container.decode(Bool.self, forKey: .projectDeadlines)
-        operativeAvailability = try container.decode(Bool.self, forKey: .operativeAvailability)
-        dailyReports = try container.decode(Bool.self, forKey: .dailyReports)
+        bookingConflicts = try container.decodeIfPresent(Bool.self, forKey: .bookingConflicts) ?? true
+        projectDeadlines = try container.decodeIfPresent(Bool.self, forKey: .projectDeadlines) ?? true
+        operativeAvailability = try container.decodeIfPresent(Bool.self, forKey: .operativeAvailability) ?? false
+        dailyReports = try container.decodeIfPresent(Bool.self, forKey: .dailyReports) ?? false
+        materialOrderCutOff = try container.decodeIfPresent(Bool.self, forKey: .materialOrderCutOff) ?? true
     }
     
     nonisolated func encode(to encoder: Encoder) throws {
@@ -576,6 +640,7 @@ struct NotificationSettings: Codable, Sendable {
         try container.encode(projectDeadlines, forKey: .projectDeadlines)
         try container.encode(operativeAvailability, forKey: .operativeAvailability)
         try container.encode(dailyReports, forKey: .dailyReports)
+        try container.encode(materialOrderCutOff, forKey: .materialOrderCutOff)
     }
 }
 

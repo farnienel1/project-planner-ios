@@ -102,6 +102,11 @@ class AppSettingsStore: ObservableObject {
         await saveSettings()
     }
     
+    func updateMyScheduleOptions(_ options: MyScheduleOptions) async {
+        settings.myScheduleOptions = options
+        await saveSettings()
+    }
+    
     // MARK: - Persistence
     
     private func saveSettings() async {

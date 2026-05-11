@@ -118,8 +118,7 @@ enum PlaygroundDemoSeeder {
                 timeSlot: .morning,
                 for: proj,
                 bookedBy: createdByName,
-                notes: "Playground demo booking",
-                notificationService: nil
+                notes: "Playground demo booking"
             )
             await bookingStore.bookOperative(
                 op,
@@ -127,8 +126,7 @@ enum PlaygroundDemoSeeder {
                 timeSlot: .afternoon,
                 for: sw,
                 bookedBy: createdByName,
-                notes: "Playground demo small works visit",
-                notificationService: nil
+                notes: "Playground demo small works visit"
             )
         } else {
             bookingNote = " No operatives in the org yet — add an operative to see demo bookings on My Schedule."

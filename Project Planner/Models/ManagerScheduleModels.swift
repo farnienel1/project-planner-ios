@@ -17,6 +17,8 @@ struct ManagerSiteBooking: Identifiable, Codable, Hashable {
     var locationType: ManagerLocationType
     /// Project or small work ID when locationType is .project or .smallWork; nil for .office
     var locationId: UUID?
+    /// Optional display name when `locationType == .custom`
+    var customLocationName: String?
     var createdAt: Date
     var updatedAt: Date
 
@@ -27,6 +29,7 @@ struct ManagerSiteBooking: Identifiable, Codable, Hashable {
         timeSlot: ManagerTimeSlot,
         locationType: ManagerLocationType,
         locationId: UUID? = nil,
+        customLocationName: String? = nil,
         createdAt: Date? = nil,
         updatedAt: Date? = nil
     ) {
@@ -36,6 +39,7 @@ struct ManagerSiteBooking: Identifiable, Codable, Hashable {
         self.timeSlot = timeSlot
         self.locationType = locationType
         self.locationId = locationId
+        self.customLocationName = customLocationName
         self.createdAt = createdAt ?? Date()
         self.updatedAt = updatedAt ?? Date()
     }
@@ -61,6 +65,9 @@ enum ManagerLocationType: String, CaseIterable, Identifiable, Codable {
     case project = "project"
     case smallWork = "small_work"
     case office = "office"
+    case workingFromHome = "working_from_home"
+    case siteSurvey = "site_survey"
+    case custom = "custom"
 
     var id: String { rawValue }
 
@@ -69,6 +76,9 @@ enum ManagerLocationType: String, CaseIterable, Identifiable, Codable {
         case .project: return "Project"
         case .smallWork: return "Small Work"
         case .office: return "Office"
+        case .workingFromHome: return "Working From Home"
+        case .siteSurvey: return "Site Survey"
+        case .custom: return "Custom"
         }
     }
 }

@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import FirebaseAuth
 
 struct EditMaterialView: View {
     @Environment(\.dismiss) private var dismiss
@@ -20,6 +21,23 @@ struct EditMaterialView: View {
     @State private var unit: MaterialUnit
     @State private var materialDescription: String
     @State private var isSaving = false
+    @State private var showingPermissionAlert = false
+    @State private var saveErrorMessage = ""
+    @State private var showingSaveErrorAlert = false
+    
+    private var canManageMaterial: Bool {
+        guard let currentUser = firebaseBackend.currentUser else { return false }
+        if !userStore.isOperativeMode() {
+            return true
+        }
+        if let ownerUserId = material.addedByUserId, !ownerUserId.isEmpty {
+            return ownerUserId == currentUser.uid
+        }
+        let normalizedAddedBy = material.addedBy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let displayName = (userStore.currentUser?.fullName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let email = (userStore.currentUser?.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalizedAddedBy == displayName || normalizedAddedBy == email
+    }
     
     init(material: MaterialItem, isPresented: Binding<Bool>) {
         self.material = material
@@ -80,15 +98,38 @@ struct EditMaterialView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
-                        saveMaterial()
+                        if canManageMaterial {
+                            saveMaterial()
+                        } else {
+                            showingPermissionAlert = true
+                        }
                     }
-                    .disabled(materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
+                    .disabled(materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving || !canManageMaterial)
                 }
+            }
+        }
+        .alert("Permission Required", isPresented: $showingPermissionAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("You can only edit materials that you booked.")
+        }
+        .alert("Could Not Save Material", isPresented: $showingSaveErrorAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(saveErrorMessage)
+        }
+        .onAppear {
+            guard canManageMaterial else {
+                showingPermissionAlert = true
+                isPresented = false
+                dismiss()
+                return
             }
         }
     }
     
     private func saveMaterial() {
+        guard canManageMaterial else { return }
         guard !materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         isSaving = true
         
@@ -104,6 +145,7 @@ struct EditMaterialView: View {
         updatedMaterial.material = materialDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         updatedMaterial.date = normalizedDate
         updatedMaterial.editedBy = editedBy
+        updatedMaterial.editedByUserId = firebaseBackend.currentUser?.uid
         updatedMaterial.editedAt = Date()
         
         Task {
@@ -129,6 +171,8 @@ struct EditMaterialView: View {
                 print("❌ Error updating material: \(error.localizedDescription)")
                 await MainActor.run {
                     isSaving = false
+                    saveErrorMessage = error.localizedDescription
+                    showingSaveErrorAlert = true
                 }
             }
         }

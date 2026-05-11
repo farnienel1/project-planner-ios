@@ -10,6 +10,7 @@ import MapKit
 import UniformTypeIdentifiers
 import PhotosUI
 import FirebaseAuth
+import UIKit
 
 fileprivate enum TaskTab: String, CaseIterable, Identifiable {
     case active = "Active"
@@ -43,16 +44,26 @@ fileprivate struct TaskFilter {
 struct ProjectDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
     
-    let project: Project
+    private let projectId: UUID
+    private let fallbackProject: Project
+    
+    /// Latest row from the store so Save on Edit Project / Small Works refreshes this screen.
+    private var project: Project {
+        projectStore.projects.first(where: { $0.id == projectId }) ?? fallbackProject
+    }
     
     @State private var selectedWeek: Date = Date()
     @State private var showingScheduleOperative = false
+    @State private var showingScheduleSubcontractor = false
     @State private var showingEditProject = false
     @State private var showingMapOptions = false
     @State private var region: MKCoordinateRegion
@@ -63,8 +74,10 @@ struct ProjectDetailView: View {
     
     private enum DetailTile: String, CaseIterable, Identifiable {
         case scheduling = "Scheduling"
+        case visibility = "View"
         case tasks = "My Tasks"
         case materials = "Materials"
+        case siteAudit = "Site Audits"
         case settings = "Settings"
         case location = "Location"
         
@@ -72,8 +85,10 @@ struct ProjectDetailView: View {
         var icon: String {
             switch self {
             case .scheduling: return "calendar.badge.clock"
+            case .visibility: return "eye"
             case .tasks: return "checklist"
             case .materials: return "cube.box.fill"
+            case .siteAudit: return "doc.text.viewfinder"
             case .settings: return "gearshape"
             case .location: return "map"
             }
@@ -83,7 +98,8 @@ struct ProjectDetailView: View {
     
     // Initialize region from project address
     init(project: Project) {
-        self.project = project
+        self.projectId = project.id
+        self.fallbackProject = project
         // Default to London coordinates - will be updated if address is geocoded
         let defaultRegion = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 51.5074, longitude: -0.1278),
@@ -133,8 +149,14 @@ struct ProjectDetailView: View {
                 .environmentObject(bookingStore)
                 .environmentObject(operativeStore)
                 .environmentObject(projectStore)
+                .environmentObject(holidayStore)
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
+                .preference(key: HideBottomMenuKey.self, value: true)
+        }
+        .sheet(isPresented: $showingScheduleSubcontractor) {
+            ScheduleSubcontractorView(project: project)
+                .environmentObject(subcontractorStore)
                 .preference(key: HideBottomMenuKey.self, value: true)
         }
         .sheet(isPresented: $showingEditProject) {
@@ -169,6 +191,9 @@ struct ProjectDetailView: View {
         .onChange(of: selectedWeek) { _, _ in
             loadWeekBookings()
         }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
+            loadWeekBookings()
+        }
         .onDisappear {
             // When leaving, the preference will automatically reset
             // because the view is removed from the hierarchy
@@ -192,9 +217,20 @@ struct ProjectDetailView: View {
     }
     
     private var overviewTiles: some View {
-        let availableTiles: [DetailTile] = userStore.isOperativeMode() 
-            ? [.tasks, .materials, .location]
-            : DetailTile.allCases
+        let availableTiles: [DetailTile] = {
+            if userStore.isOperativeMode() {
+                if userStore.canViewMaterials() {
+                    return userStore.canViewSiteAudit() ? [.tasks, .materials, .siteAudit, .location] : [.tasks, .materials, .location]
+                }
+                return userStore.canViewSiteAudit() ? [.tasks, .siteAudit, .location] : [.tasks, .location]
+            }
+            var tiles: [DetailTile] = [.scheduling]
+            if userStore.hasAdminAccess() {
+                tiles.append(.visibility)
+            }
+            tiles.append(contentsOf: [.tasks, .materials, .siteAudit, .settings, .location])
+            return tiles
+        }()
         
         return LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 16) {
             ForEach(availableTiles) { tile in
@@ -221,25 +257,47 @@ struct ProjectDetailView: View {
     
     @ViewBuilder
     private func tileDestination(for tile: DetailTile) -> some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                switch tile {
-                case .scheduling:
-                    schedulingContent
-                case .tasks:
-                    tasksContent
-                case .materials:
-                    materialsContent
-                case .settings:
-                    settingsContent
-                case .location:
-                    siteLocationSection
+        switch tile {
+        case .visibility:
+            ProjectVisibilitySettingsView(projectId: project.id)
+                .environmentObject(projectStore)
+                .environmentObject(userStore)
+        case .siteAudit:
+            SiteAuditProjectHubView(project: project)
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+        case .materials:
+            // Materials contains its own `List` and expandable layout; nesting it inside `ScrollView` gives the
+            // list an unbounded height and often collapses the rows to zero (looks like “nothing saved”).
+            MaterialsView(project: project)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+                .navigationTitle(tile.rawValue)
+                .navigationBarTitleDisplayMode(.inline)
+        case .scheduling, .tasks, .settings, .location:
+            ScrollView {
+                VStack(spacing: 20) {
+                    switch tile {
+                    case .scheduling:
+                        schedulingContent
+                    case .tasks:
+                        tasksContent
+                    case .settings:
+                        settingsContent
+                    case .location:
+                        siteLocationSection
+                    default:
+                        EmptyView()
+                    }
                 }
+                .padding()
             }
-            .padding()
+            .navigationTitle(tile.rawValue)
+            .navigationBarTitleDisplayMode(.inline)
         }
-        .navigationTitle(tile.rawValue)
-        .navigationBarTitleDisplayMode(.inline)
     }
     
     private var schedulingContent: some View {
@@ -348,34 +406,48 @@ struct ProjectDetailView: View {
     
     private func dayBubble(for date: Date) -> some View {
         let dayBookings = bookingsForDate(date)
+        let dayManagerBookings = managerBookingsForDate(date)
+        let daySubcontractorBookings = subcontractorBookingsForDate(date)
         let isToday = Calendar.current.isDateInToday(date)
         
-        let dayFormatter = DateFormatter()
-        dayFormatter.dateFormat = "EEEE" // Full day name (Monday, Tuesday, etc.)
-        let dayName = dayFormatter.string(from: date)
-        
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "d MMM" // Day number and month (1 Jan)
-        let dateString = dateFormatter.string(from: date)
+        let fullDateString = formattedFullDate(date)
         
         return VStack(alignment: .leading, spacing: 12) {
-            // Day of week at top left
+            // Full date label
             HStack {
-                Text(dayName)
+                Text(fullDateString)
                     .font(.headline)
                     .fontWeight(.semibold)
                     .foregroundColor(isToday ? .white : .primary)
                 
                 Spacer()
-                
-                Text(dateString)
-                    .font(.subheadline)
-                    .foregroundColor(isToday ? .white.opacity(0.9) : .secondary)
             }
             
-            // Operatives list
-            if !dayBookings.isEmpty {
+            // Managers, operatives and sub contractors list
+            if !dayManagerBookings.isEmpty || !dayBookings.isEmpty || !daySubcontractorBookings.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
+                    ForEach(dayManagerBookings, id: \.id) { booking in
+                        let managerName = userStore.organizationUsers.first(where: { $0.id == booking.userId })?.fullName ?? "Unknown Manager"
+                        let timeSlotText = booking.timeSlot.displayName
+                        
+                        HStack {
+                            Text(managerName)
+                                .font(.body)
+                                .foregroundColor(isToday ? .white : .primary)
+                            
+                            Spacer()
+                            
+                            Text(timeSlotText)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(isToday ? .white.opacity(0.9) : .secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(isToday ? Color.white.opacity(0.2) : Color.purple.opacity(0.15))
+                                .cornerRadius(6)
+                        }
+                    }
+                    
                     ForEach(dayBookings, id: \.id) { booking in
                         let operative = operativeStore.activeOperatives.first { $0.id == booking.operativeId }
                         let operativeName = operative?.name ?? "Unknown Operative"
@@ -395,6 +467,27 @@ struct ProjectDetailView: View {
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
                                 .background(isToday ? Color.white.opacity(0.2) : Color(.systemGray5))
+                                .cornerRadius(6)
+                        }
+                    }
+                    
+                    ForEach(daySubcontractorBookings, id: \.id) { booking in
+                        let subbie = subcontractorStore.subcontractors.first { $0.id == booking.subcontractorId }
+                        let subbieName = subbie?.name ?? "Unknown Sub Contractor"
+                        let timeSlotText = booking.timeSlot.displayName
+                        
+                        HStack {
+                            Text(subbieName)
+                                .font(.body)
+                                .foregroundColor(isToday ? .white : .primary)
+                            Spacer()
+                            Text(timeSlotText)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(isToday ? .white.opacity(0.9) : .secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(isToday ? Color.white.opacity(0.2) : Color.indigo.opacity(0.15))
                                 .cornerRadius(6)
                         }
                     }
@@ -421,21 +514,32 @@ struct ProjectDetailView: View {
     
     private func compactDayBubble(for date: Date) -> some View {
         let dayBookings = bookingsForDate(date)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "E"
-        let shortDay = formatter.string(from: date)
+        let dayManagerBookings = managerBookingsForDate(date)
+        let daySubcontractorBookings = subcontractorBookingsForDate(date)
         let isToday = Calendar.current.isDateInToday(date)
+        let fullDateString = formattedFullDate(date)
         
         return VStack(alignment: .leading, spacing: 6) {
-            Text(shortDay)
-                .font(.headline)
+            Text(fullDateString)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .lineLimit(2)
                 .foregroundColor(isToday ? .white : .primary)
-            Text(date, style: .date)
-                .font(.caption2)
-                .foregroundColor(isToday ? .white.opacity(0.8) : .secondary)
-            if let booking = dayBookings.first {
+            if let managerBooking = dayManagerBookings.first {
+                let managerName = userStore.organizationUsers.first(where: { $0.id == managerBooking.userId })?.fullName ?? "Manager"
+                Text(managerName)
+                    .font(.caption2)
+                    .lineLimit(2)
+                    .foregroundColor(isToday ? .white : .primary)
+            } else if let booking = dayBookings.first {
                 let operative = operativeStore.activeOperatives.first { $0.id == booking.operativeId }
                 Text(operative?.name ?? "Unassigned")
+                    .font(.caption2)
+                    .lineLimit(2)
+                    .foregroundColor(isToday ? .white : .primary)
+            } else if let subbieBooking = daySubcontractorBookings.first {
+                let subbie = subcontractorStore.subcontractors.first { $0.id == subbieBooking.subcontractorId }
+                Text(subbie?.name ?? "Sub Contractor")
                     .font(.caption2)
                     .lineLimit(2)
                     .foregroundColor(isToday ? .white : .primary)
@@ -516,15 +620,31 @@ struct ProjectDetailView: View {
     // MARK: - Schedule Operative Button
     
     private var scheduleOperativeButton: some View {
-        Button(action: { showingScheduleOperative = true }) {
-            Text("Schedule Operative")
-                .font(.headline)
-                .fontWeight(.semibold)
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.theme.primary)
-                .cornerRadius(12)
+        HStack(spacing: 10) {
+            Button(action: { showingScheduleOperative = true }) {
+                Text("Schedule Operative")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.theme.primary)
+                    .cornerRadius(12)
+            }
+            Button(action: { showingScheduleSubcontractor = true }) {
+                Text("Schedule Sub Contractor")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.indigo)
+                    .cornerRadius(12)
+            }
         }
     }
     
@@ -583,7 +703,7 @@ struct ProjectDetailView: View {
         if userStore.isOperativeMode() {
             // Operative mode: only show tasks assigned to this operative
             if let currentUserEmail = userStore.currentUser?.email,
-               let operative = operativeStore.allOperatives.first(where: { $0.email == currentUserEmail }) {
+               let operative = operativeStore.allOperatives.first(where: { $0.email.lowercased() == currentUserEmail.lowercased() }) {
                 tasks = tasks.filter { task in
                     // Check both legacy single assignment and new multiple assignments
                     task.allAssignedOperativeIds.contains(operative.id)
@@ -687,6 +807,22 @@ struct ProjectDetailView: View {
         }.sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
     }
     
+    private func subcontractorBookingsForDate(_ date: Date) -> [SubcontractorBooking] {
+        subcontractorStore.bookings.filter { booking in
+            Calendar.current.isDate(booking.date, inSameDayAs: date) &&
+            booking.projectId == project.id &&
+            (booking.status == .confirmed || booking.status == .tentative)
+        }.sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+    }
+    
+    private func managerBookingsForDate(_ date: Date) -> [ManagerSiteBooking] {
+        managerScheduleStore.managerSiteBookings.filter { booking in
+            Calendar.current.isDate(booking.date, inSameDayAs: date) &&
+            booking.locationId == project.id &&
+            (booking.locationType == .project || booking.locationType == .smallWork)
+        }.sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+    }
+    
     // MARK: - Helper Methods
     
     private func changeWeek(by weeks: Int) {
@@ -697,6 +833,28 @@ struct ProjectDetailView: View {
     
     private func loadWeekBookings() {
         bookingStore.loadData()
+        managerScheduleStore.loadData()
+        Task { await subcontractorStore.loadData() }
+    }
+    
+    private func formattedFullDate(_ date: Date) -> String {
+        let calendar = Calendar.current
+        let day = calendar.component(.day, from: date)
+        let weekdayFormatter = DateFormatter()
+        weekdayFormatter.dateFormat = "EEEE"
+        let monthFormatter = DateFormatter()
+        monthFormatter.dateFormat = "MMMM"
+        return "\(weekdayFormatter.string(from: date)) \(day)\(ordinalSuffix(for: day)) \(monthFormatter.string(from: date))"
+    }
+    
+    private func ordinalSuffix(for day: Int) -> String {
+        if (11...13).contains(day % 100) { return "th" }
+        switch day % 10 {
+        case 1: return "st"
+        case 2: return "nd"
+        case 3: return "rd"
+        default: return "th"
+        }
     }
     
     private var weekViewPreferenceKey: String {
@@ -884,12 +1042,6 @@ struct ProjectDetailView: View {
     
     // MARK: - Materials Content
     
-    private var materialsContent: some View {
-        MaterialsView(project: project)
-            .environmentObject(userStore)
-            .environmentObject(firebaseBackend)
-    }
-    
     private var settingsContent: some View {
         VStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 8) {
@@ -906,17 +1058,19 @@ struct ProjectDetailView: View {
             .cornerRadius(12)
             .shadow(color: .black.opacity(0.05), radius: 3, x: 0, y: 2)
             
-            Button(action: { showingEditProject = true }) {
-                HStack {
-                    Image(systemName: "square.and.pencil")
-                    Text("Edit Project Details")
+            if canEditCurrentWorkItem {
+                Button(action: { showingEditProject = true }) {
+                    HStack {
+                        Image(systemName: "square.and.pencil")
+                        Text("Edit Project Details")
+                    }
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.theme.primary)
+                    .cornerRadius(12)
                 }
-                .font(.headline)
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.theme.primary)
-                .cornerRadius(12)
             }
             
             if let notes = project.notes, !notes.isEmpty {
@@ -932,6 +1086,167 @@ struct ProjectDetailView: View {
                 .cornerRadius(12)
             }
         }
+    }
+    
+    private var canEditCurrentWorkItem: Bool {
+        guard let u = userStore.currentUser else { return false }
+        if u.permissions.operativeMode { return false }
+        if u.isSuperAdmin || u.permissions.adminAccess { return true }
+        guard u.permissions.manager else { return false }
+        return project.jobType == .smallWorks ? u.permissions.smallWorks : u.permissions.projects
+    }
+}
+
+private struct ProjectVisibilitySettingsView: View {
+    @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var userStore: UserStore
+    
+    let projectId: UUID
+    @State private var selectedTab: VisibilityTab = .managers
+    @State private var searchText = ""
+    @State private var filterMode: VisibilityFilterMode = .active
+    @State private var showSearch = false
+    
+    private enum VisibilityTab: String, CaseIterable, Identifiable {
+        case managers = "Managers"
+        case operatives = "Operatives"
+        var id: String { rawValue }
+    }
+    
+    private enum VisibilityFilterMode: String, CaseIterable, Identifiable {
+        case all = "All"
+        case active = "Active"
+        case inactive = "Inactive"
+        case pending = "Pending"
+        var id: String { rawValue }
+    }
+    
+    private var project: Project? {
+        projectStore.projects.first(where: { $0.id == projectId })
+    }
+    
+    private var managers: [AppUser] {
+        filteredUsers(base: userStore.organizationUsers.filter { user in
+            !user.permissions.operativeMode && user.permissions.manager
+        })
+    }
+    
+    private var operatives: [AppUser] {
+        filteredUsers(base: userStore.organizationUsers.filter { $0.permissions.operativeMode })
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("View")
+                .font(.title2.bold())
+            Text("View can be used to hide projects or small works from users, where access to site audits or materials is prohibited for that user on that particular job.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            
+            Picker("Role", selection: $selectedTab) {
+                ForEach(VisibilityTab.allCases) { tab in
+                    Text(tab.rawValue).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            
+            HStack(spacing: 12) {
+                Menu {
+                    ForEach(VisibilityFilterMode.allCases) { mode in
+                        Button(mode.rawValue) { filterMode = mode }
+                    }
+                } label: {
+                    Label("Filter: \(filterMode.rawValue)", systemImage: "line.3.horizontal.decrease.circle")
+                }
+                .buttonStyle(.bordered)
+                
+                Button {
+                    withAnimation { showSearch.toggle() }
+                    if !showSearch { searchText = "" }
+                } label: {
+                    Label("Search", systemImage: "magnifyingglass")
+                }
+                .buttonStyle(.bordered)
+            }
+            
+            if showSearch {
+                TextField("Search user", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+            }
+            
+            List {
+                ForEach(selectedTab == .managers ? managers : operatives) { user in
+                    Button {
+                        toggleVisibility(for: user)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(user.fullName.isEmpty ? user.email : user.fullName)
+                                    .foregroundColor(.primary)
+                                Text(user.email)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: isVisible(user) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(isVisible(user) ? .blue : .gray)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .listStyle(.plain)
+        }
+        .padding()
+        .navigationTitle("View")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+    
+    private func filteredUsers(base: [AppUser]) -> [AppUser] {
+        base.filter { user in
+            switch filterMode {
+            case .all:
+                return true
+            case .active:
+                return user.passwordSet && user.isActive
+            case .inactive:
+                return user.passwordSet && !user.isActive
+            case .pending:
+                return !user.passwordSet
+            }
+        }
+        .filter { user in
+            searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            user.fullName.localizedCaseInsensitiveContains(searchText) ||
+            user.email.localizedCaseInsensitiveContains(searchText)
+        }
+        .sorted { ($0.fullName.isEmpty ? $0.email : $0.fullName) < ($1.fullName.isEmpty ? $1.email : $1.fullName) }
+    }
+    
+    private func isVisible(_ user: AppUser) -> Bool {
+        guard let project else { return false }
+        if selectedTab == .managers {
+            return !project.hiddenManagerUserIds.contains(user.id)
+        }
+        return !project.hiddenOperativeUserIds.contains(user.id)
+    }
+    
+    private func toggleVisibility(for user: AppUser) {
+        guard var project else { return }
+        if selectedTab == .managers {
+            if project.hiddenManagerUserIds.contains(user.id) {
+                project.hiddenManagerUserIds.remove(user.id)
+            } else {
+                project.hiddenManagerUserIds.insert(user.id)
+            }
+        } else {
+            if project.hiddenOperativeUserIds.contains(user.id) {
+                project.hiddenOperativeUserIds.remove(user.id)
+            } else {
+                project.hiddenOperativeUserIds.insert(user.id)
+            }
+        }
+        Task { await projectStore.updateProject(project) }
     }
 }
 
@@ -1320,181 +1635,10 @@ private struct AddProjectTaskView: View {
     var body: some View {
         NavigationView {
             Form {
-                Section {
-                    ForEach($taskItems) { $item in
-                        VStack(alignment: .leading, spacing: 8) {
-                            TextField("Item title", text: $item.title)
-                            TextField("Description (optional)", text: $item.description, axis: .vertical)
-                                .lineLimit(2...4)
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    Button(action: {
-                        taskItems.append(TaskItemForm())
-                    }) {
-                        HStack {
-                            Image(systemName: "plus.circle.fill")
-                                .foregroundColor(.green)
-                                .font(.title2)
-                            Text("Add item")
-                                .foregroundColor(.green)
-                        }
-                    }
-                } header: {
-                    Text("Task items")
-                } footer: {
-                    Text("Add one or more items. Assignees must tick all items (when more than one) before marking the task complete.")
-                }
-                
-                Section("Assignments") {
-                    Picker("Assign To", selection: $assignmentType) {
-                        ForEach(AssignmentType.allCases, id: \.self) { type in
-                            Text(type.rawValue).tag(type)
-                        }
-                    }
-                    
-                    if assignmentType == .operative {
-                        Button(action: {
-                            showingOperativeSelection = true
-                        }) {
-                            HStack {
-                                Text("Select Operatives")
-                                Spacer()
-                                if selectedOperatives.isEmpty {
-                                    Text("None selected")
-                                        .foregroundColor(.secondary)
-                                } else {
-                                    Text("\(selectedOperatives.count) selected")
-                                        .foregroundColor(.blue)
-                                }
-                                Image(systemName: "chevron.right")
-                                    .foregroundColor(.secondary)
-                                    .font(.caption)
-                            }
-                        }
-                        
-                        if !selectedOperatives.isEmpty {
-                            ForEach(Array(selectedOperatives), id: \.self) { operativeId in
-                                if let operative = operativeStore.allOperatives.first(where: { $0.id == operativeId }) {
-                                    HStack {
-                                        Text(operative.name)
-                                        Spacer()
-                                        Button(action: {
-                                            selectedOperatives.remove(operativeId)
-                                        }) {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .foregroundColor(.red)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        Button(action: {
-                            showingManagerSelection = true
-                        }) {
-                            HStack {
-                                Text("Select Managers")
-                                    .foregroundColor(selectedManagers.isEmpty ? .red : .primary)
-                                Spacer()
-                                if selectedManagers.isEmpty {
-                                    Text("Required")
-                                        .foregroundColor(.red)
-                                } else {
-                                    Text("\(selectedManagers.count) selected")
-                                        .foregroundColor(.blue)
-                                }
-                                Image(systemName: "chevron.right")
-                                    .foregroundColor(.secondary)
-                                    .font(.caption)
-                            }
-                        }
-                        
-                        if !selectedManagers.isEmpty {
-                            ForEach(Array(selectedManagers), id: \.self) { managerId in
-                                if let manager = operativeStore.managers.first(where: { $0.id == managerId }) {
-                                    HStack {
-                                        Text(manager.fullName)
-                                        Spacer()
-                                        Button(action: {
-                                            selectedManagers.remove(managerId)
-                                        }) {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .foregroundColor(.red)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                Section("Attach Images") {
-                    Button(action: {
-                        showingImagePicker = true
-                    }) {
-                        Label("Add Images", systemImage: "photo")
-                    }
-                    
-                    if !selectedImages.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 12) {
-                                ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
-                                    ZStack(alignment: .topTrailing) {
-                                        Image(uiImage: image)
-                                            .resizable()
-                                            .scaledToFill()
-                                            .frame(width: 100, height: 100)
-                                            .clipped()
-                                            .cornerRadius(8)
-                                        
-                                        Button(action: {
-                                            selectedImages.remove(at: index)
-                                        }) {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .foregroundColor(.red)
-                                                .background(Color.white)
-                                                .clipShape(Circle())
-                                        }
-                                        .padding(4)
-                                    }
-                                }
-                            }
-                            .padding(.horizontal)
-                        }
-                    }
-                    
-                    if isUploadingImages {
-                        ProgressView(value: uploadProgress)
-                        Text("Uploading images...")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                Section("Attach File") {
-                    if let fileName = selectedFileName {
-                        HStack {
-                            Image(systemName: "doc.fill")
-                                .foregroundColor(.blue)
-                            Text(fileName)
-                                .font(.subheadline)
-                            Spacer()
-                            Button("Remove") {
-                                selectedFile = nil
-                                selectedFileName = nil
-                            }
-                            .foregroundColor(.red)
-                        }
-                    } else {
-                        Button(action: {
-                            showingFilePicker = true
-                        }) {
-                            Label("Add File (Max 10MB)", systemImage: "paperclip")
-                        }
-                    }
-                    
-                }
+                taskItemsSection
+                assignmentsSection
+                attachImagesSection
+                attachFileSection
                 .fileImporter(
                     isPresented: $showingFilePicker,
                     allowedContentTypes: [UTType.item, UTType.image, UTType.pdf, UTType.text, UTType.data],
@@ -1549,6 +1693,189 @@ private struct AddProjectTaskView: View {
             } message: {
                 if let errorMessage = errorMessage {
                     Text(errorMessage)
+                }
+            }
+        }
+    }
+
+    private var taskItemsSection: some View {
+        Section {
+            ForEach($taskItems) { $item in
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("Item title", text: $item.title)
+                    TextField("Description (optional)", text: $item.description, axis: .vertical)
+                        .lineLimit(2...4)
+                }
+                .padding(.vertical, 4)
+            }
+            Button(action: {
+                taskItems.append(TaskItemForm())
+            }) {
+                HStack {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.title2)
+                    Text("Add item")
+                        .foregroundColor(.green)
+                }
+            }
+        } header: {
+            Text("Task items")
+        } footer: {
+            Text("Add one or more items. Assignees must tick all items (when more than one) before marking the task complete.")
+        }
+    }
+
+    private var assignmentsSection: some View {
+        Section("Assignments") {
+            Picker("Assign To", selection: $assignmentType) {
+                ForEach(AssignmentType.allCases, id: \.self) { type in
+                    Text(type.rawValue).tag(type)
+                }
+            }
+
+            if assignmentType == .operative {
+                Button(action: {
+                    showingOperativeSelection = true
+                }) {
+                    HStack {
+                        Text("Select Operatives")
+                        Spacer()
+                        if selectedOperatives.isEmpty {
+                            Text("None selected")
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("\(selectedOperatives.count) selected")
+                                .foregroundColor(.blue)
+                        }
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
+                }
+
+                if !selectedOperatives.isEmpty {
+                    ForEach(Array(selectedOperatives), id: \.self) { operativeId in
+                        if let operative = operativeStore.allOperatives.first(where: { $0.id == operativeId }) {
+                            HStack {
+                                Text(operative.name)
+                                Spacer()
+                                Button(action: {
+                                    selectedOperatives.remove(operativeId)
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.red)
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                Button(action: {
+                    showingManagerSelection = true
+                }) {
+                    HStack {
+                        Text("Select Managers")
+                            .foregroundColor(selectedManagers.isEmpty ? .red : .primary)
+                        Spacer()
+                        if selectedManagers.isEmpty {
+                            Text("Required")
+                                .foregroundColor(.red)
+                        } else {
+                            Text("\(selectedManagers.count) selected")
+                                .foregroundColor(.blue)
+                        }
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
+                }
+
+                if !selectedManagers.isEmpty {
+                    ForEach(Array(selectedManagers), id: \.self) { managerId in
+                        if let manager = operativeStore.managers.first(where: { $0.id == managerId }) {
+                            HStack {
+                                Text(manager.fullName)
+                                Spacer()
+                                Button(action: {
+                                    selectedManagers.remove(managerId)
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.red)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var attachImagesSection: some View {
+        Section("Attach Images") {
+            Button(action: {
+                showingImagePicker = true
+            }) {
+                Label("Add Images", systemImage: "photo")
+            }
+
+            if !selectedImages.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
+                            ZStack(alignment: .topTrailing) {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 100, height: 100)
+                                    .clipped()
+                                    .cornerRadius(8)
+
+                                Button(action: {
+                                    selectedImages.remove(at: index)
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.red)
+                                        .background(Color.white)
+                                        .clipShape(Circle())
+                                }
+                                .padding(4)
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
+
+            if isUploadingImages {
+                ProgressView(value: uploadProgress)
+                Text("Uploading images...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private var attachFileSection: some View {
+        Section("Attach File") {
+            if let fileName = selectedFileName {
+                HStack {
+                    Image(systemName: "doc.fill")
+                        .foregroundColor(.blue)
+                    Text(fileName)
+                        .font(.subheadline)
+                    Spacer()
+                    Button("Remove") {
+                        selectedFile = nil
+                        selectedFileName = nil
+                    }
+                    .foregroundColor(.red)
+                }
+            } else {
+                Button(action: {
+                    showingFilePicker = true
+                }) {
+                    Label("Add File (Max 10MB)", systemImage: "paperclip")
                 }
             }
         }
@@ -1946,12 +2273,14 @@ struct TaskCompletionPopupView: View {
     @EnvironmentObject var taskStore: ProjectTaskStore
     
     @State private var isMarkedComplete = false
-    @State private var selectedImages: [UIImage] = []
+    @State private var selectedImages: [TaskCapturedImage] = []
     @State private var selectedFiles: [URL] = []
+    @State private var showingCameraPicker = false
     @State private var showingImagePicker = false
     @State private var showingFilePicker = false
     @State private var isUploading = false
     @State private var uploadProgress: Double = 0
+    @State private var validationMessage: String?
     
     private var displayTask: ProjectTask {
         taskStore.tasks.first(where: { $0.id == task.id }) ?? task
@@ -2011,22 +2340,39 @@ struct TaskCompletionPopupView: View {
                 
                 Section("Upload Image") {
                     Button(action: {
+                        showingCameraPicker = true
+                    }) {
+                        Label("Take Photos", systemImage: "camera.fill")
+                    }
+
+                    Button(action: {
                         showingImagePicker = true
                     }) {
-                        Label("Add Image", systemImage: "photo")
+                        Label("Choose From Library", systemImage: "photo")
                     }
                     
                     if !selectedImages.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 12) {
-                                ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
+                                ForEach(Array(selectedImages.enumerated()), id: \.element.id) { index, captured in
                                     ZStack(alignment: .topTrailing) {
-                                        Image(uiImage: image)
+                                        Image(uiImage: captured.image)
                                             .resizable()
                                             .scaledToFill()
                                             .frame(width: 100, height: 100)
                                             .clipped()
                                             .cornerRadius(8)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Spacer()
+                                            Text(Self.watermarkText(for: captured.capturedAt))
+                                                .font(.caption2)
+                                                .foregroundColor(.white)
+                                                .padding(4)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .background(Color.black.opacity(0.35))
+                                        }
+                                        .frame(width: 100, height: 100)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
                                         
                                         Button(action: {
                                             selectedImages.remove(at: index)
@@ -2042,6 +2388,12 @@ struct TaskCompletionPopupView: View {
                             }
                             .padding(.horizontal)
                         }
+                    }
+
+                    if isMarkedComplete && selectedImages.isEmpty {
+                        Text("At least 1 completion photo is required.")
+                            .font(.caption)
+                            .foregroundColor(.red)
                     }
                 }
                 
@@ -2092,11 +2444,21 @@ struct TaskCompletionPopupView: View {
                     Button("Submit") {
                         submitCompletion()
                     }
-                    .disabled(!isMarkedComplete || isUploading || (displayTask.isMultiItemTask && !displayTask.allItemsTicked))
+                    .disabled(
+                        !isMarkedComplete ||
+                        isUploading ||
+                        selectedImages.isEmpty ||
+                        (displayTask.isMultiItemTask && !displayTask.allItemsTicked)
+                    )
+                }
+            }
+            .sheet(isPresented: $showingCameraPicker) {
+                TaskCameraPicker { image in
+                    selectedImages.append(TaskCapturedImage(image: image, capturedAt: Date()))
                 }
             }
             .sheet(isPresented: $showingImagePicker) {
-                ImagePicker(images: $selectedImages)
+                CompletionImagePicker(images: $selectedImages)
             }
             .fileImporter(
                 isPresented: $showingFilePicker,
@@ -2104,6 +2466,14 @@ struct TaskCompletionPopupView: View {
                 allowsMultipleSelection: true
             ) { result in
                 handleFileSelection(result)
+            }
+            .alert("Cannot Submit Task", isPresented: Binding(
+                get: { validationMessage != nil },
+                set: { isPresented in if !isPresented { validationMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(validationMessage ?? "")
             }
         }
     }
@@ -2147,6 +2517,10 @@ struct TaskCompletionPopupView: View {
     
     private func submitCompletion() {
         guard isMarkedComplete else { return }
+        guard !selectedImages.isEmpty else {
+            validationMessage = "Please take or upload at least 1 photo before completing this task."
+            return
+        }
         
         isUploading = true
         uploadProgress = 0
@@ -2155,13 +2529,15 @@ struct TaskCompletionPopupView: View {
             let completedBy = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
             var imageURLs: [String] = []
             var fileURLs: [String] = []
+            let totalUploads = max(selectedImages.count + selectedFiles.count, 1)
             
             // Upload images
-            for image in selectedImages {
-                if let url = await uploadImage(image) {
+            for captured in selectedImages {
+                let stamped = addTimestampWatermark(to: captured.image, at: captured.capturedAt)
+                if let url = await uploadImage(stamped) {
                     imageURLs.append(url)
                 }
-                uploadProgress += 0.5 / Double(selectedImages.count + selectedFiles.count)
+                uploadProgress += 1.0 / Double(totalUploads)
             }
             
             // Upload files
@@ -2169,7 +2545,7 @@ struct TaskCompletionPopupView: View {
                 if let url = await uploadFile(file) {
                     fileURLs.append(url)
                 }
-                uploadProgress += 0.5 / Double(selectedImages.count + selectedFiles.count)
+                uploadProgress += 1.0 / Double(totalUploads)
             }
             
             uploadProgress = 1.0
@@ -2210,6 +2586,46 @@ struct TaskCompletionPopupView: View {
             print("🔥🔥🔥 DEBUG: Error uploading completion file: \(error.localizedDescription)")
             return nil
         }
+    }
+    
+    private func addTimestampWatermark(to image: UIImage, at date: Date) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: image.size)
+        let text = Self.watermarkText(for: date)
+        let scale = max(image.size.width, image.size.height) / 1200.0
+        let fontSize = max(20, 28 * scale)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.boldSystemFont(ofSize: fontSize),
+            .foregroundColor: UIColor.white
+        ]
+        let textSize = text.size(withAttributes: attributes)
+        let padding: CGFloat = max(20, 24 * scale)
+        let backgroundPadding: CGFloat = max(10, 12 * scale)
+        
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: image.size))
+            let backgroundRect = CGRect(
+                x: padding - backgroundPadding,
+                y: image.size.height - textSize.height - padding - backgroundPadding,
+                width: textSize.width + backgroundPadding * 2,
+                height: textSize.height + backgroundPadding * 2
+            )
+            UIBezierPath(roundedRect: backgroundRect, cornerRadius: 8).addClip()
+            UIColor.black.withAlphaComponent(0.2).setFill()
+            UIRectFill(backgroundRect)
+            text.draw(
+                at: CGPoint(
+                    x: padding,
+                    y: image.size.height - textSize.height - padding
+                ),
+                withAttributes: attributes
+            )
+        }
+    }
+    
+    private static func watermarkText(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "dd MMM yyyy HH:mm:ss"
+        return formatter.string(from: date)
     }
 }
 
@@ -2254,6 +2670,102 @@ private struct ImagePicker: UIViewControllerRepresentable {
                     }
                 }
             }
+        }
+    }
+}
+
+private struct CompletionImagePicker: UIViewControllerRepresentable {
+    @Binding var images: [TaskCapturedImage]
+    @Environment(\.dismiss) private var dismiss
+    
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration()
+        config.filter = .images
+        config.selectionLimit = 10
+        
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let parent: CompletionImagePicker
+        
+        init(_ parent: CompletionImagePicker) {
+            self.parent = parent
+        }
+        
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            picker.dismiss(animated: true)
+            
+            for result in results {
+                result.itemProvider.loadObject(ofClass: UIImage.self) { object, _ in
+                    if let image = object as? UIImage {
+                        DispatchQueue.main.async {
+                            self.parent.images.append(TaskCapturedImage(image: image, capturedAt: Date()))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct TaskCapturedImage: Identifiable {
+    let id = UUID()
+    let image: UIImage
+    let capturedAt: Date
+}
+
+private struct TaskCameraPicker: UIViewControllerRepresentable {
+    let onCapture: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+    
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            picker.sourceType = .camera
+            picker.cameraCaptureMode = .photo
+        } else {
+            // Simulator fallback: keep flow usable by selecting from library.
+            picker.sourceType = .photoLibrary
+        }
+        picker.delegate = context.coordinator
+        picker.allowsEditing = false
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let parent: TaskCameraPicker
+        
+        init(_ parent: TaskCameraPicker) {
+            self.parent = parent
+        }
+        
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
+        
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            if let image = info[.originalImage] as? UIImage {
+                parent.onCapture(image)
+            }
+            parent.dismiss()
         }
     }
 }
@@ -2586,7 +3098,7 @@ private struct CompletedTaskDetailView: View {
                             .padding(.horizontal)
                             .padding(.top)
                         
-                        if task.completionImages.isEmpty {
+                        if displayTask.completionImages.isEmpty {
                             Text("N/A")
                                 .font(.body)
                                 .foregroundColor(.secondary)
@@ -2596,16 +3108,8 @@ private struct CompletedTaskDetailView: View {
                         } else {
                             ScrollView(.horizontal, showsIndicators: true) {
                                 HStack(spacing: 16) {
-                                    ForEach(task.completionImages, id: \.self) { imageURL in
-                                        AsyncImage(url: URL(string: imageURL)) { image in
-                                            image
-                                                .resizable()
-                                                .scaledToFill()
-                                        } placeholder: {
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .fill(Color(.systemGray5))
-                                                .overlay(ProgressView())
-                                        }
+                                    ForEach(displayTask.completionImages, id: \.self) { imageURL in
+                                        TaskCompletionImageView(urlString: imageURL)
                                         .frame(width: 200, height: 200)
                                         .clipped()
                                         .cornerRadius(12)

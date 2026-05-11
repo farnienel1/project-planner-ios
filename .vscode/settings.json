@@ -1,0 +1,32 @@
+{
+  "files.watcherExclude": {
+    "**/.git/**": true,
+    "**/.DS_Store": true,
+    "**/node_modules/**": true,
+    "**/.next/**": true,
+    "**/dist/**": true,
+    "**/build/**": true,
+    "**/DerivedData/**": true,
+    "**/*.xcresult/**": true,
+    "**/*.app/**": true,
+    "**/*.dSYM/**": true,
+    "**/Pods/**": true,
+    "**/Project Planner_backup_*/**": true
+  },
+  "search.exclude": {
+    "**/.git": true,
+    "**/node_modules": true,
+    "**/.next": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/DerivedData": true,
+    "**/*.xcresult": true,
+    "**/*.app": true,
+    "**/*.dSYM": true,
+    "**/Pods": true,
+    "**/Project Planner_backup_*": true
+  },
+  "files.exclude": {
+    "**/.DS_Store": true
+  }
+}

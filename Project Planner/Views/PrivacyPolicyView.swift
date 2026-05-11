@@ -13,7 +13,7 @@ struct PrivacyPolicyView: View {
     var onAccept: (() -> Void)?
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     // Header
@@ -183,6 +183,7 @@ struct PrivacyPolicyView: View {
                     }
                 }
             }
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("Privacy Policy")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -195,6 +196,8 @@ struct PrivacyPolicyView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemGroupedBackground))
     }
 }
 

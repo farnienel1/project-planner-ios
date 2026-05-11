@@ -16,19 +16,43 @@ struct AddUserView: View {
         case managerAddingOperative
     }
     
+    enum InvitedAccountType: String, CaseIterable, Identifiable {
+        case admin
+        case manager
+        case operative
+        
+        var id: String { rawValue }
+        
+        var title: String {
+            switch self {
+            case .admin: return "Administrator"
+            case .manager: return "Manager"
+            case .operative: return "Operative"
+            }
+        }
+    }
+    
     let mode: AddUserMode
     
     @State private var currentStep = 1
+    @State private var invitedAccountType: InvitedAccountType = .manager
     @State private var firstName = ""
     @State private var surname = ""
     @State private var email = ""
     @State private var mobileNumber = ""
     @State private var permissions = UserPermissions()
+    @State private var assignedManagerUserId: String?
+    @State private var operativeDayRateText = ""
+    @State private var managerDayRateText = ""
     @State private var isCreating = false
     @State private var showSuccess = false
     @State private var errorMessage: String?
     
-    private let totalSteps = 4
+    private var totalSteps: Int {
+        mode == .managerAddingOperative ? 3 : 4
+    }
+    
+    private var finalReviewStep: Int { totalSteps }
     
     init(mode: AddUserMode = .admin) {
         self.mode = mode
@@ -37,17 +61,14 @@ struct AddUserView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Progress Slider
                 progressSlider
                 
-                // Content
                 if showSuccess {
                     successView
                 } else {
                     stepContent
                 }
                 
-                // Error Message
                 if let errorMessage = errorMessage {
                     Text(errorMessage)
                         .foregroundColor(.red)
@@ -63,10 +84,17 @@ struct AddUserView: View {
                     }
                 }
             }
+            .onAppear {
+                if mode == .managerAddingOperative {
+                    invitedAccountType = .operative
+                    applyPermissionsForInvitedType()
+                    assignedManagerUserId = userStore.currentUser?.id
+                }
+            }
         }
     }
     
-    // MARK: - Progress Slider
+    // MARK: - Progress
     
     private var progressSlider: some View {
         VStack(spacing: 16) {
@@ -94,11 +122,19 @@ struct AddUserView: View {
     }
     
     private var stepTitle: String {
+        if mode == .managerAddingOperative {
+            switch currentStep {
+            case 1: return "User Details"
+            case 2: return "Operative"
+            case 3: return "Review"
+            default: return ""
+            }
+        }
         switch currentStep {
-        case 1: return "User Details"
-        case 2: return mode == .managerAddingOperative ? "Operative" : "Permissions"
-        case 3: return "Review"
-        case 4: return "Success"
+        case 1: return "Account Type"
+        case 2: return "User Details"
+        case 3: return "Permissions"
+        case 4: return "Review"
         default: return ""
         }
     }
@@ -109,21 +145,26 @@ struct AddUserView: View {
     private var stepContent: some View {
         ScrollView {
             VStack(spacing: 24) {
-                switch currentStep {
-                case 1:
-                    step1View
-                case 2:
-                    step2View
-                case 3:
-                    step3View
-                default:
-                    EmptyView()
+                if mode == .managerAddingOperative {
+                    switch currentStep {
+                    case 1: stepDetailsOnly
+                    case 2: stepManagerOperativeSummary
+                    case 3: stepReview
+                    default: EmptyView()
+                    }
+                } else {
+                    switch currentStep {
+                    case 1: stepAccountType
+                    case 2: stepDetailsWithManager
+                    case 3: stepPermissionsControlled
+                    case 4: stepReview
+                    default: EmptyView()
+                    }
                 }
             }
             .padding(20)
         }
         
-        // Navigation Buttons
         VStack(spacing: 12) {
             Divider()
             
@@ -139,15 +180,17 @@ struct AddUserView: View {
                 
                 Spacer()
                 
-                Button(currentStep == 3 ? (isCreating ? "Creating..." : "Create User") : "Next") {
-                    print("🔥🔥🔥 DEBUG: Button tapped - currentStep: \(currentStep), totalSteps: \(totalSteps)")
-                    print("🔥🔥🔥 DEBUG: canProceed: \(canProceed)")
-                    if currentStep == 3 {
-                        print("🔥🔥🔥 DEBUG: Calling createUser()")
+                Button(currentStep == finalReviewStep ? (isCreating ? "Creating..." : "Create User") : "Next") {
+                    if currentStep == finalReviewStep {
                         createUser()
                     } else {
-                        print("🔥🔥🔥 DEBUG: Moving to next step")
                         withAnimation {
+                            if mode == .admin && currentStep == 1 {
+                                applyPermissionsForInvitedType()
+                                if invitedAccountType == .operative {
+                                    assignedManagerUserId = nil
+                                }
+                            }
                             currentStep += 1
                         }
                     }
@@ -156,11 +199,6 @@ struct AddUserView: View {
                 .tint(.indigo)
                 .disabled(!canProceed || isCreating)
                 .opacity((canProceed && !isCreating) ? 1.0 : 0.5)
-                .onChange(of: isCreating) { oldValue, newValue in
-                    if !newValue && errorMessage == nil && !showSuccess {
-                        // Reset if creation failed silently
-                    }
-                }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -168,9 +206,56 @@ struct AddUserView: View {
         .background(Color(.systemBackground))
     }
     
-    // MARK: - Step 1: User Details
+    // MARK: - Steps
     
-    private var step1View: some View {
+    private var stepAccountType: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Choose what kind of account this will be. Super admin is never assigned from here.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            
+            Picker("Account type", selection: $invitedAccountType) {
+                ForEach(InvitedAccountType.allCases) { t in
+                    Text(t.title).tag(t)
+                }
+            }
+            .pickerStyle(.inline)
+            .onChange(of: invitedAccountType) { _, _ in
+                applyPermissionsForInvitedType()
+                if invitedAccountType != .operative {
+                    assignedManagerUserId = nil
+                }
+            }
+        }
+    }
+    
+    private var stepDetailsOnly: some View {
+        stepDetailsWithManagerWithoutManagerPicker
+    }
+    
+    private var stepDetailsWithManager: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            stepDetailsWithManagerWithoutManagerPicker
+            
+            if invitedAccountType == .operative {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Line manager")
+                        .font(.headline)
+                    Text("Holiday requests from this operative will go to this manager (and organisation admins).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Picker("Manager", selection: $assignedManagerUserId) {
+                        Text("Select manager…").tag(nil as String?)
+                        ForEach(lineManagerCandidates, id: \.id) { u in
+                            Text(u.fullName.isEmpty ? u.email : u.fullName).tag(Optional(u.id))
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private var stepDetailsWithManagerWithoutManagerPicker: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Enter the user's basic information")
                 .font(.subheadline)
@@ -207,163 +292,255 @@ struct AddUserView: View {
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.phonePad)
                 }
-            }
-        }
-    }
-    
-    // MARK: - Step 2: Permissions
-    
-    private var step2View: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            if mode == .managerAddingOperative {
-                Text("Managers can only add operatives.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            } else {
-                Text("Select what this user can access")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-            
-            VStack(spacing: 16) {
-                if mode == .managerAddingOperative {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Image(systemName: "person.fill")
-                                .foregroundColor(.indigo)
-                            Text("Operative Mode")
-                                .font(.headline)
-                        }
-                        Text("This user will be added as an operative with a limited view of the app.")
-                            .font(.caption)
+                
+                if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Day rate (optional)")
+                            .font(.headline)
+                        TextField("e.g. 250", text: dayRateBindingForSelectedType)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                            .keyboardType(.decimalPad)
+                        Text(invitedAccountType == .manager ? "Optional for managers. Leave blank if not needed." : "Stored on the operative profile when their account is linked.")
+                            .font(.caption2)
                             .foregroundColor(.secondary)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(Color.indigo.opacity(0.08))
-                    .cornerRadius(12)
-                    .onAppear {
-                        permissions.operativeMode = true
-                        permissions.adminAccess = false
-                        permissions.manager = false
-                        permissions.operatives = false
-                        permissions.projects = true
-                        permissions.smallWorks = true
-                    }
-                } else {
-                PermissionToggle(
-                    title: "Admin Access",
-                    description: "Can add and manage users.",
-                    isOn: $permissions.adminAccess,
-                    isDisabled: permissions.operativeMode
-                )
-                .onChange(of: permissions.adminAccess) { oldValue, newValue in
-                    if newValue && permissions.operativeMode {
-                        errorMessage = "Operative mode does not allow users to access the above features. Please deselect operative mode to continue with the above features."
-                        permissions.adminAccess = false
-                    } else if newValue {
-                        // Admins are automatically managers and get projects/small works permissions
-                        permissions.manager = true
-                        permissions.projects = true
-                        permissions.smallWorks = true
-                    }
-                }
-                
-                PermissionToggle(
-                    title: "Manager",
-                    description: "Managers will be able to schedule operatives, create new clients, skills, and qualifications, view warnings and manage tasks.",
-                    isOn: $permissions.manager,
-                    isDisabled: permissions.operativeMode || permissions.adminAccess
-                )
-                .onChange(of: permissions.manager) { oldValue, newValue in
-                    if newValue && permissions.operativeMode {
-                        errorMessage = "Operative mode does not allow users to access the above features. Please deselect operative mode to continue with the above features."
-                        permissions.manager = false
-                    } else if newValue {
-                        // Managers automatically get projects and small works permissions
-                        permissions.projects = true
-                        permissions.smallWorks = true
-                    }
-                }
-                
-                PermissionToggle(
-                    title: "Projects",
-                    description: "Can create and manage projects.",
-                    isOn: $permissions.projects,
-                    isDisabled: permissions.operativeMode || (!permissions.manager && !permissions.adminAccess)
-                )
-                .onChange(of: permissions.projects) { oldValue, newValue in
-                    if newValue && permissions.operativeMode {
-                        errorMessage = "Operative mode does not allow users to access the above features. Please deselect operative mode to continue with the above features."
-                        permissions.projects = false
-                    }
-                }
-                
-                PermissionToggle(
-                    title: "Small Works",
-                    description: "Can create and manage small works.",
-                    isOn: $permissions.smallWorks,
-                    isDisabled: permissions.operativeMode || (!permissions.manager && !permissions.adminAccess)
-                )
-                .onChange(of: permissions.smallWorks) { oldValue, newValue in
-                    if newValue && permissions.operativeMode {
-                        errorMessage = "Operative mode does not allow users to access the above features. Please deselect operative mode to continue with the above features."
-                        permissions.smallWorks = false
-                    }
-                }
-                
-                PermissionToggle(
-                    title: "Operative Management",
-                    description: "Can manage operatives and view their details. If un-selected the user will only be able to assign operatives to projects and small works.",
-                    isOn: $permissions.operatives,
-                    isDisabled: permissions.operativeMode
-                )
-                .onChange(of: permissions.operatives) { oldValue, newValue in
-                    if newValue && permissions.operativeMode {
-                        errorMessage = "Operative mode does not allow users to access the above features. Please deselect operative mode to continue with the above features."
-                        permissions.operatives = false
-                    }
-                }
-                
-                Divider()
-                    .padding(.vertical, 8)
-                
-                PermissionToggle(
-                    title: "Operative Mode",
-                    description: "Limited view mode for operatives. They can only see projects/small works assigned to them, their tasks, as well as their tasks.\n\nOperative skills and qualifications can be added with the manage operatives page later on.",
-                    isOn: $permissions.operativeMode
-                )
-                .onChange(of: permissions.operativeMode) { oldValue, newValue in
-                    if newValue {
-                        // If operative mode is enabled, disable all other permissions
-                        permissions.adminAccess = false
-                        permissions.manager = false
-                        permissions.operatives = false
-                        // Clear error message when operative mode is selected
-                        errorMessage = nil
-                    } else {
-                        // Clear error message when operative mode is deselected
-                        errorMessage = nil
-                    }
-                }
                 }
             }
         }
     }
     
-    // MARK: - Step 3: Review
+    private var lineManagerCandidates: [AppUser] {
+        userStore.organizationUsers.filter { u in
+            !u.permissions.operativeMode &&
+            (u.isSuperAdmin || u.permissions.adminAccess || u.permissions.manager) &&
+            u.isActive &&
+            u.passwordSet
+        }
+        .sorted { ($0.fullName.isEmpty ? $0.email : $0.fullName) < ($1.fullName.isEmpty ? $1.email : $1.fullName) }
+    }
     
-    private var step3View: some View {
+    private var stepManagerOperativeSummary: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("This person will be invited as an operative with a limited app view.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Image(systemName: "person.fill")
+                        .foregroundColor(.indigo)
+                    Text("Operative mode")
+                        .font(.headline)
+                }
+                Text("They can see assigned projects and small works, tasks, holiday (requests), schedule (view only), and their qualifications.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+            .background(Color.indigo.opacity(0.08))
+            .cornerRadius(12)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Line manager")
+                    .font(.headline)
+                Text("Choose who receives this operative's holiday requests first. Options include super admins, admins, and managers.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Picker("Manager", selection: $assignedManagerUserId) {
+                    Text("Select manager…").tag(nil as String?)
+                    ForEach(lineManagerCandidates, id: \.id) { u in
+                        Text(u.fullName.isEmpty ? u.email : u.fullName).tag(Optional(u.id))
+                    }
+                }
+            }
+            .onAppear {
+                permissions.operativeMode = true
+                permissions.adminAccess = false
+                permissions.manager = false
+                permissions.operatives = false
+                permissions.skills = false
+                permissions.qualifications = false
+                permissions.materials = false
+                permissions.projects = true
+                permissions.smallWorks = true
+                if assignedManagerUserId == nil {
+                    assignedManagerUserId = userStore.currentUser?.id
+                }
+            }
+        }
+    }
+    
+    private var stepPermissionsControlled: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Review user details before creating")
+            Text(permissionsDescriptionHeader)
                 .font(.subheadline)
                 .foregroundColor(.secondary)
             
             VStack(spacing: 16) {
-                // User Details
+                switch invitedAccountType {
+                case .admin:
+                    PermissionToggle(
+                        title: "Admin Access",
+                        description: "Full organisation administration (excluding super-admin-only ownership actions).",
+                        isOn: .constant(true),
+                        isDisabled: true
+                    )
+                    PermissionToggle(
+                        title: "Manager",
+                        description: "Scheduling, clients, skills, qualifications, warnings, tasks.",
+                        isOn: .constant(true),
+                        isDisabled: true
+                    )
+                    PermissionToggle(
+                        title: "Operative Management",
+                        description: "Can open the Operatives tab and manage operative profiles.",
+                        isOn: .constant(true),
+                        isDisabled: true
+                    )
+                    PermissionToggle(
+                        title: "Skills & Qualifications (org)",
+                        description: "Can maintain organisation skills and qualifications catalogues.",
+                        isOn: .constant(true),
+                        isDisabled: true
+                    )
+                    PermissionToggle(
+                        title: "Projects & Small Works",
+                        description: "Can create and manage projects and small works.",
+                        isOn: .constant(true),
+                        isDisabled: true
+                    )
+                    PermissionToggle(
+                        title: "Operative Mode",
+                        description: "Off for admin accounts.",
+                        isOn: .constant(false),
+                        isDisabled: true
+                    )
+                case .manager:
+                    PermissionToggle(
+                        title: "Admin Access",
+                        description: "Not available for manager accounts.",
+                        isOn: .constant(false),
+                        isDisabled: true
+                    )
+                    PermissionToggle(
+                        title: "Manager",
+                        description: "Manager capabilities are enabled.",
+                        isOn: .constant(true),
+                        isDisabled: true
+                    )
+                    PermissionToggle(
+                        title: "Operative Management",
+                        description: "Can manage operatives and view their details. If turned off, this user can still assign operatives to projects and small works, but will not see the Operatives tab or full operative profiles.",
+                        isOn: $permissions.operatives,
+                        isDisabled: false
+                    )
+                    PermissionToggle(
+                        title: "Annual Leave",
+                        description: "Can book their own annual leave. If unselected the manager will need to request annual leave and have this approved.",
+                        isOn: $permissions.annualLeaveSelfBook,
+                        isDisabled: false
+                    )
+                    PermissionToggle(
+                        title: "Weekly Report",
+                        description: "Will be able to pull weekly reports.",
+                        isOn: $permissions.weeklyReports,
+                        isDisabled: false
+                    )
+                    PermissionToggle(
+                        title: "Sub Contractors",
+                        description: "Can add and manage sub contractors. If unselected they will be unable to manage them, they will only be able to book them in.",
+                        isOn: $permissions.subContractors,
+                        isDisabled: false
+                    )
+                    PermissionToggle(
+                        title: "Skills & Qualifications (org)",
+                        description: "Managers can maintain skills and qualifications unless you change this later in Manage Users.",
+                        isOn: .constant(true),
+                        isDisabled: true
+                    )
+                    PermissionToggle(
+                        title: "Projects & Small Works",
+                        description: "Can add and edit projects and small works. If unselected, this manager can still schedule on them.",
+                        isOn: Binding(
+                            get: { permissions.projects && permissions.smallWorks },
+                            set: { newValue in
+                                permissions.projects = newValue
+                                permissions.smallWorks = newValue
+                            }
+                        ),
+                        isDisabled: false
+                    )
+                    PermissionToggle(
+                        title: "Operative Mode",
+                        description: "Off for manager accounts.",
+                        isOn: .constant(false),
+                        isDisabled: true
+                    )
+                case .operative:
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Operative permissions are fixed")
+                            .font(.headline)
+                        Text("Operative mode is on; admin, manager, skills, and organisation qualification editing are off. Projects and small works access is limited to assigned work in the app.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        PermissionToggle(
+                            title: "Materials",
+                            description: "Allow this operative to see and use Materials inside assigned projects and small works.",
+                            isOn: $permissions.materials,
+                            isDisabled: false
+                        )
+                        PermissionToggle(
+                            title: "Site Audit",
+                            description: "Allow this operative to access Site Audits for assigned projects and small works.",
+                            isOn: $permissions.siteAudit,
+                            isDisabled: false
+                        )
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(12)
+                }
+            }
+        }
+        .onAppear {
+            applyPermissionsForInvitedType()
+        }
+    }
+    
+    private var permissionsDescriptionHeader: String {
+        switch invitedAccountType {
+        case .admin:
+            return "Administrator template — all access except operative mode."
+        case .manager:
+            return "Choose whether this manager can open the Operatives tab and manage operative profiles."
+        case .operative:
+            return ""
+        }
+    }
+    
+    private var stepReview: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Review before sending the invitation")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            
+            VStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("User Details")
+                    Text("Account")
                         .font(.headline)
+                    if mode == .admin {
+                        HStack {
+                            Text("Type:")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text(invitedAccountType.title)
+                                .fontWeight(.medium)
+                        }
+                    } else {
+                        Text("Operative (invited by manager)")
+                            .fontWeight(.medium)
+                    }
                     
                     HStack {
                         Text("Name:")
@@ -390,14 +567,35 @@ struct AddUserView: View {
                                 .fontWeight(.medium)
                         }
                     }
+                    
+                    if permissions.operativeMode, let mid = assignedManagerUserId,
+                       let mgr = userStore.organizationUsers.first(where: { $0.id == mid }) {
+                        HStack {
+                            Text("Line manager:")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text(mgr.fullName.isEmpty ? mgr.email : mgr.fullName)
+                                .fontWeight(.medium)
+                        }
+                    }
+                    
+                    let reviewDayRate = selectedDayRateTextForReview
+                    if !reviewDayRate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        HStack {
+                            Text("Day rate:")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text(reviewDayRate)
+                                .fontWeight(.medium)
+                        }
+                    }
                 }
                 .padding()
                 .background(Color(.systemGray6))
                 .cornerRadius(12)
                 
-                // Permissions
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Permissions")
+                    Text("Permissions summary")
                         .font(.headline)
                     
                     LazyVGrid(columns: [
@@ -421,7 +619,7 @@ struct AddUserView: View {
         }
     }
     
-    // MARK: - Success View
+    // MARK: - Success
     
     private var successView: some View {
         VStack(spacing: 24) {
@@ -453,25 +651,83 @@ struct AddUserView: View {
         .padding(20)
     }
     
-    // MARK: - Helper Properties
+    // MARK: - Validation & permissions
+    
+    private func applyPermissionsForInvitedType() {
+        switch invitedAccountType {
+        case .admin:
+            permissions = UserPermissions(
+                adminAccess: true,
+                manager: true,
+                operatives: true,
+                skills: true,
+                qualifications: true,
+                materials: true,
+                projects: true,
+                smallWorks: true,
+                operativeMode: false
+            )
+        case .manager:
+            permissions = UserPermissions(
+                adminAccess: false,
+                manager: true,
+                operatives: true,
+                skills: true,
+                qualifications: true,
+                materials: true,
+                projects: true,
+                smallWorks: true,
+                operativeMode: false,
+                annualLeaveSelfBook: false,
+                weeklyReports: false,
+                subContractors: false,
+                siteAudit: true
+            )
+        case .operative:
+            permissions = UserPermissions(
+                adminAccess: false,
+                manager: false,
+                operatives: false,
+                skills: false,
+                qualifications: false,
+                materials: false,
+                projects: true,
+                smallWorks: true,
+                operativeMode: true,
+                siteAudit: true
+            )
+        }
+    }
     
     private var canProceed: Bool {
-        let result: Bool
+        if mode == .managerAddingOperative {
+            switch currentStep {
+            case 1:
+                return !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email)
+            case 2:
+                return assignedManagerUserId != nil && !(assignedManagerUserId?.isEmpty ?? true)
+            case 3:
+                return true
+            default:
+                return false
+            }
+        }
         switch currentStep {
         case 1:
-            result = !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email)
-            print("🔥🔥🔥 DEBUG: Step 1 validation - firstName: '\(firstName)', surname: '\(surname)', email: '\(email)', isValidEmail: \(isValidEmail(email)), result: \(result)")
+            return true
         case 2:
-            result = true // At least one permission should be selected, but we'll allow all false for now
-            print("🔥🔥🔥 DEBUG: Step 2 validation - result: \(result)")
+            let base = !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email)
+            if invitedAccountType == .operative {
+                return base && assignedManagerUserId != nil && !(assignedManagerUserId?.isEmpty ?? true)
+            }
+            return base
         case 3:
-            result = true
-            print("🔥🔥🔥 DEBUG: Step 3 validation - result: \(result)")
+            return true
+        case 4:
+            return true
         default:
-            result = false
-            print("🔥🔥🔥 DEBUG: Default validation - result: \(result)")
+            return false
         }
-        return result
     }
     
     private var permissionItems: [(title: String, isEnabled: Bool)] {
@@ -479,64 +735,51 @@ struct AddUserView: View {
             ("Admin Access", permissions.adminAccess),
             ("Manager", permissions.manager),
             ("Operative Management", permissions.operatives),
-            ("Operative Mode", permissions.operativeMode)
+            ("Skills (org)", permissions.skills),
+            ("Qualifications (org)", permissions.qualifications),
+            ("Materials", permissions.materials),
+            ("Projects", permissions.projects),
+            ("Small Works", permissions.smallWorks),
+            ("Operative Mode", permissions.operativeMode),
+            ("Annual Leave Self-Book", permissions.annualLeaveSelfBook),
+            ("Weekly Reports", permissions.weeklyReports),
+            ("Sub Contractors", permissions.subContractors),
+            ("Site Audit", permissions.siteAudit)
         ]
     }
     
-    // MARK: - Actions
-    
     private func createUser() {
-        print("🔥🔥🔥 DEBUG: Create User button tapped")
-        print("🔥🔥🔥 DEBUG: First Name: \(firstName)")
-        print("🔥🔥🔥 DEBUG: Surname: \(surname)")
-        print("🔥🔥🔥 DEBUG: Email: \(email)")
-        print("🔥🔥🔥 DEBUG: Permissions: \(permissions)")
-        
-        // Validate permissions - operative mode cannot be combined with other permissions
         if permissions.operativeMode && (permissions.adminAccess || permissions.manager || permissions.operatives) {
-            errorMessage = "Operative mode does not allow users to access the above features. Please deselect operative mode to continue with the above features."
+            errorMessage = "Operative mode cannot be combined with admin, manager, or operative management flags."
             return
         }
         
-        guard !isCreating else {
-            print("🔥🔥🔥 DEBUG: Already creating user, ignoring duplicate request")
-            return
-        }
+        guard !isCreating else { return }
         
         isCreating = true
         errorMessage = nil
         
         Task {
-            print("🔥🔥🔥 DEBUG: Calling userStore.inviteUser")
-            
-            // Check if organization is available via userStore's firebaseBackend
-            // We'll check this in the inviteUser function itself
-            
+            let parsedDayRate = parseDayRate(from: selectedDayRateTextForReview)
             let success = await userStore.inviteUser(
                 firstName: firstName,
                 surname: surname,
                 email: email,
                 mobileNumber: mobileNumber.isEmpty ? nil : mobileNumber,
-                permissions: permissions
+                permissions: permissions,
+                assignedManagerUserId: permissions.operativeMode ? assignedManagerUserId : nil,
+                invitedOperativeDayRate: permissions.operativeMode ? parsedDayRate : nil,
+                invitedManagerDayRate: permissions.manager ? parsedDayRate : nil
             )
-            
-            print("🔥🔥🔥 DEBUG: inviteUser returned: \(success)")
             
             await MainActor.run {
                 isCreating = false
                 if success {
-                    print("🔥🔥🔥 DEBUG: Success! Showing success view")
                     withAnimation {
                         showSuccess = true
                     }
                 } else {
-                    print("🔥🔥🔥 DEBUG: Failed to create user")
-                    // Get more specific error message from userStore if available
-                    if let storeError = userStore.errorMessage {
-                        errorMessage = storeError
-                    } else {
-                        errorMessage = "Failed to create user. Please check your internet connection and try again."
-                    }
+                    errorMessage = userStore.errorMessage ?? "Failed to create user. Please try again."
                 }
             }
         }
@@ -546,6 +789,41 @@ struct AddUserView: View {
         let emailRegex = "[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,64}"
         let emailPredicate = NSPredicate(format: "SELF MATCHES %@", emailRegex)
         return emailPredicate.evaluate(with: email)
+    }
+
+    private var dayRateBindingForSelectedType: Binding<String> {
+        Binding(
+            get: {
+                if mode == .managerAddingOperative || invitedAccountType == .operative {
+                    return operativeDayRateText
+                }
+                return managerDayRateText
+            },
+            set: { newValue in
+                if mode == .managerAddingOperative || invitedAccountType == .operative {
+                    operativeDayRateText = newValue
+                } else {
+                    managerDayRateText = newValue
+                }
+            }
+        )
+    }
+
+    private var selectedDayRateTextForReview: String {
+        if mode == .managerAddingOperative || invitedAccountType == .operative {
+            return operativeDayRateText
+        }
+        if invitedAccountType == .manager {
+            return managerDayRateText
+        }
+        return ""
+    }
+
+    private func parseDayRate(from text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
+        return Double(normalized)
     }
 }
 

@@ -33,11 +33,11 @@ struct ProjectsView: View {
                 // Projects List
                 projectsList
             }
-            .padding(.leading, 40)
+            .padding(.horizontal, 16)
             .navigationTitle("Projects")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button(action: {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                     }) {
@@ -178,18 +178,46 @@ struct ProjectsView: View {
         var projects = projectStore.projects.filter { $0.jobType != .smallWorks }
         
         if userStore.isOperativeMode() {
-            if let currentUserEmail = userStore.currentUser?.email,
-               let operative = operativeStore.allOperatives.first(where: { $0.email == currentUserEmail }) {
-                let assignedProjectIds = Set(bookingStore.bookings
-                    .filter { $0.operativeId == operative.id }
-                    .map { $0.projectId })
-                projects = projects.filter { assignedProjectIds.contains($0.id) }
-            } else {
-                projects = []
+            guard let operative = resolvedCurrentOperative,
+                  let currentUserId = userStore.currentUser?.id else {
+                return []
             }
+            let assignedProjectIds = Set(bookingStore.bookings
+                .filter {
+                    $0.operativeId == operative.id &&
+                    ($0.status == .confirmed || $0.status == .tentative)
+                }
+                .map { $0.projectId })
+            projects = projects.filter {
+                assignedProjectIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId)
+            }
+        } else if let currentUser = userStore.currentUser,
+                  !currentUser.isSuperAdmin,
+                  !currentUser.permissions.adminAccess,
+                  currentUser.permissions.manager {
+            projects = projects.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
         }
         
         return projects
+    }
+
+    private var resolvedCurrentOperative: Operative? {
+        let normalizedEmail = userStore.currentUser?.email
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedEmail, !normalizedEmail.isEmpty,
+           let byEmail = operativeStore.allOperatives.first(where: {
+               $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
+           }) {
+            return byEmail
+        }
+        let first = userStore.currentUser?.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let last = userStore.currentUser?.surname.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !first.isEmpty || !last.isEmpty else { return nil }
+        return operativeStore.allOperatives.first(where: {
+            $0.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == first &&
+            $0.lastName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == last
+        })
     }
     
     private var isEmptyDueToStatusFilterOnly: Bool {

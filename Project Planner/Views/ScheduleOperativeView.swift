@@ -15,6 +15,7 @@ struct ScheduleOperativeView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     
     let project: Project
@@ -22,7 +23,7 @@ struct ScheduleOperativeView: View {
     @State private var selectedOperatives: Set<UUID> = []
     @State private var showingSelectOperatives = false
     @State private var selectedDates: Set<Date> = []
-    @State private var dateTimeSlots: [Date: TimeSlot] = [:]
+    @State private var dateTimeSlots: [String: TimeSlot] = [:]
     @State private var currentMonth: Date = Date()
     @State private var quickSelectDays: Int? = nil
     @State private var showingBookingConfirmation = false
@@ -106,9 +107,15 @@ struct ScheduleOperativeView: View {
                 )
                 .environmentObject(projectStore)
                 .environmentObject(userStore)
+                .environmentObject(operativeStore)
             }
-            .sheet(isPresented: $showingBookingConfirmation) {
+            .sheet(isPresented: $showingBookingConfirmation, onDismiss: {
+                // After showing "Booking Confirmed", return to the scheduling overview page.
+                dismiss()
+            }) {
                 BookingConfirmationView(isPresented: $showingBookingConfirmation)
+                    .presentationDetents([.fraction(0.35)])
+                    .interactiveDismissDisabled(true)
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -126,20 +133,33 @@ struct ScheduleOperativeView: View {
                 bottomActionBar
             }
             .sheet(isPresented: $showingSelectOperatives) {
-                SelectOperativesView(selectedOperatives: $selectedOperatives)
+                SelectOperativesView(
+                    selectedOperatives: $selectedOperatives,
+                    unavailableOperativeIds: unavailableOperativeIdsForSelectedDates
+                )
                     .environmentObject(operativeStore)
             }
-            .alert("Booking Confirmed", isPresented: $showingBookingConfirmation) {
-                Button("OK") {
-                    dismiss()
-                }
-            } message: {
-                Text("Operatives have been successfully booked.")
+            .onChange(of: selectedDates) { _, _ in
+                removeUnavailableSelectedOperatives()
+            }
+            .onAppear {
+                Task { await holidayStore.loadData() }
             }
         }
     }
     
     // MARK: - Project Header Card
+    private var selectableOperatives: [Operative] {
+        let active = operativeStore.activeOperatives
+        return active.isEmpty ? operativeStore.allOperatives : active
+    }
+    
+    private var selectedOperativeNames: [String] {
+        selectableOperatives
+            .filter { selectedOperatives.contains($0.id) }
+            .map(\.name)
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
     
     private var projectHeaderCard: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -220,7 +240,7 @@ struct ScheduleOperativeView: View {
                                 .foregroundColor(.primary)
                             
                             if selectedOperatives.count <= 3 {
-                                let names = operativeStore.activeOperatives
+                                let names = selectableOperatives
                                     .filter { selectedOperatives.contains($0.id) }
                                     .map { $0.name }
                                     .prefix(3)
@@ -483,7 +503,7 @@ struct ScheduleOperativeView: View {
     }
     
     private func selectedDateRow(for date: Date) -> some View {
-        let timeSlot = dateTimeSlots[date] ?? .fullDay
+        let timeSlot = dateTimeSlots[slotKey(for: date)] ?? .fullDay
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "EEEE, d MMM yyyy"
         
@@ -503,7 +523,7 @@ struct ScheduleOperativeView: View {
                 Button(action: {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                         selectedDates.remove(date)
-                        dateTimeSlots.removeValue(forKey: date)
+                        dateTimeSlots.removeValue(forKey: slotKey(for: date))
                     }
                 }) {
                     Image(systemName: "xmark.circle.fill")
@@ -540,7 +560,8 @@ struct ScheduleOperativeView: View {
     private func timeSlotButton(slot: TimeSlot, selected: Bool, date: Date) -> some View {
         Button(action: {
             withAnimation(.spring(response: 0.2, dampingFraction: 0.8)) {
-                dateTimeSlots[date] = selected && dateTimeSlots[date] == slot ? .fullDay : slot
+                let key = slotKey(for: date)
+                dateTimeSlots[key] = selected && dateTimeSlots[key] == slot ? .fullDay : slot
             }
         }) {
             Text(slot.shortDisplayName)
@@ -602,6 +623,22 @@ struct ScheduleOperativeView: View {
                         .font(.subheadline)
                         .fontWeight(.bold)
                         .foregroundColor(Color.theme.primary)
+                }
+                
+                if !selectedOperativeNames.isEmpty {
+                    Divider()
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Selected Operatives", systemImage: "person.3.sequence.fill")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        ForEach(selectedOperativeNames, id: \.self) { name in
+                            Text(name)
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                        }
+                    }
                 }
             }
             .padding(16)
@@ -691,14 +728,15 @@ struct ScheduleOperativeView: View {
     private func toggleDateSelection(_ date: Date) {
         let calendar = Calendar.current
         let normalizedDate = calendar.startOfDay(for: date)
+        let key = slotKey(for: normalizedDate)
         
         if selectedDates.contains(normalizedDate) {
             selectedDates.remove(normalizedDate)
-            dateTimeSlots.removeValue(forKey: normalizedDate)
+            dateTimeSlots.removeValue(forKey: key)
         } else {
             selectedDates.insert(normalizedDate)
-            if dateTimeSlots[normalizedDate] == nil {
-                dateTimeSlots[normalizedDate] = .fullDay
+            if dateTimeSlots[key] == nil {
+                dateTimeSlots[key] = .fullDay
             }
         }
         
@@ -716,7 +754,7 @@ struct ScheduleOperativeView: View {
             if let date = calendar.date(byAdding: .day, value: i, to: today) {
                 let normalizedDate = calendar.startOfDay(for: date)
                 selectedDates.insert(normalizedDate)
-                dateTimeSlots[normalizedDate] = .fullDay
+                dateTimeSlots[slotKey(for: normalizedDate)] = .fullDay
             }
         }
     }
@@ -754,12 +792,12 @@ struct ScheduleOperativeView: View {
     
     private func detectClashes() -> [BookingClash] {
         var clashes: [BookingClash] = []
-        let operatives = operativeStore.activeOperatives.filter { selectedOperatives.contains($0.id) }
+        let operatives = selectableOperatives.filter { selectedOperatives.contains($0.id) }
         let dates = Array(selectedDates.sorted())
         
         for operative in operatives {
             for date in dates {
-                if let timeSlot = dateTimeSlots[date] {
+                if let timeSlot = dateTimeSlots[slotKey(for: date)] {
                     // Check for existing bookings for this operative on this date
                     let existingBookings = bookingStore.bookings.filter { booking in
                         booking.operativeId == operative.id &&
@@ -769,6 +807,11 @@ struct ScheduleOperativeView: View {
                     
                     // Check if time slots clash
                     for existingBooking in existingBookings {
+                        // Allow same-project scheduling to proceed without clash warning.
+                        if existingBooking.projectId == project.id {
+                            continue
+                        }
+                        
                         if timeSlotsClash(timeSlot, existingBooking.timeSlot) {
                             // Find the project for the existing booking
                             let existingProject = projectStore.projects.first(where: { $0.id == existingBooking.projectId }) ??
@@ -801,55 +844,114 @@ struct ScheduleOperativeView: View {
         }
         return false
     }
+
+    private func slotKey(for date: Date) -> String {
+        let calendar = Calendar.current
+        let normalizedDate = calendar.startOfDay(for: date)
+        let components = calendar.dateComponents([.year, .month, .day], from: normalizedDate)
+        return "\(components.year ?? 0)-\(components.month ?? 0)-\(components.day ?? 0)"
+    }
+
+    private var unavailableOperativeIdsForSelectedDates: Set<UUID> {
+        guard !selectedDates.isEmpty else { return [] }
+        return Set(
+            selectableOperatives
+                .filter { operative in
+                    selectedDates.contains { isOperativeOnApprovedHoliday(operative: operative, date: $0) }
+                }
+                .map(\.id)
+        )
+    }
+    
+    private func isOperativeOnApprovedHoliday(operative: Operative, date: Date) -> Bool {
+        let normalizedEmail = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let linkedUser = userStore.organizationUsers.first {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
+        }
+        return holidayStore.approvedBookings(covering: date).contains { booking in
+            if booking.operativeId == operative.id { return true }
+            if let uid = booking.userId, let linkedUser, uid == linkedUser.id { return true }
+            return false
+        }
+    }
+    
+    private func removeUnavailableSelectedOperatives() {
+        let blocked = unavailableOperativeIdsForSelectedDates
+        guard !blocked.isEmpty else { return }
+        selectedOperatives = selectedOperatives.subtracting(blocked)
+    }
     
     private func proceedWithBooking() {
         isBooking = true
         
         Task {
-            let operatives = operativeStore.activeOperatives.filter { selectedOperatives.contains($0.id) }
+            let operatives = selectableOperatives.filter { selectedOperatives.contains($0.id) }
             let dates = Array(selectedDates.sorted())
+            var createdBookingCount = 0
+            var createdDatesByOperative: [UUID: Set<Date>] = [:]
             
-            // Filter out cancelled clashes before creating bookings
-            let activeClashes = detectedClashes.filter { !$0.cancelled }
+            // Cancelled clashes are explicitly skipped from booking creation.
+            let cancelledClashKeys = Set(
+                detectedClashes
+                    .filter(\.cancelled)
+                    .map(\.bookingKey)
+            )
             
             // Create bookings for each operative on each selected date
             for operative in operatives {
                 for date in dates {
-                    if let timeSlot = dateTimeSlots[date] {
-                        // Check if this booking was cancelled due to clash
-                        let isCancelled = activeClashes.contains { clash in
-                            clash.operative.id == operative.id &&
-                            Calendar.current.isDate(clash.date, inSameDayAs: date) &&
-                            clash.newTimeSlot == timeSlot
+                    if let timeSlot = dateTimeSlots[slotKey(for: date)] {
+                        let bookingKey = BookingKey(
+                            operativeId: operative.id,
+                            dateKey: slotKey(for: date),
+                            timeSlot: timeSlot
+                        )
+                        
+                        // Skip bookings user cancelled in the clash warning flow.
+                        if cancelledClashKeys.contains(bookingKey) {
+                            continue
                         }
                         
-                        if !isCancelled {
+                        // Skip if same booking already exists on this project/date/time.
+                        let duplicateExists = bookingStore.bookings.contains { booking in
+                            booking.projectId == project.id &&
+                            booking.operativeId == operative.id &&
+                            Calendar.current.isDate(booking.date, inSameDayAs: date) &&
+                            booking.timeSlot == timeSlot &&
+                            (booking.status == .confirmed || booking.status == .tentative)
+                        }
+                        
+                        if !duplicateExists && !isOperativeOnApprovedHoliday(operative: operative, date: date) {
                             await bookingStore.bookOperative(
                                 operative,
                                 on: date,
                                 timeSlot: timeSlot,
                                 for: project,
-                                bookedBy: loggedInUserName,
-                                notificationService: notificationService
+                                bookedBy: loggedInUserName
                             )
+                            createdBookingCount += 1
+                            createdDatesByOperative[operative.id, default: []].insert(Calendar.current.startOfDay(for: date))
                         }
                     }
                 }
             }
             
-            // Send notifications for any clashes that were confirmed (not cancelled)
-            for clash in activeClashes {
-                // Find the user ID for the existing booking's creator
-                // bookedBy might be email or name, we need to find the user
-                let existingBookedBy = clash.existingBooking.bookedBy
-                
-                await notificationService.notifyBookingClash(
-                    booking1Id: clash.existingBooking.id,
-                    booking2Id: UUID(), // New booking ID (we don't have it yet, but notification will work)
-                    operativeName: clash.operative.name,
-                    date: clash.date,
-                    userId1: existingBookedBy, // Existing booking creator
-                    userId2: loggedInUserName // Current user
+            if createdBookingCount > 0 {
+                await notificationService.notifyBookingBatchCreated(
+                    projectName: project.siteName,
+                    bookingCount: createdBookingCount,
+                    createdBy: loggedInUserName
+                )
+                let bookedRecipients = createdDatesByOperative.map { (operativeId, dates) in
+                    NotificationService.BookedUserRecipient(
+                        operativeId: operativeId,
+                        dates: Array(dates)
+                    )
+                }
+                await notificationService.notifyBookedUsers(
+                    projectName: project.siteName,
+                    bookedBy: loggedInUserName,
+                    recipients: bookedRecipients
                 )
             }
             
@@ -857,6 +959,10 @@ struct ScheduleOperativeView: View {
                 isBooking = false
                 showingBookingConfirmation = true
                 detectedClashes = []
+                // Stay on Schedule Operative page; reset selections so user can continue booking quickly.
+                selectedDates.removeAll()
+                selectedOperatives.removeAll()
+                dateTimeSlots.removeAll()
             }
         }
     }
@@ -869,6 +975,27 @@ struct ScheduleOperativeView: View {
         let existingBooking: Booking
         let existingProject: Project?
         var cancelled: Bool = false
+        
+        var bookingKey: BookingKey {
+            BookingKey(
+                operativeId: operative.id,
+                dateKey: Self.dateKey(from: date),
+                timeSlot: newTimeSlot
+            )
+        }
+        
+        private static func dateKey(from date: Date) -> String {
+            let calendar = Calendar.current
+            let normalizedDate = calendar.startOfDay(for: date)
+            let components = calendar.dateComponents([.year, .month, .day], from: normalizedDate)
+            return "\(components.year ?? 0)-\(components.month ?? 0)-\(components.day ?? 0)"
+        }
+    }
+    
+    struct BookingKey: Hashable {
+        let operativeId: UUID
+        let dateKey: String
+        let timeSlot: TimeSlot
     }
 }
 
@@ -895,6 +1022,7 @@ extension Array {
     .environmentObject(OperativeStore())
     .environmentObject(ProjectStore())
     .environmentObject(UserStore())
+    .environmentObject(HolidayStore())
     .environmentObject(FirebaseBackend())
 }
 

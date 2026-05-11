@@ -12,16 +12,39 @@ struct SelectOperativesView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     
     @Binding var selectedOperatives: Set<UUID>
+    let unavailableOperativeIds: Set<UUID>
     @State private var searchText = ""
+    @State private var selectedFilter: AvailabilityFilter = .all
+    
+    enum AvailabilityFilter: String, CaseIterable, Identifiable {
+        case all = "All"
+        case available = "Available"
+        case annualLeave = "Annual Leave"
+        
+        var id: String { rawValue }
+    }
+    
+    private var availableOperatives: [Operative] {
+        let active = operativeStore.activeOperatives
+        return active.isEmpty ? operativeStore.allOperatives : active
+    }
     
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
                 // Search bar
-                if !operativeStore.activeOperatives.isEmpty {
+                if !availableOperatives.isEmpty {
                     OperativeSearchBar(text: $searchText)
                         .padding(.horizontal)
                         .padding(.vertical, 8)
+                    Picker("Filter", selection: $selectedFilter) {
+                        ForEach(AvailabilityFilter.allCases) { filter in
+                            Text(filter.rawValue).tag(filter)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
                 }
                 
                 // Operatives list
@@ -34,11 +57,13 @@ struct SelectOperativesView: View {
                             .font(.system(size: 48))
                             .foregroundColor(.secondary)
                         
-                        Text("No Operatives Available")
+                        Text(unavailableOperativeIds.isEmpty ? "No Operatives Available" : "No Matching Operatives")
                             .font(.headline)
                             .foregroundColor(.secondary)
                         
-                        Text("Add operatives in the Operatives section")
+                        Text(unavailableOperativeIds.isEmpty
+                             ? "Add operatives in the Operatives section"
+                             : "Selected dates include approved holiday for one or more operatives.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -47,10 +72,13 @@ struct SelectOperativesView: View {
                     .padding()
                 } else {
                     List(filteredOperatives) { operative in
+                        let isOnAnnualLeave = unavailableOperativeIds.contains(operative.id)
                         OperativeSelectionRow(
                             operative: operative,
                             isSelected: selectedOperatives.contains(operative.id),
+                            isDisabled: isOnAnnualLeave,
                             onToggle: {
+                                if isOnAnnualLeave { return }
                                 if selectedOperatives.contains(operative.id) {
                                     selectedOperatives.remove(operative.id)
                                 } else {
@@ -86,7 +114,16 @@ struct SelectOperativesView: View {
     }
     
     private var filteredOperatives: [Operative] {
-        let operatives = operativeStore.activeOperatives
+        let operatives = availableOperatives.filter { operative in
+            switch selectedFilter {
+            case .all:
+                return true
+            case .available:
+                return !unavailableOperativeIds.contains(operative.id)
+            case .annualLeave:
+                return unavailableOperativeIds.contains(operative.id)
+            }
+        }
         
         if searchText.isEmpty {
             return operatives
@@ -102,6 +139,7 @@ struct SelectOperativesView: View {
 struct OperativeSelectionRow: View {
     let operative: Operative
     let isSelected: Bool
+    let isDisabled: Bool
     let onToggle: () -> Void
     
     var body: some View {
@@ -122,9 +160,21 @@ struct OperativeSelectionRow: View {
                 
                 // Operative info
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(operative.name)
+                    HStack(spacing: 6) {
+                        Text(operative.name)
+                        if isDisabled {
+                            Text("AL")
+                                .font(.caption2)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.orange)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.15))
+                                .cornerRadius(6)
+                        }
+                    }
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(isDisabled ? .secondary : .primary)
                     
                     Text(operative.email)
                         .font(.subheadline)
@@ -159,6 +209,7 @@ struct OperativeSelectionRow: View {
             .padding(.vertical, 4)
         }
         .buttonStyle(PlainButtonStyle())
+        .opacity(isDisabled ? 0.55 : 1)
     }
 }
 
@@ -181,7 +232,7 @@ struct OperativeSearchBar: View {
 }
 
 #Preview {
-    SelectOperativesView(selectedOperatives: .constant(Set<UUID>()))
+    SelectOperativesView(selectedOperatives: .constant(Set<UUID>()), unavailableOperativeIds: [])
         .environmentObject(OperativeStore())
 }
 

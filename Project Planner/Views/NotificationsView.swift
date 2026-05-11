@@ -73,18 +73,24 @@ struct NotificationsView: View {
                 .background(Color(.systemGroupedBackground))
                 
                 if filteredNotifications.isEmpty {
-                    VStack(spacing: 16) {
-                        Image(systemName: "bell.slash")
-                            .font(.system(size: 60))
-                            .foregroundColor(.secondary)
-                        Text("No Notifications")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        Text("You're all caught up!")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+                    ScrollView {
+                        VStack(spacing: 16) {
+                            Image(systemName: "bell.slash")
+                                .font(.system(size: 60))
+                                .foregroundColor(.secondary)
+                            Text("No Notifications")
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                            Text("You're all caught up!")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 320)
+                        .padding(.top, 80)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .refreshable {
+                        await notificationService.loadNotifications()
+                    }
                 } else {
                     List {
                         ForEach(filteredNotifications) { notification in
@@ -95,6 +101,9 @@ struct NotificationsView: View {
                         }
                     }
                     .listStyle(.plain)
+                    .refreshable {
+                        await notificationService.loadNotifications()
+                    }
                 }
             }
             .navigationTitle("Notifications")
@@ -190,11 +199,10 @@ struct NotificationsView: View {
                         name: NSNotification.Name("navigateToWarnings"),
                         object: nil
                     )
-                case .holidayRequestSubmitted, .holidayRequestApproved:
+                case .holidayRequestSubmitted, .holidayRequestApproved, .holidayRequestDeclined:
                     NotificationCenter.default.post(
-                        name: NSNotification.Name("openHoliday"),
-                        object: nil,
-                        userInfo: ["showRequests": true]
+                        name: NSNotification.Name("openTasksDetail"),
+                        object: nil
                     )
                 }
                 
@@ -256,6 +264,7 @@ struct NotificationRowView: View {
         case .taskCreated: return "list.bullet.rectangle"
         case .holidayRequestSubmitted: return "sun.max"
         case .holidayRequestApproved: return "sun.max.fill"
+        case .holidayRequestDeclined: return "xmark.circle.fill"
         }
     }
 
@@ -272,6 +281,7 @@ struct NotificationRowView: View {
         case .taskCreated: return .blue
         case .holidayRequestSubmitted: return .orange
         case .holidayRequestApproved: return .green
+        case .holidayRequestDeclined: return .red
         }
     }
 }

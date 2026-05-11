@@ -15,6 +15,18 @@ struct BookingClashWarningView: View {
     
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var operativeStore: OperativeStore
+    
+    private var clashesByOperative: [(operativeName: String, items: [ScheduleOperativeView.BookingClash])] {
+        let grouped = Dictionary(grouping: clashes) { $0.operative.name }
+        return grouped
+            .map { (operativeName: $0.key, items: $0.value.sorted { $0.date < $1.date }) }
+            .sorted { $0.operativeName.localizedCaseInsensitiveCompare($1.operativeName) == .orderedAscending }
+    }
+    
+    private var allClashesResolved: Bool {
+        !clashes.isEmpty && clashes.allSatisfy(\.cancelled)
+    }
     
     var body: some View {
         NavigationView {
@@ -40,13 +52,24 @@ struct BookingClashWarningView: View {
                     
                     // Clash Details
                     VStack(spacing: 16) {
-                        ForEach(clashes) { clash in
-                            ClashDetailCard(clash: clash, isCancelled: clash.cancelled) { cancelled in
-                                if let index = clashes.firstIndex(where: { $0.id == clash.id }) {
-                                    clashes[index].cancelled = cancelled
+                        ForEach(clashesByOperative, id: \.operativeName) { group in
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text(group.operativeName)
+                                    .font(.headline)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.primary)
+                                    .padding(.horizontal, 2)
+                                
+                                ForEach(group.items) { clash in
+                                    ClashDetailCard(clash: clash, isCancelled: clash.cancelled) { cancelled in
+                                        if let index = clashes.firstIndex(where: { $0.id == clash.id }) {
+                                            clashes[index].cancelled = cancelled
+                                        }
+                                    }
+                                    .environmentObject(projectStore)
+                                    .environmentObject(operativeStore)
                                 }
                             }
-                            .environmentObject(projectStore)
                         }
                     }
                     .padding(.horizontal)
@@ -54,14 +77,15 @@ struct BookingClashWarningView: View {
                     // Action Buttons
                     VStack(spacing: 12) {
                         Button(action: onContinue) {
-                            Text("Continue with Booking")
+                            Text("Confirm Booking")
                                 .font(.headline)
                                 .foregroundColor(.white)
                                 .frame(maxWidth: .infinity)
                                 .padding()
-                                .background(Color.blue)
+                                .background(allClashesResolved ? Color.blue : Color.gray)
                                 .cornerRadius(12)
                         }
+                        .disabled(!allClashesResolved)
                         
                         Button(action: onCancel) {
                             Text("Cancel This Selection")
@@ -88,6 +112,7 @@ struct ClashDetailCard: View {
     let onToggle: (Bool) -> Void
     
     @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var operativeStore: OperativeStore
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -127,6 +152,7 @@ struct ClashDetailCard: View {
                 
                 if let project = clash.existingProject {
                     BookingDetailRow(title: "Existing Project", value: "\(project.jobNumber) - \(project.siteName)")
+                    BookingDetailRow(title: "Project Manager", value: managerName(for: project))
                 }
                 
                 BookingDetailRow(title: "Booked By", value: clash.existingBooking.bookedBy)
@@ -138,7 +164,7 @@ struct ClashDetailCard: View {
                 }) {
                     HStack {
                         Image(systemName: "xmark.circle.fill")
-                        Text("Cancel This Booking")
+                        Text("Cancel New Booking")
                     }
                     .font(.subheadline)
                     .foregroundColor(.red)
@@ -172,6 +198,14 @@ struct ClashDetailCard: View {
             RoundedRectangle(cornerRadius: 16)
                 .stroke(isCancelled ? Color.red.opacity(0.3) : Color.orange.opacity(0.3), lineWidth: 2)
         )
+    }
+    
+    private func managerName(for project: Project) -> String {
+        if let managerId = project.managerId,
+           let manager = operativeStore.allManagers.first(where: { $0.id == managerId }) {
+            return manager.displayName
+        }
+        return project.manager.displayName
     }
 }
 

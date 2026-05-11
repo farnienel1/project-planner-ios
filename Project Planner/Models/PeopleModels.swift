@@ -77,8 +77,11 @@ struct Operative: Identifiable, Codable {
     var skills: Set<String>
     var qualifications: Set<Qualification>
     var qualificationExpiryDates: [UUID: Date]
+    var qualificationCertificateURLs: [UUID: String]
     var isActive: Bool
     var hourlyRate: Double?
+    /// Preferred day-rate field (distinct from legacy `hourlyRate` where both exist).
+    var dayRate: Double?
     var currencySymbol: String?
     var notes: String?
     var createdAt: Date
@@ -99,8 +102,10 @@ struct Operative: Identifiable, Codable {
         skills: Set<String> = [],
         qualifications: [Qualification] = [],
         qualificationExpiryDates: [UUID: Date] = [:],
+        qualificationCertificateURLs: [UUID: String] = [:],
         isActive: Bool = true,
         hourlyRate: Double? = nil,
+        dayRate: Double? = nil,
         currencySymbol: String? = nil,
         notes: String? = nil,
         createdAt: Date = Date(),
@@ -119,8 +124,10 @@ struct Operative: Identifiable, Codable {
         }
         self.qualifications = Set(qualDict.values)
         self.qualificationExpiryDates = qualificationExpiryDates
+        self.qualificationCertificateURLs = qualificationCertificateURLs
         self.isActive = isActive
         self.hourlyRate = hourlyRate
+        self.dayRate = dayRate
         self.currencySymbol = currencySymbol
         self.notes = notes
         self.createdAt = createdAt
@@ -137,8 +144,10 @@ struct Operative: Identifiable, Codable {
         skills: Set<String> = [],
         qualifications: [Qualification] = [],
         qualificationExpiryDates: [UUID: Date] = [:],
+        qualificationCertificateURLs: [UUID: String] = [:],
         isActive: Bool = true,
         hourlyRate: Double? = nil,
+        dayRate: Double? = nil,
         currencySymbol: String? = nil,
         notes: String? = nil,
         createdAt: Date = Date(),
@@ -158,8 +167,10 @@ struct Operative: Identifiable, Codable {
         }
         self.qualifications = Set(qualDict.values)
         self.qualificationExpiryDates = qualificationExpiryDates
+        self.qualificationCertificateURLs = qualificationCertificateURLs
         self.isActive = isActive
         self.hourlyRate = hourlyRate
+        self.dayRate = dayRate
         self.currencySymbol = currencySymbol
         self.notes = notes
         self.createdAt = createdAt

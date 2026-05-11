@@ -10,7 +10,7 @@
 
 ### 1. ✅ SendGrid Code Integration
 - SendGridEmailService.swift is configured
-- API key is set: `SG.REDACTED_SET_VIA_SECURE_CONFIG`
+- API key source is set via secure runtime config (`SENDGRID_API_KEY`)
 - From email is set: `info@projectplanner.us`
 - All email functions are implemented:
   - Password setup emails ✅

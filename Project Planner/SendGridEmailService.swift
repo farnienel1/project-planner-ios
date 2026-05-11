@@ -5,8 +5,7 @@ class SendGridEmailService: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     
-    // Replace with your actual SendGrid API key
-    private let apiKey = "SG.REDACTED_SET_VIA_SECURE_CONFIG"
+    private let apiKeyName = "SENDGRID_API_KEY"
     private let fromEmail = "info@projectplanner.us" // Primary email address
     private let baseURL = "https://api.sendgrid.com/v3/mail/send"
     
@@ -61,6 +60,14 @@ class SendGridEmailService: ObservableObject {
         guard let url = URL(string: baseURL) else {
             DispatchQueue.main.async {
                 self.errorMessage = "Invalid URL"
+                self.isLoading = false
+            }
+            return false
+        }
+
+        guard let apiKey = SecureConfig.requiredSecret(named: apiKeyName) else {
+            DispatchQueue.main.async {
+                self.errorMessage = "Email service not configured. Add SENDGRID_API_KEY to your scheme environment variables."
                 self.isLoading = false
             }
             return false

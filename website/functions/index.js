@@ -12,16 +12,61 @@
 
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
-import { defineSecret } from "firebase-functions/params";
+import { onSchedule } from "firebase-functions/v2/scheduler";
+import { defineSecret, defineString } from "firebase-functions/params";
 
 const resendApiKey = defineSecret("RESEND_API_KEY");
+const healthcheckRecipient = defineString("EMAIL_HEALTHCHECK_TO", { default: "" });
 
 initializeApp();
 const db = getFirestore();
 
-const BASE_URL = "https://projectplanner.us";
+const BASE_URL = "https://project-planner-f986c.web.app";
 const FROM_EMAIL = "info@projectplanner.us";
+
+async function sendViaResend({ apiKey, fromDisplay, to, subject, html, cc, replyTo }) {
+  const payload = {
+    from: fromDisplay,
+    to: [to],
+    subject,
+    html,
+  };
+  if (cc) payload.cc = [cc];
+  if (replyTo) payload.reply_to = replyTo;
+
+  const resendResponse = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!resendResponse.ok) {
+    const errorText = await resendResponse.text();
+    return {
+      ok: false,
+      status: resendResponse.status,
+      errorText,
+    };
+  }
+
+  return { ok: true, status: 200, errorText: "" };
+}
+
+async function recordEmailFailure(context) {
+  try {
+    await db.collection("emailDeliveryFailures").add({
+      ...context,
+      createdAt: new Date(),
+    });
+  } catch (error) {
+    console.error("Failed to persist emailDeliveryFailures log:", error);
+  }
+}
 
 function buildResetEmailHtml(firstName, token) {
   const url = `${BASE_URL}/setup-password.html?token=${encodeURIComponent(token)}`;
@@ -114,25 +159,23 @@ async function sendResetEmailForAddress(email, apiKey) {
   await db.collection("invitations").doc(invitationId).set(invitationData);
 
   const fromDisplay = orgName ? `${orgName} <${FROM_EMAIL}>` : `Project Planner <${FROM_EMAIL}>`;
-  const body = JSON.stringify({
-    from: fromDisplay,
-    to: [data.email || emailTrimmed],
+  const sendResult = await sendViaResend({
+    apiKey,
+    fromDisplay,
+    to: data.email || emailTrimmed,
     subject: "Reset Your Project Planner Password",
     html: buildResetEmailHtml(firstName, invitationId),
   });
 
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body,
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error("Resend API error:", res.status, errText);
+  if (!sendResult.ok) {
+    console.error("Resend API error:", sendResult.status, sendResult.errorText);
+    await recordEmailFailure({
+      channel: "password_reset",
+      to: data.email || emailTrimmed,
+      status: sendResult.status,
+      errorText: sendResult.errorText,
+      category: [401, 403, 429].includes(sendResult.status) ? "auth_or_rate_limit" : "delivery_error",
+    });
     return { sent: false, reason: "resend_error" };
   }
 
@@ -206,5 +249,194 @@ export const sendPasswordResetHttp = onRequest(
     }
     const result = await sendResetEmailForAddress(email, apiKey);
     res.set("Access-Control-Allow-Origin", "*").status(200).json(result);
+  }
+);
+
+export const sendProjectPlannerEmail = onRequest(
+  { region: "us-central1", secrets: [resendApiKey] },
+  async (req, res) => {
+    res.set("Access-Control-Allow-Origin", "*");
+    if (req.method === "OPTIONS") {
+      res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+      res.set("Access-Control-Allow-Headers", "Content-Type");
+      res.status(204).send("");
+      return;
+    }
+    if (req.method !== "POST") {
+      res.status(405).json({ sent: false, error: "Method not allowed" });
+      return;
+    }
+
+    const apiKey = resendApiKey.value();
+    if (!apiKey) {
+      res.status(503).json({ sent: false, error: "RESEND_API_KEY is not configured" });
+      return;
+    }
+
+    let body = req.body;
+    if (typeof body === "string") {
+      try {
+        body = JSON.parse(body);
+      } catch (_) {
+        res.status(400).json({ sent: false, error: "Invalid JSON body" });
+        return;
+      }
+    }
+
+    const to = typeof body?.to === "string" ? body.to.trim() : "";
+    const subject = typeof body?.subject === "string" ? body.subject.trim() : "";
+    const html = typeof body?.html === "string" ? body.html : "";
+    const cc = typeof body?.cc === "string" ? body.cc.trim() : "";
+    const replyTo = typeof body?.replyTo === "string" ? body.replyTo.trim() : "";
+    const fromName = typeof body?.fromName === "string" ? body.fromName.trim() : "";
+
+    if (!to || !subject || !html) {
+      res.status(400).json({ sent: false, error: "Missing required fields: to, subject, html" });
+      return;
+    }
+
+    const fromDisplay = `${fromName || "Project Planner"} <${FROM_EMAIL}>`;
+    const sendResult = await sendViaResend({
+      apiKey,
+      fromDisplay,
+      to,
+      subject,
+      html,
+      cc,
+      replyTo,
+    });
+
+    if (!sendResult.ok) {
+      console.error("sendProjectPlannerEmail Resend error:", sendResult.status, sendResult.errorText);
+      await recordEmailFailure({
+        channel: "general",
+        to,
+        status: sendResult.status,
+        errorText: sendResult.errorText,
+        category: [401, 403, 429].includes(sendResult.status) ? "auth_or_rate_limit" : "delivery_error",
+      });
+      res.status(500).json({
+        sent: false,
+        error: "Resend API call failed",
+        status: sendResult.status,
+      });
+      return;
+    }
+
+    res.status(200).json({ sent: true });
+  }
+);
+
+export const resolveInvitationAuthConflict = onRequest(
+  { region: "us-central1" },
+  async (req, res) => {
+    res.set("Access-Control-Allow-Origin", "*");
+    if (req.method === "OPTIONS") {
+      res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+      res.set("Access-Control-Allow-Headers", "Content-Type");
+      res.status(204).send("");
+      return;
+    }
+    if (req.method !== "POST") {
+      res.status(405).json({ ok: false, error: "Method not allowed" });
+      return;
+    }
+
+    let body = req.body;
+    if (typeof body === "string") {
+      try {
+        body = JSON.parse(body);
+      } catch (_) {
+        res.status(400).json({ ok: false, error: "Invalid JSON body" });
+        return;
+      }
+    }
+
+    const invitationCode = typeof body?.invitationCode === "string" ? body.invitationCode.trim() : "";
+    if (!invitationCode) {
+      res.status(400).json({ ok: false, error: "invitationCode is required" });
+      return;
+    }
+
+    const invitationRef = db.collection("invitations").doc(invitationCode);
+    const invitationSnap = await invitationRef.get();
+    if (!invitationSnap.exists) {
+      res.status(404).json({ ok: false, error: "Invitation not found" });
+      return;
+    }
+    const invitation = invitationSnap.data() || {};
+    if (invitation.isUsed === true) {
+      res.status(409).json({ ok: false, error: "Invitation already used" });
+      return;
+    }
+
+    const email = String(invitation.email || "").trim().toLowerCase();
+    if (!email) {
+      res.status(400).json({ ok: false, error: "Invitation has no email" });
+      return;
+    }
+
+    // Safety: never delete Auth account if any app user record for this email is already passwordSet=true.
+    const usersByEmail = await db.collection("users").where("email", "==", email).limit(20).get();
+    const hasAnyActiveUserRecord = usersByEmail.docs.some((d) => d.data()?.passwordSet === true);
+    if (hasAnyActiveUserRecord) {
+      res.status(200).json({ ok: true, deleted: false, reason: "active_user_record_exists" });
+      return;
+    }
+
+    try {
+      const authUser = await getAuth().getUserByEmail(email);
+      await getAuth().deleteUser(authUser.uid);
+      res.status(200).json({ ok: true, deleted: true });
+    } catch (error) {
+      const code = error?.code || "";
+      if (code === "auth/user-not-found") {
+        res.status(200).json({ ok: true, deleted: false, reason: "auth_user_not_found" });
+        return;
+      }
+      console.error("resolveInvitationAuthConflict failed:", error);
+      res.status(500).json({ ok: false, error: "Failed to resolve auth conflict" });
+    }
+  }
+);
+
+export const sendDailyEmailHealthCheck = onSchedule(
+  {
+    schedule: "every day 08:00",
+    region: "us-central1",
+    timeZone: "Europe/London",
+    secrets: [resendApiKey],
+  },
+  async () => {
+    const apiKey = resendApiKey.value();
+    const recipient = healthcheckRecipient.value().trim();
+
+    if (!apiKey || !recipient) {
+      console.warn("Health check skipped: missing RESEND_API_KEY or EMAIL_HEALTHCHECK_TO");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const sendResult = await sendViaResend({
+      apiKey,
+      fromDisplay: `Project Planner Monitor <${FROM_EMAIL}>`,
+      to: recipient,
+      subject: "Project Planner Email Health Check",
+      html: `<p>Email pipeline health check succeeded at ${now}.</p>`,
+    });
+
+    if (!sendResult.ok) {
+      console.error("Health check failed:", sendResult.status, sendResult.errorText);
+      await recordEmailFailure({
+        channel: "health_check",
+        to: recipient,
+        status: sendResult.status,
+        errorText: sendResult.errorText,
+        category: [401, 403, 429].includes(sendResult.status) ? "auth_or_rate_limit" : "delivery_error",
+      });
+      return;
+    }
+
+    console.log("Health check email sent successfully:", recipient, now);
   }
 );

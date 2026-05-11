@@ -11,6 +11,7 @@
 		274779482EA6AEF90000D1F8 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 274779472EA6AEF90000D1F8 /* FirebaseCore */; };
 		2747794A2EA6AEF90000D1F8 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 274779492EA6AEF90000D1F8 /* FirebaseFirestore */; };
 		2747794C2EA6AEF90000D1F9 /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 2747794B2EA6AEF90000D1F9 /* FirebaseStorage */; };
+		274779502EA6AEF90000D1FC /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 2747794F2EA6AEF90000D1FC /* FirebaseMessaging */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +35,7 @@
 				274779462EA6AEF90000D1F8 /* FirebaseAuth in Frameworks */,
 				2747794A2EA6AEF90000D1F8 /* FirebaseFirestore in Frameworks */,
 				2747794C2EA6AEF90000D1F9 /* FirebaseStorage in Frameworks */,
+				274779502EA6AEF90000D1FC /* FirebaseMessaging in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -80,6 +82,7 @@
 				274779472EA6AEF90000D1F8 /* FirebaseCore */,
 				274779492EA6AEF90000D1F8 /* FirebaseFirestore */,
 				2747794B2EA6AEF90000D1F9 /* FirebaseStorage */,
+				2747794F2EA6AEF90000D1FC /* FirebaseMessaging */,
 			);
 			productName = "Project Planner";
 			productReference = 27090EBB2E8ADF3000528ADD /* Project Planner.app */;
@@ -271,13 +274,20 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Project Planner/Project Planner.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = RTUL47LH55;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_FirebaseAppDelegateProxyEnabled = NO;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access to capture timestamped snag completion photos.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving and attaching snag completion photos.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow selecting photos to attach to task and snag completions.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -295,6 +305,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				a = "";
 			};
 			name = Debug;
 		};
@@ -303,13 +314,20 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Project Planner/Project Planner.Release.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = RTUL47LH55;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_FirebaseAppDelegateProxyEnabled = NO;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access to capture timestamped snag completion photos.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving and attaching snag completion photos.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow selecting photos to attach to task and snag completions.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -327,6 +345,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				a = "";
 			};
 			name = Release;
 		};
@@ -384,6 +403,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 274779442EA6AE970000D1F8 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseStorage;
+		};
+		2747794F2EA6AEF90000D1FC /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 274779442EA6AE970000D1F8 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

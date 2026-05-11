@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import FirebaseAuth
 import FirebaseFirestore
 
 struct ManageUsersView: View {
@@ -13,6 +14,7 @@ struct ManageUsersView: View {
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @Environment(\.dismiss) private var dismiss
     
     @State private var showingAddUser = false
@@ -35,11 +37,27 @@ struct ManageUsersView: View {
         if userStore.hasAdminAccess() { return false }
         return u.permissions.manager && u.permissions.operatives
     }
+
+    /// Signed in with Firebase Auth but org user doc not in memory yet — show spinner instead of “access denied”.
+    private var needsProfileBeforeManageUsersGate: Bool {
+        Auth.auth().currentUser != nil && userStore.currentUser == nil
+    }
     
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if !userStore.canManageUsers() {
+                if needsProfileBeforeManageUsersGate {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                        Text("Loading profile…")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .task {
+                        await userStore.loadCurrentUser()
+                    }
+                } else if !userStore.canManageUsers() {
                     if isManagerOperativeManagement {
                         // Managers with Operative Management can manage operatives only
                         VStack(spacing: 0) {
@@ -115,13 +133,6 @@ struct ManageUsersView: View {
             }
             .navigationTitle(isManagerOperativeManagement && !userStore.canManageUsers() ? "Manage Operatives" : "Manage Users")
             .navigationBarTitleDisplayMode(.inline)
-            .task {
-                // Always load fresh from Firebase when opening so deleted-in-console users disappear
-                await userStore.loadOrganizationUsers()
-            }
-            .refreshable {
-                await userStore.loadOrganizationUsers()
-            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") {
@@ -149,6 +160,7 @@ struct ManageUsersView: View {
                     .environmentObject(bookingStore)
                     .environmentObject(operativeStore)
                     .environmentObject(holidayStore)
+                    .environmentObject(firebaseBackend)
             }
             .alert("Delete User", isPresented: $showingDeleteConfirmation) {
                 Button("Cancel", role: .cancel) {
@@ -186,8 +198,7 @@ struct ManageUsersView: View {
                         } else if isOperative {
                             // Count bookings for this operative (by operativeId matching user email or name)
                             let operativeBookings = bookingStore.bookings.filter { booking in
-                                // Try to match by finding operative with matching email
-                                if let operative = operativeStore.operatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+                                if let operative = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
                                     return booking.operativeId == operative.id
                                 }
                                 return false
@@ -208,19 +219,15 @@ struct ManageUsersView: View {
         }
         .task {
             await userStore.loadOrganizationUsers()
-            // Set initial tab if provided
             if initialTab >= 0 && initialTab <= 2 {
                 selectedTab = initialTab
             }
-            // Scroll to highlighted user if provided
-            if let userToHighlight = userToHighlight {
+            if let userToHighlight {
                 selectedUser = userToHighlight
-                // Small delay to ensure list is rendered
-                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                try? await Task.sleep(nanoseconds: 300_000_000)
             }
         }
         .onAppear {
-            // Set initial tab if provided
             if initialTab >= 0 && initialTab <= 2 {
                 selectedTab = initialTab
             }
@@ -361,6 +368,7 @@ struct ManageUsersView: View {
     
     private var managersList: some View {
         let managers = userStore.organizationUsers.filter { user in
+            guard !user.permissions.operativeMode else { return false }
             let isManager = (user.permissions.adminAccess || user.isSuperAdmin) || user.permissions.manager
             return isManager && rosterSegment.matches(user)
         }
@@ -601,9 +609,13 @@ struct ManageUserRowView: View {
                         "operatives": user.permissions.operatives,
                         "skills": user.permissions.skills,
                         "qualifications": user.permissions.qualifications,
+                        "materials": user.permissions.materials,
                         "projects": user.permissions.projects,
                         "smallWorks": user.permissions.smallWorks,
-                        "operativeMode": user.permissions.operativeMode
+                        "operativeMode": user.permissions.operativeMode,
+                        "weeklyReports": user.permissions.weeklyReports,
+                        "subContractors": user.permissions.subContractors,
+                        "siteAudit": user.permissions.siteAudit
                     ],
                     "createdAt": Timestamp(date: Date()),
                     "isUsed": false
@@ -669,6 +681,7 @@ struct EditUserView: View {
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @Environment(\.dismiss) private var dismiss
     
     let user: AppUser
@@ -687,26 +700,82 @@ struct EditUserView: View {
     @State private var isUpdatingActiveStatus = false
     @State private var activeStatusMessage: String?
     @State private var showingHolidayReport = false
+    @State private var saveErrorMessage: String?
+    @State private var selectedAssignedManagerUserId: String?
+    @State private var dayRateText: String
+    @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
+    @State private var showingQualificationsEditor = false
     
     init(user: AppUser) {
         self.user = user
         self._permissions = State(initialValue: user.permissions)
         self._isActive = State(initialValue: user.isActive)
+        self._selectedAssignedManagerUserId = State(initialValue: user.assignedManagerUserId)
+        self._dayRateText = State(initialValue: user.dayRate.map { String(format: "%.2f", $0) } ?? "")
     }
     
-    // Check if current user is admin/super admin
-    private var canEdit: Bool {
-        guard let currentUser = userStore.displayUser else { return false }
-        return currentUser.isSuperAdmin || currentUser.permissions.adminAccess
+    private var isManagerOperativeOnly: Bool {
+        userStore.isActingManagerOperativeManagementOnly()
+    }
+    
+    private var canEditPermissionsMatrix: Bool {
+        userStore.canEditTargetUserPermissions(user)
+    }
+    
+    /// Admin-level account tools (status, delete, some emails).
+    private var canUseAdminAccountTools: Bool {
+        userStore.hasAdminAccess()
+    }
+    
+    /// Password / invitation actions also available to managers who only manage operatives.
+    private var canShowCredentialActions: Bool {
+        canUseAdminAccountTools || (isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative))
+    }
+    
+    private var linkedOperativeForUser: Operative? {
+        operativeStore.allOperatives.first {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
+            user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
     
     // Check if any changes have been made
     private var hasChanges: Bool {
-        permissions != user.permissions || isActive != user.isActive
+        if userStore.isOrganizationCreator(userId: user.id) {
+            return false
+        }
+        let dayRateEligible = (user.permissions.operativeMode || user.role == .operative || user.permissions.manager || user.role == .manager)
+        let operativeProfileChanged = (user.permissions.operativeMode || user.role == .operative) && (
+            (selectedAssignedManagerUserId ?? "") != (user.assignedManagerUserId ?? "") ||
+            parseDayRate(dayRateText) != user.dayRate
+        )
+        let managerDayRateChanged = (user.permissions.manager || user.role == .manager) && dayRateEligible && parseDayRate(dayRateText) != user.dayRate
+        if canUseAdminAccountTools {
+            return permissions != user.permissions || isActive != user.isActive || operativeProfileChanged || managerDayRateChanged
+        }
+        if canEditPermissionsMatrix && operativeProfileChanged {
+            return true
+        }
+        if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative) {
+            return permissions.materials != user.permissions.materials ||
+                permissions.siteAudit != user.permissions.siteAudit
+        }
+        return false
+    }
+
+    private var lineManagerCandidates: [AppUser] {
+        userStore.organizationUsers
+            .filter { candidate in
+                !candidate.permissions.operativeMode &&
+                (candidate.isSuperAdmin || candidate.permissions.adminAccess || candidate.permissions.manager) &&
+                candidate.isActive &&
+                candidate.passwordSet
+            }
+            .sorted { ($0.fullName.isEmpty ? $0.email : $0.fullName) < ($1.fullName.isEmpty ? $1.email : $1.fullName) }
     }
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ScrollView {
                 VStack(spacing: 0) {
                     // User Info Header
@@ -715,16 +784,16 @@ struct EditUserView: View {
                     // User Details Section
                     userDetailsSection
                     
-                    // Active/Inactive — all admin-editable accounts (admins were missing this before)
-                    if canEdit {
+                    // Active/Inactive — admins only (never for organisation creator)
+                    if canUseAdminAccountTools && !userStore.isOrganizationCreator(userId: user.id) {
                         activeToggleSection
                     }
                     
                     // Permissions
                     permissionsSection
                     
-                    // Reset password / Send sign-up (no "Verification" heading) + Delete user
-                    if canEdit {
+                    // Account actions (credentials + admin-only maintenance)
+                    if canShowCredentialActions || canUseAdminAccountTools {
                         actionsSection
                     }
                 }
@@ -739,7 +808,7 @@ struct EditUserView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    if canEdit {
+                    if canEditPermissionsMatrix {
                         Button("Save") {
                             saveChanges()
                         }
@@ -766,11 +835,32 @@ struct EditUserView: View {
                     Text("Are you sure you want to delete \(user.fullName)? This action cannot be undone.")
                 }
             }
+            .alert("Could Not Save", isPresented: .constant(saveErrorMessage != nil)) {
+                Button("OK") { saveErrorMessage = nil }
+            } message: {
+                if let msg = saveErrorMessage {
+                    Text(msg)
+                }
+            }
+            .sheet(isPresented: $showingQualificationsEditor) {
+                if let operative = linkedOperativeForUser {
+                    OperativeQualificationsEditorView(
+                        operative: operative,
+                        title: "Skills & Qualifications",
+                        canEditAssignments: canEditPermissionsMatrix && (user.permissions.operativeMode || user.role == .operative)
+                    )
+                    .environmentObject(operativeStore)
+                    .environmentObject(firebaseBackend)
+                }
+            }
         }
         .sheet(isPresented: $showingHolidayReport) {
             HolidayReportView(user: user)
                 .environmentObject(holidayStore)
                 .environmentObject(operativeStore)
+        }
+        .task {
+            await loadDayRateHistory()
         }
     }
     
@@ -843,7 +933,84 @@ struct EditUserView: View {
                 DetailRow(label: "Status", value: user.isActive ? "Active" : "Inactive")
             }
             .padding(.horizontal, 20)
+
+            if (user.permissions.operativeMode || user.role == .operative || user.permissions.manager || user.role == .manager) && canEditPermissionsMatrix {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text((user.permissions.manager || user.role == .manager) ? "Manager setup" : "Operative setup")
+                        .font(.headline)
+
+                    if user.permissions.operativeMode || user.role == .operative {
+                        Text("Line manager")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Picker("Line manager", selection: $selectedAssignedManagerUserId) {
+                            Text("Select manager…").tag(nil as String?)
+                            ForEach(lineManagerCandidates, id: \.id) { manager in
+                                Text(manager.fullName.isEmpty ? manager.email : manager.fullName).tag(Optional(manager.id))
+                            }
+                        }
+                    }
+
+                    Text("Day rate")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    HStack {
+                        Text(localeCurrencySymbol())
+                            .foregroundColor(.secondary)
+                        TextField("Leave blank if not set", text: $dayRateText)
+                            .keyboardType(.decimalPad)
+                    }
+                    if (user.permissions.operativeMode || user.role == .operative) && !dayRateHistory.isEmpty {
+                        Text("Previous day rates")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 4)
+                        ForEach(dayRateHistory) { entry in
+                            HStack {
+                                Text(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text("\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))")
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                    
+                    if (user.permissions.operativeMode || user.role == .operative), linkedOperativeForUser != nil {
+                        Button(action: { showingQualificationsEditor = true }) {
+                            HStack {
+                                Image(systemName: "graduationcap.fill")
+                                Text("Skills & Qualifications")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                            }
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.indigo)
+                            .cornerRadius(10)
+                        }
+                        .padding(.top, 6)
+                    }
+                }
+                .padding(16)
+                .background(Color(.systemBackground))
+                .cornerRadius(12)
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+            }
         }
+    }
+
+    private func loadDayRateHistory() async {
+        guard user.permissions.operativeMode || user.role == .operative else {
+            dayRateHistory = []
+            return
+        }
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let all = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? [:]
+        dayRateHistory = (all[user.id] ?? []).sorted(by: { $0.effectiveAt > $1.effectiveAt })
     }
     
     private var activeToggleSection: some View {
@@ -871,6 +1038,7 @@ struct EditUserView: View {
     /// Verified users: password reset only. Pending users: resend sign-up / invitation only (no Firebase reset — avoids clashing flows).
     private var actionsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if canShowCredentialActions {
             Group {
                 if user.passwordSet {
                     Button(action: { sendResetPasswordEmail() }) {
@@ -924,9 +1092,11 @@ struct EditUserView: View {
                     .foregroundColor(.secondary)
                     .padding(.horizontal, 20)
             }
+            }
 
             // Super Admin transfer (organization ownership)
-            if userStore.currentUser?.isSuperAdmin == true,
+            if canUseAdminAccountTools,
+               userStore.currentUser?.isSuperAdmin == true,
                !user.isSuperAdmin,
                !user.permissions.operativeMode,
                (user.permissions.adminAccess || user.role == .admin) {
@@ -976,7 +1146,8 @@ struct EditUserView: View {
             }
 
             // Deactivate / Reactivate (admin + super admin only)
-            if !userStore.isOrganizationCreator(userId: user.id) {
+            if canUseAdminAccountTools,
+               !userStore.isOrganizationCreator(userId: user.id) {
                 Button(action: { toggleActiveStatus() }) {
                     HStack {
                         Image(systemName: isActive ? "pause.circle.fill" : "play.circle.fill")
@@ -1003,7 +1174,9 @@ struct EditUserView: View {
                 }
             }
             
-            if !user.isSuperAdmin {
+            if canUseAdminAccountTools,
+               userStore.canDeleteUser(user),
+               !userStore.isOrganizationCreator(userId: user.id) {
                 Button(action: { showingDeleteConfirmation = true }) {
                     HStack {
                         Image(systemName: "trash.fill")
@@ -1058,7 +1231,7 @@ struct EditUserView: View {
     
     private var permissionsSection: some View {
         VStack(alignment: .leading, spacing: 20) {
-            if user.isSuperAdmin {
+            if userStore.isOrganizationCreator(userId: user.id) {
                 VStack(spacing: 12) {
                     HStack {
                         Image(systemName: "lock.fill")
@@ -1075,6 +1248,34 @@ struct EditUserView: View {
                 .background(Color.orange.opacity(0.1))
                 .cornerRadius(12)
                 .padding(.horizontal, 20)
+            } else if !canEditPermissionsMatrix {
+                Text("You do not have permission to change access for this user. Ask an organisation admin.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+            } else if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Operative access")
+                        .font(.headline)
+                        .padding(.horizontal, 20)
+                    Text("You can adjust materials access for this operative. Other permissions are managed by an admin.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 20)
+                    PermissionToggle(
+                        title: "Materials",
+                        description: "Allow this operative to see and use Materials inside assigned projects and small works.",
+                        isOn: $permissions.materials
+                    )
+                    .padding(.horizontal, 20)
+                    PermissionToggle(
+                        title: "Site Audit",
+                        description: "Allow this operative to access Site Audits for assigned projects and small works.",
+                        isOn: $permissions.siteAudit
+                    )
+                    .padding(.horizontal, 20)
+                }
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Permissions")
@@ -1102,12 +1303,6 @@ struct EditUserView: View {
                             isOn: $permissions.manager
                         )
                         .disabled(permissions.adminAccess || permissions.operativeMode)
-                        .onChange(of: permissions.manager) { oldValue, newValue in
-                            if newValue && !permissions.operativeMode {
-                                permissions.projects = true
-                                permissions.smallWorks = true
-                            }
-                        }
                         
                         PermissionToggle(
                             title: "Projects",
@@ -1122,10 +1317,24 @@ struct EditUserView: View {
                             isOn: $permissions.smallWorks
                         )
                         .disabled((!permissions.manager && !permissions.adminAccess) || permissions.operativeMode)
+
+                        PermissionToggle(
+                            title: "Weekly Report",
+                            description: "Will be able to pull weekly reports.",
+                            isOn: $permissions.weeklyReports
+                        )
+                        .disabled((!permissions.manager && !permissions.adminAccess) || permissions.operativeMode)
+                        
+                        PermissionToggle(
+                            title: "Sub Contractors",
+                            description: "Can add and manage sub contractors. If unselected they will be unable to manage them, they will only be able to book them in.",
+                            isOn: $permissions.subContractors
+                        )
+                        .disabled((!permissions.manager && !permissions.adminAccess) || permissions.operativeMode)
                         
                         PermissionToggle(
                             title: "Operatives",
-                            description: "Can manage operatives and view their details. If un-selected the user will only be able to assign operatives to projects and small works.",
+                            description: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Operatives tab or full operative profiles.",
                             isOn: $permissions.operatives
                         )
                         .disabled(permissions.operativeMode)
@@ -1143,6 +1352,20 @@ struct EditUserView: View {
                             isOn: $permissions.qualifications
                         )
                         .disabled(permissions.operativeMode)
+
+                        PermissionToggle(
+                            title: "Materials",
+                            description: "For operatives: can view/use materials in assigned projects and small works.",
+                            isOn: $permissions.materials
+                        )
+                        .disabled(!permissions.operativeMode)
+                        
+                        PermissionToggle(
+                            title: "Site Audit",
+                            description: "For operatives: can open Site Audits in assigned projects and small works.",
+                            isOn: $permissions.siteAudit
+                        )
+                        .disabled(!permissions.operativeMode)
                         
                         Divider()
                             .padding(.vertical, 8)
@@ -1161,6 +1384,8 @@ struct EditUserView: View {
                                 permissions.operatives = false
                                 permissions.skills = false
                                 permissions.qualifications = false
+                                permissions.materials = false
+                                permissions.siteAudit = false
                             }
                         }
                     }
@@ -1175,25 +1400,76 @@ struct EditUserView: View {
         
         Task {
             var permissionsSuccess = true
-            if !user.isSuperAdmin && permissions != user.permissions {
-                permissionsSuccess = await userStore.updateUserPermissions(
-                    userId: user.id,
-                    permissions: permissions
-                )
+            if canEditPermissionsMatrix && !userStore.isOrganizationCreator(userId: user.id) {
+                if canUseAdminAccountTools && permissions != user.permissions {
+                    permissionsSuccess = await userStore.updateUserPermissions(
+                        userId: user.id,
+                        permissions: permissions
+                    )
+                } else if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative),
+                          (permissions.materials != user.permissions.materials || permissions.siteAudit != user.permissions.siteAudit) {
+                    var merged = user.permissions
+                    merged.materials = permissions.materials
+                    merged.siteAudit = permissions.siteAudit
+                    permissionsSuccess = await userStore.updateUserPermissions(
+                        userId: user.id,
+                        permissions: merged
+                    )
+                }
             }
             
             var activeSuccess = true
-            if isActive != user.isActive {
+            if canUseAdminAccountTools && isActive != user.isActive {
                 activeSuccess = await userStore.updateUserActiveStatus(for: user, isActive: isActive)
+            }
+
+            var operativeDetailsSuccess = true
+            let operativeProfileChanged = (user.permissions.operativeMode || user.role == .operative) && (
+                (selectedAssignedManagerUserId ?? "") != (user.assignedManagerUserId ?? "") ||
+                parseDayRate(dayRateText) != user.dayRate
+            )
+            if canEditPermissionsMatrix && operativeProfileChanged {
+                let parsedDayRate = parseDayRate(dayRateText)
+                operativeDetailsSuccess = await userStore.updateOperativeProfileFields(
+                    for: user,
+                    assignedManagerUserId: selectedAssignedManagerUserId,
+                    dayRate: parsedDayRate,
+                    operativeStore: operativeStore
+                )
+            }
+            
+            var managerDayRateSuccess = true
+            let managerDayRateChanged = (user.permissions.manager || user.role == .manager) && parseDayRate(dayRateText) != user.dayRate
+            if canEditPermissionsMatrix && managerDayRateChanged {
+                managerDayRateSuccess = await userStore.updateManagerDayRate(for: user, dayRate: parseDayRate(dayRateText))
             }
             
             await MainActor.run {
                 isUpdating = false
-                if permissionsSuccess && activeSuccess {
+                if permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess {
                     dismiss()
+                } else {
+                    saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."
                 }
             }
         }
+    }
+
+    private func parseDayRate(_ input: String) -> Double? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let normalized = trimmed
+            .replacingOccurrences(of: ",", with: ".")
+            .replacingOccurrences(of: localeCurrencySymbol(), with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return Double(normalized)
+    }
+
+    private func localeCurrencySymbol() -> String {
+        if #available(iOS 16.0, *) {
+            return Locale.current.currency?.identifier == nil ? (Locale.current.currencySymbol ?? "£") : (Locale.current.currencySymbol ?? "£")
+        }
+        return Locale.current.currencySymbol ?? "£"
     }
     
     private func sendResetPasswordEmail() {
@@ -1258,9 +1534,13 @@ struct EditUserView: View {
                 "operatives": permissions.operatives,
                 "skills": permissions.skills,
                 "qualifications": permissions.qualifications,
+                "materials": permissions.materials,
                 "projects": permissions.projects,
                 "smallWorks": permissions.smallWorks,
-                "operativeMode": permissions.operativeMode
+                "operativeMode": permissions.operativeMode,
+                "weeklyReports": permissions.weeklyReports,
+                "subContractors": permissions.subContractors,
+                "siteAudit": permissions.siteAudit
             ],
             "createdAt": Timestamp(date: Date()),
             "isUsed": false
@@ -1323,9 +1603,13 @@ struct EditUserView: View {
                         "operatives": user.permissions.operatives,
                         "skills": user.permissions.skills,
                         "qualifications": user.permissions.qualifications,
+                        "materials": user.permissions.materials,
                         "projects": user.permissions.projects,
                         "smallWorks": user.permissions.smallWorks,
-                        "operativeMode": user.permissions.operativeMode
+                        "operativeMode": user.permissions.operativeMode,
+                        "weeklyReports": user.permissions.weeklyReports,
+                        "subContractors": user.permissions.subContractors,
+                        "siteAudit": user.permissions.siteAudit
                     ],
                     "createdAt": Timestamp(date: Date()),
                     "isUsed": false
@@ -1426,4 +1710,8 @@ struct TabButton: View {
 #Preview {
     ManageUsersView()
         .environmentObject(UserStore())
+        .environmentObject(BookingStore())
+        .environmentObject(OperativeStore())
+        .environmentObject(HolidayStore())
+        .environmentObject(FirebaseBackend())
 }

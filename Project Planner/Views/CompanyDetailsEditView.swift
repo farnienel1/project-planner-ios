@@ -5,6 +5,7 @@
 
 import SwiftUI
 import CoreLocation
+import PhotosUI
 
 struct CompanyDetailsEditView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
@@ -16,6 +17,8 @@ struct CompanyDetailsEditView: View {
     @State private var officeCity = ""
     @State private var officePostcode = ""
     @State private var countryCode = "GB"
+    @State private var selectedLogoItem: PhotosPickerItem?
+    @State private var selectedLogoImage: UIImage?
     
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -53,6 +56,52 @@ struct CompanyDetailsEditView: View {
                 } footer: {
                     Text("Country is always required. If there is no office address, the site map centres on the capital (London for the UK).")
                 }
+
+                Section {
+                    HStack(spacing: 12) {
+                        Group {
+                            if let selectedLogoImage {
+                                Image(uiImage: selectedLogoImage)
+                                    .resizable()
+                                    .scaledToFit()
+                            } else if let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
+                                      let url = URL(string: logoURL) {
+                                AsyncImage(url: url) { image in
+                                    image.resizable().scaledToFit()
+                                } placeholder: {
+                                    ProgressView()
+                                }
+                            } else {
+                                Image(systemName: "photo")
+                                    .font(.title2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(width: 72, height: 72)
+                        .background(Color(.systemGray6))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            PhotosPicker(selection: $selectedLogoItem, matching: .images) {
+                                Text("Upload logo (JPEG)")
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            Button("Remove logo", role: .destructive) {
+                                selectedLogoImage = nil
+                                selectedLogoItem = nil
+                                Task {
+                                    try? await firebaseBackend.updateOrganizationCompanyLogoURL(nil)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                } header: {
+                    Text("Company logo")
+                } footer: {
+                    Text("Shown on Home and Site Audit report header.")
+                }
                 
                 if let errorMessage {
                     Section {
@@ -88,6 +137,17 @@ struct CompanyDetailsEditView: View {
             }
             .onAppear {
                 applyOrganizationToForm()
+            }
+            .onChange(of: selectedLogoItem) { _, newItem in
+                guard let newItem else { return }
+                Task {
+                    if let data = try? await newItem.loadTransferable(type: Data.self),
+                       let image = UIImage(data: data) {
+                        await MainActor.run {
+                            selectedLogoImage = resizedLogoImage(image)
+                        }
+                    }
+                }
             }
         }
     }
@@ -159,6 +219,11 @@ struct CompanyDetailsEditView: View {
                 defaultLatitude: lat,
                 defaultLongitude: lon
             )
+            if let selectedLogoImage,
+               let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                let logoURL = try await firebaseBackend.uploadOrganizationLogo(selectedLogoImage, organizationId: orgId)
+                try await firebaseBackend.updateOrganizationCompanyLogoURL(logoURL)
+            }
             await MainActor.run {
                 isSaving = false
                 successMessage = "Saved."
@@ -171,6 +236,17 @@ struct CompanyDetailsEditView: View {
                 isSaving = false
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    private func resizedLogoImage(_ image: UIImage) -> UIImage {
+        let targetWidth: CGFloat = 900
+        guard image.size.width > targetWidth else { return image }
+        let scale = targetWidth / image.size.width
+        let newSize = CGSize(width: targetWidth, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
         }
     }
 }
