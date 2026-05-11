@@ -52,7 +52,8 @@ struct ProjectDetailView: View {
     @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
-    
+    @EnvironmentObject var appSettings: AppSettingsStore
+
     private let projectId: UUID
     private let fallbackProject: Project
     
@@ -75,22 +76,20 @@ struct ProjectDetailView: View {
     private enum DetailTile: String, CaseIterable, Identifiable {
         case scheduling = "Scheduling"
         case visibility = "View"
-        case tasks = "My Tasks"
+        case tasks = "My tasks"
         case materials = "Materials"
-        case siteAudit = "Site Audits"
-        case settings = "Settings"
+        case siteAudit = "Site audits"
         case location = "Location"
-        
+
         var id: String { rawValue }
         var icon: String {
             switch self {
-            case .scheduling: return "calendar.badge.clock"
+            case .scheduling: return "calendar"
             case .visibility: return "eye"
             case .tasks: return "checklist"
-            case .materials: return "cube.box.fill"
-            case .siteAudit: return "doc.text.viewfinder"
-            case .settings: return "gearshape"
-            case .location: return "map"
+            case .materials: return "shippingbox"
+            case .siteAudit: return "clipboard.fill"
+            case .location: return "mappin.and.ellipse"
             }
         }
     }
@@ -120,23 +119,48 @@ struct ProjectDetailView: View {
     
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                projectHeader
+            VStack(alignment: .leading, spacing: 16) {
+                detailHeroCard
+                sectionHeading("Manage")
                 overviewTiles
+                sectionHeading("Details")
+                detailSummaryCard
             }
-            .padding()
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
         }
+        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .navigationTitle(detailRootTitle)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button(action: { dismiss() }) {
                     Image(systemName: "chevron.left")
-                        .foregroundColor(Color.theme.primary)
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
                         .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 36, height: 36)
+                        .background(Color.white)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                 }
             }
-            
+            if canEditCurrentWorkItem {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showingEditProject = true
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .font(.system(size: 18, weight: .medium))
+                            .frame(width: 36, height: 36)
+                            .background(Color.white)
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
+                    }
+                    .accessibilityLabel("Edit project details")
+                }
+            }
         }
         .preference(key: HideBottomMenuKey.self, value: true)
         .background(
@@ -188,6 +212,9 @@ struct ProjectDetailView: View {
                 }
             }
         }
+        .onChange(of: project.updatedAt) { _, _ in
+            geocodeAddress()
+        }
         .onChange(of: selectedWeek) { _, _ in
             loadWeekBookings()
         }
@@ -200,22 +227,201 @@ struct ProjectDetailView: View {
         }
     }
     
-    // MARK: - Project Header
-    
-    private var projectHeader: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(project.jobNumber)
-                .font(.largeTitle)
-                .fontWeight(.bold)
-                .foregroundColor(Color.theme.primary)
-            
-            Text(project.siteName)
-                .font(.title2)
-                .foregroundColor(.primary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    // MARK: - Detail layout (revamp)
+
+    private var detailRootTitle: String {
+        project.jobType == .smallWorks ? "Small work" : "Project"
     }
-    
+
+    private func sectionHeading(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(ProjectWorksRevampColors.muted)
+            .tracking(0.4)
+            .padding(.leading, 4)
+    }
+
+    private var primaryGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color.theme.primary(for: appSettings.settings.colorScheme),
+                ProjectWorksRevampColors.blueLight
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var detailHeroCard: some View {
+        let pct = WorksListProgress.fraction(for: project)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(project.jobNumber)
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(.white)
+                            .tracking(-0.3)
+                        if let pill = heroJobTypePillText {
+                            Text(pill)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.white.opacity(0.22))
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                .tracking(0.3)
+                        }
+                    }
+                    Text(project.siteName)
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.9))
+                }
+                Spacer(minLength: 8)
+                heroStatusPill
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.22))
+                        .frame(height: 5)
+                    Capsule()
+                        .fill(Color.white)
+                        .frame(width: max(6, geo.size.width * CGFloat(pct)), height: 5)
+                }
+            }
+            .frame(height: 5)
+            .padding(.top, 2)
+
+            HStack {
+                Text("\(Int(pct * 100))% complete")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                Spacer()
+                Text(daysLeftCaption)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+        }
+        .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(primaryGradient)
+        )
+    }
+
+    private var heroJobTypePillText: String? {
+        if project.jobType == .smallWorks { return nil }
+        if let c = project.customJobType, !c.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return c.uppercased()
+        }
+        return project.jobType.rawValue
+    }
+
+    private var heroStatusPill: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(Color.white)
+                .frame(width: 5, height: 5)
+            Text(project.status.rawValue)
+                .font(.system(size: 10, weight: .medium))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(Color.white.opacity(0.18))
+        .clipShape(Capsule())
+    }
+
+    private var daysLeftCaption: String {
+        switch project.status {
+        case .completed:
+            return "Completed"
+        case .inactive:
+            return "Inactive"
+        default:
+            let cal = Calendar.current
+            let d = cal.dateComponents([.day], from: cal.startOfDay(for: Date()), to: cal.startOfDay(for: project.endDate)).day ?? 0
+            if d < 0 { return "Ended" }
+            return "\(d) days left"
+        }
+    }
+
+    private var schedulingAttentionCount: Int {
+        bookingStore.bookings.filter { $0.projectId == project.id && $0.status == .tentative }.count
+    }
+
+    private var openTasksCount: Int {
+        taskStore.tasks.filter { $0.projectId == project.id && $0.status != .completed }.count
+    }
+
+    private var detailSummaryCard: some View {
+        VStack(spacing: 0) {
+            summaryRow(
+                icon: "building.2.fill",
+                title: "Client",
+                value: project.client.name,
+                iconTint: ProjectWorksRevampColors.blue,
+                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984)
+            )
+            Divider().overlay(ProjectWorksRevampColors.border)
+            summaryRow(
+                icon: "person.fill.checkmark",
+                title: "Manager",
+                value: managerDisplayName,
+                iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
+                iconBackground: ProjectWorksRevampColors.jobTypePillBg
+            )
+            Divider().overlay(ProjectWorksRevampColors.border)
+            summaryRow(
+                icon: "calendar",
+                title: "Timeline",
+                value: timelineDetailSummary,
+                iconTint: ProjectWorksRevampColors.upcomingAmber,
+                iconBackground: Color(red: 0.98, green: 0.933, blue: 0.855)
+            )
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 4)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    private var timelineDetailSummary: String {
+        let f = DateFormatter()
+        f.dateFormat = "dd MMM yy"
+        return "\(f.string(from: project.startDate)) – \(f.string(from: project.endDate))"
+    }
+
+    private func summaryRow(icon: String, title: String, value: String, iconTint: Color, iconBackground: Color) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(iconBackground)
+                .frame(width: 30, height: 30)
+                .overlay(
+                    Image(systemName: icon)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(iconTint)
+                )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                Text(value)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 11)
+    }
+
     private var overviewTiles: some View {
         let availableTiles: [DetailTile] = {
             if userStore.isOperativeMode() {
@@ -228,30 +434,94 @@ struct ProjectDetailView: View {
             if userStore.hasAdminAccess() {
                 tiles.append(.visibility)
             }
-            tiles.append(contentsOf: [.tasks, .materials, .siteAudit, .settings, .location])
+            tiles.append(contentsOf: [.tasks, .materials, .siteAudit, .location])
             return tiles
         }()
-        
-        return LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 16) {
+
+        return LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
             ForEach(availableTiles) { tile in
                 NavigationLink(destination: tileDestination(for: tile)) {
-                    VStack(spacing: 12) {
-                        Image(systemName: tile.icon)
-                            .font(.system(size: 32, weight: .semibold))
-                            .foregroundColor(Color.theme.primary)
-                        Text(tile.rawValue)
-                            .font(.headline)
-                            .foregroundColor(.primary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 120)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color(.systemBackground))
-                            .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
-                    )
+                    manageTileContents(for: tile)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func manageTileContents(for tile: DetailTile) -> some View {
+        VStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(tileIconBackground(for: tile))
+                    .frame(width: 36, height: 36)
+                Image(systemName: tile.icon)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(tileIconForeground(for: tile))
+            }
+            .overlay(alignment: .topTrailing) {
+                if let badge = manageTileBadgeCount(for: tile), badge > 0 {
+                    Text("\(badge)")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(minWidth: 14, minHeight: 14)
+                        .padding(.horizontal, 3)
+                        .background(manageTileBadgeColor(for: tile))
+                        .clipShape(Capsule())
+                        .offset(x: 6, y: -5)
                 }
             }
+            Text(tile.rawValue)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 6)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    private func manageTileBadgeCount(for tile: DetailTile) -> Int? {
+        switch tile {
+        case .scheduling: return schedulingAttentionCount
+        case .tasks: return openTasksCount
+        default: return nil
+        }
+    }
+
+    private func manageTileBadgeColor(for tile: DetailTile) -> Color {
+        switch tile {
+        case .scheduling: return Color(red: 0.639, green: 0.176, blue: 0.176)
+        default: return ProjectWorksRevampColors.blue
+        }
+    }
+
+    private func tileIconBackground(for tile: DetailTile) -> Color {
+        switch tile {
+        case .scheduling: return Color(red: 0.902, green: 0.945, blue: 0.984)
+        case .visibility: return ProjectWorksRevampColors.jobTypePillBg
+        case .tasks: return Color(red: 0.882, green: 0.961, blue: 0.933)
+        case .materials: return Color(red: 0.98, green: 0.933, blue: 0.855)
+        case .siteAudit: return Color(red: 0.98, green: 0.925, blue: 0.906)
+        case .location: return Color(red: 0.984, green: 0.918, blue: 0.941)
+        }
+    }
+
+    private func tileIconForeground(for tile: DetailTile) -> Color {
+        switch tile {
+        case .scheduling: return ProjectWorksRevampColors.blue
+        case .visibility: return Color(red: 0.325, green: 0.29, blue: 0.718)
+        case .tasks: return ProjectWorksRevampColors.activeGreen
+        case .materials: return ProjectWorksRevampColors.upcomingAmber
+        case .siteAudit: return Color(red: 0.6, green: 0.235, blue: 0.114)
+        case .location: return Color(red: 0.6, green: 0.208, blue: 0.337)
         }
     }
     
@@ -277,7 +547,7 @@ struct ProjectDetailView: View {
                 .environmentObject(firebaseBackend)
                 .navigationTitle(tile.rawValue)
                 .navigationBarTitleDisplayMode(.inline)
-        case .scheduling, .tasks, .settings, .location:
+        case .scheduling, .tasks, .location:
             ScrollView {
                 VStack(spacing: 20) {
                     switch tile {
@@ -285,8 +555,6 @@ struct ProjectDetailView: View {
                         schedulingContent
                     case .tasks:
                         tasksContent
-                    case .settings:
-                        settingsContent
                     case .location:
                         siteLocationSection
                     default:
@@ -569,9 +837,9 @@ struct ProjectDetailView: View {
                     .foregroundColor(.primary)
             }
             
-            if hasValidAddress {
+            if hasValidLocation {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(project.siteAddress)
+                    Text(locationDisplayText)
                         .font(.subheadline)
                         .foregroundColor(.primary)
                     
@@ -652,6 +920,22 @@ struct ProjectDetailView: View {
     
     private var hasValidAddress: Bool {
         !project.siteAddress.isEmpty && project.siteAddress != "Site Location not available"
+    }
+
+    private var hasPinnedCoordinate: Bool {
+        project.usesMapPinForLocation && project.latitude != nil && project.longitude != nil
+    }
+
+    private var hasValidLocation: Bool {
+        hasPinnedCoordinate || hasValidAddress
+    }
+
+    private var locationDisplayText: String {
+        if hasValidAddress { return project.siteAddress }
+        if hasPinnedCoordinate, let la = project.latitude, let lo = project.longitude {
+            return String(format: "%.5f, %.5f", la, lo)
+        }
+        return ""
     }
     
     private var weekOfString: String {
@@ -871,12 +1155,21 @@ struct ProjectDetailView: View {
     }
     
     private func geocodeAddress() {
+        if hasPinnedCoordinate, let la = project.latitude, let lo = project.longitude {
+            let coord = CLLocationCoordinate2D(latitude: la, longitude: lo)
+            Task { @MainActor in
+                let placemark = MKPlacemark(coordinate: coord)
+                mapItem = MKMapItem(placemark: placemark)
+                updateRegion(with: coord)
+            }
+            return
+        }
         guard hasValidAddress else { return }
-        
+
         let request = MKLocalSearch.Request()
         request.naturalLanguageQuery = project.siteAddress
         let search = MKLocalSearch(request: request)
-        
+
         Task {
             do {
                 let response = try await search.start()
@@ -907,6 +1200,19 @@ struct ProjectDetailView: View {
     }
     
     private func openInGoogleMaps() {
+        if hasPinnedCoordinate, let la = project.latitude, let lo = project.longitude {
+            let ll = "\(la),\(lo)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+            if let url = URL(string: "comgooglemaps://?q=\(ll)&center=\(ll)&zoom=17") {
+                if UIApplication.shared.canOpenURL(url) {
+                    UIApplication.shared.open(url)
+                    return
+                }
+            }
+            if let webUrl = URL(string: "https://www.google.com/maps/search/?api=1&query=\(ll)") {
+                UIApplication.shared.open(webUrl)
+            }
+            return
+        }
         let address = project.siteAddress.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         if let url = URL(string: "comgooglemaps://?q=\(address)") {
             if UIApplication.shared.canOpenURL(url) {
@@ -916,13 +1222,20 @@ struct ProjectDetailView: View {
             }
         }
     }
-    
+
     private func openInAppleMaps() {
         if let mapItem = mapItem {
             mapItem.openInMaps()
             return
         }
-        
+        if hasPinnedCoordinate, let la = project.latitude, let lo = project.longitude {
+            let name = project.siteName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+            if let url = URL(string: "http://maps.apple.com/?ll=\(la),\(lo)&q=\(name)") {
+                UIApplication.shared.open(url)
+            }
+            return
+        }
+
         let address = project.siteAddress.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         if let url = URL(string: "http://maps.apple.com/?q=\(address)") {
             UIApplication.shared.open(url)
@@ -936,6 +1249,9 @@ struct ProjectDetailView: View {
     private var currentCoordinate: CLLocationCoordinate2D? {
         if let item = mapItem {
             return coordinate(from: item)
+        }
+        if hasPinnedCoordinate, let la = project.latitude, let lo = project.longitude {
+            return CLLocationCoordinate2D(latitude: la, longitude: lo)
         }
         return nil
     }
@@ -1263,10 +1579,16 @@ private struct ProjectVisibilitySettingsView: View {
             manager: .na
         ))
         .environmentObject(BookingStore())
+        .environmentObject(ManagerScheduleStore())
         .environmentObject(OperativeStore())
         .environmentObject(ProjectStore())
         .environmentObject(UserStore())
+        .environmentObject(HolidayStore())
+        .environmentObject(SubcontractorStore())
         .environmentObject(FirebaseBackend())
+        .environmentObject(NotificationService())
+        .environmentObject(AppSettingsStore())
+        .environmentObject(ProjectTaskStore())
     }
 }
 

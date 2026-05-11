@@ -6,6 +6,13 @@
 //
 
 import SwiftUI
+import MapKit
+
+private enum CreateSmallWorksLocationMode: String, CaseIterable, Identifiable {
+    case addressFields = "Address"
+    case mapPin = "Map pin"
+    var id: String { rawValue }
+}
 
 struct CreateSmallWorksView: View {
     @EnvironmentObject var projectStore: ProjectStore
@@ -32,6 +39,12 @@ struct CreateSmallWorksView: View {
     @State private var selectedJobType: String = ""
 
     @State private var isSaving = false
+
+    @State private var locationMode: CreateSmallWorksLocationMode = .addressFields
+    @State private var pinLatitude: Double?
+    @State private var pinLongitude: Double?
+    @State private var showingMapPinPicker = false
+    @State private var showingQuickAddressForm = false
     
     // Job type mapping helper
     private func jobTypeFromString(_ type: String) -> JobType {
@@ -74,24 +87,47 @@ struct CreateSmallWorksView: View {
                     
                     // Form
                     VStack(spacing: 15) {
-                        TextField("Job Number *", text: $projectJobNumber)
+                        TextField("Project reference *", text: $projectJobNumber)
                             .textFieldStyle(.roundedBorder)
                         
                         TextField("Site Name *", text: $projectSiteName)
                             .textFieldStyle(.roundedBorder)
-                        
-                        TextField("Address Line 1 *", text: $projectAddressLine1)
-                            .textFieldStyle(.roundedBorder)
-                        
-                        TextField("Address Line 2 (Optional)", text: $projectAddressLine2)
-                            .textFieldStyle(.roundedBorder)
-                        
-                        TextField("Town/City *", text: $projectTownCity)
-                            .textFieldStyle(.roundedBorder)
-                        
-                        TextField("Postcode *", text: $projectPostcode)
-                            .textFieldStyle(.roundedBorder)
-                            .textInputAutocapitalization(.characters)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Location")
+                                .font(.headline)
+                            Picker("", selection: $locationMode) {
+                                ForEach(CreateSmallWorksLocationMode.allCases) { mode in
+                                    Text(mode.rawValue).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .onChange(of: locationMode) { _, newValue in
+                                switch newValue {
+                                case .addressFields:
+                                    pinLatitude = nil
+                                    pinLongitude = nil
+                                case .mapPin:
+                                    projectAddressLine1 = ""
+                                    projectAddressLine2 = ""
+                                    projectTownCity = ""
+                                    projectPostcode = ""
+                                }
+                            }
+                            if locationMode == .addressFields {
+                                TextField("Address Line 1 *", text: $projectAddressLine1)
+                                    .textFieldStyle(.roundedBorder)
+                                TextField("Address Line 2 (Optional)", text: $projectAddressLine2)
+                                    .textFieldStyle(.roundedBorder)
+                                TextField("Town/City *", text: $projectTownCity)
+                                    .textFieldStyle(.roundedBorder)
+                                TextField("Postcode *", text: $projectPostcode)
+                                    .textFieldStyle(.roundedBorder)
+                                    .textInputAutocapitalization(.characters)
+                            } else {
+                                smallWorksMapPinLocationBlock
+                            }
+                        }
                         
                         DatePicker("Start Date", selection: $projectStartDate, displayedComponents: .date)
                             .datePickerStyle(.compact)
@@ -299,6 +335,17 @@ struct CreateSmallWorksView: View {
                 CreateManagerView()
                     .environmentObject(operativeStore)
             }
+            .sheet(isPresented: $showingMapPinPicker) {
+                MapPinPickerView(
+                    initialCoordinate: defaultSmallWorksMapCoordinate,
+                    selectedLatitude: $pinLatitude,
+                    selectedLongitude: $pinLongitude,
+                    onConfirm: { _ in }
+                )
+            }
+            .sheet(isPresented: $showingQuickAddressForm) {
+                smallWorksQuickAddressSheet
+            }
             .onAppear {
                 if selectedClient == nil {
                     selectedClient = projectStore.clients.first
@@ -307,13 +354,65 @@ struct CreateSmallWorksView: View {
             }
         }
     }
+
+    private var defaultSmallWorksMapCoordinate: CLLocationCoordinate2D {
+        if let la = pinLatitude, let lo = pinLongitude {
+            return CLLocationCoordinate2D(latitude: la, longitude: lo)
+        }
+        return CLLocationCoordinate2D(latitude: 51.5074, longitude: -0.1278)
+    }
+
+    private var smallWorksMapPinLocationBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let la = pinLatitude, let lo = pinLongitude {
+                Text(String(format: "Pinned at %.5f, %.5f", la, lo))
+                    .font(.subheadline)
+            } else {
+                Text("Optional: set a pin for the site, then add postal address if needed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Button("Set pin on map") { showingMapPinPicker = true }
+                .buttonStyle(.bordered)
+            Button("Set address") { showingQuickAddressForm = true }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var smallWorksQuickAddressSheet: some View {
+        NavigationStack {
+            Form {
+                TextField("Address line 1", text: $projectAddressLine1)
+                TextField("Address line 2 (optional)", text: $projectAddressLine2)
+                TextField("Town / City", text: $projectTownCity)
+                TextField("Postcode", text: $projectPostcode)
+                    .textInputAutocapitalization(.characters)
+            }
+            .navigationTitle("Set address")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showingQuickAddressForm = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingQuickAddressForm = false }
+                }
+            }
+        }
+    }
     
     private var isFormValid: Bool {
-        !projectJobNumber.isEmpty &&
+        let locationOK: Bool = {
+            if locationMode == .mapPin {
+                return pinLatitude != nil && pinLongitude != nil
+            }
+            return !projectAddressLine1.isEmpty && !projectTownCity.isEmpty && !projectPostcode.isEmpty
+        }()
+        return !projectJobNumber.isEmpty &&
         !projectSiteName.isEmpty &&
-        !projectAddressLine1.isEmpty &&
-        !projectTownCity.isEmpty &&
-        !projectPostcode.isEmpty
+        locationOK
     }
     
     private func createSmallWorks() async {
@@ -349,6 +448,7 @@ struct CreateSmallWorksView: View {
 
         // jobType enum is always .smallWorks for small works items (determines collection)
         // customJobType is the user-selected job type for display
+        let usesPin = locationMode == .mapPin
         let project = Project(
             jobNumber: projectJobNumber,
             siteName: projectSiteName,
@@ -364,7 +464,10 @@ struct CreateSmallWorksView: View {
             manager: selectedManager != nil ? .custom : .na,
             managerId: selectedManager?.id, // Save the actual manager ID
             isLive: true,
-            description: projectDescription.isEmpty ? nil : projectDescription
+            description: projectDescription.isEmpty ? nil : projectDescription,
+            usesMapPinForLocation: usesPin,
+            latitude: usesPin ? pinLatitude : nil,
+            longitude: usesPin ? pinLongitude : nil
         )
 
         do {

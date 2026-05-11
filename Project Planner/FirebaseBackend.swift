@@ -1131,6 +1131,9 @@ class FirebaseBackend: ObservableObject {
         ]
         data["hiddenManagerUserIds"] = Array(project.hiddenManagerUserIds)
         data["hiddenOperativeUserIds"] = Array(project.hiddenOperativeUserIds)
+        data["usesMapPinForLocation"] = project.usesMapPinForLocation
+        if let lat = project.latitude { data["latitude"] = lat }
+        if let lon = project.longitude { data["longitude"] = lon }
         
         // Save managerId if available
         if let managerId = project.managerId {
@@ -1175,6 +1178,25 @@ class FirebaseBackend: ObservableObject {
                 }
             }
             throw error
+        }
+    }
+
+    /// Restores map-pin location fields from Firestore (handles `NSNumber` from Firestore).
+    private static func applyMapPinFields(from data: [String: Any], to project: inout Project) {
+        project.usesMapPinForLocation = data["usesMapPinForLocation"] as? Bool ?? false
+        if let n = data["latitude"] as? NSNumber {
+            project.latitude = n.doubleValue
+        } else if let d = data["latitude"] as? Double {
+            project.latitude = d
+        } else {
+            project.latitude = nil
+        }
+        if let n = data["longitude"] as? NSNumber {
+            project.longitude = n.doubleValue
+        } else if let d = data["longitude"] as? Double {
+            project.longitude = d
+        } else {
+            project.longitude = nil
         }
     }
     
@@ -1250,7 +1272,7 @@ class FirebaseBackend: ObservableObject {
                let townCity = data["townCity"] as? String,
                let postcode = data["postcode"] as? String {
                 // New format
-                project = Project(
+                var decodedProject = Project(
                     id: UUID(uuidString: docId) ?? UUID(),
                     jobNumber: data["jobNumber"] as? String ?? "",
                     siteName: data["siteName"] as? String ?? "Unnamed Project",
@@ -1270,6 +1292,8 @@ class FirebaseBackend: ObservableObject {
                     hiddenManagerUserIds: hiddenManagerUserIds,
                     hiddenOperativeUserIds: hiddenOperativeUserIds
                 )
+                Self.applyMapPinFields(from: data, to: &decodedProject)
+                project = decodedProject
             } else {
                 // Legacy format - use old initializer
                 var legacyProject = Project(
@@ -1290,7 +1314,9 @@ class FirebaseBackend: ObservableObject {
                 // Set managerId and customJobType after initialization since legacy initializer doesn't accept them
                 legacyProject.managerId = managerId
                 legacyProject.customJobType = customJobType
-                project = legacyProject
+                var legacyVar = legacyProject
+                Self.applyMapPinFields(from: data, to: &legacyVar)
+                project = legacyVar
             }
             
             loadedProjects.append(project)
@@ -1462,6 +1488,9 @@ class FirebaseBackend: ObservableObject {
         ]
         data["hiddenManagerUserIds"] = Array(smallWork.hiddenManagerUserIds)
         data["hiddenOperativeUserIds"] = Array(smallWork.hiddenOperativeUserIds)
+        data["usesMapPinForLocation"] = smallWork.usesMapPinForLocation
+        if let lat = smallWork.latitude { data["latitude"] = lat }
+        if let lon = smallWork.longitude { data["longitude"] = lon }
         
         // Save managerId if available
         if let managerId = smallWork.managerId {
@@ -1581,7 +1610,7 @@ class FirebaseBackend: ObservableObject {
                let townCity = data["townCity"] as? String,
                let postcode = data["postcode"] as? String {
                 // New format
-                smallWork = Project(
+                var decodedSmallWork = Project(
                     id: UUID(uuidString: docId) ?? UUID(),
                     jobNumber: data["jobNumber"] as? String ?? "",
                     siteName: data["siteName"] as? String ?? "Unnamed Small Works",
@@ -1601,6 +1630,8 @@ class FirebaseBackend: ObservableObject {
                     hiddenManagerUserIds: hiddenManagerUserIds,
                     hiddenOperativeUserIds: hiddenOperativeUserIds
                 )
+                Self.applyMapPinFields(from: data, to: &decodedSmallWork)
+                smallWork = decodedSmallWork
             } else {
                 // Legacy format - use old initializer
                 var legacySmallWork = Project(
@@ -1621,7 +1652,9 @@ class FirebaseBackend: ObservableObject {
                 // Set managerId and customJobType after initialization since legacy initializer doesn't accept them
                 legacySmallWork.managerId = managerId
                 legacySmallWork.customJobType = customJobType
-                smallWork = legacySmallWork
+                var legacySmallVar = legacySmallWork
+                Self.applyMapPinFields(from: data, to: &legacySmallVar)
+                smallWork = legacySmallVar
             }
             
             loadedSmallWorks.append(smallWork)

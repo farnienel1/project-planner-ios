@@ -47,34 +47,23 @@ struct HomeView: View {
     @State private var showingClientsView = false
     @State private var showingQuickMenu = false
     @State private var warningsRefreshTask: Task<Void, Never>?
+    @State private var isCustomisingQuickActions = false
+    @State private var showingAddQuickActionPicker = false
+    @State private var persistedQuickActionIds: [String] = []
+    @State private var showingGeneralAppSettings = false
+    @State private var hasLoadedQuickActionLayout = false
     
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                logoAndTitleSection
-                navigationMenuBar
                 taskLimitWarningBanner
-                warningsAndTasksSection
-                navigationTilesGrid
-                
-                if userStore.canViewProjects() {
-                    maintenanceSection
-                }
+                homeDashboardRoot
             }
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar(.hidden, for: .navigationBar)
-        .background(
-            LinearGradient(
-                gradient: Gradient(colors: [
-                    Color(.systemGroupedBackground),
-                    Color(.systemGroupedBackground).opacity(0.8)
-                ]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
+        .background(homeCanvasBackground.ignoresSafeArea(edges: .top))
         .sheet(isPresented: $showingWarningsDetail) {
             WarningsDetailView(warningsService: warningsService)
                 .environmentObject(projectStore)
@@ -175,150 +164,54 @@ struct HomeView: View {
             ClientsView()
                 .environmentObject(projectStore)
         }
-    }
-    
-    // MARK: - Logo and Title Section
-    private var logoAndTitleSection: some View {
-        VStack(spacing: 8) {
-            HStack(alignment: .center, spacing: 12) {
-                Text("Project Planner")
-                    .font(.system(size: 34, weight: .bold, design: .default))
-                    .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
-                    .environment(\.appColorScheme, appSettings.settings.colorScheme)
-                Spacer()
-                if let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
-                   let url = URL(string: logoURL) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .empty:
-                            Image(systemName: "building.2")
-                                .font(.title3)
-                                .foregroundStyle(.secondary)
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFit()
-                        case .failure:
-                            Image(systemName: "building.2")
-                                .font(.title3)
-                                .foregroundStyle(.secondary)
-                        @unknown default:
-                            EmptyView()
-                        }
-                    }
-                    .frame(width: 52, height: 52)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            
-            Rectangle()
-                .fill(Color.theme.primary.opacity(0.2))
-                .frame(height: 2)
+        .sheet(isPresented: $showingDailyOverview) {
+            DailyOverviewView()
+                .environmentObject(bookingStore)
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
+                .environmentObject(holidayStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(subcontractorStore)
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 24)
-        .padding(.bottom, 12)
-    }
-    
-    // MARK: - Navigation Menu Bar
-    private var navigationMenuBar: some View {
-        VStack(spacing: 16) {
-            // User Name and Menu Button Row
-            HStack {
-                // User Name
-                if let appUser = userStore.currentUser {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Image(systemName: "person.circle.fill")
-                                .foregroundColor(Color.theme.primary)
-                            Text("Welcome, \(appUser.firstName.isEmpty ? (appUser.email.components(separatedBy: "@").first?.capitalized ?? "User") : appUser.firstName)")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .foregroundColor(.primary)
-                        }
-                        if let orgName = firebaseBackend.currentOrganization?.name, !orgName.isEmpty {
-                            Text(orgName)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .padding(.leading, 24)
-                        }
-                    }
-                } else if let currentUser = firebaseBackend.currentUser?.email {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Image(systemName: "person.circle.fill")
-                                .foregroundColor(Color.theme.primary)
-                            Text("Welcome, \(extractNameFromEmail(currentUser))")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .foregroundColor(.primary)
-                        }
-                        if let orgName = firebaseBackend.currentOrganization?.name, !orgName.isEmpty {
-                            Text(orgName)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .padding(.leading, 24)
-                        }
-                    }
-                }
-                
-                Spacer()
-                
-                // Notification Badge Button — tap opens list and marks all as read so badge clears; only new notifications will show after that
-                Button(action: {
-                    let service = notificationService
-                    Task {
-                        await service.markAllAsRead()
-                        showingNotifications = true
-                    }
-                }) {
-                    ZStack {
-                        Image(systemName: "bell.fill")
-                            .font(.title3)
-                            .foregroundColor(.primary)
-                        
-                        if notificationService.unreadCount > 0 {
-                            Text("\(notificationService.unreadCount > 99 ? "99+" : "\(notificationService.unreadCount)")")
-                                .font(.caption2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                                .padding(4)
-                                .background(Color.red)
-                                .clipShape(Circle())
-                                .offset(x: 12, y: -12)
-                        } else {
-                            // Show "0" when no notifications
-                            Text("0")
-                                .font(.caption2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                                .padding(4)
-                                .background(Color.red)
-                                .clipShape(Circle())
-                                .offset(x: 12, y: -12)
-                        }
-                    }
-                }
-                .padding(.trailing, 8)
-                
-                // Scrollable menu sheet
-                Button {
-                    showingQuickMenu = true
-                } label: {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.title2)
-                        .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
-                        .padding(12)
-                        .background(Color.white)
-                        .cornerRadius(8)
-                        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-                }
-                .environment(\.appColorScheme, appSettings.settings.colorScheme)
-            }
-            .padding(.horizontal, 20)
+        .sheet(isPresented: $showingWeeklyReport) {
+            WeeklyReportView()
+                .environmentObject(bookingStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
+                .environmentObject(holidayStore)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(subcontractorStore)
         }
-        .padding(.bottom, 20)
+        .sheet(isPresented: $showingOrgSitesMap) {
+            OrgSitesMapView()
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+        }
+        .sheet(isPresented: $showingMySchedule) {
+            MyScheduleView()
+                .environmentObject(firebaseBackend)
+                .environmentObject(bookingStore)
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(holidayStore)
+                .environmentObject(appSettings)
+        }
+        .sheet(isPresented: $showingSiteAudit) {
+            SiteAuditHubView()
+                .environmentObject(projectStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+        }
         .sheet(isPresented: $showingQuickMenu) {
             QuickMenuSheet(
                 showingClientsView: $showingClientsView,
@@ -330,132 +223,696 @@ struct HomeView: View {
                 showingWholesalers: $showingWholesalers,
                 showingOperativeQualifications: $showingOperativeQualifications,
                 showingAddUser: $showingAddUser,
-                showingManageUsers: $showingManageUsers
+                showingManageUsers: $showingManageUsers,
+                showingTasksDetail: $showingTasksDetail
             )
             .environmentObject(userStore)
             .environmentObject(firebaseBackend)
             .environmentObject(appSettings)
+            .environmentObject(projectStore)
+            .environmentObject(operativeStore)
+        }
+        .onAppear {
+            managerScheduleStore.loadData()
+            loadPersistedQuickActionsIfNeeded()
+        }
+        .onChange(of: userStore.currentUser?.id) { _, _ in
+            hasLoadedQuickActionLayout = false
+            loadPersistedQuickActionsIfNeeded()
+        }
+        .sheet(isPresented: $showingAddQuickActionPicker) {
+            HomeQuickActionAddSheet(
+                ids: addableQuickActionIds,
+                displayTitle: { id in displayTitleForQuickAction(id: id) }
+            ) { id in
+                appendQuickAction(id: id)
+                showingAddQuickActionPicker = false
+            }
+        }
+        .sheet(isPresented: $showingGeneralAppSettings) {
+            NavigationStack {
+                GeneralAppSettingsView()
+                    .environmentObject(appSettings)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showingGeneralAppSettings = false }
+                        }
+                    }
+            }
         }
     }
-    
+
+    // MARK: - Home dashboard (HTML / design reference)
+
+    private var homeCanvasBackground: Color {
+        Color(red: 0.97, green: 0.973, blue: 0.98)
+    }
+
+    private var homeInk: Color { Color(red: 0.043, green: 0.063, blue: 0.125) }
+    private var homeMuted: Color { Color(red: 0.42, green: 0.45, blue: 0.49) }
+    private var homeBlue: Color { Color(red: 0.094, green: 0.373, blue: 0.647) }
+    private var homeBlueLight: Color { Color(red: 0.216, green: 0.541, blue: 0.867) }
+
+    private var greetingFirstName: String {
+        if let appUser = userStore.currentUser {
+            if !appUser.firstName.isEmpty { return appUser.firstName }
+            return appUser.email.components(separatedBy: "@").first?.capitalized ?? "there"
+        }
+        if let email = firebaseBackend.currentUser?.email {
+            return extractNameFromEmail(email)
+        }
+        return "there"
+    }
+
+    private var profileInitials: String {
+        guard let u = userStore.currentUser else {
+            let e = firebaseBackend.currentUser?.email ?? "?"
+            return String(e.prefix(2)).uppercased()
+        }
+        let f = u.firstName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1)
+        let s = u.surname.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1)
+        if f.isEmpty && s.isEmpty {
+            return String(u.email.prefix(2)).uppercased()
+        }
+        return "\(f)\(s)".uppercased()
+    }
+
+    private var todayWeekdayLine: String {
+        Date().formatted(.dateTime.weekday(.wide).day().month(.abbreviated))
+    }
+
+    private var liveProjectCount: Int {
+        projectStore.liveProjects.count + projectStore.smallWorks.count
+    }
+
+    private var tasksDueTodayCount: Int {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        return taskStore.tasks.filter { task in
+            guard !task.isCompleted, let due = task.dueDate, cal.isDate(due, inSameDayAs: today) else { return false }
+            if userStore.isOperativeMode() {
+                let em = userStore.currentUser?.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard let op = operativeStore.allOperatives.first(where: {
+                    $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
+                }) else { return false }
+                return task.allAssignedOperativeIds.contains(op.id)
+            }
+            return true
+        }.count
+    }
+
+    private var tasksDueThisWeekCount: Int {
+        let cal = Calendar.current
+        let now = Date()
+        guard let weekEnd = cal.date(byAdding: .day, value: 7, to: cal.startOfDay(for: now)) else { return 0 }
+        return taskStore.tasks.filter { task in
+            guard !task.isCompleted, let due = task.dueDate else { return false }
+            let d0 = cal.startOfDay(for: due)
+            guard d0 >= cal.startOfDay(for: now), d0 < weekEnd else { return false }
+            if userStore.isOperativeMode() {
+                let em = userStore.currentUser?.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard let op = operativeStore.allOperatives.first(where: {
+                    $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
+                }) else { return false }
+                return task.allAssignedOperativeIds.contains(op.id)
+            }
+            return true
+        }.count
+    }
+
+    private var homeDashboardRoot: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            homeGreetingHeader
+            todayOverviewCard
+            homeSecondaryStatusRow
+            quickActionsHeaderRow
+            quickActionsIconGrid
+            upNextSection
+            if userStore.canViewProjects() && !userStore.isOperativeMode() {
+                maintenanceTeaserCompact
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 8)
+        .padding(.bottom, 28)
+        .onAppear {
+            scheduleWarningsRefresh()
+        }
+        .onChange(of: operativeStore.allOperatives) { _, _ in scheduleWarningsRefresh() }
+        .onChange(of: bookingStore.bookings) { _, _ in scheduleWarningsRefresh() }
+        .onChange(of: projectStore.projects) { _, _ in scheduleWarningsRefresh() }
+        .onChange(of: projectStore.smallWorks) { _, _ in scheduleWarningsRefresh() }
+    }
+
+    private var homeGreetingHeader: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(todayWeekdayLine)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(homeMuted)
+                Text("Hi, \(greetingFirstName)")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(homeInk)
+                    .tracking(-0.3)
+            }
+            Spacer()
+            HStack(spacing: 8) {
+                Button {
+                    Task {
+                        await notificationService.markAllAsRead()
+                        showingNotifications = true
+                    }
+                } label: {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "bell.fill")
+                            .font(.system(size: 17))
+                            .foregroundStyle(homeInk)
+                            .frame(width: 38, height: 38)
+                            .background(Color.white)
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
+                        if notificationService.unreadCount > 0 {
+                            Circle()
+                                .fill(Color(red: 0.89, green: 0.29, blue: 0.29))
+                                .frame(width: 8, height: 8)
+                                .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
+                                .offset(x: 2, y: -2)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                Text(profileInitials)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(homeBlue)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
+            }
+        }
+        .padding(.bottom, 18)
+    }
+
+    private var todayOverviewCard: some View {
+        let onTrack = warningsService.warningCount == 0 && tasksDueTodayCount == 0
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Today's overview")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .textCase(.uppercase)
+                        .tracking(0.3)
+                    Text("\(liveProjectCount) active project\(liveProjectCount == 1 ? "" : "s")")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.white)
+                }
+                Spacer()
+                Text(onTrack ? "On track" : "Heads up")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(.white.opacity(0.18))
+                    .clipShape(Capsule())
+            }
+            HStack(spacing: 10) {
+                overviewStatPill(value: "\(tasksDueTodayCount)", label: "Tasks today")
+                overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "Due this week")
+                overviewStatPill(value: "\(warningsService.warningCount)", label: "Warnings")
+            }
+        }
+        .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
+        .background(
+            LinearGradient(
+                colors: [homeBlue, homeBlueLight],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(.bottom, 14)
+    }
+
+    private func overviewStatPill(value: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(.white)
+            Text(label)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(.white.opacity(0.85))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.white.opacity(0.14))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var homeSecondaryStatusRow: some View {
+        HStack(spacing: 10) {
+            if userStore.hasAdminAccess() || userStore.isHomeProfileLoading {
+                secondaryPill(
+                    icon: "exclamationmark.triangle.fill",
+                    iconTint: Color(red: 0.64, green: 0.18, blue: 0.18),
+                    iconBackground: Color(red: 0.99, green: 0.92, blue: 0.92),
+                    title: "Warnings",
+                    value: warningsService.warningCount == 0 ? "All clear" : "\(warningsService.warningCount) active"
+                ) {
+                    DispatchQueue.main.async { showingWarningsDetail = true }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            secondaryPill(
+                icon: "checklist",
+                iconTint: homeBlue,
+                iconBackground: Color(red: 0.9, green: 0.945, blue: 0.984),
+                title: "Tasks",
+                value: "\(assignedTasksCount) pending"
+            ) {
+                DispatchQueue.main.async { showingTasksDetail = true }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.bottom, 18)
+    }
+
+    private func secondaryPill(
+        icon: String,
+        iconTint: Color,
+        iconBackground: Color,
+        title: String,
+        value: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(iconBackground)
+                        .frame(width: 32, height: 32)
+                    Image(systemName: icon)
+                        .font(.system(size: 15))
+                        .foregroundStyle(iconTint)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(homeMuted)
+                    Text(value)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(homeInk)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var quickActionStorageKey: String {
+        let uid = firebaseBackend.currentUser?.uid ?? "anonymous"
+        return "homeQuickActionOrder.\(uid)"
+    }
+
+    private func loadPersistedQuickActionsIfNeeded() {
+        guard !hasLoadedQuickActionLayout else { return }
+        hasLoadedQuickActionLayout = true
+        if let saved = UserDefaults.standard.array(forKey: quickActionStorageKey) as? [String], !saved.isEmpty {
+            let allowed = Set(HomeQuickActionRegistry.allEligibleIds(userStore: userStore))
+            var seen = Set<String>()
+            let filtered = saved.filter { allowed.contains($0) }.filter { seen.insert($0).inserted }
+            persistedQuickActionIds = filtered.isEmpty
+                ? HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
+                : filtered
+        } else {
+            persistedQuickActionIds = HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
+        }
+    }
+
+    private func savePersistedQuickActions() {
+        UserDefaults.standard.set(persistedQuickActionIds, forKey: quickActionStorageKey)
+    }
+
+    private func sanitizePersistedQuickActionsIfNeeded() {
+        let allowed = Set(HomeQuickActionRegistry.allEligibleIds(userStore: userStore))
+        let next = persistedQuickActionIds.filter { allowed.contains($0) }
+        if next.count != persistedQuickActionIds.count {
+            persistedQuickActionIds = next.isEmpty
+                ? HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
+                : next
+            savePersistedQuickActions()
+        }
+    }
+
+    private var addableQuickActionIds: [String] {
+        let onHome = Set(persistedQuickActionIds)
+        return HomeQuickActionRegistry.allEligibleIds(userStore: userStore)
+            .filter { !onHome.contains($0) }
+            .sorted()
+    }
+
+    private func displayTitleForQuickAction(id: String) -> String {
+        if id == HomeQuickActionID.staffAddUser.rawValue, !userStore.canManageUsers() {
+            return "Add\noperative"
+        }
+        if id == HomeQuickActionID.staffManageUsersSheet.rawValue, !userStore.canManageUsers() {
+            return "Manage\noperatives"
+        }
+        return HomeQuickActionRegistry.meta(for: id)?.title ?? ""
+    }
+
+    private func appendQuickAction(id: String) {
+        guard HomeQuickActionRegistry.isEligible(id: id, userStore: userStore) else { return }
+        guard !persistedQuickActionIds.contains(id) else { return }
+        persistedQuickActionIds.append(id)
+        savePersistedQuickActions()
+    }
+
+    private func removeQuickAction(id: String) {
+        persistedQuickActionIds.removeAll { $0 == id }
+        savePersistedQuickActions()
+    }
+
+    private func moveQuickActions(from source: IndexSet, to destination: Int) {
+        persistedQuickActionIds.move(fromOffsets: source, toOffset: destination)
+        savePersistedQuickActions()
+    }
+
+    private func performQuickAction(id: String) {
+        guard HomeQuickActionRegistry.isEligible(id: id, userStore: userStore) else { return }
+        switch id {
+        case HomeQuickActionID.opProjects.rawValue, HomeQuickActionID.staffProjects.rawValue:
+            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 1])
+        case HomeQuickActionID.opSmallWorks.rawValue, HomeQuickActionID.staffSmallWorks.rawValue:
+            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 2])
+        case HomeQuickActionID.opAnnualLeave.rawValue, HomeQuickActionID.staffAnnualLeave.rawValue:
+            presentAnnualLeaveFromHome()
+        case HomeQuickActionID.opSiteAudit.rawValue, HomeQuickActionID.staffSiteAudit.rawValue:
+            showingSiteAudit = true
+        case HomeQuickActionID.opSchedule.rawValue, HomeQuickActionID.staffSchedule.rawValue:
+            showingMySchedule = true
+        case HomeQuickActionID.opSettings.rawValue, HomeQuickActionID.staffSettings.rawValue:
+            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 5])
+        case HomeQuickActionID.staffWeeklyReport.rawValue:
+            showingWeeklyReport = true
+        case HomeQuickActionID.staffDailyOverview.rawValue:
+            showingDailyOverview = true
+        case HomeQuickActionID.staffManagers.rawValue:
+            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 4])
+        case HomeQuickActionID.staffOperatives.rawValue:
+            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 3])
+        case HomeQuickActionID.staffSubcontractors.rawValue:
+            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 9])
+        case HomeQuickActionID.staffSiteMap.rawValue:
+            showingOrgSitesMap = true
+        case HomeQuickActionID.staffClients.rawValue:
+            showingClientsView = true
+        case HomeQuickActionID.staffCreateProject.rawValue:
+            showingCreateProject = true
+        case HomeQuickActionID.staffCreateSmallWorks.rawValue:
+            showingCreateSmallWorks = true
+        case HomeQuickActionID.staffSkills.rawValue:
+            showingSkillsManagement = true
+        case HomeQuickActionID.staffQualifications.rawValue:
+            showingQualificationsManagement = true
+        case HomeQuickActionID.staffMyQualifications.rawValue:
+            showingOperativeQualifications = true
+        case HomeQuickActionID.staffJobTypes.rawValue:
+            showingJobTypesManagement = true
+        case HomeQuickActionID.staffWholesalers.rawValue:
+            showingWholesalers = true
+        case HomeQuickActionID.staffAddUser.rawValue:
+            showingAddUser = true
+        case HomeQuickActionID.staffManageUsersSheet.rawValue:
+            showingManageUsers = true
+        case HomeQuickActionID.staffHelp.rawValue:
+            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 6])
+        case HomeQuickActionID.staffHoliday.rawValue:
+            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 8])
+        case HomeQuickActionID.staffGeneralAppSettings.rawValue:
+            showingGeneralAppSettings = true
+        default:
+            break
+        }
+    }
+
+    @ViewBuilder
+    private func quickActionTileContents(meta: HomeQuickActionMeta, title: String) -> some View {
+        let tint = meta.color
+        VStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(tint.opacity(0.22))
+                    .frame(width: 36, height: 36)
+                Image(systemName: meta.symbol)
+                    .font(.system(size: 17))
+                    .foregroundStyle(tint)
+            }
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(homeInk)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 6)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
+        )
+    }
+
+    private var quickActionsHeaderRow: some View {
+        HStack {
+            Text("Quick actions")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(homeInk)
+            Spacer()
+            if isCustomisingQuickActions, !addableQuickActionIds.isEmpty {
+                Button {
+                    showingAddQuickActionPicker = true
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(homeBlue)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add quick action")
+            }
+            Button {
+                showingQuickMenu = true
+            } label: {
+                Label("Expand Menu", systemImage: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(homeBlue)
+            }
+            .buttonStyle(.plain)
+            Button {
+                if isCustomisingQuickActions {
+                    isCustomisingQuickActions = false
+                    sanitizePersistedQuickActionsIfNeeded()
+                    savePersistedQuickActions()
+                } else {
+                    isCustomisingQuickActions = true
+                }
+            } label: {
+                Text(isCustomisingQuickActions ? "Done" : "Customise")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(homeMuted)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.bottom, 10)
+    }
+
+    private let quickGrid = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+
+    private var quickActionsIconGrid: some View {
+        Group {
+            if isCustomisingQuickActions {
+                List {
+                    ForEach(persistedQuickActionIds, id: \.self) { id in
+                        if let meta = HomeQuickActionRegistry.meta(for: id),
+                           HomeQuickActionRegistry.isEligible(id: id, userStore: userStore) {
+                            HStack(spacing: 12) {
+                                quickActionTileContents(meta: meta, title: displayTitleForQuickAction(id: id))
+                                    .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(Color.clear)
+                                Button {
+                                    removeQuickAction(id: id)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 22))
+                                        .foregroundStyle(Color.secondary.opacity(0.85))
+                                        .accessibilityLabel("Remove \(displayTitleForQuickAction(id: id))")
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                        }
+                    }
+                    .onMove(perform: moveQuickActions)
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: CGFloat(max(persistedQuickActionIds.count, 1)) * 72)
+                .environment(\.editMode, .constant(.active))
+            } else {
+                LazyVGrid(columns: quickGrid, spacing: 10) {
+                    ForEach(persistedQuickActionIds, id: \.self) { id in
+                        if let meta = HomeQuickActionRegistry.meta(for: id),
+                           HomeQuickActionRegistry.isEligible(id: id, userStore: userStore) {
+                            Button {
+                                performQuickAction(id: id)
+                            } label: {
+                                quickActionTileContents(meta: meta, title: displayTitleForQuickAction(id: id))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.bottom, 18)
+        .onAppear { sanitizePersistedQuickActionsIfNeeded() }
+    }
+
+    private var upNextRows: [HomeUpNextRow] {
+        HomeUpNextSupport.upcomingRows(
+            limit: 2,
+            now: Date(),
+            authUserId: firebaseBackend.currentUser?.uid,
+            currentUserEmail: userStore.currentUser?.email,
+            operatives: operativeStore.allOperatives,
+            bookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            allProjects: projectStore.projects,
+            organizationUsers: userStore.organizationUsers,
+            accentBlue: homeBlue,
+            accentPurple: Color(red: 0.325, green: 0.29, blue: 0.718)
+        )
+    }
+
+    private var upNextSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Up next")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(homeInk)
+                Spacer()
+                Button("See all") { showingMySchedule = true }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(homeBlue)
+            }
+            .padding(.bottom, 10)
+
+            let rows = upNextRows
+            if rows.isEmpty {
+                Text("No upcoming bookings on your schedule.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(homeMuted)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(rows) { row in
+                    Button {
+                        showingMySchedule = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                .fill(row.accentColor)
+                                .frame(width: 4, height: 36)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(row.title)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(homeInk)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                Text(row.subtitle)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(homeMuted)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Color(red: 0.77, green: 0.79, blue: 0.82))
+                        }
+                        .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+                        .background(Color.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 10)
+                }
+            }
+        }
+        .padding(.bottom, 8)
+    }
+
+    private var maintenanceTeaserCompact: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(red: 0.98, green: 0.933, blue: 0.855))
+                    .frame(width: 36, height: 36)
+                Image(systemName: "wrench.and.screwdriver.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(Color(red: 0.522, green: 0.31, blue: 0.043))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text("Maintenance")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(homeInk)
+                    Text("Soon")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(Color(red: 0.522, green: 0.31, blue: 0.043))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(red: 0.98, green: 0.933, blue: 0.855))
+                        .clipShape(Capsule())
+                }
+                Text("Coming in a future update")
+                    .font(.system(size: 11))
+                    .foregroundStyle(homeMuted)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 14))
+                .foregroundStyle(Color(red: 0.77, green: 0.79, blue: 0.82))
+        }
+        .padding(14)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
+        )
+    }
+
     // MARK: - Helper Functions
     private func extractNameFromEmail(_ email: String) -> String {
         // Extract the part before @ and capitalize it
         let name = email.components(separatedBy: "@").first ?? email
         return name.capitalized
-    }
-    
-    // MARK: - Warnings and Tasks Section
-    private var warningsAndTasksSection: some View {
-        HStack(spacing: 16) {
-            if userStore.hasAdminAccess() || userStore.isHomeProfileLoading {
-                // Warnings Tile (Super Admin / Admin only)
-                Button(action: {
-                    DispatchQueue.main.async {
-                        showingWarningsDetail = true
-                    }
-                }) {
-                    VStack(spacing: 0) {
-                        HStack {
-                            Spacer()
-                            Image(systemName: "exclamationmark.triangle")
-                                .foregroundColor(.red)
-                            Text("Warnings")
-                                .font(.headline)
-                                .foregroundColor(.red)
-                            Spacer()
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 12)
-                        .background(Color.red.opacity(0.1))
-                        
-                        HStack {
-                            Spacer()
-                            if warningsService.warningCount == 0 {
-                                Text("No warnings")
-                                    .font(.subheadline)
-                                    .foregroundColor(.red.opacity(0.8))
-                            } else {
-                                HStack(spacing: 4) {
-                                    Text("\(warningsService.warningCount) Warning\(warningsService.warningCount == 1 ? "" : "s")")
-                                        .font(.subheadline)
-                                        .foregroundColor(.red.opacity(0.8))
-                                        .fontWeight(.semibold)
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption)
-                                        .foregroundColor(.red.opacity(0.6))
-                                }
-                            }
-                            Spacer()
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 12)
-                        .background(Color.red.opacity(0.05))
-                    }
-                }
-                .buttonStyle(PlainButtonStyle())
-                .contentShape(Rectangle())
-                .frame(maxWidth: .infinity)
-            }
-            
-            // Tasks Tile
-            Button(action: {
-                DispatchQueue.main.async {
-                    showingTasksDetail = true
-                }
-            }) {
-                VStack(spacing: 0) {
-                    HStack {
-                        Spacer()
-                        Image(systemName: "checklist")
-                            .foregroundColor(.blue)
-                        Text("Tasks")
-                            .font(.headline)
-                            .foregroundColor(.blue)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 12)
-                    .background(Color.blue.opacity(0.1))
-                    
-                    HStack {
-                        Spacer()
-                        let taskCount = assignedTasksCount
-                        Text("\(taskCount) Task\(taskCount == 1 ? "" : "s")")
-                            .font(.subheadline)
-                            .foregroundColor(.blue.opacity(0.8))
-                            .fontWeight(.semibold)
-                        Image(systemName: "chevron.right")
-                            .font(.caption)
-                            .foregroundColor(.blue.opacity(0.6))
-                        Spacer()
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 12)
-                    .background(Color.blue.opacity(0.05))
-                }
-            }
-            .buttonStyle(PlainButtonStyle())
-            .contentShape(Rectangle())
-            .frame(maxWidth: .infinity)
-        }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 20)
-        .onAppear {
-            scheduleWarningsRefresh()
-        }
-        .onChange(of: operativeStore.allOperatives) { _, _ in
-            scheduleWarningsRefresh()
-        }
-        .onChange(of: bookingStore.bookings) { _, _ in
-            scheduleWarningsRefresh()
-        }
-        .onChange(of: projectStore.projects) { _, _ in
-            scheduleWarningsRefresh()
-        }
-        .onChange(of: projectStore.smallWorks) { _, _ in
-            scheduleWarningsRefresh()
-        }
     }
     
     /// Debounce: bulk store updates during startup were calling `updateWarnings` repeatedly and freezing the main thread.
@@ -610,279 +1067,6 @@ struct HomeView: View {
         )
     }
 
-    // MARK: - Navigation Tiles Grid
-    private var navigationTilesGrid: some View {
-        VStack(spacing: 16) {
-            if userStore.isOperativeMode() {
-                // Operative Mode – Projects, Small Works, Annual Leave, My Schedule (view-only), Settings
-                LazyVGrid(columns: [
-                    GridItem(.flexible(), spacing: 12),
-                    GridItem(.flexible(), spacing: 12)
-                ], spacing: 12) {
-                    navigationTile(
-                        icon: "folder.fill",
-                        title: "Projects",
-                        action: {
-                            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 1])
-                        }
-                    )
-                    navigationTile(
-                        icon: "hammer.fill",
-                        title: "Small Works",
-                        action: {
-                            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 2])
-                        }
-                    )
-                    navigationTile(
-                        icon: "sun.max.fill",
-                        title: "Annual Leave",
-                        action: { presentAnnualLeaveFromHome() }
-                    )
-                    if userStore.canViewSiteAudit() || userStore.isHomeProfileLoading {
-                        navigationTile(
-                            icon: "doc.text.viewfinder",
-                            title: "Site Audit",
-                            action: { showingSiteAudit = true }
-                        )
-                    }
-                    navigationTile(
-                        icon: "calendar",
-                        title: "My Schedule",
-                        action: { showingMySchedule = true }
-                    )
-                    navigationTile(
-                        icon: "gearshape.fill",
-                        title: "Settings",
-                        action: {
-                            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 5])
-                        }
-                    )
-                }
-            } else {
-                // Full Mode - All tiles
-                LazyVGrid(columns: [
-                    GridItem(.flexible(), spacing: 12),
-                    GridItem(.flexible(), spacing: 12)
-                ], spacing: 12) {
-                    // Row 1: Weekly Report, Daily Overview
-                    if userStore.hasAdminAccess() || userStore.displayUser?.permissions.weeklyReports == true || userStore.isHomeProfileLoading {
-                        navigationTile(
-                            icon: "chart.bar.doc.horizontal",
-                            title: "Weekly Report",
-                            action: { showingWeeklyReport = true }
-                        )
-                        navigationTile(
-                            icon: "calendar.badge.clock",
-                            title: "Daily Overview",
-                            action: { showingDailyOverview = true }
-                        )
-                    }
-                    // Row 2: Projects (left), Small Works (right)
-                    if userStore.canViewProjects() {
-                        navigationTile(
-                            icon: "folder.fill",
-                            title: "Projects",
-                            action: {
-                                NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 1])
-                            }
-                        )
-                        navigationTile(
-                            icon: "hammer.fill",
-                            title: "Small Works",
-                            action: {
-                                NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 2])
-                            }
-                        )
-                    }
-                    // Row 3: Annual Leave + My Schedule
-                    if userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true || userStore.isHomeProfileLoading {
-                        navigationTile(
-                            icon: "sun.max.fill",
-                            title: "Annual Leave",
-                            action: { presentAnnualLeaveFromHome() }
-                        )
-                    }
-                    if userStore.canViewProjects() || userStore.isOperativeMode() {
-                        navigationTile(
-                            icon: "calendar",
-                            title: "My Schedule",
-                            action: { showingMySchedule = true }
-                        )
-                    }
-                    if userStore.canViewSiteAudit() || userStore.isHomeProfileLoading {
-                        navigationTile(
-                            icon: "doc.text.viewfinder",
-                            title: "Site Audit",
-                            action: { showingSiteAudit = true }
-                        )
-                    }
-
-                    // Row 4: Managers + Operatives
-                    if userStore.hasAdminAccess() {
-                        navigationTile(
-                            icon: "person.badge.key.fill",
-                            title: "Managers",
-                            action: {
-                                NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 4])
-                            }
-                        )
-                    }
-                    if userStore.canViewOperatives() {
-                        navigationTile(
-                            icon: "person.3.fill",
-                            title: "Manage Operatives",
-                            action: {
-                                NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 3])
-                            }
-                        )
-                    }
-                    
-                    if userStore.canManageSubcontractors() {
-                        navigationTile(
-                            icon: "person.2.badge.gearshape.fill",
-                            title: "Sub Contractors",
-                            action: {
-                                NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 9])
-                            }
-                        )
-                    }
-
-                    if userStore.hasAdminAccess() {
-                        navigationTile(
-                            icon: "map.fill",
-                            title: "Site Map",
-                            action: { showingOrgSitesMap = true }
-                        )
-                    }
-
-                    navigationTile(
-                        icon: "gearshape.fill",
-                        title: "Settings",
-                        action: {
-                            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 5])
-                        }
-                    )
-                    .gridCellColumns(2)
-                }
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 20)
-        .sheet(isPresented: $showingDailyOverview) {
-            DailyOverviewView()
-                .environmentObject(bookingStore)
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(userStore)
-                .environmentObject(holidayStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(subcontractorStore)
-        }
-        .sheet(isPresented: $showingWeeklyReport) {
-            WeeklyReportView()
-                .environmentObject(bookingStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(holidayStore)
-                .environmentObject(userStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(subcontractorStore)
-        }
-        .sheet(isPresented: $showingOrgSitesMap) {
-            OrgSitesMapView()
-                .environmentObject(firebaseBackend)
-                .environmentObject(userStore)
-                .environmentObject(projectStore)
-                .environmentObject(bookingStore)
-                .environmentObject(operativeStore)
-        }
-        .sheet(isPresented: $showingMySchedule) {
-            MyScheduleView()
-                .environmentObject(firebaseBackend)
-                .environmentObject(bookingStore)
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(userStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(holidayStore)
-                .environmentObject(appSettings)
-        }
-        .sheet(isPresented: $showingSiteAudit) {
-            SiteAuditHubView()
-                .environmentObject(projectStore)
-                .environmentObject(bookingStore)
-                .environmentObject(operativeStore)
-                .environmentObject(userStore)
-                .environmentObject(firebaseBackend)
-        }
-    }
-    
-    // MARK: - Navigation Tile
-    private func navigationTile(icon: String, title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 12) {
-                Image(systemName: icon)
-                    .font(.system(size: 40, weight: .medium))
-                    .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
-                
-                Text(title)
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 120)
-            .padding(.vertical, 16)
-            .background(Color.white)
-            .cornerRadius(16)
-            .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
-        }
-        .buttonStyle(PlainButtonStyle())
-        .contentShape(Rectangle())
-    }
-    
-    // MARK: - Maintenance Section
-    private var maintenanceSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if !userStore.isOperativeMode() {
-                Text("Maintenance")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.orange)
-                    .padding(.horizontal, 20)
-            }
-            
-            VStack(spacing: 16) {
-                HStack {
-                    Image(systemName: "wrench.and.screwdriver.fill")
-                        .font(.system(size: 40))
-                        .foregroundColor(.orange)
-                    
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Maintenance Coming Soon!")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.orange)
-                        
-                        Text("Maintenance features will be available in a future update.")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Spacer()
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 20)
-                .background(Color.orange.opacity(0.1))
-                .cornerRadius(12)
-                .padding(.horizontal, 20)
-            }
-        }
-        .padding(.bottom, 30)
-    }
-    
-    
     // MARK: - Sample Data
     private var sampleProjects: [SampleProject] {
         [
@@ -1199,10 +1383,54 @@ struct OperativeQualificationsReadOnlyView: View {
     }
 }
 
+struct HomeQuickActionAddSheet: View {
+    let ids: [String]
+    let displayTitle: (String) -> String
+    let onPick: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if ids.isEmpty {
+                    ContentUnavailableView(
+                        "No more actions",
+                        systemImage: "checkmark.circle",
+                        description: Text("All available quick actions are already on your home screen.")
+                    )
+                } else {
+                    List(ids, id: \.self) { id in
+                        Button {
+                            onPick(id)
+                        } label: {
+                            if let meta = HomeQuickActionRegistry.meta(for: id) {
+                                Label {
+                                    Text(displayTitle(id).replacingOccurrences(of: "\n", with: " "))
+                                } icon: {
+                                    Image(systemName: meta.symbol)
+                                        .foregroundStyle(meta.color)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Add quick action")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
 struct QuickMenuSheet: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var operativeStore: OperativeStore
     @Environment(\.dismiss) private var dismiss
 
     @Binding var showingClientsView: Bool
@@ -1215,124 +1443,584 @@ struct QuickMenuSheet: View {
     @Binding var showingOperativeQualifications: Bool
     @Binding var showingAddUser: Bool
     @Binding var showingManageUsers: Bool
+    @Binding var showingTasksDetail: Bool
+
+    private var quickCreateGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color.theme.primary(for: appSettings.settings.colorScheme),
+                ProjectWorksRevampColors.blueLight
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("Navigate") {
-                    if !userStore.isOperativeMode() {
-                        actionRow("Clients", "person.2.fill") { showingClientsView = true }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .center) {
+                        Text("Main Menu")
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .tracking(-0.3)
+                        Spacer(minLength: 12)
+                        Button("Done") { dismiss() }
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 7)
+                            .background(ProjectWorksRevampColors.blue)
+                            .clipShape(Capsule())
                     }
-                    actionRow("Projects", "folder.fill") { selectTab(1) }
-                    actionRow("Small Works", "hammer.fill") { selectTab(2) }
-                    if userStore.canViewOperatives() { actionRow("Manage Operatives", "person.3.fill") { selectTab(3) } }
-                    if userStore.canViewManagers() { actionRow("Managers", "person.badge.key.fill") { selectTab(4) } }
-                }
+                    .padding(.top, 4)
 
-                Section("Tools") {
-                    if userStore.canManageSkills() {
-                        actionRow("Skills", "wrench.and.screwdriver.fill") { showingSkillsManagement = true }
+                    if showQuickCreateSection {
+                        quickCreateCard
                     }
-                    if userStore.canManageQualifications() {
-                        actionRow("Qualifications", "graduationcap.fill") { showingQualificationsManagement = true }
-                    }
-                    if userStore.isOperativeMode() {
-                        actionRow("My Qualifications", "graduationcap.fill") { showingOperativeQualifications = true }
-                    }
-                    if userStore.hasAdminAccess() {
-                        actionRow("Job Types", "folder.fill") { showingJobTypesManagement = true }
-                        actionRow("Wholesalers", "building.2.fill") { showingWholesalers = true }
-                    }
-                    if userStore.canManageSubcontractors() {
-                        actionRow("Sub Contractors", "person.2.badge.gearshape.fill") { selectTab(9) }
-                    }
-                }
 
-                if canCreateProject || canCreateSmallWorks {
-                    Section("Create") {
-                        if canCreateProject {
-                            actionRow("Create Project", "plus.square.fill") { showingCreateProject = true }
-                        }
-                        if canCreateSmallWorks {
-                            actionRow("Create Small Works", "hammer.fill") { showingCreateSmallWorks = true }
+                    if hasNavigateRows {
+                        menuSectionTitle("Navigate")
+                        menuGroupedCard {
+                            if !userStore.isOperativeMode() {
+                                polishedNavigateRow(
+                                    icon: "briefcase.fill",
+                                    iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
+                                    iconTint: ProjectWorksRevampColors.blue,
+                                    title: "Clients",
+                                    subtitle: "\(projectStore.clients.count) on file"
+                                ) {
+                                    showingClientsView = true
+                                }
+                            }
+                            if userStore.canViewProjects() {
+                                polishedNavigateRow(
+                                    icon: "folder.fill",
+                                    iconBackground: Color(red: 0.882, green: 0.961, blue: 0.933),
+                                    iconTint: ProjectWorksRevampColors.activeGreen,
+                                    title: "Projects",
+                                    subtitle: "\(regularProjectsInProgress) in progress"
+                                ) {
+                                    selectTab(1)
+                                }
+                                polishedNavigateRow(
+                                    icon: "hammer.fill",
+                                    iconBackground: Color(red: 0.98, green: 0.933, blue: 0.855),
+                                    iconTint: ProjectWorksRevampColors.upcomingAmber,
+                                    title: "Small works",
+                                    subtitle: "\(smallWorksOpenCount) open"
+                                ) {
+                                    selectTab(2)
+                                }
+                            }
+                            if userStore.canViewOperatives() {
+                                polishedNavigateRow(
+                                    icon: "person.3.fill",
+                                    iconBackground: ProjectWorksRevampColors.jobTypePillBg,
+                                    iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
+                                    title: "Operatives",
+                                    subtitle: "\(activeOperativesCount) team members"
+                                ) {
+                                    selectTab(3)
+                                }
+                            }
+                            if userStore.canViewManagers() {
+                                polishedNavigateRow(
+                                    icon: "person.badge.shield.checkmark.fill",
+                                    iconBackground: Color(red: 0.984, green: 0.918, blue: 0.941),
+                                    iconTint: Color(red: 0.6, green: 0.208, blue: 0.337),
+                                    title: "Managers",
+                                    subtitle: "\(operativeStore.allManagers.count) active"
+                                ) {
+                                    selectTab(4)
+                                }
+                            }
                         }
                     }
-                }
 
-                if userStore.canManageUsers() ||
-                    (!userStore.hasAdminAccess() &&
-                     userStore.displayUser?.permissions.manager == true &&
-                     userStore.displayUser?.permissions.operatives == true) {
-                    Section("User Management") {
-                        actionRow(userStore.canManageUsers() ? "Add User" : "Add Operative", "person.badge.plus.fill") {
-                            showingAddUser = true
-                        }
-                        actionRow(userStore.canManageUsers() ? "Manage Users" : "Manage Operatives", "person.2.fill") {
-                            showingManageUsers = true
+                    if hasToolsRows {
+                        menuSectionTitle("Tools")
+                        menuGroupedCard {
+                            if userStore.canManageSkills() {
+                                polishedToolRow(
+                                    icon: "wrench.and.screwdriver.fill",
+                                    iconBackground: Color(red: 0.98, green: 0.925, blue: 0.906),
+                                    iconTint: Color(red: 0.6, green: 0.235, blue: 0.114),
+                                    title: "Skills",
+                                    badge: nil
+                                ) {
+                                    showingSkillsManagement = true
+                                }
+                            }
+                            if userStore.canManageQualifications() {
+                                polishedToolRow(
+                                    icon: "graduationcap.fill",
+                                    iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
+                                    iconTint: ProjectWorksRevampColors.blue,
+                                    title: "Qualifications",
+                                    badge: qualificationsExpiringSoonCount > 0
+                                        ? "\(qualificationsExpiringSoonCount) expiring"
+                                        : nil
+                                ) {
+                                    showingQualificationsManagement = true
+                                }
+                            }
+                            if userStore.isOperativeMode() {
+                                polishedToolRow(
+                                    icon: "graduationcap.fill",
+                                    iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
+                                    iconTint: ProjectWorksRevampColors.blue,
+                                    title: "My qualifications",
+                                    badge: nil
+                                ) {
+                                    showingOperativeQualifications = true
+                                }
+                            }
+                            if userStore.hasAdminAccess() {
+                                polishedToolRow(
+                                    icon: "square.grid.2x2.fill",
+                                    iconBackground: Color(red: 0.882, green: 0.961, blue: 0.933),
+                                    iconTint: ProjectWorksRevampColors.activeGreen,
+                                    title: "Job types",
+                                    badge: nil
+                                ) {
+                                    showingJobTypesManagement = true
+                                }
+                                polishedToolRow(
+                                    icon: "building.2.fill",
+                                    iconBackground: Color(red: 0.98, green: 0.933, blue: 0.855),
+                                    iconTint: ProjectWorksRevampColors.upcomingAmber,
+                                    title: "Wholesalers",
+                                    badge: nil
+                                ) {
+                                    showingWholesalers = true
+                                }
+                            }
+                            if userStore.canManageSubcontractors() {
+                                polishedToolRow(
+                                    icon: "person.2.badge.gearshape.fill",
+                                    iconBackground: ProjectWorksRevampColors.jobTypePillBg,
+                                    iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
+                                    title: "Sub contractors",
+                                    badge: nil
+                                ) {
+                                    selectTab(9)
+                                }
+                            }
                         }
                     }
-                }
-                
-                if userStore.hasAdminAccess() {
-                    Section("App Settings") {
-                        actionRow("Settings", "gearshape.fill") { selectTab(5) }
-                        NavigationLink {
-                            GeneralAppSettingsView()
-                                .environmentObject(appSettings)
-                        } label: {
-                            Label("General", systemImage: "slider.horizontal.3")
-                        }
-                    }
-                } else {
-                    Section("App Settings") {
-                        actionRow("Settings", "gearshape.fill") { selectTab(5) }
-                    }
-                }
 
-                Section("Account") {
-                    actionRow("Reset Password", "key.fill") {
-                        if let email = firebaseBackend.currentUser?.email {
-                            Task { try? await firebaseBackend.resetPassword(email: email) }
+                    if showTeamSection {
+                        menuSectionTitle("Team")
+                        menuGroupedCard {
+                            polishedToolRow(
+                                icon: "person.badge.plus.fill",
+                                iconBackground: ProjectWorksRevampColors.jobTypePillBg,
+                                iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
+                                title: userStore.canManageUsers() ? "Add user" : "Add operative",
+                                badge: nil
+                            ) {
+                                showingAddUser = true
+                            }
+                            polishedToolRow(
+                                icon: "person.2.fill",
+                                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
+                                iconTint: ProjectWorksRevampColors.blue,
+                                title: userStore.canManageUsers() ? "Manage users" : "Manage operatives",
+                                badge: nil
+                            ) {
+                                showingManageUsers = true
+                            }
                         }
                     }
-                    actionRow("Sign Out", "rectangle.portrait.and.arrow.right") {
-                        userStore.clearOnSignOut()
-                        try? firebaseBackend.signOut()
+
+                    menuSectionTitle("App & account")
+                    menuGroupedCard {
+                        polishedToolRow(
+                            icon: "gearshape.fill",
+                            iconBackground: Color(red: 0.949, green: 0.953, blue: 0.961),
+                            iconTint: ProjectWorksRevampColors.muted,
+                            title: "Settings",
+                            badge: nil
+                        ) {
+                            selectTab(5)
+                        }
+                        if userStore.hasAdminAccess() {
+                            NavigationLink {
+                                GeneralAppSettingsView()
+                                    .environmentObject(appSettings)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                        .fill(Color(red: 0.902, green: 0.945, blue: 0.984))
+                                        .frame(width: 32, height: 32)
+                                        .overlay(
+                                            Image(systemName: "slider.horizontal.3")
+                                                .font(.system(size: 16, weight: .medium))
+                                                .foregroundStyle(ProjectWorksRevampColors.blue)
+                                        )
+                                    Text("General")
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+                                }
+                                .padding(.vertical, 11)
+                            }
+                            .buttonStyle(.plain)
+                            Divider().overlay(ProjectWorksRevampColors.border)
+                        }
+                        if !userStore.isOperativeMode() {
+                            polishedToolRow(
+                                icon: "questionmark.circle.fill",
+                                iconBackground: Color(red: 0.882, green: 0.961, blue: 0.933),
+                                iconTint: ProjectWorksRevampColors.activeGreen,
+                                title: "Help & support",
+                                badge: nil
+                            ) {
+                                selectTab(6)
+                            }
+                        }
+                        polishedToolRow(
+                            icon: "key.fill",
+                            iconBackground: ProjectWorksRevampColors.jobTypePillBg,
+                            iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
+                            title: "Reset password",
+                            badge: nil,
+                            showsDivider: false
+                        ) {
+                            if let email = firebaseBackend.currentUser?.email {
+                                Task { try? await firebaseBackend.resetPassword(email: email) }
+                            }
+                        }
                     }
+
+                    signOutButton
+
+                    Text(appVersionLine)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 4)
+                }
+                .padding(.horizontal, 18)
+                .padding(.bottom, 24)
+            }
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
+        }
+    }
+
+    private var appVersionLine: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        return "Project Planner · v\(v)"
+    }
+
+    private var showQuickCreateSection: Bool {
+        quickCreateVisibleButtonCount > 0
+    }
+
+    private var quickCreateVisibleButtonCount: Int {
+        (canCreateProject ? 1 : 0) + (canCreateSmallWorks ? 1 : 0) + (canAddUserQuick ? 1 : 0) + 1
+    }
+
+    private var canAddUserQuick: Bool {
+        userStore.canManageUsers()
+            || (!userStore.hasAdminAccess()
+                && userStore.displayUser?.permissions.manager == true
+                && userStore.displayUser?.permissions.operatives == true)
+    }
+
+    private var hasNavigateRows: Bool {
+        !userStore.isOperativeMode()
+            || userStore.canViewProjects()
+            || userStore.canViewOperatives()
+            || userStore.canViewManagers()
+    }
+
+    private var hasToolsRows: Bool {
+        userStore.canManageSkills()
+            || userStore.canManageQualifications()
+            || userStore.isOperativeMode()
+            || userStore.hasAdminAccess()
+            || userStore.canManageSubcontractors()
+    }
+
+    private var showTeamSection: Bool {
+        userStore.canManageUsers()
+            || (!userStore.hasAdminAccess()
+                && userStore.displayUser?.permissions.manager == true
+                && userStore.displayUser?.permissions.operatives == true)
+    }
+
+    private var regularProjectsInProgress: Int {
+        projectStore.projects.filter { $0.jobType != .smallWorks && $0.status == .active }.count
+    }
+
+    private var smallWorksOpenCount: Int {
+        projectStore.smallWorks.filter { $0.status == .active || $0.status == .upcoming }.count
+    }
+
+    private var activeOperativesCount: Int {
+        operativeStore.allOperatives.filter(\.isActive).count
+    }
+
+    private var qualificationsExpiringSoonCount: Int {
+        let today = Calendar.current.startOfDay(for: Date())
+        guard let horizon = Calendar.current.date(byAdding: .day, value: 30, to: today) else { return 0 }
+        var n = 0
+        for op in operativeStore.allOperatives {
+            for (_, exp) in op.qualificationExpiryDates {
+                if exp >= today && exp <= horizon { n += 1 }
+            }
+        }
+        return n
+    }
+
+    private var quickCreateCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Quick create")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .tracking(0.3)
+                    Text("Start something new")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Color.white.opacity(0.18))
+                    .clipShape(Circle())
+            }
+            HStack(spacing: 8) {
+                if canCreateProject {
+                    quickCreatePillButton(icon: "folder.badge.plus", title: "Project") {
+                        showingCreateProject = true
+                    }
+                }
+                if canCreateSmallWorks {
+                    quickCreatePillButton(icon: "hammer.fill", title: "Small work") {
+                        showingCreateSmallWorks = true
+                    }
+                }
+                if canAddUserQuick {
+                    quickCreatePillButton(icon: "person.badge.plus", title: "User") {
+                        showingAddUser = true
+                    }
+                }
+                quickCreatePillButton(icon: "plus.rectangle.on.rectangle", title: "Task") {
+                    showingTasksDetail = true
                 }
             }
-            .navigationTitle("Menu")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(quickCreateGradient)
+        )
+    }
+
+    private func quickCreatePillButton(icon: String, title: String, action: @escaping () -> Void) -> some View {
+        Button {
+            dismissAfter(action)
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.white)
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.14))
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func menuSectionTitle(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(ProjectWorksRevampColors.muted)
+            .tracking(0.4)
+            .padding(.leading, 4)
+    }
+
+    private func menuGroupedCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 0) {
+            content()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 4)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    private func polishedNavigateRow(
+        icon: String,
+        iconBackground: Color,
+        iconTint: Color,
+        title: String,
+        subtitle: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        VStack(spacing: 0) {
+            Button {
+                dismissAfter(action)
+            } label: {
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(iconBackground)
+                        .frame(width: 32, height: 32)
+                        .overlay(
+                            Image(systemName: icon)
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(iconTint)
+                        )
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                        Text(subtitle)
+                            .font(.system(size: 11))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
                 }
+                .padding(.vertical, 11)
+            }
+            .buttonStyle(.plain)
+            Divider().overlay(ProjectWorksRevampColors.border)
+        }
+    }
+
+    private func polishedToolRow(
+        icon: String,
+        iconBackground: Color,
+        iconTint: Color,
+        title: String,
+        badge: String?,
+        showsDivider: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
+        VStack(spacing: 0) {
+            Button {
+                dismissAfter(action)
+            } label: {
+                polishedToolRowLabel(icon: icon, iconBackground: iconBackground, iconTint: iconTint, title: title, badge: badge)
+            }
+            .buttonStyle(.plain)
+            if showsDivider {
+                Divider().overlay(ProjectWorksRevampColors.border)
             }
         }
     }
 
-    @ViewBuilder
-    private func actionRow(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
+    private func polishedToolRowLabel(
+        icon: String,
+        iconBackground: Color,
+        iconTint: Color,
+        title: String,
+        badge: String?
+    ) -> some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(iconBackground)
+                .frame(width: 32, height: 32)
+                .overlay(
+                    Image(systemName: icon)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(iconTint)
+                )
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                if let badge {
+                    Text(badge)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(Color(red: 0.639, green: 0.176, blue: 0.176))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(red: 0.988, green: 0.922, blue: 0.922))
+                        .clipShape(Capsule())
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+        }
+        .padding(.vertical, 11)
+    }
+
+    private var signOutButton: some View {
         Button {
-            dismiss()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                action()
+            dismissAfter {
+                userStore.clearOnSignOut()
+                try? firebaseBackend.signOut()
             }
         } label: {
-            Label(title, systemImage: icon)
+            HStack(spacing: 10) {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 16, weight: .medium))
+                Text("Sign out")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .foregroundStyle(Color(red: 0.639, green: 0.176, blue: 0.176))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 13)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color(red: 0.988, green: 0.922, blue: 0.922), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func dismissAfter(_ action: @escaping () -> Void) {
+        dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            action()
         }
     }
 
     private func selectTab(_ tab: Int) {
         NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": tab])
     }
-    
+
     private var canCreateProject: Bool {
         guard let user = userStore.currentUser else { return false }
         if user.permissions.operativeMode { return false }
         if user.isSuperAdmin || user.permissions.adminAccess { return true }
         return user.permissions.manager && user.permissions.projects
     }
-    
+
     private var canCreateSmallWorks: Bool {
         guard let user = userStore.currentUser else { return false }
         if user.permissions.operativeMode { return false }
