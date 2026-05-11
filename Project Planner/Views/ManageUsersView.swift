@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 import FirebaseAuth
 import FirebaseFirestore
 
@@ -705,13 +706,37 @@ struct EditUserView: View {
     @State private var dayRateText: String
     @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
     @State private var showingQualificationsEditor = false
-    
+    @State private var tradePresetRaw: String
+    @State private var tradeCustomText: String
+    @State private var showingProfilePhotoSourcePicker = false
+    @State private var profilePhotoPickerSource: UIImagePickerController.SourceType = .photoLibrary
+    @State private var showingProfileImagePicker = false
+    @State private var pickedProfileImage: UIImage?
+    @State private var isUploadingProfilePhoto = false
+    @State private var profilePhotoUploadMessage: String?
+    @State private var showingChangeUserType = false
+    @State private var changeUserTypeDraft: ManagedAccountKind = .operative
+    @State private var managerSelfBookDraft = false
+    @State private var managerTransitionOperatives = true
+    @State private var managerTransitionSkills = true
+    @State private var managerTransitionQualifications = true
+    @State private var managerTransitionWeeklyReports = false
+    @State private var managerTransitionSubContractors = false
+    @State private var managerTransitionProjects = true
+    @State private var managerTransitionSmallWorks = true
+    @State private var operativeTransitionMaterials = false
+    @State private var operativeTransitionSiteAudit = true
+    @State private var isApplyingUserType = false
+    @State private var userTypeChangeMessage: String?
+
     init(user: AppUser) {
         self.user = user
         self._permissions = State(initialValue: user.permissions)
         self._isActive = State(initialValue: user.isActive)
         self._selectedAssignedManagerUserId = State(initialValue: user.assignedManagerUserId)
         self._dayRateText = State(initialValue: user.dayRate.map { String(format: "%.2f", $0) } ?? "")
+        self._tradePresetRaw = State(initialValue: user.tradeTypePreset ?? "")
+        self._tradeCustomText = State(initialValue: user.tradeTypeCustom ?? "")
     }
     
     private var isManagerOperativeOnly: Bool {
@@ -739,26 +764,121 @@ struct EditUserView: View {
         }
     }
     
+    /// Fresh row from the store (e.g. after profile photo upload).
+    private var displayedUser: AppUser {
+        userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+    }
+    
+    private var canUploadProfilePhoto: Bool {
+        canEditPermissionsMatrix
+    }
+
+    private var editNavigationTitle: String {
+        permissions.operativeMode ? "Edit operative" : "Edit user"
+    }
+
+    private var showOperativeSetupCard: Bool {
+        let eligible = permissions.operativeMode || permissions.manager
+        return eligible && canEditPermissionsMatrix
+    }
+
+    private var lineManagerSummary: String {
+        guard permissions.operativeMode else { return "" }
+        guard let id = selectedAssignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
+            return "Select manager…"
+        }
+        if let m = lineManagerCandidates.first(where: { $0.id == id }) {
+            let name = m.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+            return name.isEmpty ? m.email : name
+        }
+        return "Select manager…"
+    }
+
+    private var operativeSetupSectionTitle: String {
+        permissions.manager && !permissions.operativeMode ? "Manager setup" : "Operative setup"
+    }
+
+    private var roleHeaderIconName: String {
+        if permissions.operativeMode {
+            return "wrench.and.screwdriver.fill"
+        }
+        if permissions.adminAccess {
+            return "person.badge.key.fill"
+        }
+        return "person.fill"
+    }
+
+    private var changeUserTypeIsNoOp: Bool {
+        let currentKind = UserRoleTransitionPolicy.kind(for: permissions)
+        if changeUserTypeDraft != currentKind { return false }
+        switch changeUserTypeDraft {
+        case .operative:
+            return operativeTransitionMaterials == permissions.materials
+                && operativeTransitionSiteAudit == permissions.siteAudit
+        case .manager:
+            return managerSelfBookDraft == permissions.annualLeaveSelfBook
+                && managerTransitionOperatives == permissions.operatives
+                && managerTransitionSkills == permissions.skills
+                && managerTransitionQualifications == permissions.qualifications
+                && managerTransitionWeeklyReports == permissions.weeklyReports
+                && managerTransitionSubContractors == permissions.subContractors
+                && managerTransitionProjects == permissions.projects
+                && managerTransitionSmallWorks == permissions.smallWorks
+        case .administrator:
+            return true
+        }
+    }
+
+    private func applyDraftsForChangeUserTypeSelection() {
+        if let m = UserRoleTransitionPolicy.managerConfigForSheet(current: permissions, selectedKind: changeUserTypeDraft) {
+            managerSelfBookDraft = m.annualLeaveSelfBook
+            managerTransitionOperatives = m.operatives
+            managerTransitionSkills = m.skills
+            managerTransitionQualifications = m.qualifications
+            managerTransitionWeeklyReports = m.weeklyReports
+            managerTransitionSubContractors = m.subContractors
+            managerTransitionProjects = m.projects
+            managerTransitionSmallWorks = m.smallWorks
+        }
+        if let o = UserRoleTransitionPolicy.operativeConfigForSheet(current: permissions, selectedKind: changeUserTypeDraft) {
+            operativeTransitionMaterials = o.materials
+            operativeTransitionSiteAudit = o.siteAudit
+        }
+    }
+
+    private var displayRoleLabel: String {
+        if permissions.adminAccess { return UserRole.admin.displayName }
+        if permissions.manager && !permissions.operativeMode { return UserRole.manager.displayName }
+        if permissions.operativeMode { return UserRole.operative.displayName }
+        return user.role.displayName
+    }
+    
     // Check if any changes have been made
     private var hasChanges: Bool {
         if userStore.isOrganizationCreator(userId: user.id) {
             return false
         }
-        let dayRateEligible = (user.permissions.operativeMode || user.role == .operative || user.permissions.manager || user.role == .manager)
-        let operativeProfileChanged = (user.permissions.operativeMode || user.role == .operative) && (
+        let dayRateEligible = permissions.operativeMode || permissions.manager
+        let trimmedTradeP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTradeC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let origTradeP = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let origTradeC = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let tradeChanged = dayRateEligible && (trimmedTradeP != origTradeP || trimmedTradeC != origTradeC)
+        let operativeProfileChanged = permissions.operativeMode && (
             (selectedAssignedManagerUserId ?? "") != (user.assignedManagerUserId ?? "") ||
             parseDayRate(dayRateText) != user.dayRate
         )
-        let managerDayRateChanged = (user.permissions.manager || user.role == .manager) && dayRateEligible && parseDayRate(dayRateText) != user.dayRate
+        let managerDayRateChanged = permissions.manager && !permissions.operativeMode && parseDayRate(dayRateText) != user.dayRate
         if canUseAdminAccountTools {
-            return permissions != user.permissions || isActive != user.isActive || operativeProfileChanged || managerDayRateChanged
+            return permissions != user.permissions || isActive != user.isActive || operativeProfileChanged || managerDayRateChanged || tradeChanged
         }
-        if canEditPermissionsMatrix && operativeProfileChanged {
+        if canEditPermissionsMatrix && (operativeProfileChanged || tradeChanged) {
             return true
         }
         if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative) {
             return permissions.materials != user.permissions.materials ||
-                permissions.siteAudit != user.permissions.siteAudit
+                permissions.siteAudit != user.permissions.siteAudit ||
+                tradeChanged
         }
         return false
     }
@@ -777,43 +897,54 @@ struct EditUserView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 0) {
-                    // User Info Header
+                VStack(spacing: 18) {
                     userInfoHeader
-                    
-                    // User Details Section
-                    userDetailsSection
-                    
-                    // Active/Inactive — admins only (never for organisation creator)
-                    if canUseAdminAccountTools && !userStore.isOrganizationCreator(userId: user.id) {
-                        activeToggleSection
+                    userDetailsChromeSection
+                    if showOperativeSetupCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ManageUserSectionTitle(text: operativeSetupSectionTitle)
+                            operativeAndManagerSetupCard
+                        }
                     }
-                    
-                    // Permissions
+                    if canUseAdminAccountTools && !userStore.isOrganizationCreator(userId: user.id) {
+                        activeToggleChromeSection
+                    }
                     permissionsSection
-                    
-                    // Account actions (credentials + admin-only maintenance)
                     if canShowCredentialActions || canUseAdminAccountTools {
-                        actionsSection
+                        actionsChromeSection
                     }
                 }
+                .padding(.horizontal, 18)
+                .padding(.bottom, 32)
             }
-            .navigationTitle("Edit User")
+            .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
+            .navigationTitle(editNavigationTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
+                    Button("Cancel") { dismiss() }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(Capsule(style: .continuous).fill(Color.white))
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(Color(red: 0xE5 / 255, green: 0xE7 / 255, blue: 0xEB / 255), lineWidth: 0.5)
+                        )
                 }
-                
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if canEditPermissionsMatrix {
-                        Button("Save") {
-                            saveChanges()
-                        }
-                        .disabled(isUpdating || !hasChanges)
-                        .foregroundColor(hasChanges ? .blue : .gray)
+                        Button("Save") { saveChanges() }
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(hasChanges ? Color.white : ManageUserProfilePalette.textSecondary)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 7)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(hasChanges ? ManageUserProfilePalette.primaryBlue : Color(.systemGray5))
+                            )
+                            .disabled(isUpdating || !hasChanges)
                     }
                 }
             }
@@ -853,158 +984,584 @@ struct EditUserView: View {
                     .environmentObject(firebaseBackend)
                 }
             }
+            .confirmationDialog("Profile photo", isPresented: $showingProfilePhotoSourcePicker, titleVisibility: .visible) {
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    Button("Take Photo") {
+                        profilePhotoPickerSource = .camera
+                        showingProfileImagePicker = true
+                    }
+                }
+                Button("Photo Library") {
+                    profilePhotoPickerSource = .photoLibrary
+                    showingProfileImagePicker = true
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+            .sheet(isPresented: $showingProfileImagePicker) {
+                ProfileImagePicker(image: $pickedProfileImage, sourceType: profilePhotoPickerSource)
+            }
+            .onChange(of: pickedProfileImage) { _, newImage in
+                guard let newImage else { return }
+                pickedProfileImage = nil
+                Task { await uploadPickedProfilePhoto(newImage) }
+            }
+            .alert("Profile photo", isPresented: Binding(
+                get: { profilePhotoUploadMessage != nil },
+                set: { if !$0 { profilePhotoUploadMessage = nil } }
+            )) {
+                Button("OK") { profilePhotoUploadMessage = nil }
+            } message: {
+                if let profilePhotoUploadMessage {
+                    Text(profilePhotoUploadMessage)
+                }
+            }
         }
         .sheet(isPresented: $showingHolidayReport) {
             HolidayReportView(user: user)
                 .environmentObject(holidayStore)
                 .environmentObject(operativeStore)
         }
+        .sheet(isPresented: $showingChangeUserType) {
+            changeUserTypeSheet
+        }
         .task {
             await loadDayRateHistory()
         }
     }
+
+    private var changeUserTypeSheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("Choose how this account should behave in the app. Permissions are aligned with the Add user flows so Firestore stays consistent. Approved annual leave is kept. Pending approval requests are removed when the person can book their own leave (manager with self-book, or administrator).")
+                        .font(.subheadline)
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+
+                    Picker("Account type", selection: $changeUserTypeDraft) {
+                        ForEach(ManagedAccountKind.allCases) { kind in
+                            Text(kind.title).tag(kind)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: changeUserTypeDraft) { oldKind, newKind in
+                        guard oldKind != newKind else { return }
+                        applyDraftsForChangeUserTypeSelection()
+                    }
+
+                    if changeUserTypeDraft == .manager {
+                        Text("Manager access")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(ManageUserProfilePalette.textPrimary)
+
+                        VStack(spacing: 0) {
+                            ManageUserPermissionToggleRow(
+                                iconName: "person.crop.rectangle.stack.fill",
+                                iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                                iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                                title: "Operatives",
+                                subtitle: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Operatives tab or full operative profiles.",
+                                isOn: $managerTransitionOperatives
+                            )
+                            ManageUserCardDivider()
+                            ManageUserPermissionToggleRow(
+                                iconName: "beach.umbrella.fill",
+                                iconBackground: ManageUserProfilePalette.chipBlueBg,
+                                iconForeground: ManageUserProfilePalette.chipBlueFg,
+                                title: "Annual Leave",
+                                subtitle: "Can book their own annual leave. If off, this manager requests leave for approval.",
+                                isOn: $managerSelfBookDraft
+                            )
+                            ManageUserCardDivider()
+                            ManageUserPermissionToggleRow(
+                                iconName: "doc.text.fill",
+                                iconBackground: ManageUserProfilePalette.chipTealBg,
+                                iconForeground: ManageUserProfilePalette.chipTealFg,
+                                title: "Weekly Report",
+                                subtitle: "Will be able to pull weekly reports.",
+                                isOn: $managerTransitionWeeklyReports
+                            )
+                            ManageUserCardDivider()
+                            ManageUserPermissionToggleRow(
+                                iconName: "person.2.wave.2.fill",
+                                iconBackground: ManageUserProfilePalette.chipTealBg,
+                                iconForeground: ManageUserProfilePalette.chipTealFg,
+                                title: "Sub Contractors",
+                                subtitle: "Can add and manage sub contractors. If unselected they will be unable to manage them, they will only be able to book them in.",
+                                isOn: $managerTransitionSubContractors
+                            )
+                            ManageUserCardDivider()
+                            ManageUserPermissionToggleRow(
+                                iconName: "wrench.and.screwdriver.fill",
+                                iconBackground: ManageUserProfilePalette.chipPinkBg,
+                                iconForeground: ManageUserProfilePalette.chipPinkFg,
+                                title: "Skills",
+                                subtitle: "Can create and alter existing skills.",
+                                isOn: $managerTransitionSkills
+                            )
+                            ManageUserCardDivider()
+                            ManageUserPermissionToggleRow(
+                                iconName: "rosette",
+                                iconBackground: ManageUserProfilePalette.chipPinkBg,
+                                iconForeground: ManageUserProfilePalette.chipPinkFg,
+                                title: "Qualifications",
+                                subtitle: "Can create and alter existing qualifications.",
+                                isOn: $managerTransitionQualifications
+                            )
+                            ManageUserCardDivider()
+                            ManageUserPermissionToggleRow(
+                                iconName: "folder.fill",
+                                iconBackground: ManageUserProfilePalette.chipBlueBg,
+                                iconForeground: ManageUserProfilePalette.chipBlueFg,
+                                title: "Projects",
+                                subtitle: "Can create and manage projects.",
+                                isOn: $managerTransitionProjects,
+                                isDisabled: false
+                            )
+                            ManageUserCardDivider()
+                            ManageUserPermissionToggleRow(
+                                iconName: "hammer.fill",
+                                iconBackground: ManageUserProfilePalette.chipBlueBg,
+                                iconForeground: ManageUserProfilePalette.chipBlueFg,
+                                title: "Small Works",
+                                subtitle: "Can create and manage small works.",
+                                isOn: $managerTransitionSmallWorks,
+                                isDisabled: false
+                            )
+                        }
+                        .background(Color.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(Color(red: 0xE5 / 255, green: 0xE7 / 255, blue: 0xEB / 255), lineWidth: 0.5)
+                        )
+
+                        Text("If annual leave self-book is turned on, pending approval requests are cleared.")
+                            .font(.caption)
+                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    }
+
+                    if changeUserTypeDraft == .operative {
+                        Text("Operative access")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(ManageUserProfilePalette.textPrimary)
+
+                        VStack(spacing: 0) {
+                            ManageUserPermissionToggleRow(
+                                iconName: "shippingbox.fill",
+                                iconBackground: ManageUserProfilePalette.chipAmberBg,
+                                iconForeground: ManageUserProfilePalette.chipAmberFg,
+                                title: "Materials",
+                                subtitle: "Order & track stock",
+                                isOn: $operativeTransitionMaterials
+                            )
+                            ManageUserCardDivider()
+                            ManageUserPermissionToggleRow(
+                                iconName: "checklist",
+                                iconBackground: ManageUserProfilePalette.chipTealBg,
+                                iconForeground: ManageUserProfilePalette.chipTealFg,
+                                title: "Site audit",
+                                subtitle: "Submit safety checks",
+                                isOn: $operativeTransitionSiteAudit
+                            )
+                        }
+                        .background(Color.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(Color(red: 0xE5 / 255, green: 0xE7 / 255, blue: 0xEB / 255), lineWidth: 0.5)
+                        )
+
+                        Text("These match the optional extras when adding an operative. Line manager and day rate can be set after the type change on the main edit screen.")
+                            .font(.caption)
+                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    }
+
+                    if let userTypeChangeMessage {
+                        Text(userTypeChangeMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+
+                    Button {
+                        Task { await applyChangeUserType() }
+                    } label: {
+                        if isApplyingUserType {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Text("Apply")
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(ManageUserProfilePalette.primaryBlue)
+                    .disabled(isApplyingUserType || changeUserTypeIsNoOp)
+                }
+                .padding(20)
+            }
+            .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
+            .navigationTitle("Change user type")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        showingChangeUserType = false
+                        userTypeChangeMessage = nil
+                    }
+                }
+            }
+        }
+    }
+
+    private func applyChangeUserType() async {
+        await MainActor.run {
+            isApplyingUserType = true
+            userTypeChangeMessage = nil
+        }
+        let managerConfig: ManagerUserTypeTransitionConfig? = changeUserTypeDraft == .manager
+            ? ManagerUserTypeTransitionConfig(
+                annualLeaveSelfBook: managerSelfBookDraft,
+                operatives: managerTransitionOperatives,
+                skills: managerTransitionSkills,
+                qualifications: managerTransitionQualifications,
+                weeklyReports: managerTransitionWeeklyReports,
+                subContractors: managerTransitionSubContractors,
+                projects: managerTransitionProjects,
+                smallWorks: managerTransitionSmallWorks
+            )
+            : nil
+        let operativeConfig: OperativeUserTypeTransitionConfig? = changeUserTypeDraft == .operative
+            ? OperativeUserTypeTransitionConfig(materials: operativeTransitionMaterials, siteAudit: operativeTransitionSiteAudit)
+            : nil
+        let newPerms = UserRoleTransitionPolicy.permissions(
+            for: changeUserTypeDraft,
+            carryingFrom: permissions,
+            manager: managerConfig,
+            operative: operativeConfig
+        )
+        let ok = await userStore.updateUserPermissions(
+            userId: user.id,
+            permissions: newPerms,
+            holidayStore: holidayStore,
+            linkedOperativeUUID: linkedOperativeForUser?.id
+        )
+        await MainActor.run { isApplyingUserType = false }
+        if ok {
+            await userStore.loadOrganizationUsers()
+            await holidayStore.loadData()
+            await MainActor.run {
+                if let fresh = userStore.organizationUsers.first(where: { $0.id == user.id }) {
+                    permissions = fresh.permissions
+                    selectedAssignedManagerUserId = fresh.assignedManagerUserId
+                    isActive = fresh.isActive
+                }
+                if permissions.operativeMode {
+                    Task { await loadDayRateHistory() }
+                } else {
+                    dayRateHistory = []
+                }
+                showingChangeUserType = false
+            }
+        } else {
+            await MainActor.run {
+                userTypeChangeMessage = userStore.errorMessage ?? "Could not update account type."
+            }
+        }
+    }
     
     private var userInfoHeader: some View {
-        VStack(spacing: 16) {
-            Circle()
-                .fill(user.isActive ? Color.indigo : Color.gray)
-                .frame(width: 80, height: 80)
-                .overlay(
-                    Text(user.firstName.prefix(1) + user.surname.prefix(1))
-                        .font(.title)
-                        .foregroundColor(.white)
-                )
-            
-            VStack(spacing: 4) {
-                Text(user.fullName)
-                    .font(.title2)
-                    .fontWeight(.bold)
-                
-                Text(user.email)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
-                HStack(spacing: 8) {
-                    Text(user.role.displayName)
-                        .font(.caption)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.indigo.opacity(0.2))
-                        .foregroundColor(.indigo)
-                        .cornerRadius(12)
-                    
-                    // Pending/Verified Status
-                    if !user.passwordSet {
-                        Text("Pending")
-                            .font(.caption)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.orange.opacity(0.2))
-                            .foregroundColor(.orange)
-                            .cornerRadius(12)
-                    } else {
-                        Text("Verified")
-                            .font(.caption)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.green.opacity(0.2))
-                            .foregroundColor(.green)
-                            .cornerRadius(12)
+        ManageUserCard {
+            VStack(spacing: 12) {
+                ZStack(alignment: .bottomTrailing) {
+                    ZStack {
+                        if let urlString = displayedUser.profilePhotoURL,
+                           let url = URL(string: urlString) {
+                            AsyncImage(url: url) { phase in
+                                switch phase {
+                                case .empty:
+                                    ProgressView()
+                                        .tint(.white)
+                                case .success(let image):
+                                    image
+                                        .resizable()
+                                        .scaledToFill()
+                                case .failure:
+                                    profileInitialsPlaceholder
+                                @unknown default:
+                                    profileInitialsPlaceholder
+                                }
+                            }
+                        } else {
+                            profileInitialsPlaceholder
+                        }
                     }
+                    .frame(width: 84, height: 84)
+                    .clipShape(Circle())
+
+                    if canUploadProfilePhoto {
+                        Button {
+                            showingProfilePhotoSourcePicker = true
+                        } label: {
+                            Image(systemName: "camera.fill")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 28, height: 28)
+                                .background(ManageUserProfilePalette.primaryBlue)
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(Color.white, lineWidth: 2.5))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isUploadingProfilePhoto)
+                        .offset(x: 2, y: 2)
+                    }
+                }
+                .overlay {
+                    if isUploadingProfilePhoto {
+                        ProgressView()
+                            .padding(8)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                }
+
+                VStack(spacing: 4) {
+                    Text(user.fullName)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(ManageUserProfilePalette.textPrimary)
+
+                    Text(user.email)
+                        .font(.system(size: 13))
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+
+                    HStack(spacing: 6) {
+                        roleStatusChip(
+                            text: displayRoleLabel,
+                            systemImage: roleHeaderIconName,
+                            foreground: ManageUserProfilePalette.operativeChipLabel,
+                            background: ManageUserProfilePalette.chipPurpleBg
+                        )
+                        if user.passwordSet {
+                            roleStatusChip(
+                                text: "Verified",
+                                systemImage: "checkmark.circle.fill",
+                                foreground: ManageUserProfilePalette.chipTealFg,
+                                background: ManageUserProfilePalette.chipTealBg
+                            )
+                        } else {
+                            roleStatusChip(
+                                text: "Pending",
+                                systemImage: "clock.fill",
+                                foreground: ManageUserProfilePalette.chipAmberFg,
+                                background: ManageUserProfilePalette.chipAmberBg
+                            )
+                        }
+                        roleStatusChip(
+                            text: user.isActive ? "Active" : "Inactive",
+                            systemImage: "smallcircle.filled.circle.fill",
+                            foreground: ManageUserProfilePalette.chipBlueFg,
+                            background: ManageUserProfilePalette.chipBlueBg
+                        )
+                    }
+                    .padding(.top, 4)
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func roleStatusChip(text: String, systemImage: String, foreground: Color, background: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+            Text(text)
+                .font(.system(size: 11, weight: .medium))
+        }
+        .foregroundStyle(foreground)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(background)
+        .clipShape(Capsule(style: .continuous))
+    }
+
+    private var profileInitialsPlaceholder: some View {
+        Circle()
+            .fill(
+                LinearGradient(
+                    colors: [
+                        ManageUserProfilePalette.avatarGradientTop,
+                        ManageUserProfilePalette.avatarGradientBottom,
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(
+                Text("\(String(displayedUser.firstName.prefix(1)))\(String(displayedUser.surname.prefix(1)))".uppercased())
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(.white)
+                    .tracking(0.5)
+            )
+            .opacity(displayedUser.isActive ? 1 : 0.45)
+    }
+
+    private var userDetailsChromeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ManageUserSectionTitle(text: "User details")
+            ManageUserCard {
+                VStack(spacing: 0) {
+                    ManageUserDetailStaticRow(
+                        iconName: "envelope.fill",
+                        iconBackground: ManageUserProfilePalette.chipBlueBg,
+                        iconForeground: ManageUserProfilePalette.chipBlueFg,
+                        label: "Email",
+                        value: user.email
+                    )
+                    ManageUserCardDivider()
+                    ManageUserDetailStaticRow(
+                        iconName: "phone.fill",
+                        iconBackground: ManageUserProfilePalette.chipTealBg,
+                        iconForeground: ManageUserProfilePalette.chipTealFg,
+                        label: "Mobile number",
+                        value: {
+                            if let mobileNumber = user.mobileNumber, !mobileNumber.isEmpty { return mobileNumber }
+                            return "—"
+                        }()
+                    )
+                    ManageUserCardDivider()
+                    ManageUserDetailStaticRow(
+                        iconName: "calendar",
+                        iconBackground: ManageUserProfilePalette.chipAmberBg,
+                        iconForeground: ManageUserProfilePalette.chipAmberFg,
+                        label: "Last active",
+                        value: "—"
+                    )
                 }
             }
         }
-        .padding(20)
-        .background(Color(.systemGroupedBackground))
+    }
+
+    private var operativeAndManagerSetupCard: some View {
+        ManageUserCard {
+            VStack(spacing: 0) {
+                if permissions.operativeMode {
+                    lineManagerPickRow
+                    ManageUserCardDivider()
+                }
+                ManageUserDayRateEditRow(dayRateText: $dayRateText, currencySymbol: localeCurrencySymbol())
+                ManageUserCardDivider()
+                tradeTypePickSection
+                if permissions.operativeMode && !dayRateHistory.isEmpty {
+                    ManageUserCardDivider()
+                    dayRateHistoryChromeBlock
+                }
+                if permissions.operativeMode, linkedOperativeForUser != nil, canEditPermissionsMatrix {
+                    ManageUserCardDivider()
+                    ManageUserNavigationSubtitleRow(
+                        iconName: "graduationcap.fill",
+                        iconBackground: ManageUserProfilePalette.chipBlueBg,
+                        iconForeground: ManageUserProfilePalette.chipBlueFg,
+                        title: "Skills & qualifications",
+                        subtitle: "Manage certifications",
+                        action: { showingQualificationsEditor = true }
+                    )
+                }
+            }
+        }
+    }
+
+    private var lineManagerPickRow: some View {
+        Menu {
+            Button("Unassigned") { selectedAssignedManagerUserId = nil }
+            ForEach(lineManagerCandidates, id: \.id) { manager in
+                Button(manager.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? manager.email : manager.fullName) {
+                    selectedAssignedManagerUserId = manager.id
+                }
+            }
+        } label: {
+            ManageUserChevronRow(
+                iconName: "person.badge.plus",
+                iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                label: "Line manager",
+                value: lineManagerSummary
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var tradeTypePickSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Menu {
+                ForEach(StaffTradeType.pickerCases) { trade in
+                    Button(trade.rawValue) {
+                        tradePresetRaw = trade.rawValue
+                        if trade != .other {
+                            tradeCustomText = ""
+                        }
+                    }
+                }
+            } label: {
+                ManageUserChevronRow(
+                    iconName: "bolt.fill",
+                    iconBackground: ManageUserProfilePalette.chipPinkBg,
+                    iconForeground: ManageUserProfilePalette.chipPinkFg,
+                    label: "Trade type",
+                    value: StaffTradeType.displayLabel(presetRaw: tradePresetRaw, custom: tradeCustomText)
+                )
+            }
+            .buttonStyle(.plain)
+
+            if tradePresetRaw == StaffTradeType.other.rawValue {
+                TextField("Enter trade name", text: $tradeCustomText)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                    .padding(.horizontal, 14)
+                    .padding(.leading, ManageUserProfilePalette.iconChipSize + 24)
+                    .padding(.bottom, 12)
+            }
+        }
+    }
+
+    private var dayRateHistoryChromeBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Previous day rates")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+            ForEach(dayRateHistory) { entry in
+                HStack {
+                    Text(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))
+                        .font(.system(size: 11))
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    Spacer()
+                    Text("\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                }
+                .padding(.horizontal, 14)
+            }
+            .padding(.bottom, 8)
+        }
     }
     
-    private var userDetailsSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("User Details")
-                .font(.headline)
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-            
-            VStack(spacing: 12) {
-                DetailRow(label: "Email", value: user.email)
-                if let mobileNumber = user.mobileNumber, !mobileNumber.isEmpty {
-                    DetailRow(label: "Mobile Number", value: mobileNumber)
-                }
-                DetailRow(label: "Status", value: user.isActive ? "Active" : "Inactive")
-            }
-            .padding(.horizontal, 20)
-
-            if (user.permissions.operativeMode || user.role == .operative || user.permissions.manager || user.role == .manager) && canEditPermissionsMatrix {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text((user.permissions.manager || user.role == .manager) ? "Manager setup" : "Operative setup")
-                        .font(.headline)
-
-                    if user.permissions.operativeMode || user.role == .operative {
-                        Text("Line manager")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        Picker("Line manager", selection: $selectedAssignedManagerUserId) {
-                            Text("Select manager…").tag(nil as String?)
-                            ForEach(lineManagerCandidates, id: \.id) { manager in
-                                Text(manager.fullName.isEmpty ? manager.email : manager.fullName).tag(Optional(manager.id))
-                            }
-                        }
-                    }
-
-                    Text("Day rate")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    HStack {
-                        Text(localeCurrencySymbol())
-                            .foregroundColor(.secondary)
-                        TextField("Leave blank if not set", text: $dayRateText)
-                            .keyboardType(.decimalPad)
-                    }
-                    if (user.permissions.operativeMode || user.role == .operative) && !dayRateHistory.isEmpty {
-                        Text("Previous day rates")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .padding(.top, 4)
-                        ForEach(dayRateHistory) { entry in
-                            HStack {
-                                Text(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Text("\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))")
-                                    .font(.caption)
-                            }
-                        }
-                    }
-                    
-                    if (user.permissions.operativeMode || user.role == .operative), linkedOperativeForUser != nil {
-                        Button(action: { showingQualificationsEditor = true }) {
-                            HStack {
-                                Image(systemName: "graduationcap.fill")
-                                Text("Skills & Qualifications")
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                            }
-                            .foregroundColor(.white)
-                            .padding()
-                            .background(Color.indigo)
-                            .cornerRadius(10)
-                        }
-                        .padding(.top, 6)
-                    }
-                }
-                .padding(16)
-                .background(Color(.systemBackground))
-                .cornerRadius(12)
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
+    private func uploadPickedProfilePhoto(_ image: UIImage) async {
+        await MainActor.run { isUploadingProfilePhoto = true }
+        let subject = displayedUser
+        let success = await userStore.updateUserProfilePhoto(for: subject, image: image)
+        await MainActor.run {
+            isUploadingProfilePhoto = false
+            if success {
+                profilePhotoUploadMessage = "Profile photo updated."
+            } else {
+                profilePhotoUploadMessage = userStore.errorMessage ?? "Could not upload profile photo."
             }
         }
     }
-
+    
     private func loadDayRateHistory() async {
-        guard user.permissions.operativeMode || user.role == .operative else {
+        guard permissions.operativeMode else {
             dayRateHistory = []
             return
         }
@@ -1013,184 +1570,157 @@ struct EditUserView: View {
         dayRateHistory = (all[user.id] ?? []).sorted(by: { $0.effectiveAt > $1.effectiveAt })
     }
     
-    private var activeToggleSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Account Status")
-                .font(.headline)
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-            
-            HStack {
-                Text("Active")
-                    .font(.body)
-                Spacer()
-                Toggle("", isOn: $isActive)
-                    .labelsHidden()
+    private var activeToggleChromeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ManageUserSectionTitle(text: "Account status")
+            ManageUserCard {
+                ManageUserPermissionToggleRow(
+                    iconName: "smallcircle.filled.circle.fill",
+                    iconBackground: ManageUserProfilePalette.chipBlueBg,
+                    iconForeground: ManageUserProfilePalette.chipBlueFg,
+                    title: "Active",
+                    subtitle: "User can sign in and use the app",
+                    isOn: $isActive
+                )
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(Color(.systemBackground))
-            .cornerRadius(12)
-            .padding(.horizontal, 20)
         }
     }
-    
+
     /// Verified users: password reset only. Pending users: resend sign-up / invitation only (no Firebase reset — avoids clashing flows).
-    private var actionsSection: some View {
+    private var actionsChromeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if canShowCredentialActions {
-            Group {
-                if user.passwordSet {
-                    Button(action: { sendResetPasswordEmail() }) {
-                        HStack {
-                            Image(systemName: "key.fill")
-                            Text("Send password reset email")
-                            Spacer()
-                            if isSendingResetPassword {
-                                ProgressView()
-                            }
-                        }
-                        .foregroundColor(.white)
-                        .padding()
-                        .background(Color.blue)
-                        .cornerRadius(12)
+            ManageUserSectionTitle(text: "Account actions")
+            VStack(spacing: 8) {
+                if canShowCredentialActions {
+                    if user.passwordSet {
+                        ManageUserAccountActionButton(
+                            iconName: "key.fill",
+                            iconBackground: ManageUserProfilePalette.chipBlueBg,
+                            iconForeground: ManageUserProfilePalette.chipBlueFg,
+                            title: "Send password reset",
+                            action: { sendResetPasswordEmail() },
+                            isBusy: isSendingResetPassword
+                        )
+                    } else {
+                        let isPendingManagerOrOperative = (user.permissions.manager || user.permissions.operativeMode) &&
+                            !user.permissions.adminAccess && !user.isSuperAdmin
+                        ManageUserAccountActionButton(
+                            iconName: isPendingManagerOrOperative ? "envelope.badge.fill" : "envelope.fill",
+                            iconBackground: ManageUserProfilePalette.chipBlueBg,
+                            iconForeground: ManageUserProfilePalette.chipBlueFg,
+                            title: isPendingManagerOrOperative
+                                ? "Resend sign-up email (verification code)"
+                                : "Resend verification email",
+                            action: { resendVerificationEmail() },
+                            isBusy: isResendingEmail || isSendingSignUpEmail
+                        )
+                        Text("They have not finished setting a password yet. Resend the invitation email so they receive a new code and setup link.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 4)
                     }
-                    .disabled(isSendingResetPassword)
-                } else {
-                    let isPendingManagerOrOperative = (user.permissions.manager || user.permissions.operativeMode) &&
-                        !user.permissions.adminAccess && !user.isSuperAdmin
-                    Button(action: { resendVerificationEmail() }) {
-                        HStack {
-                            Image(systemName: isPendingManagerOrOperative ? "envelope.badge.fill" : "envelope.fill")
-                            Text(isPendingManagerOrOperative
-                                 ? "Resend sign-up email (verification code)"
-                                 : "Resend verification email")
-                            Spacer()
-                            if isResendingEmail || isSendingSignUpEmail {
-                                ProgressView()
-                            }
-                        }
-                        .foregroundColor(.white)
-                        .padding()
-                        .background(isPendingManagerOrOperative ? Color.blue : Color.orange)
-                        .cornerRadius(12)
+
+                    if let message = resetPasswordMessage ?? resendEmailMessage ?? signUpEmailMessage {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 4)
                     }
-                    .disabled(isResendingEmail || isSendingSignUpEmail)
-                    
-                    Text("They have not finished setting a password yet. Resend the invitation email so they receive a new code and setup link.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 4)
                 }
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 20)
-            
-            if let message = resetPasswordMessage ?? resendEmailMessage ?? signUpEmailMessage {
-                Text(message)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 20)
-            }
-            }
 
-            // Super Admin transfer (organization ownership)
-            if canUseAdminAccountTools,
-               userStore.currentUser?.isSuperAdmin == true,
-               !user.isSuperAdmin,
-               !user.permissions.operativeMode,
-               (user.permissions.adminAccess || user.role == .admin) {
-                Button(action: { transferSuperAdmin() }) {
-                    HStack {
-                        Image(systemName: "crown.fill")
-                        Text("Make Super Admin")
-                        Spacer()
-                        if isTransferringSuperAdmin {
-                            ProgressView()
-                        }
-                    }
-                    .foregroundColor(.white)
-                    .padding()
-                    .background(Color.purple)
-                    .cornerRadius(12)
+                if canUseAdminAccountTools,
+                   userStore.currentUser?.isSuperAdmin == true,
+                   !user.isSuperAdmin,
+                   !user.permissions.operativeMode,
+                   (user.permissions.adminAccess || user.role == .admin) {
+                    ManageUserAccountActionButton(
+                        iconName: "crown.fill",
+                        iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                        iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                        title: "Make Super Admin",
+                        action: { transferSuperAdmin() },
+                        isBusy: isTransferringSuperAdmin
+                    )
                 }
-                .disabled(isTransferringSuperAdmin)
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-            }
 
-            if let message = transferSuperAdminMessage {
-                Text(message)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 20)
-            }
-
-            if userStore.hasAdminAccess(),
-               !user.isSuperAdmin,
-               !user.permissions.adminAccess,
-               (user.permissions.manager || user.permissions.operativeMode) {
-                Button(action: { showingHolidayReport = true }) {
-                    HStack {
-                        Image(systemName: "calendar")
-                        Text("Holiday Report")
-                        Spacer()
-                    }
-                    .foregroundColor(.white)
-                    .padding()
-                    .background(Color.indigo)
-                    .cornerRadius(12)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-            }
-
-            // Deactivate / Reactivate (admin + super admin only)
-            if canUseAdminAccountTools,
-               !userStore.isOrganizationCreator(userId: user.id) {
-                Button(action: { toggleActiveStatus() }) {
-                    HStack {
-                        Image(systemName: isActive ? "pause.circle.fill" : "play.circle.fill")
-                        Text(isActive ? "Deactivate User" : "Reactivate User")
-                        Spacer()
-                        if isUpdatingActiveStatus {
-                            ProgressView()
-                        }
-                    }
-                    .foregroundColor(.white)
-                    .padding()
-                    .background(isActive ? Color.gray : Color.green)
-                    .cornerRadius(12)
-                }
-                .disabled(isUpdatingActiveStatus)
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-
-                if let message = activeStatusMessage {
+                if let message = transferSuperAdminMessage {
                     Text(message)
                         .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 20)
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        .padding(.leading, 4)
                 }
-            }
-            
-            if canUseAdminAccountTools,
-               userStore.canDeleteUser(user),
-               !userStore.isOrganizationCreator(userId: user.id) {
-                Button(action: { showingDeleteConfirmation = true }) {
-                    HStack {
-                        Image(systemName: "trash.fill")
-                        Text("Delete User")
-                        Spacer()
+
+                if userStore.hasAdminAccess(),
+                   !user.isSuperAdmin,
+                   !user.permissions.adminAccess,
+                   (user.permissions.manager || user.permissions.operativeMode) {
+                    ManageUserAccountActionButton(
+                        iconName: "chart.line.uptrend.xyaxis",
+                        iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                        iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                        title: "Holiday report",
+                        action: { showingHolidayReport = true }
+                    )
+                }
+
+                if canUseAdminAccountTools,
+                   canEditPermissionsMatrix,
+                   !userStore.isOrganizationCreator(userId: user.id) {
+                    ManageUserAccountActionButton(
+                        iconName: "person.crop.circle.badge.arrow.left.and.arrow.right",
+                        iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                        iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                        title: "Change user type",
+                        subtitle: "Switch between operative, manager, or administrator",
+                        action: {
+                            changeUserTypeDraft = UserRoleTransitionPolicy.kind(for: permissions)
+                            applyDraftsForChangeUserTypeSelection()
+                            userTypeChangeMessage = nil
+                            showingChangeUserType = true
+                        }
+                    )
+                }
+
+                if canUseAdminAccountTools,
+                   !userStore.isOrganizationCreator(userId: user.id) {
+                    ManageUserAccountActionButton(
+                        iconName: "pause.circle.fill",
+                        iconBackground: ManageUserProfilePalette.chipAmberBg,
+                        iconForeground: ManageUserProfilePalette.chipAmberFg,
+                        title: isActive ? "Deactivate user" : "Reactivate user",
+                        subtitle: "Suspend access, keep history",
+                        titleColor: ManageUserProfilePalette.chipAmberFg,
+                        borderColor: ManageUserProfilePalette.chipAmberBg,
+                        showsChevron: false,
+                        action: { toggleActiveStatus() },
+                        isBusy: isUpdatingActiveStatus
+                    )
+
+                    if let message = activeStatusMessage {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                            .padding(.leading, 4)
                     }
-                    .foregroundColor(.white)
-                    .padding()
-                    .background(Color.red)
-                    .cornerRadius(12)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 40)
+
+                if canUseAdminAccountTools,
+                   userStore.canDeleteUser(user),
+                   !userStore.isOrganizationCreator(userId: user.id) {
+                    ManageUserAccountActionButton(
+                        iconName: "trash.fill",
+                        iconBackground: ManageUserProfilePalette.chipRedBg,
+                        iconForeground: ManageUserProfilePalette.chipRedFg,
+                        title: "Delete user",
+                        subtitle: "Permanently remove account",
+                        titleColor: ManageUserProfilePalette.chipRedFg,
+                        borderColor: ManageUserProfilePalette.chipRedBg,
+                        showsChevron: false,
+                        action: { showingDeleteConfirmation = true }
+                    )
+                }
             }
         }
     }
@@ -1230,168 +1760,235 @@ struct EditUserView: View {
     }
     
     private var permissionsSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 12) {
             if userStore.isOrganizationCreator(userId: user.id) {
-                VStack(spacing: 12) {
-                    HStack {
-                        Image(systemName: "lock.fill")
-                            .foregroundColor(.orange)
-                        Text("Super Admin")
-                            .font(.headline)
-                            .foregroundColor(.orange)
+                ManageUserSectionTitle(text: "Permissions")
+                ManageUserCard {
+                    HStack(alignment: .top, spacing: 12) {
+                        ManageUserIconChip(
+                            systemName: "lock.fill",
+                            background: Color.orange.opacity(0.12),
+                            foreground: Color.orange
+                        )
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Super Admin")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color.orange)
+                            Text("This user is the organization creator. Their permissions cannot be changed.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        }
                     }
-                    Text("This user is the organization creator. Their permissions cannot be changed.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    .padding(16)
                 }
-                .padding()
-                .background(Color.orange.opacity(0.1))
-                .cornerRadius(12)
-                .padding(.horizontal, 20)
             } else if !canEditPermissionsMatrix {
                 Text("You do not have permission to change access for this user. Ask an organisation admin.")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 12)
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .padding(.top, 4)
             } else if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Operative access")
-                        .font(.headline)
-                        .padding(.horizontal, 20)
+                VStack(alignment: .leading, spacing: 8) {
+                    ManageUserSectionTitle(text: "Permissions")
                     Text("You can adjust materials access for this operative. Other permissions are managed by an admin.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 20)
-                    PermissionToggle(
-                        title: "Materials",
-                        description: "Allow this operative to see and use Materials inside assigned projects and small works.",
-                        isOn: $permissions.materials
-                    )
-                    .padding(.horizontal, 20)
-                    PermissionToggle(
-                        title: "Site Audit",
-                        description: "Allow this operative to access Site Audits for assigned projects and small works.",
-                        isOn: $permissions.siteAudit
-                    )
-                    .padding(.horizontal, 20)
+                        .font(.system(size: 11))
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        .padding(.leading, 4)
+                    ManageUserCard {
+                        operativeMaterialsAndSiteAuditRows
+                    }
                 }
             } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Permissions")
-                        .font(.headline)
-                        .padding(.horizontal, 20)
-                    
-                    VStack(spacing: 12) {
-                        PermissionToggle(
-                            title: "Admin Access",
-                            description: "Can add and manage users.",
-                            isOn: $permissions.adminAccess
-                        )
-                        .disabled(permissions.operativeMode)
-                        .onChange(of: permissions.adminAccess) { oldValue, newValue in
-                            if newValue && !permissions.operativeMode {
-                                permissions.manager = true
-                                permissions.projects = true
-                                permissions.smallWorks = true
-                            }
+                VStack(alignment: .leading, spacing: 8) {
+                    ManageUserSectionTitle(text: "Permissions")
+                    if canUseAdminAccountTools && permissions.operativeMode {
+                        ManageUserCard {
+                            operativeMaterialsAndSiteAuditRows
                         }
-                        
-                        PermissionToggle(
-                            title: "Manager",
-                            description: "Managers will be able to schedule operatives, create new clients, skills, and qualifications, view warnings and manage tasks.",
-                            isOn: $permissions.manager
-                        )
-                        .disabled(permissions.adminAccess || permissions.operativeMode)
-                        
-                        PermissionToggle(
-                            title: "Projects",
-                            description: "Can create and manage projects.",
-                            isOn: $permissions.projects
-                        )
-                        .disabled((!permissions.manager && !permissions.adminAccess) || permissions.operativeMode)
-                        
-                        PermissionToggle(
-                            title: "Small Works",
-                            description: "Can create and manage small works.",
-                            isOn: $permissions.smallWorks
-                        )
-                        .disabled((!permissions.manager && !permissions.adminAccess) || permissions.operativeMode)
-
-                        PermissionToggle(
-                            title: "Weekly Report",
-                            description: "Will be able to pull weekly reports.",
-                            isOn: $permissions.weeklyReports
-                        )
-                        .disabled((!permissions.manager && !permissions.adminAccess) || permissions.operativeMode)
-                        
-                        PermissionToggle(
-                            title: "Sub Contractors",
-                            description: "Can add and manage sub contractors. If unselected they will be unable to manage them, they will only be able to book them in.",
-                            isOn: $permissions.subContractors
-                        )
-                        .disabled((!permissions.manager && !permissions.adminAccess) || permissions.operativeMode)
-                        
-                        PermissionToggle(
-                            title: "Operatives",
-                            description: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Operatives tab or full operative profiles.",
-                            isOn: $permissions.operatives
-                        )
-                        .disabled(permissions.operativeMode)
-                        
-                        PermissionToggle(
-                            title: "Skills",
-                            description: "Can create and alter existing skills.",
-                            isOn: $permissions.skills
-                        )
-                        .disabled(permissions.operativeMode)
-                        
-                        PermissionToggle(
-                            title: "Qualifications",
-                            description: "Can create and alter existing qualifications.",
-                            isOn: $permissions.qualifications
-                        )
-                        .disabled(permissions.operativeMode)
-
-                        PermissionToggle(
-                            title: "Materials",
-                            description: "For operatives: can view/use materials in assigned projects and small works.",
-                            isOn: $permissions.materials
-                        )
-                        .disabled(!permissions.operativeMode)
-                        
-                        PermissionToggle(
-                            title: "Site Audit",
-                            description: "For operatives: can open Site Audits in assigned projects and small works.",
-                            isOn: $permissions.siteAudit
-                        )
-                        .disabled(!permissions.operativeMode)
-                        
-                        Divider()
-                            .padding(.vertical, 8)
-                        
-                        PermissionToggle(
-                            title: "Operative Mode",
-                            description: "Limited view for operatives: only projects/small works assigned to them, their tasks, and My Schedule. No manager or admin features.",
-                            isOn: $permissions.operativeMode
-                        )
-                        .onChange(of: permissions.operativeMode) { oldValue, newValue in
-                            if newValue {
-                                permissions.adminAccess = false
-                                permissions.manager = false
-                                permissions.projects = false
-                                permissions.smallWorks = false
-                                permissions.operatives = false
-                                permissions.skills = false
-                                permissions.qualifications = false
-                                permissions.materials = false
-                                permissions.siteAudit = false
-                            }
+                    } else {
+                        ManageUserCard {
+                            fullAdminPermissionMatrixRows
                         }
                     }
-                    .padding(.horizontal, 20)
                 }
             }
+        }
+    }
+
+    private var operativeMaterialsAndSiteAuditRows: some View {
+        VStack(spacing: 0) {
+            ManageUserPermissionToggleRow(
+                iconName: "shippingbox.fill",
+                iconBackground: ManageUserProfilePalette.chipAmberBg,
+                iconForeground: ManageUserProfilePalette.chipAmberFg,
+                title: "Materials",
+                subtitle: "Order & track stock",
+                isOn: $permissions.materials
+            )
+            ManageUserCardDivider()
+            ManageUserPermissionToggleRow(
+                iconName: "checklist",
+                iconBackground: ManageUserProfilePalette.chipTealBg,
+                iconForeground: ManageUserProfilePalette.chipTealFg,
+                title: "Site audit",
+                subtitle: "Submit safety checks",
+                isOn: $permissions.siteAudit
+            )
+        }
+    }
+
+    private var fullAdminPermissionMatrixRows: some View {
+        Group {
+            Group {
+                ManageUserPermissionToggleRow(
+                    iconName: "person.badge.key.fill",
+                    iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                    iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                    title: "Admin Access",
+                    subtitle: "Can add and manage users.",
+                    isOn: $permissions.adminAccess,
+                    isDisabled: false
+                )
+            }
+            .onChange(of: permissions.adminAccess) { _, newValue in
+                if newValue {
+                    permissions.manager = true
+                    permissions.projects = true
+                    permissions.smallWorks = true
+                }
+            }
+
+            ManageUserCardDivider()
+
+            ManageUserPermissionToggleRow(
+                iconName: "person.3.fill",
+                iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                title: "Manager",
+                subtitle: "Managers will be able to schedule operatives, create new clients, skills, and qualifications, view warnings and manage tasks.",
+                isOn: $permissions.manager,
+                isDisabled: permissions.adminAccess
+            )
+
+            ManageUserCardDivider()
+
+            ManageUserPermissionToggleRow(
+                iconName: "folder.fill",
+                iconBackground: ManageUserProfilePalette.chipBlueBg,
+                iconForeground: ManageUserProfilePalette.chipBlueFg,
+                title: "Projects",
+                subtitle: "Can create and manage projects.",
+                isOn: $permissions.projects,
+                isDisabled: !permissions.manager && !permissions.adminAccess
+            )
+
+            ManageUserCardDivider()
+
+            ManageUserPermissionToggleRow(
+                iconName: "hammer.fill",
+                iconBackground: ManageUserProfilePalette.chipBlueBg,
+                iconForeground: ManageUserProfilePalette.chipBlueFg,
+                title: "Small Works",
+                subtitle: "Can create and manage small works.",
+                isOn: $permissions.smallWorks,
+                isDisabled: !permissions.manager && !permissions.adminAccess
+            )
+
+            ManageUserCardDivider()
+
+            ManageUserPermissionToggleRow(
+                iconName: "doc.text.fill",
+                iconBackground: ManageUserProfilePalette.chipTealBg,
+                iconForeground: ManageUserProfilePalette.chipTealFg,
+                title: "Weekly Report",
+                subtitle: "Will be able to pull weekly reports.",
+                isOn: $permissions.weeklyReports,
+                isDisabled: !permissions.manager && !permissions.adminAccess
+            )
+
+            ManageUserCardDivider()
+
+            ManageUserPermissionToggleRow(
+                iconName: "person.2.wave.2.fill",
+                iconBackground: ManageUserProfilePalette.chipTealBg,
+                iconForeground: ManageUserProfilePalette.chipTealFg,
+                title: "Sub Contractors",
+                subtitle: "Can add and manage sub contractors. If unselected they will be unable to manage them, they will only be able to book them in.",
+                isOn: $permissions.subContractors,
+                isDisabled: !permissions.manager && !permissions.adminAccess
+            )
+
+            if permissions.manager && !permissions.adminAccess {
+                ManageUserCardDivider()
+                ManageUserPermissionToggleRow(
+                    iconName: "beach.umbrella.fill",
+                    iconBackground: ManageUserProfilePalette.chipBlueBg,
+                    iconForeground: ManageUserProfilePalette.chipBlueFg,
+                    title: "Annual Leave",
+                    subtitle: "Can book their own annual leave. If off, this manager requests leave for approval.",
+                    isOn: $permissions.annualLeaveSelfBook,
+                    isDisabled: false
+                )
+            }
+
+            ManageUserCardDivider()
+
+            ManageUserPermissionToggleRow(
+                iconName: "person.crop.rectangle.stack.fill",
+                iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                title: "Operatives",
+                subtitle: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Operatives tab or full operative profiles.",
+                isOn: $permissions.operatives,
+                isDisabled: false
+            )
+
+            ManageUserCardDivider()
+
+            ManageUserPermissionToggleRow(
+                iconName: "wrench.and.screwdriver.fill",
+                iconBackground: ManageUserProfilePalette.chipPinkBg,
+                iconForeground: ManageUserProfilePalette.chipPinkFg,
+                title: "Skills",
+                subtitle: "Can create and alter existing skills.",
+                isOn: $permissions.skills,
+                isDisabled: false
+            )
+
+            ManageUserCardDivider()
+
+            ManageUserPermissionToggleRow(
+                iconName: "rosette",
+                iconBackground: ManageUserProfilePalette.chipPinkBg,
+                iconForeground: ManageUserProfilePalette.chipPinkFg,
+                title: "Qualifications",
+                subtitle: "Can create and alter existing qualifications.",
+                isOn: $permissions.qualifications,
+                isDisabled: false
+            )
+
+            ManageUserCardDivider()
+
+            ManageUserPermissionToggleRow(
+                iconName: "shippingbox.fill",
+                iconBackground: ManageUserProfilePalette.chipAmberBg,
+                iconForeground: ManageUserProfilePalette.chipAmberFg,
+                title: "Materials",
+                subtitle: "For operatives: can view/use materials in assigned projects and small works.",
+                isOn: $permissions.materials,
+                isDisabled: true
+            )
+
+            ManageUserCardDivider()
+
+            ManageUserPermissionToggleRow(
+                iconName: "checklist",
+                iconBackground: ManageUserProfilePalette.chipTealBg,
+                iconForeground: ManageUserProfilePalette.chipTealFg,
+                title: "Site Audit",
+                subtitle: "For operatives: can open Site Audits in assigned projects and small works.",
+                isOn: $permissions.siteAudit,
+                isDisabled: true
+            )
         }
     }
     
@@ -1399,21 +1996,37 @@ struct EditUserView: View {
         isUpdating = true
         
         Task {
+            let dayRateEligible = permissions.operativeMode || permissions.manager
+            if canEditPermissionsMatrix && dayRateEligible && !StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText) {
+                await MainActor.run {
+                    isUpdating = false
+                    saveErrorMessage = "Please choose a trade type. If you select Other, enter the trade name."
+                }
+                return
+            }
+            
             var permissionsSuccess = true
+            var didPersistPermissions = false
             if canEditPermissionsMatrix && !userStore.isOrganizationCreator(userId: user.id) {
                 if canUseAdminAccountTools && permissions != user.permissions {
+                    didPersistPermissions = true
                     permissionsSuccess = await userStore.updateUserPermissions(
                         userId: user.id,
-                        permissions: permissions
+                        permissions: permissions,
+                        holidayStore: holidayStore,
+                        linkedOperativeUUID: linkedOperativeForUser?.id
                     )
                 } else if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative),
                           (permissions.materials != user.permissions.materials || permissions.siteAudit != user.permissions.siteAudit) {
+                    didPersistPermissions = true
                     var merged = user.permissions
                     merged.materials = permissions.materials
                     merged.siteAudit = permissions.siteAudit
                     permissionsSuccess = await userStore.updateUserPermissions(
                         userId: user.id,
-                        permissions: merged
+                        permissions: merged,
+                        holidayStore: holidayStore,
+                        linkedOperativeUUID: linkedOperativeForUser?.id
                     )
                 }
             }
@@ -1424,7 +2037,7 @@ struct EditUserView: View {
             }
 
             var operativeDetailsSuccess = true
-            let operativeProfileChanged = (user.permissions.operativeMode || user.role == .operative) && (
+            let operativeProfileChanged = permissions.operativeMode && (
                 (selectedAssignedManagerUserId ?? "") != (user.assignedManagerUserId ?? "") ||
                 parseDayRate(dayRateText) != user.dayRate
             )
@@ -1439,14 +2052,33 @@ struct EditUserView: View {
             }
             
             var managerDayRateSuccess = true
-            let managerDayRateChanged = (user.permissions.manager || user.role == .manager) && parseDayRate(dayRateText) != user.dayRate
+            let managerDayRateChanged = permissions.manager && !permissions.operativeMode && parseDayRate(dayRateText) != user.dayRate
             if canEditPermissionsMatrix && managerDayRateChanged {
                 managerDayRateSuccess = await userStore.updateManagerDayRate(for: user, dayRate: parseDayRate(dayRateText))
             }
             
+            var tradeSuccess = true
+            let trimmedP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let origP = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let origC = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let tradeDirty = dayRateEligible && (trimmedP != origP || trimmedC != origC)
+            if canEditPermissionsMatrix && tradeDirty {
+                tradeSuccess = await userStore.updateUserStaffTrade(
+                    for: user,
+                    tradeTypePreset: trimmedP.isEmpty ? nil : trimmedP,
+                    tradeTypeCustom: trimmedC.isEmpty ? nil : trimmedC,
+                    operativeStore: operativeStore
+                )
+            }
+
+            if didPersistPermissions && permissionsSuccess {
+                await holidayStore.loadData()
+            }
+            
             await MainActor.run {
                 isUpdating = false
-                if permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess {
+                if permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess {
                     dismiss()
                 } else {
                     saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."
@@ -1658,29 +2290,6 @@ struct EditUserView: View {
                 dismiss()
             }
         }
-    }
-}
-
-// MARK: - Detail Row Helper
-
-struct DetailRow: View {
-    let label: String
-    let value: String
-    
-    var body: some View {
-        HStack {
-            Text(label)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            Spacer()
-            Text(value)
-                .font(.body)
-                .foregroundColor(.primary)
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 16)
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
     }
 }
 
