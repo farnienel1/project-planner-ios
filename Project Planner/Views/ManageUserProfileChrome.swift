@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 enum ManageUserProfilePalette {
     static let primaryBlue = Color(red: 0x18 / 255, green: 0x5F / 255, blue: 0xA5 / 255)
@@ -128,6 +129,77 @@ struct ManageUserDetailStaticRow: View {
     }
 }
 
+/// Editable single-line field matching Manage User detail styling.
+struct ManageUserDetailTextFieldRow: View {
+    let iconName: String
+    let iconBackground: Color
+    let iconForeground: Color
+    let label: String
+    var placeholder: String = ""
+    @Binding var text: String
+    var keyboard: UIKeyboardType = .default
+    var contentType: UITextContentType? = nil
+    var autocapitalization: TextInputAutocapitalization = .never
+    var disableAutocorrection: Bool = true
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            ManageUserIconChip(systemName: iconName, background: iconBackground, foreground: iconForeground)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                TextField(placeholder, text: $text)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                    .keyboardType(keyboard)
+                    .textInputAutocapitalization(autocapitalization)
+                    .autocorrectionDisabled(disableAutocorrection)
+                    .textContentType(contentType)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+    }
+}
+
+/// First + last name on one row (same card style as other user details).
+struct ManageUserNameEditRow: View {
+    @Binding var firstName: String
+    @Binding var surname: String
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            ManageUserIconChip(
+                systemName: "person.fill",
+                background: ManageUserProfilePalette.chipPurpleBg,
+                foreground: ManageUserProfilePalette.chipPurpleFg
+            )
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Name")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                HStack(spacing: 10) {
+                    TextField("First name", text: $firstName)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                        .textInputAutocapitalization(.words)
+                        .textContentType(.givenName)
+                    TextField("Last name", text: $surname)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                        .textInputAutocapitalization(.words)
+                        .textContentType(.familyName)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+    }
+}
+
 /// Row that opens a menu / navigation target (chevron).
 struct ManageUserChevronRow: View {
     let iconName: String
@@ -220,6 +292,72 @@ struct ManageUserPermissionToggleRow: View {
                 .disabled(isDisabled)
                 .scaleEffect(0.86)
                 .frame(width: 44, height: 28)
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .opacity(isDisabled ? 0.55 : 1)
+    }
+}
+
+/// Permission row: tap the title to expand the description; toggle stays independent.
+struct ManageUserExpandablePermissionToggleRow: View {
+    let iconName: String
+    let iconBackground: Color
+    let iconForeground: Color
+    let title: String
+    var description: String?
+    @Binding var isOn: Bool
+    var isDisabled: Bool = false
+
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                ManageUserIconChip(systemName: iconName, background: iconBackground, foreground: iconForeground)
+                Group {
+                    if let description, !description.isEmpty {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+                        } label: {
+                            HStack(alignment: .center, spacing: 6) {
+                                Text(title)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(isDisabled ? ManageUserProfilePalette.textSecondary : ManageUserProfilePalette.textPrimary)
+                                    .multilineTextAlignment(.leading)
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                                    .rotationEffect(.degrees(expanded ? 0 : -90))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Text(title)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(isDisabled ? ManageUserProfilePalette.textSecondary : ManageUserProfilePalette.textPrimary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                Toggle("", isOn: $isOn)
+                    .labelsHidden()
+                    .tint(ManageUserProfilePalette.primaryBlue)
+                    .disabled(isDisabled)
+                    .scaleEffect(0.86)
+                    .frame(width: 44, height: 28)
+            }
+            if expanded, let description, !description.isEmpty {
+                Text(description)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, ManageUserProfilePalette.iconChipSize + 24)
+                    .padding(.trailing, 14)
+                    .padding(.top, 6)
+                    .padding(.bottom, 4)
+            }
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 14)

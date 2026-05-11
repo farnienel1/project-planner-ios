@@ -14,7 +14,8 @@ class OperativeStore: ObservableObject {
     @Published var operatives: [Operative] = []
     
     @Published var managers: [Manager] = []
-    @Published var skills: Set<String> = []
+    /// Organisation skill catalogue (`organizations/{orgId}/skills`). Operative `skills` stores these document ids.
+    @Published var organizationSkills: [OrganizationSkill] = []
     @Published var qualifications: [Qualification] = []
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
@@ -191,10 +192,6 @@ class OperativeStore: ObservableObject {
                         let firebaseOperatives = try await withTimeout(seconds: 10) {
                             try await firebaseBackend.loadOperatives(organizationId: organizationId)
                         }
-                        self.operatives = firebaseOperatives
-                        if let smartCache = smartCache {
-                            smartCache.cacheOperatives(firebaseOperatives)
-                        }
                         
                         // Load managers from Firebase (exclude placeholder/legacy entries so only real users show)
                         let firebaseManagers = try await withTimeout(seconds: 10) {
@@ -215,13 +212,16 @@ class OperativeStore: ObservableObject {
                             smartCache.cacheQualifications(firebaseQualifications)
                         }
                         
-                        // Load skills from Firebase
+                        // Load skill catalogue before normalising operative skill tokens
                         let firebaseSkills = try await withTimeout(seconds: 5) {
                             try await firebaseBackend.loadSkills(organizationId: organizationId)
                         }
-                        self.skills = firebaseSkills
+                        self.organizationSkills = firebaseSkills
+                        let normalizedOperatives = Self.normalizeOperativeSkillTokens(operatives: firebaseOperatives, catalog: firebaseSkills)
+                        self.operatives = normalizedOperatives
                         if let smartCache = smartCache {
-                            smartCache.cacheSkills(firebaseSkills)
+                            smartCache.cacheOrganizationSkills(firebaseSkills)
+                            smartCache.cacheOperatives(normalizedOperatives)
                         }
                         
                         print("🔥🔥🔥 DEBUG: ✅ Loaded \(firebaseOperatives.count) operatives, \(realManagers.count) managers from Firebase (filtered from \(firebaseManagers.count) docs)")
@@ -230,10 +230,14 @@ class OperativeStore: ObservableObject {
                         // Organization still nil after recovery attempt - use cached data
                         print("🔥🔥🔥 DEBUG: Organization still nil after recovery, using cached data")
                         if let smartCache = smartCache {
-                            operatives = smartCache.getCachedOperatives()
+                            let cachedOperatives = smartCache.getCachedOperatives()
                             let cachedManagers = smartCache.getCachedManagers()
                             managers = cachedManagers.filter { !Self.isPlaceholderManager($0) }
-                            skills = smartCache.getCachedSkills()
+                            let cachedSkillCatalog = smartCache.getCachedOrganizationSkills()
+                            organizationSkills = cachedSkillCatalog
+                            operatives = cachedSkillCatalog.isEmpty
+                                ? cachedOperatives
+                                : Self.normalizeOperativeSkillTokens(operatives: cachedOperatives, catalog: cachedSkillCatalog)
                             qualifications = smartCache.getCachedQualifications()
                             isOffline = !smartCache.isOnline
                         } else {
@@ -245,10 +249,14 @@ class OperativeStore: ObservableObject {
                     // Fallback to cached data if available
                     print("🔥🔥🔥 DEBUG: Firebase not available - using cached data")
                     if let smartCache = smartCache {
-                        operatives = smartCache.getCachedOperatives()
+                        let cachedOperatives = smartCache.getCachedOperatives()
                         let cachedManagers = smartCache.getCachedManagers()
                         managers = cachedManagers.filter { !Self.isPlaceholderManager($0) }
-                        skills = smartCache.getCachedSkills()
+                        let cachedSkillCatalog = smartCache.getCachedOrganizationSkills()
+                        organizationSkills = cachedSkillCatalog
+                        operatives = cachedSkillCatalog.isEmpty
+                            ? cachedOperatives
+                            : Self.normalizeOperativeSkillTokens(operatives: cachedOperatives, catalog: cachedSkillCatalog)
                         qualifications = smartCache.getCachedQualifications()
                         isOffline = !smartCache.isOnline
                     } else {
@@ -265,12 +273,16 @@ class OperativeStore: ObservableObject {
                 if let smartCache = smartCache {
                     let cachedOperatives = smartCache.getCachedOperatives()
                     let cachedManagers = smartCache.getCachedManagers().filter { !Self.isPlaceholderManager($0) }
-                    let cachedSkills = smartCache.getCachedSkills()
+                    let cachedSkillCatalog = smartCache.getCachedOrganizationSkills()
                     let cachedQualifications = smartCache.getCachedQualifications()
-                    if !cachedOperatives.isEmpty { self.operatives = cachedOperatives }
                     if !cachedManagers.isEmpty { self.managers = cachedManagers }
-                    if !cachedSkills.isEmpty { self.skills = cachedSkills }
+                    if !cachedSkillCatalog.isEmpty { self.organizationSkills = cachedSkillCatalog }
                     if !cachedQualifications.isEmpty { self.qualifications = cachedQualifications }
+                    if !cachedOperatives.isEmpty {
+                        self.operatives = cachedSkillCatalog.isEmpty
+                            ? cachedOperatives
+                            : Self.normalizeOperativeSkillTokens(operatives: cachedOperatives, catalog: cachedSkillCatalog)
+                    }
                 }
             }
         }
@@ -291,6 +303,51 @@ class OperativeStore: ObservableObject {
             let result = try await group.next()!
             group.cancelAll()
             return result
+        }
+    }
+
+    /// Maps legacy operative skill entries (skill name strings) to catalogue document ids when possible.
+    private static func normalizeOperativeSkillTokens(operatives: [Operative], catalog: [OrganizationSkill]) -> [Operative] {
+        let idSet = Set(catalog.map(\.id))
+        var groupedByName: [String: [OrganizationSkill]] = [:]
+        for s in catalog {
+            let key = s.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            groupedByName[key, default: []].append(s)
+        }
+        return operatives.map { op in
+            var copy = op
+            var newSkills = Set<String>()
+            for token in op.skills {
+                let tTrim = token.trimmingCharacters(in: .whitespacesAndNewlines)
+                if idSet.contains(tTrim) {
+                    newSkills.insert(tTrim)
+                    continue
+                }
+                let key = tTrim.lowercased()
+                guard let matches = groupedByName[key], !matches.isEmpty else {
+                    newSkills.insert(tTrim)
+                    continue
+                }
+                if matches.count == 1 {
+                    newSkills.insert(matches[0].id)
+                } else {
+                    let opTradeKey: String = {
+                        if let c = op.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines), !c.isEmpty {
+                            return c.lowercased()
+                        }
+                        if let p = op.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
+                            return p.lowercased()
+                        }
+                        return ""
+                    }()
+                    let preferred = matches.first {
+                        $0.trade.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == opTradeKey
+                    }
+                    newSkills.insert((preferred ?? matches[0]).id)
+                }
+            }
+            copy.skills = newSkills
+            return copy
         }
     }
     
@@ -452,14 +509,37 @@ class OperativeStore: ObservableObject {
     
     // MARK: - Skills Operations
     
-    func addSkill(_ skill: String) async {
-        skills.insert(skill)
-        _ = await saveDataWithRetry(description: "adding skill \(skill)")
+    func addOrganizationSkill(name: String, trade: String) async {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        let tradeOut = trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? OrganizationSkill.defaultTrade
+            : trade.trimmingCharacters(in: .whitespacesAndNewlines)
+        let (nk, tk) = OrganizationSkill.normalizedPair(name: trimmedName, trade: tradeOut)
+        if organizationSkills.contains(where: {
+            let p = OrganizationSkill.normalizedPair(name: $0.name, trade: $0.trade)
+            return p.0 == nk && p.1 == tk
+        }) {
+            return
+        }
+        let newSkill = OrganizationSkill(name: trimmedName, trade: tradeOut)
+        organizationSkills.append(newSkill)
+        organizationSkills.sort {
+            if $0.trade.localizedCaseInsensitiveCompare($1.trade) != .orderedSame {
+                return $0.trade.localizedCaseInsensitiveCompare($1.trade) == .orderedAscending
+            }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        _ = await saveDataWithRetry(description: "adding organisation skill \(trimmedName)")
     }
     
-    func removeSkill(_ skill: String) async {
-        skills.remove(skill)
-        _ = await saveDataWithRetry(description: "removing skill \(skill)")
+    func removeOrganizationSkill(id: String) async {
+        organizationSkills.removeAll { $0.id == id }
+        _ = await saveDataWithRetry(description: "removing organisation skill \(id)")
+    }
+
+    func skillCatalogEntry(skillId: String) -> OrganizationSkill? {
+        organizationSkills.first { $0.id == skillId }
     }
     
     // MARK: - Qualifications Operations
@@ -519,7 +599,7 @@ class OperativeStore: ObservableObject {
         }
         
         // Save skills
-        try await firebaseBackend.saveSkills(organizationId: organizationId, skills: skills)
+        try await firebaseBackend.saveSkills(organizationId: organizationId, skills: organizationSkills)
         
         // Save qualifications (saves entire collection)
         try await firebaseBackend.saveQualifications(organizationId: organizationId, qualifications: qualifications)
@@ -528,7 +608,7 @@ class OperativeStore: ObservableObject {
         if let smartCache = smartCache {
             smartCache.cacheOperatives(operatives)
             smartCache.cacheManagers(managers)
-            smartCache.cacheSkills(skills)
+            smartCache.cacheOrganizationSkills(organizationSkills)
             smartCache.cacheQualifications(qualifications)
         }
     }
@@ -536,13 +616,13 @@ class OperativeStore: ObservableObject {
     private func clearAllData() async {
         operatives.removeAll()
         managers.removeAll()
-        skills.removeAll()
+        organizationSkills.removeAll()
         qualifications.removeAll()
         
         if let smartCache = smartCache {
             smartCache.cacheOperatives([])
             smartCache.cacheManagers([])
-            smartCache.cacheSkills([])
+            smartCache.cacheOrganizationSkills([])
             smartCache.cacheQualifications([])
         }
     }

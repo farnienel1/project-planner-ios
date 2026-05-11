@@ -151,7 +151,11 @@ struct OperativesView: View {
             formatter.dateStyle = .medium
             return formatter.string(from: operative.startDate).localizedCaseInsensitiveContains(filterText)
         case .skills:
-            return operative.skills.contains { $0.localizedCaseInsensitiveContains(filterText) }
+            return operative.skills.contains { token in
+                let label = operativeStore.skillCatalogEntry(skillId: token)?.listTitle ?? token
+                return label.localizedCaseInsensitiveContains(filterText)
+                    || token.localizedCaseInsensitiveContains(filterText)
+            }
         case .qualifications:
             return operative.qualifications.contains { $0.name.localizedCaseInsensitiveContains(filterText) }
         case .dayRate:
@@ -467,6 +471,7 @@ struct OperativeFilterOptionsView: View {
 
 struct OperativeDetailRowView: View {
     let operative: Operative
+    @EnvironmentObject private var operativeStore: OperativeStore
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -525,8 +530,8 @@ struct OperativeDetailRowView: View {
                         .foregroundColor(.secondary)
                     
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 4) {
-                        ForEach(Array(operative.skills.prefix(4)), id: \.self) { skill in
-                            Text(skill)
+                        ForEach(Array(operative.skills.prefix(4)), id: \.self) { skillToken in
+                            Text(operativeStore.skillCatalogEntry(skillId: skillToken)?.listTitle ?? skillToken)
                                 .font(.caption)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
@@ -624,26 +629,26 @@ struct AddOperativeView: View {
                 }
                 
                 Section("Skills") {
-                    if operativeStore.skills.isEmpty {
+                    if operativeStore.organizationSkills.isEmpty {
                         Text("No skills added yet.")
                             .foregroundColor(.secondary)
                             .font(.subheadline)
                     } else {
-                        ForEach(Array(operativeStore.skills.sorted()), id: \.self) { skill in
+                        ForEach(operativeStore.organizationSkills) { skill in
                             HStack {
-                                Text(skill)
+                                Text(skill.listTitle)
                                 Spacer()
-                                if selectedSkills.contains(skill) {
+                                if selectedSkills.contains(skill.id) {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundColor(.blue)
                                 }
                             }
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                if selectedSkills.contains(skill) {
-                                    selectedSkills.remove(skill)
+                                if selectedSkills.contains(skill.id) {
+                                    selectedSkills.remove(skill.id)
                                 } else {
-                                    selectedSkills.insert(skill)
+                                    selectedSkills.insert(skill.id)
                                 }
                             }
                         }
@@ -829,7 +834,7 @@ struct EditOperativeView: View {
     }
     
     var body: some View {
-        let _ = print("🔥🔥🔥 DEBUG: EditOperativeView body called - skills count: \(operativeStore.skills.count), qualifications count: \(operativeStore.qualifications.count)")
+        let _ = print("🔥🔥🔥 DEBUG: EditOperativeView body called - skills count: \(operativeStore.organizationSkills.count), qualifications count: \(operativeStore.qualifications.count)")
         let _ = print("🔥🔥🔥 DEBUG: EditOperativeView - operative name: \(operative.name)")
         let _ = print("🔥🔥🔥 DEBUG: EditOperativeView - operative email: \(operative.email)")
         
@@ -839,7 +844,7 @@ struct EditOperativeView: View {
                     .font(.headline)
                     .padding()
                 
-                Text("Skills: \(operativeStore.skills.count), Qualifications: \(operativeStore.qualifications.count)")
+                Text("Skills: \(operativeStore.organizationSkills.count), Qualifications: \(operativeStore.qualifications.count)")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.bottom)
@@ -863,26 +868,26 @@ struct EditOperativeView: View {
                     }
                 
                 Section("Skills") {
-                    if operativeStore.skills.isEmpty {
+                    if operativeStore.organizationSkills.isEmpty {
                         Text("No skills added yet.")
                             .foregroundColor(.secondary)
                             .font(.subheadline)
                     } else {
-                        ForEach(Array(operativeStore.skills.sorted()), id: \.self) { skill in
+                        ForEach(operativeStore.organizationSkills) { skill in
                             HStack {
-                                Text(skill)
+                                Text(skill.listTitle)
                                 Spacer()
-                                if selectedSkills.contains(skill) {
+                                if selectedSkills.contains(skill.id) {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundColor(.blue)
                                 }
                             }
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                if selectedSkills.contains(skill) {
-                                    selectedSkills.remove(skill)
+                                if selectedSkills.contains(skill.id) {
+                                    selectedSkills.remove(skill.id)
                                 } else {
-                                    selectedSkills.insert(skill)
+                                    selectedSkills.insert(skill.id)
                                 }
                             }
                         }

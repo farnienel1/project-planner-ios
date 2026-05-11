@@ -13,7 +13,7 @@ struct QualificationsManagementView: View {
     @State private var showingAddQualification = false
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack {
                 if operativeStore.qualifications.isEmpty {
                     // Empty state
@@ -68,8 +68,10 @@ struct QualificationsManagementView: View {
                 }
             }
             .sheet(isPresented: $showingAddQualification) {
-                AddQualificationView()
-                    .environmentObject(operativeStore)
+                NavigationStack {
+                    AddQualificationView()
+                        .environmentObject(operativeStore)
+                }
             }
         }
     }
@@ -128,39 +130,37 @@ struct AddQualificationView: View {
     @State private var errorMessage: String?
     
     var body: some View {
-        NavigationView {
-            Form {
-                Section("Qualification Details") {
-                    TextField("Qualification Name", text: $qualificationName)
-                        .textFieldStyle(.roundedBorder)
-                    
-                    Text("Note: Expiration dates can be set when assigning this qualification to an operative.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+        Form {
+            Section("Qualification Details") {
+                TextField("Qualification Name", text: $qualificationName)
+                    .textFieldStyle(.roundedBorder)
                 
-                if let errorMessage = errorMessage {
-                    Section {
-                        Text(errorMessage)
-                            .foregroundColor(.red)
-                    }
+                Text("Note: Expiration dates can be set when assigning this qualification to an operative.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            if let errorMessage = errorMessage {
+                Section {
+                    Text(errorMessage)
+                        .foregroundColor(.red)
                 }
             }
-            .navigationTitle("Add Qualification")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
+        }
+        .navigationTitle("Add Qualification")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button("Cancel") {
+                    dismiss()
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        saveQualification()
-                    }
-                    .disabled(!isFormValid)
+            }
+            
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Save") {
+                    saveQualification()
                 }
+                .disabled(!isFormValid || isLoading)
             }
         }
     }
@@ -170,6 +170,7 @@ struct AddQualificationView: View {
     }
     
     private func saveQualification() {
+        guard isFormValid, !isLoading else { return }
         isLoading = true
         errorMessage = nil
         
@@ -179,12 +180,10 @@ struct AddQualificationView: View {
             endDate: nil
         )
         
-        Task {
+        Task { @MainActor in
             await operativeStore.addQualification(qualification)
-            await MainActor.run {
-                isLoading = false
-                dismiss()
-            }
+            isLoading = false
+            dismiss()
         }
     }
 }

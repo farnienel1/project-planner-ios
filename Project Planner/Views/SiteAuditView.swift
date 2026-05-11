@@ -112,7 +112,10 @@ private struct SiteAuditProjectAccess {
 
 fileprivate func siteAuditsForCurrentUser(_ audits: [SiteAudit], userStore: UserStore) -> [SiteAudit] {
     guard userStore.isOperativeMode() else { return audits }
-    return audits.filter(\.visibleToOperatives)
+    guard let uid = userStore.currentUser?.id else {
+        return audits.filter(\.visibleToOperatives)
+    }
+    return audits.filter { $0.visibleToOperatives || $0.createdByUserId == uid }
 }
 
 struct SiteAuditHubView: View {
@@ -194,19 +197,28 @@ struct SiteAuditProjectsBrowserView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @State private var selectedFilter: SiteAuditProjectFilter = .all
     @State private var selectedProject: Project?
+    @State private var authoredAuditProjectIds: Set<UUID> = []
 
-    private var filteredProjects: [Project] {
+    private var mergedProjectsForSiteAudit: [Project] {
         let visible = SiteAuditProjectAccess.visibleProjects(
             userStore: userStore,
             projectStore: projectStore,
             bookingStore: bookingStore,
             operativeStore: operativeStore
         )
+        let fromAuthored = (projectStore.projects + projectStore.smallWorks).filter { authoredAuditProjectIds.contains($0.id) }
+        var byId: [UUID: Project] = [:]
+        for p in visible { byId[p.id] = p }
+        for p in fromAuthored { byId[p.id] = p }
+        return Array(byId.values)
+    }
+
+    private var filteredProjects: [Project] {
         switch selectedFilter {
-        case .all: return visible.sorted { $0.jobNumber < $1.jobNumber }
-        case .active: return visible.filter { $0.status == .active }.sorted { $0.jobNumber < $1.jobNumber }
-        case .upcoming: return visible.filter { $0.status == .upcoming }.sorted { $0.jobNumber < $1.jobNumber }
-        case .completed: return visible.filter { $0.status == .completed }.sorted { $0.jobNumber < $1.jobNumber }
+        case .all: return mergedProjectsForSiteAudit.sorted { $0.jobNumber < $1.jobNumber }
+        case .active: return mergedProjectsForSiteAudit.filter { $0.status == .active }.sorted { $0.jobNumber < $1.jobNumber }
+        case .upcoming: return mergedProjectsForSiteAudit.filter { $0.status == .upcoming }.sorted { $0.jobNumber < $1.jobNumber }
+        case .completed: return mergedProjectsForSiteAudit.filter { $0.status == .completed }.sorted { $0.jobNumber < $1.jobNumber }
         }
     }
 
@@ -227,7 +239,7 @@ struct SiteAuditProjectsBrowserView: View {
                         systemImage: "folder",
                         description: Text(
                             userStore.isOperativeMode()
-                            ? "Only projects/small works you are booked onto appear in Site Audit."
+                            ? "Shows jobs you are booked onto, plus any job where you previously submitted a site audit."
                             : "Try switching the filter to All."
                         )
                     )
@@ -254,6 +266,24 @@ struct SiteAuditProjectsBrowserView: View {
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
             }
+            .task { await loadAuthoredAuditProjectIds() }
+        }
+    }
+
+    private func loadAuthoredAuditProjectIds() async {
+        guard userStore.isOperativeMode(),
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+              let uid = userStore.currentUser?.id else {
+            await MainActor.run { authoredAuditProjectIds = [] }
+            return
+        }
+        do {
+            let audits = try await firebaseBackend.loadSiteAudits(organizationId: orgId, createdByUserId: uid)
+            await MainActor.run {
+                authoredAuditProjectIds = Set(audits.map(\.projectId))
+            }
+        } catch {
+            await MainActor.run { authoredAuditProjectIds = [] }
         }
     }
 }

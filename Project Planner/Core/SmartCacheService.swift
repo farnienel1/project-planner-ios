@@ -29,7 +29,7 @@ class SmartCacheService: ObservableObject {
     private var cachedOperatives: [Operative] = []
     private var cachedManagers: [Manager] = []
     private var cachedBookings: [Booking] = []
-    private var cachedSkills: Set<String> = []
+    private var cachedOrganizationSkills: [OrganizationSkill] = []
     private var cachedQualifications: [Qualification] = []
     
     // Offline queue for pending changes
@@ -86,8 +86,8 @@ class SmartCacheService: ObservableObject {
         cachedBookings = bookings
     }
     
-    func cacheSkills(_ skills: Set<String>) {
-        cachedSkills = skills
+    func cacheOrganizationSkills(_ skills: [OrganizationSkill]) {
+        cachedOrganizationSkills = skills
     }
     
     func cacheQualifications(_ qualifications: [Qualification]) {
@@ -116,8 +116,8 @@ class SmartCacheService: ObservableObject {
         return cachedBookings
     }
     
-    func getCachedSkills() -> Set<String> {
-        return cachedSkills
+    func getCachedOrganizationSkills() -> [OrganizationSkill] {
+        return cachedOrganizationSkills
     }
     
     func getCachedQualifications() -> [Qualification] {
@@ -162,7 +162,7 @@ class SmartCacheService: ObservableObject {
         cachedOperatives.removeAll()
         cachedManagers.removeAll()
         cachedBookings.removeAll()
-        cachedSkills.removeAll()
+        cachedOrganizationSkills.removeAll()
         cachedQualifications.removeAll()
         pendingChanges.removeAll()
         print("🔥🔥🔥 DEBUG: All cache cleared")

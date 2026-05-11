@@ -65,6 +65,50 @@ extension Qualification: Hashable {
     }
 }
 
+// MARK: - Organisation skill catalogue
+
+/// One row in `organizations/{orgId}/skills`. `id` is the Firestore document id and is what we store on `Operative.skills`.
+struct OrganizationSkill: Identifiable, Hashable, Codable, Sendable {
+    let id: String
+    var name: String
+    /// Trade grouping for filtering and display (e.g. preset trade label or "General").
+    var trade: String
+    var createdAt: Date
+    var updatedAt: Date
+
+    static let defaultTrade = "General"
+
+    nonisolated init(
+        id: String = UUID().uuidString,
+        name: String,
+        trade: String,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let t = trade.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.trade = t.isEmpty ? Self.defaultTrade : t
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    /// Line shown in lists: `Trade · Skill` (trade omitted when `General`).
+    var listTitle: String {
+        if trade.caseInsensitiveCompare(Self.defaultTrade) == .orderedSame {
+            return name
+        }
+        return "\(trade) · \(name)"
+    }
+
+    static func normalizedPair(name: String, trade: String) -> (String, String) {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let t = trade.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tout = t.isEmpty ? defaultTrade.lowercased() : t.lowercased()
+        return (n, tout)
+    }
+}
+
 // MARK: - Operative Models
 
 struct Operative: Identifiable, Codable {

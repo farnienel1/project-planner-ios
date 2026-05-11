@@ -1077,6 +1077,101 @@ class UserStore: ObservableObject {
                  print("🔥🔥🔥 DEBUG: ========== DELETE USER COMPLETE ==========")
              }
              
+    /// Saves display name, profile email, and phone; reconciles org `userEmails`; syncs linked operative / manager roster by **previous** email.
+    /// When the signed-in user changes their own email, requests Firebase Auth **verify-before-update** so sign-in can move to the new address after they confirm.
+    func updateUserIdentityProfile(
+        userId: String,
+        firstName: String,
+        surname: String,
+        email: String,
+        mobileNumber: String?,
+        operativeStore: OperativeStore?
+    ) async -> Bool {
+        guard let firebaseBackend = firebaseBackend else { return false }
+        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+        if isOrganizationCreator(userId: userId) { return false }
+
+        var updated = organizationUsers[index]
+        let oldEmailNorm = updated.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedFirst = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSurname = surname.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmedMobile = mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mobileOut: String? = (trimmedMobile?.isEmpty == false) ? trimmedMobile : nil
+
+        guard !trimmedEmail.isEmpty else {
+            errorMessage = "Email cannot be empty."
+            return false
+        }
+
+        updated.firstName = trimmedFirst
+        updated.surname = trimmedSurname
+        updated.email = trimmedEmail
+        updated.mobileNumber = mobileOut
+
+        let emailChanged = oldEmailNorm != trimmedEmail
+        let orgId = updated.organizationId
+
+        do {
+            try await firebaseBackend.saveUser(updated)
+            if emailChanged {
+                try await firebaseBackend.reconcileUserEmailIndex(
+                    organizationId: orgId,
+                    userId: userId,
+                    oldEmailNormalized: oldEmailNorm,
+                    newEmail: trimmedEmail
+                )
+            }
+
+            if let opStore = operativeStore {
+                if let oi = opStore.operatives.firstIndex(where: {
+                    $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == oldEmailNorm
+                }) {
+                    var op = opStore.operatives[oi]
+                    op.firstName = trimmedFirst
+                    op.lastName = trimmedSurname
+                    op.email = trimmedEmail
+                    op.phone = mobileOut
+                    op.updatedAt = Date()
+                    await opStore.updateOperative(op)
+                }
+                if let mi = opStore.managers.firstIndex(where: {
+                    $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == oldEmailNorm
+                }) {
+                    var mgr = opStore.managers[mi]
+                    mgr.email = trimmedEmail
+                    mgr.firstName = trimmedFirst
+                    mgr.lastName = trimmedSurname
+                    mgr.mobileNumber = mobileOut ?? ""
+                    mgr.updatedAt = Date()
+                    try await firebaseBackend.saveManager(mgr, organizationId: orgId)
+                    opStore.managers[mi] = mgr
+                }
+            }
+
+            organizationUsers[index] = updated
+            if var cu = currentUser, cu.id == userId {
+                cu = updated
+                currentUser = cu
+            }
+
+            if emailChanged, Auth.auth().currentUser?.uid == userId {
+                do {
+                    try await firebaseBackend.sendVerifyBeforeUpdateEmail(to: trimmedEmail)
+                } catch {
+                    errorMessage = "Profile saved. Could not send sign-in email verification: \(error.localizedDescription). You can try again later or update the address in Firebase Authentication."
+                    print("🔥🔥🔥 DEBUG: verifyBeforeUpdateEmail failed: \(error)")
+                }
+            }
+
+            return true
+        } catch {
+            errorMessage = "Could not save profile: \(error.localizedDescription)"
+            print("🔥🔥🔥 DEBUG: updateUserIdentityProfile error: \(error)")
+            return false
+        }
+    }
+
              func updateUserPermissions(
                  userId: String,
                  permissions: UserPermissions,

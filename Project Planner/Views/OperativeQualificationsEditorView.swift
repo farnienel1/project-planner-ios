@@ -33,7 +33,13 @@ struct OperativeQualificationsEditorView: View {
     @State private var baselineExpiry: [UUID: Date]
     @State private var baselineCerts: [UUID: String]
 
-    @State private var showingAddQualifications = false
+    @State private var showingAssignQualificationsPicker = false
+    @State private var showingOrgSkills = false
+    @State private var showingListFilters = false
+    @State private var qualificationSearchText = ""
+    @State private var skillSearchText = ""
+    /// Empty string means all trades.
+    @State private var skillTradeFilter: String = ""
 
     init(
         operative: Operative,
@@ -68,10 +74,51 @@ struct OperativeQualificationsEditorView: View {
         return false
     }
 
-    /// Qualifications in the organisation catalogue not yet on this profile (for Add flow).
-    private var addCatalogQualifications: [Qualification] {
-        operativeStore.qualifications.filter { q in
-            !selectedQualifications.contains(q)
+    private var skillTradePickerOptions: [String] {
+        let trades = Set(operativeStore.organizationSkills.map(\.trade))
+        return trades.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    private var qualificationFilterTrimmed: String {
+        qualificationSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var skillFilterTrimmed: String {
+        skillSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var filteredSelectedQualifications: [Qualification] {
+        let base = sortedSelectedQualifications
+        let q = qualificationFilterTrimmed
+        if q.isEmpty { return base }
+        return base.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    }
+
+    private var selectedSkillTokensSorted: [String] {
+        Array(selectedSkills).sorted()
+    }
+
+    private func skillMatchesFilters(skill: OrganizationSkill) -> Bool {
+        if !skillFilterTrimmed.isEmpty {
+            let inName = skill.name.localizedCaseInsensitiveContains(skillFilterTrimmed)
+            let inTrade = skill.trade.localizedCaseInsensitiveContains(skillFilterTrimmed)
+            if !inName && !inTrade { return false }
+        }
+        if !skillTradeFilter.isEmpty, skill.trade != skillTradeFilter {
+            return false
+        }
+        return true
+    }
+
+    private var filteredSelectedSkillTokens: [String] {
+        selectedSkillTokensSorted.filter { token in
+            guard let s = operativeStore.skillCatalogEntry(skillId: token) else {
+                if !skillFilterTrimmed.isEmpty {
+                    return token.localizedCaseInsensitiveContains(skillFilterTrimmed)
+                }
+                return skillTradeFilter.isEmpty
+            }
+            return skillMatchesFilters(skill: s)
         }
     }
 
@@ -80,30 +127,10 @@ struct OperativeQualificationsEditorView: View {
             Form {
                 if isMyQualifications {
                     myQualificationsQualSection
+                    skillsSections
                 } else {
-                    manageQualificationsCatalogSection
-                }
-
-                if !operativeStore.skills.isEmpty {
-                    Section("Available Skills") {
-                        ForEach(Array(operativeStore.skills).sorted(), id: \.self) { skill in
-                            HStack {
-                                Text(skill)
-                                Spacer()
-                                Image(systemName: selectedSkills.contains(skill) ? "checkmark.circle.fill" : "circle")
-                                    .foregroundColor(selectedSkills.contains(skill) ? .blue : .gray)
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                guard canEditAssignments else { return }
-                                if selectedSkills.contains(skill) {
-                                    selectedSkills.remove(skill)
-                                } else {
-                                    selectedSkills.insert(skill)
-                                }
-                            }
-                        }
-                    }
+                    manageQualificationsSections
+                    skillsSections
                 }
 
                 if let errorMessage {
@@ -116,6 +143,13 @@ struct OperativeQualificationsEditorView: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showingListFilters = true
+                    } label: {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                    }
+                }
                 if isMyQualifications {
                     ToolbarItem(placement: .cancellationAction) {
                         if hasUnsavedChanges {
@@ -166,17 +200,40 @@ struct OperativeQualificationsEditorView: View {
                 }
                 selectedUploadQualificationId = nil
             }
-            .sheet(isPresented: $showingAddQualifications) {
-                AddQualificationsCatalogView(
-                    catalog: addCatalogQualifications,
-                    errorMessage: $errorMessage,
-                    onCommit: { added, newExpiries, newPending in
-                        await saveChanges(
-                            dismissAfterSave: false,
-                            mergeAdditions: (added, newExpiries, newPending)
-                        )
+            .sheet(isPresented: $showingAssignQualificationsPicker) {
+                AssignQualificationsPickerView(selectedQualifications: $selectedQualifications)
+                    .environmentObject(operativeStore)
+            }
+            .sheet(isPresented: $showingOrgSkills) {
+                SkillsManagementView(assignmentSkillIds: $selectedSkills)
+                    .environmentObject(operativeStore)
+            }
+            .sheet(isPresented: $showingListFilters) {
+                NavigationStack {
+                    Form {
+                        Section("Qualifications") {
+                            TextField("Search qualifications", text: $qualificationSearchText)
+                                .textInputAutocapitalization(.never)
+                        }
+                        Section("Skills") {
+                            TextField("Search skills or trade", text: $skillSearchText)
+                                .textInputAutocapitalization(.never)
+                            Picker("Trade", selection: $skillTradeFilter) {
+                                Text("All trades").tag("")
+                                ForEach(skillTradePickerOptions, id: \.self) { t in
+                                    Text(t).tag(t)
+                                }
+                            }
+                        }
                     }
-                )
+                    .navigationTitle("Filter lists")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showingListFilters = false }
+                        }
+                    }
+                }
             }
             .onChange(of: operative.updatedAt) { _, _ in
                 guard isMyQualifications, !hasUnsavedChanges else { return }
@@ -188,44 +245,106 @@ struct OperativeQualificationsEditorView: View {
     // MARK: - Sections
 
     @ViewBuilder
+    private var manageQualificationsSections: some View {
+        Section {
+            if operativeStore.qualifications.isEmpty {
+                Text("No qualifications available yet. Tap Add qualifications to open the organisation list and create templates.")
+                    .foregroundStyle(.secondary)
+            } else if filteredSelectedQualifications.isEmpty {
+                Text(qualificationFilterTrimmed.isEmpty ? "No qualifications assigned yet." : "No qualifications match this filter.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(filteredSelectedQualifications) { qualification in
+                    qualificationRow(qualification)
+                }
+            }
+
+            Button {
+                showingAssignQualificationsPicker = true
+            } label: {
+                Label("Add qualifications", systemImage: "plus.circle.fill")
+            }
+            .disabled(!canEditAssignments)
+        } header: {
+            Text("Current qualifications")
+        }
+    }
+
+    @ViewBuilder
+    private var skillsSections: some View {
+        Section {
+            if operativeStore.organizationSkills.isEmpty {
+                Text("No organisation skills yet. Add skills under organisation skills management.")
+                    .foregroundStyle(.secondary)
+            } else if filteredSelectedSkillTokens.isEmpty {
+                Text(skillFilterTrimmed.isEmpty && skillTradeFilter.isEmpty ? "No skills assigned yet." : "No assigned skills match this filter.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(filteredSelectedSkillTokens, id: \.self) { token in
+                    if let skill = operativeStore.skillCatalogEntry(skillId: token) {
+                        HStack(alignment: .top, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(skill.name)
+                                    .font(.body.weight(.medium))
+                                Text(skill.trade)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.blue)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            guard canEditAssignments else { return }
+                            selectedSkills.remove(token)
+                        }
+                    } else {
+                        HStack {
+                            Text(token)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+            }
+
+            Button {
+                showingOrgSkills = true
+            } label: {
+                Label("Add skills", systemImage: "plus.circle.fill")
+            }
+            .disabled(!canEditAssignments)
+        } header: {
+            Text("Current skills")
+        }
+    }
+
+    @ViewBuilder
     private var myQualificationsQualSection: some View {
         Section {
             if operativeStore.qualifications.isEmpty {
                 Text("No qualifications have been set up for your organisation yet. Ask a manager or admin to add qualification templates.")
                     .foregroundStyle(.secondary)
             } else if selectedQualifications.isEmpty {
-                Text("You have not added any qualifications yet. Tap Add qualifications to choose from your organisation’s list, set expiry dates, and attach certificates.")
+                Text("You have not added any qualifications yet. Tap Add qualifications to pick from your organisation list, then set expiry dates and certificates below.")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(sortedSelectedQualifications) { qualification in
+                ForEach(filteredSelectedQualifications) { qualification in
                     qualificationRow(qualification)
                 }
             }
 
             Button {
-                showingAddQualifications = true
+                showingAssignQualificationsPicker = true
             } label: {
                 Label("Add qualifications", systemImage: "plus.circle.fill")
             }
             .disabled(!canEditAssignments || operativeStore.qualifications.isEmpty)
         } header: {
             Text("My qualifications")
-        }
-    }
-
-    @ViewBuilder
-    private var manageQualificationsCatalogSection: some View {
-        if operativeStore.qualifications.isEmpty {
-            Section {
-                Text("No qualifications available yet. Ask a manager or admin to create qualification templates.")
-                    .foregroundColor(.secondary)
-            }
-        } else {
-            Section("Available Qualifications") {
-                ForEach(operativeStore.qualifications.sorted(by: { $0.name < $1.name })) { qualification in
-                    qualificationRow(qualification)
-                }
-            }
         }
     }
 

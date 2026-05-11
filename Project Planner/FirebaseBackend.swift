@@ -2593,13 +2593,13 @@ class FirebaseBackend: ObservableObject {
                 guard let firstName = data["firstName"] as? String,
                       let lastName = data["lastName"] as? String,
                       let email = data["email"] as? String,
-                      let mobileNumber = data["mobileNumber"] as? String,
                       let isActive = data["isActive"] as? Bool,
                       let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
                       let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() else {
                     print("🔥🔥🔥 DEBUG: Failed to parse manager data for document: \(doc.documentID)")
                     continue
                 }
+                let mobileNumber = (data["mobileNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 
                 let id = UUID(uuidString: doc.documentID) ?? UUID()
                 let department = data["department"] as? String
@@ -2706,29 +2706,27 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: Successfully saved \(qualifications.count) qualifications to Firebase")
     }
     
-    func saveSkills(organizationId: String, skills: Set<String>) async throws {
+    func saveSkills(organizationId: String, skills: [OrganizationSkill]) async throws {
+        let skillsRef = db.collection("organizations").document(organizationId).collection("skills")
+        let existingSnapshot = try await skillsRef.getDocuments()
+        let newIds = Set(skills.map(\.id))
         let batch = db.batch()
-        
-        // Clear existing skills
-        let existingSnapshot = try await db.collection("organizations").document(organizationId).collection("skills").getDocuments()
-        for document in existingSnapshot.documents {
+        for document in existingSnapshot.documents where !newIds.contains(document.documentID) {
             batch.deleteDocument(document.reference)
         }
-        
-        // Add new skills
+        let now = Date()
         for skill in skills {
-            let docRef = db.collection("organizations").document(organizationId).collection("skills").document()
+            let docRef = skillsRef.document(skill.id)
             let data: [String: Any] = [
-                "name": skill,
-                "createdAt": Timestamp(date: Date()),
-                "updatedAt": Timestamp(date: Date())
+                "name": skill.name,
+                "trade": skill.trade,
+                "createdAt": Timestamp(date: skill.createdAt),
+                "updatedAt": Timestamp(date: now)
             ]
-            
-            batch.setData(data, forDocument: docRef)
+            batch.setData(data, forDocument: docRef, merge: true)
         }
-        
         try await batch.commit()
-        print("🔥🔥🔥 DEBUG: Successfully saved \(skills.count) skills to Firebase")
+        print("🔥🔥🔥 DEBUG: Successfully saved \(skills.count) organisation skills to Firebase")
     }
     
     func loadQualifications(organizationId: String) async throws -> [Qualification] {
@@ -2766,21 +2764,28 @@ class FirebaseBackend: ObservableObject {
         return qualifications
     }
     
-    func loadSkills(organizationId: String) async throws -> Set<String> {
+    func loadSkills(organizationId: String) async throws -> [OrganizationSkill] {
         let orgId = try await ensureReadableOrganization(organizationId)
         let snapshot = try await db.collection("organizations").document(orgId).collection("skills").getDocuments(source: .server)
         
-        var skills: Set<String> = []
+        var skills: [OrganizationSkill] = []
         
         for doc in snapshot.documents {
             let data = doc.data()
-            
-            if let skillName = data["name"] as? String {
-                skills.insert(skillName)
-            }
+            guard let skillName = data["name"] as? String else { continue }
+            let tradeRaw = (data["trade"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let trade = tradeRaw.isEmpty ? OrganizationSkill.defaultTrade : tradeRaw
+            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+            let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? createdAt
+            skills.append(OrganizationSkill(id: doc.documentID, name: skillName, trade: trade, createdAt: createdAt, updatedAt: updatedAt))
         }
-        
-        print("🔥🔥🔥 DEBUG: Loaded \(skills.count) skills from Firebase")
+        skills.sort {
+            if $0.trade.localizedCaseInsensitiveCompare($1.trade) != .orderedSame {
+                return $0.trade.localizedCaseInsensitiveCompare($1.trade) == .orderedAscending
+            }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        print("🔥🔥🔥 DEBUG: Loaded \(skills.count) organisation skills from Firebase")
         return skills
     }
     
@@ -3118,31 +3123,51 @@ class FirebaseBackend: ObservableObject {
             "updatedAt": Timestamp(date: Date())
         ]
         
-        if let mobileNumber = user.mobileNumber {
-            userData["mobileNumber"] = mobileNumber
+        let trimmedMobile = user.mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedMobile.isEmpty {
+            userData["mobileNumber"] = trimmedMobile
+        } else {
+            userData["mobileNumber"] = FieldValue.delete()
         }
         
         if let policyAcceptedAt = user.policyAcceptedAt {
             userData["policyAcceptedAt"] = Timestamp(date: policyAcceptedAt)
+        } else {
+            userData["policyAcceptedAt"] = FieldValue.delete()
         }
         
         if user.permissions.operativeMode,
-           let mid = user.assignedManagerUserId,
+           let mid = user.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !mid.isEmpty {
             userData["assignedManagerUserId"] = mid
+        } else {
+            userData["assignedManagerUserId"] = FieldValue.delete()
         }
         
-        if (user.permissions.operativeMode || user.permissions.manager), let dr = user.dayRate {
-            userData["dayRate"] = dr
+        if user.permissions.operativeMode || user.permissions.manager {
+            if let dr = user.dayRate {
+                userData["dayRate"] = dr
+            } else {
+                userData["dayRate"] = FieldValue.delete()
+            }
+        } else {
+            userData["dayRate"] = FieldValue.delete()
         }
         
         if user.permissions.operativeMode || user.permissions.manager {
             if let p = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
                 userData["tradeTypePreset"] = p
+            } else {
+                userData["tradeTypePreset"] = FieldValue.delete()
             }
             if let c = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines), !c.isEmpty {
                 userData["tradeTypeCustom"] = c
+            } else {
+                userData["tradeTypeCustom"] = FieldValue.delete()
             }
+        } else {
+            userData["tradeTypePreset"] = FieldValue.delete()
+            userData["tradeTypeCustom"] = FieldValue.delete()
         }
         
         if let photo = user.profilePhotoURL?.trimmingCharacters(in: .whitespacesAndNewlines), !photo.isEmpty {
@@ -3151,7 +3176,33 @@ class FirebaseBackend: ObservableObject {
             userData["profilePhotoURL"] = FieldValue.delete()
         }
         
-        try await db.collection("users").document(user.id).setData(userData)
+        try await db.collection("users").document(user.id).setData(userData, merge: true)
+    }
+
+    /// Keeps `organizations/{orgId}/userEmails/{email}` aligned when a member’s profile email changes.
+    func reconcileUserEmailIndex(organizationId: String, userId: String, oldEmailNormalized: String, newEmail: String) async throws {
+        let orgId = try await ensureReadableOrganization(organizationId)
+        let newNorm = newEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let oldNorm = oldEmailNormalized.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newNorm.isEmpty else { return }
+        let orgRef = db.collection("organizations").document(orgId)
+        if oldNorm != newNorm {
+            try? await orgRef.collection("userEmails").document(oldNorm).delete()
+        }
+        try await orgRef.collection("userEmails").document(newNorm).setData(["userId": userId], merge: true)
+    }
+
+    /// Sends a verification link to `newEmail`. After the user completes it, Firebase Authentication updates the **sign-in** email. Only valid for `auth.currentUser`.
+    func sendVerifyBeforeUpdateEmail(to newEmail: String) async throws {
+        let trimmed = newEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let user = auth.currentUser else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "You must be signed in to update the sign-in email."]
+            )
+        }
+        try await user.sendEmailVerification(beforeUpdatingEmail: trimmed, actionCodeSettings: nil)
     }
     
     func updateUserProfilePhotoURL(userId: String, url: String?) async throws {
@@ -5753,12 +5804,15 @@ extension FirebaseBackend {
             .setData(data)
     }
 
-    func loadSiteAudits(organizationId: String, projectId: UUID? = nil) async throws -> [SiteAudit] {
+    func loadSiteAudits(organizationId: String, projectId: UUID? = nil, createdByUserId: String? = nil) async throws -> [SiteAudit] {
         var query: Query = db.collection("organizations").document(organizationId)
             .collection("siteAudits")
 
         if let projectId {
             query = query.whereField("projectId", isEqualTo: projectId.uuidString)
+        }
+        if let createdByUserId {
+            query = query.whereField("createdByUserId", isEqualTo: createdByUserId)
         }
 
         let snapshot = try await query.getDocuments()
