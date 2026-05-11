@@ -1,20 +1,27 @@
-# Reduce Cursor indexing/churn from generated or large artifacts
-.git/
-node_modules/
-.next/
-dist/
-build/
-DerivedData/
-Pods/
+# Cursor: skip huge or generated trees (reduces lag)
+**/.git/
+**/node_modules/
+**/.next/
+**/dist/
+**/build/
+**/DerivedData/
+**/Pods/
+**/.firebase/
+**/__pycache__/
 
-# Xcode build artifacts
+# Xcode
 *.xcresult/
 *.app/
 *.dSYM/
 
-# Large backups / logs
+# macOS duplicate copies (Finder "name 2") — never need these indexed
+**/* 2/
+**/* 3/
+
+# Logs / backups
 Project Planner_backup_*/
 build.log
+*.patch
 
-# Tooling output
+# Agent tooling noise
 .cursor/projects/**/agent-tools/

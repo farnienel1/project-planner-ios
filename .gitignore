@@ -6,3 +6,15 @@ Secrets.plist
 **/Secrets.plist
 *.local.xcconfig
 *.secrets.xcconfig
+
+# Accidental duplicate copies (macOS / merges) — do not commit
+* 2
+* 2.*
+**/* 2/
+**/* 3/
+
+# Firebase / Node caches in repo
+**/.firebase/
+
+# Cursor local
+.cursor/user-prompts-by-session.txt
