@@ -14,6 +14,7 @@ struct ProjectsView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     /// Default to all projects so completed / past jobs are not hidden (Active only includes jobs whose dates span today).
     @State private var selectedStatus: ProjectStatus? = nil
     @State private var navigationPath = NavigationPath()
@@ -104,6 +105,7 @@ struct ProjectsView: View {
                     .environmentObject(operativeStore)
                     .environmentObject(notificationService)
                     .environmentObject(userStore)
+                    .environmentObject(firebaseBackend)
             }
         }
     }

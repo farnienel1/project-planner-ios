@@ -49,6 +49,7 @@ struct HomeView: View {
     @State private var warningsRefreshTask: Task<Void, Never>?
     @State private var isCustomisingQuickActions = false
     @State private var showingAddQuickActionPicker = false
+    @State private var showingQuickActionCustomizeHint = false
     @State private var persistedQuickActionIds: [String] = []
     @State private var showingGeneralAppSettings = false
     @State private var hasLoadedQuickActionLayout = false
@@ -101,11 +102,17 @@ struct HomeView: View {
             CreateProjectView()
                 .environmentObject(projectStore)
                 .environmentObject(operativeStore)
+                .environmentObject(notificationService)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingCreateSmallWorks) {
             CreateSmallWorksView()
                 .environmentObject(projectStore)
                 .environmentObject(operativeStore)
+                .environmentObject(notificationService)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingCreateOperative) {
             CreateOperativeView()
@@ -260,6 +267,13 @@ struct HomeView: View {
                     }
             }
         }
+        .alert("Quick actions", isPresented: $showingQuickActionCustomizeHint) {
+            Button("OK") {
+                UserDefaults.standard.set(true, forKey: quickActionCustomizeHintKey)
+            }
+        } message: {
+            Text("Drag the icons to your desired layout.")
+        }
     }
 
     // MARK: - Home dashboard (HTML / design reference)
@@ -310,14 +324,12 @@ struct HomeView: View {
         let today = cal.startOfDay(for: Date())
         return taskStore.tasks.filter { task in
             guard !task.isCompleted, let due = task.dueDate, cal.isDate(due, inSameDayAs: today) else { return false }
-            if userStore.isOperativeMode() {
-                let em = userStore.currentUser?.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                guard let op = operativeStore.allOperatives.first(where: {
-                    $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
-                }) else { return false }
-                return task.allAssignedOperativeIds.contains(op.id)
-            }
-            return true
+            return task.isAssignedToUser(
+                userEmail: userStore.currentUser?.email,
+                operatives: operativeStore.allOperatives,
+                managers: operativeStore.allManagers,
+                isOperativeMode: userStore.isOperativeMode()
+            )
         }.count
     }
 
@@ -329,14 +341,12 @@ struct HomeView: View {
             guard !task.isCompleted, let due = task.dueDate else { return false }
             let d0 = cal.startOfDay(for: due)
             guard d0 >= cal.startOfDay(for: now), d0 < weekEnd else { return false }
-            if userStore.isOperativeMode() {
-                let em = userStore.currentUser?.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                guard let op = operativeStore.allOperatives.first(where: {
-                    $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
-                }) else { return false }
-                return task.allAssignedOperativeIds.contains(op.id)
-            }
-            return true
+            return task.isAssignedToUser(
+                userEmail: userStore.currentUser?.email,
+                operatives: operativeStore.allOperatives,
+                managers: operativeStore.allManagers,
+                isOperativeMode: userStore.isOperativeMode()
+            )
         }.count
     }
 
@@ -542,6 +552,11 @@ struct HomeView: View {
         return "homeQuickActionOrder.\(uid)"
     }
 
+    private var quickActionCustomizeHintKey: String {
+        let uid = firebaseBackend.currentUser?.uid ?? "anonymous"
+        return "homeQuickActionCustomizeHint.\(uid)"
+    }
+
     private func loadPersistedQuickActionsIfNeeded() {
         guard !hasLoadedQuickActionLayout else { return }
         hasLoadedQuickActionLayout = true
@@ -601,8 +616,15 @@ struct HomeView: View {
         savePersistedQuickActions()
     }
 
-    private func moveQuickActions(from source: IndexSet, to destination: Int) {
-        persistedQuickActionIds.move(fromOffsets: source, toOffset: destination)
+    private func reorderQuickAction(fromId: String, toId: String) {
+        guard let from = persistedQuickActionIds.firstIndex(of: fromId),
+              let to = persistedQuickActionIds.firstIndex(of: toId),
+              from != to else { return }
+        var ids = persistedQuickActionIds
+        let item = ids.remove(at: from)
+        let insertIndex = from < to ? to - 1 : to
+        ids.insert(item, at: insertIndex)
+        persistedQuickActionIds = ids
         savePersistedQuickActions()
     }
 
@@ -714,7 +736,7 @@ struct HomeView: View {
             Button {
                 showingQuickMenu = true
             } label: {
-                Label("Expand Menu", systemImage: "arrow.up.left.and.arrow.down.right")
+                Label("Main Menu", systemImage: "arrow.up.left.and.arrow.down.right")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(homeBlue)
             }
@@ -726,6 +748,9 @@ struct HomeView: View {
                     savePersistedQuickActions()
                 } else {
                     isCustomisingQuickActions = true
+                    if !UserDefaults.standard.bool(forKey: quickActionCustomizeHintKey) {
+                        showingQuickActionCustomizeHint = true
+                    }
                 }
             } label: {
                 Text(isCustomisingQuickActions ? "Done" : "Customise")
@@ -740,56 +765,56 @@ struct HomeView: View {
     private let quickGrid = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
 
     private var quickActionsIconGrid: some View {
-        Group {
-            if isCustomisingQuickActions {
-                List {
-                    ForEach(persistedQuickActionIds, id: \.self) { id in
-                        if let meta = HomeQuickActionRegistry.meta(for: id),
-                           HomeQuickActionRegistry.isEligible(id: id, userStore: userStore) {
-                            HStack(spacing: 12) {
-                                quickActionTileContents(meta: meta, title: displayTitleForQuickAction(id: id))
-                                    .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
-                                    .listRowSeparator(.hidden)
-                                    .listRowBackground(Color.clear)
-                                Button {
-                                    removeQuickAction(id: id)
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.system(size: 22))
-                                        .foregroundStyle(Color.secondary.opacity(0.85))
-                                        .accessibilityLabel("Remove \(displayTitleForQuickAction(id: id))")
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
+        LazyVGrid(columns: quickGrid, spacing: 10) {
+            ForEach(persistedQuickActionIds, id: \.self) { id in
+                if let meta = HomeQuickActionRegistry.meta(for: id),
+                   HomeQuickActionRegistry.isEligible(id: id, userStore: userStore) {
+                    if isCustomisingQuickActions {
+                        quickActionCustomizeTile(id: id, meta: meta)
+                    } else {
+                        Button {
+                            performQuickAction(id: id)
+                        } label: {
+                            quickActionTileContents(meta: meta, title: displayTitleForQuickAction(id: id))
                         }
-                    }
-                    .onMove(perform: moveQuickActions)
-                }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: CGFloat(max(persistedQuickActionIds.count, 1)) * 72)
-                .environment(\.editMode, .constant(.active))
-            } else {
-                LazyVGrid(columns: quickGrid, spacing: 10) {
-                    ForEach(persistedQuickActionIds, id: \.self) { id in
-                        if let meta = HomeQuickActionRegistry.meta(for: id),
-                           HomeQuickActionRegistry.isEligible(id: id, userStore: userStore) {
-                            Button {
-                                performQuickAction(id: id)
-                            } label: {
-                                quickActionTileContents(meta: meta, title: displayTitleForQuickAction(id: id))
-                            }
-                            .buttonStyle(.plain)
-                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
         }
         .padding(.bottom, 18)
         .onAppear { sanitizePersistedQuickActionsIfNeeded() }
+    }
+
+    @ViewBuilder
+    private func quickActionCustomizeTile(id: String, meta: HomeQuickActionMeta) -> some View {
+        let title = displayTitleForQuickAction(id: id)
+        ZStack(alignment: .topTrailing) {
+            quickActionTileContents(meta: meta, title: title)
+                .draggable(id) {
+                    quickActionTileContents(meta: meta, title: title)
+                        .frame(width: 118, height: 100)
+                        .opacity(0.9)
+                }
+                .dropDestination(for: String.self) { items, _ in
+                    guard let dragged = items.first, dragged != id else { return false }
+                    reorderQuickAction(fromId: dragged, toId: id)
+                    return true
+                }
+
+            Button {
+                removeQuickAction(id: id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 18, height: 18)
+                    .background(Circle().fill(Color.black.opacity(0.42)))
+            }
+            .buttonStyle(.plain)
+            .offset(x: 4, y: -4)
+            .accessibilityLabel("Remove \(title) from quick actions")
+        }
     }
 
     private var upNextRows: [HomeUpNextRow] {
@@ -945,8 +970,17 @@ struct HomeView: View {
             }.count
             return taskCount + operativeQualificationExpiryReminderCount
         } else {
-            // For regular users, count all active tasks
-            return taskStore.tasks.filter { !$0.isCompleted }.count + pendingHolidayApprovalsCount
+            let email = userStore.currentUser?.email
+            let taskCount = taskStore.tasks.filter { task in
+                !task.isCompleted
+                    && task.isAssignedToUser(
+                        userEmail: email,
+                        operatives: operativeStore.allOperatives,
+                        managers: operativeStore.allManagers,
+                        isOperativeMode: false
+                    )
+            }.count
+            return taskCount + pendingHolidayApprovalsCount
         }
     }
 

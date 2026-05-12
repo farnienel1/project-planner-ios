@@ -40,6 +40,13 @@ struct EditProjectView: View {
     @State private var showingMapPinPicker = false
     @State private var showingQuickAddressForm = false
 
+    // Backup so we can restore address when the user toggles to "Map pin"
+    // but never actually drops a pin.
+    @State private var addressBackupLine1: String = ""
+    @State private var addressBackupLine2: String = ""
+    @State private var addressBackupTownCity: String = ""
+    @State private var addressBackupPostcode: String = ""
+
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var showingCreateClient = false
@@ -69,6 +76,10 @@ struct EditProjectView: View {
         _projectAddressLine2 = State(initialValue: project.addressLine2 ?? "")
         _projectTownCity = State(initialValue: project.townCity)
         _projectPostcode = State(initialValue: project.postcode)
+        _addressBackupLine1 = State(initialValue: project.addressLine1)
+        _addressBackupLine2 = State(initialValue: project.addressLine2 ?? "")
+        _addressBackupTownCity = State(initialValue: project.townCity)
+        _addressBackupPostcode = State(initialValue: project.postcode)
         _projectStartDate = State(initialValue: project.startDate)
         _projectEndDate = State(initialValue: project.endDate)
         _projectDescription = State(initialValue: project.description ?? "")
@@ -222,11 +233,28 @@ struct EditProjectView: View {
     }
 
     private func applyMutualExclusion(for mode: EditLocationMode) {
+        let hadPin = pinLatitude != nil && pinLongitude != nil
+
         switch mode {
         case .addressFields:
+            // If the user never actually set a pin, restore the address they had typed.
+            // If a pin was set, address should remain cleared to avoid ambiguity.
             pinLatitude = nil
             pinLongitude = nil
+
+            if !hadPin {
+                projectAddressLine1 = addressBackupLine1
+                projectAddressLine2 = addressBackupLine2
+                projectTownCity = addressBackupTownCity
+                projectPostcode = addressBackupPostcode
+            }
         case .mapPin:
+            // Backup typed address before clearing it (in case they back out without selecting a pin).
+            addressBackupLine1 = projectAddressLine1
+            addressBackupLine2 = projectAddressLine2
+            addressBackupTownCity = projectTownCity
+            addressBackupPostcode = projectPostcode
+
             projectAddressLine1 = ""
             projectAddressLine2 = ""
             projectTownCity = ""

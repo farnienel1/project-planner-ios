@@ -1786,7 +1786,9 @@ class FirebaseBackend: ObservableObject {
             
             let dueDate = (data["dueDate"] as? Timestamp)?.dateValue()
             let details = data["details"] as? String
-            
+            let priorityRaw = data["priority"] as? String
+            let priority = priorityRaw.flatMap { ProjectTask.Priority(rawValue: $0) } ?? .normal
+
             // Load multiple assignments
             var assignedOperativeIds: [UUID] = []
             if let operativeIdsArray = data["assignedOperativeIds"] as? [String] {
@@ -1833,6 +1835,7 @@ class FirebaseBackend: ObservableObject {
                 assignedOperativeIds: assignedOperativeIds,
                 assignedManagerIds: assignedManagerIds,
                 dueDate: dueDate,
+                priority: priority,
                 status: status,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
@@ -1858,6 +1861,7 @@ class FirebaseBackend: ObservableObject {
             "details": task.details ?? "",
             "createdBy": task.createdBy,
             "status": task.status.rawValue,
+            "priority": task.priority.rawValue,
             "createdAt": Timestamp(date: task.createdAt),
             "updatedAt": Timestamp(date: task.updatedAt)
         ]

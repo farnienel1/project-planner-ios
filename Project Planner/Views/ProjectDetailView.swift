@@ -76,9 +76,9 @@ struct ProjectDetailView: View {
     private enum DetailTile: String, CaseIterable, Identifiable {
         case scheduling = "Scheduling"
         case visibility = "View"
-        case tasks = "My tasks"
+        case tasks = "My Tasks"
         case materials = "Materials"
-        case siteAudit = "Site audits"
+        case siteAudit = "Site Audit"
         case location = "Location"
 
         var id: String { rawValue }
@@ -382,6 +382,16 @@ struct ProjectDetailView: View {
                 iconTint: ProjectWorksRevampColors.upcomingAmber,
                 iconBackground: Color(red: 0.98, green: 0.933, blue: 0.855)
             )
+            Divider().overlay(ProjectWorksRevampColors.border)
+            let desc = project.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            summaryMultilineRow(
+                icon: "text.alignleft",
+                title: "Description",
+                value: desc.isEmpty ? "No description added" : desc,
+                valueColor: desc.isEmpty ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.ink,
+                iconTint: ProjectWorksRevampColors.blue,
+                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984)
+            )
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 4)
@@ -416,6 +426,37 @@ struct ProjectDetailView: View {
                 Text(value)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 11)
+    }
+
+    private func summaryMultilineRow(
+        icon: String,
+        title: String,
+        value: String,
+        valueColor: Color,
+        iconTint: Color,
+        iconBackground: Color
+    ) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(iconBackground)
+                .frame(width: 30, height: 30)
+                .overlay(
+                    Image(systemName: icon)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(iconTint)
+                )
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                Text(value)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(valueColor)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
         }
@@ -922,17 +963,18 @@ struct ProjectDetailView: View {
         !project.siteAddress.isEmpty && project.siteAddress != "Site Location not available"
     }
 
-    private var hasPinnedCoordinate: Bool {
-        project.usesMapPinForLocation && project.latitude != nil && project.longitude != nil
+    /// Any stored WGS84 coordinates (map pin mode or optional pin alongside address).
+    private var hasStoredMapCoordinate: Bool {
+        project.latitude != nil && project.longitude != nil
     }
 
     private var hasValidLocation: Bool {
-        hasPinnedCoordinate || hasValidAddress
+        hasValidAddress || hasStoredMapCoordinate
     }
 
     private var locationDisplayText: String {
         if hasValidAddress { return project.siteAddress }
-        if hasPinnedCoordinate, let la = project.latitude, let lo = project.longitude {
+        if hasStoredMapCoordinate, let la = project.latitude, let lo = project.longitude {
             return String(format: "%.5f, %.5f", la, lo)
         }
         return ""
@@ -964,11 +1006,11 @@ struct ProjectDetailView: View {
             break
         case .operative:
             if let operativeId = taskFilter.operativeId {
-                tasks = tasks.filter { $0.assignedOperativeId == operativeId }
+                tasks = tasks.filter { $0.allAssignedOperativeIds.contains(operativeId) }
             }
         case .manager:
             if let managerId = taskFilter.managerId {
-                tasks = tasks.filter { $0.assignedManagerId == managerId }
+                tasks = tasks.filter { $0.allAssignedManagerIds.contains(managerId) }
             }
         case .dateRange:
             if let range = taskFilter.dateRange {
@@ -997,20 +1039,15 @@ struct ProjectDetailView: View {
                 tasks = []
             }
         } else {
-            // Regular users: Super Admin and Admins see all tasks, others see tasks assigned to them
-            if !userStore.canManageUsers() {
-                // Not super admin or admin - only show tasks assigned to them
-                if userStore.currentUser?.id != nil {
-                    // Check if task is assigned to this user (as manager or operative)
-                    tasks = tasks.filter { task in
-                        // Check if user is assigned as manager or operative
-                        // For now, we'll show all tasks if user has project access
-                        // This can be refined based on actual assignment logic
-                        return true // Show all for now, can be refined
-                    }
-                }
+            let email = userStore.currentUser?.email
+            tasks = tasks.filter { task in
+                task.isAssignedToUser(
+                    userEmail: email,
+                    operatives: operativeStore.allOperatives,
+                    managers: operativeStore.allManagers,
+                    isOperativeMode: false
+                )
             }
-            // Super Admin and Admins see all tasks (no filtering needed)
         }
         
         return tasks.sorted { $0.createdAt > $1.createdAt }
@@ -1155,7 +1192,7 @@ struct ProjectDetailView: View {
     }
     
     private func geocodeAddress() {
-        if hasPinnedCoordinate, let la = project.latitude, let lo = project.longitude {
+        if hasStoredMapCoordinate, let la = project.latitude, let lo = project.longitude {
             let coord = CLLocationCoordinate2D(latitude: la, longitude: lo)
             Task { @MainActor in
                 let placemark = MKPlacemark(coordinate: coord)
@@ -1200,7 +1237,7 @@ struct ProjectDetailView: View {
     }
     
     private func openInGoogleMaps() {
-        if hasPinnedCoordinate, let la = project.latitude, let lo = project.longitude {
+        if hasStoredMapCoordinate, let la = project.latitude, let lo = project.longitude {
             let ll = "\(la),\(lo)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
             if let url = URL(string: "comgooglemaps://?q=\(ll)&center=\(ll)&zoom=17") {
                 if UIApplication.shared.canOpenURL(url) {
@@ -1228,7 +1265,7 @@ struct ProjectDetailView: View {
             mapItem.openInMaps()
             return
         }
-        if hasPinnedCoordinate, let la = project.latitude, let lo = project.longitude {
+        if hasStoredMapCoordinate, let la = project.latitude, let lo = project.longitude {
             let name = project.siteName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
             if let url = URL(string: "http://maps.apple.com/?ll=\(la),\(lo)&q=\(name)") {
                 UIApplication.shared.open(url)
@@ -1250,7 +1287,7 @@ struct ProjectDetailView: View {
         if let item = mapItem {
             return coordinate(from: item)
         }
-        if hasPinnedCoordinate, let la = project.latitude, let lo = project.longitude {
+        if hasStoredMapCoordinate, let la = project.latitude, let lo = project.longitude {
             return CLLocationCoordinate2D(latitude: la, longitude: lo)
         }
         return nil
@@ -1621,6 +1658,7 @@ private struct ProjectTaskRow: View {
             HStack {
                 Text(task.title)
                     .font(.headline)
+                priorityBadge
                 Spacer()
                 HStack(spacing: 8) {
                     if canShowSettingsCog {
@@ -1776,6 +1814,26 @@ private struct ProjectTaskRow: View {
             .foregroundColor(statusColor)
             .cornerRadius(8)
     }
+
+    private var priorityBadge: some View {
+        Text(task.priority.rawValue.uppercased())
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.3)
+            .foregroundColor(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(priorityBackgroundColor)
+            .clipShape(Capsule())
+    }
+
+    private var priorityBackgroundColor: Color {
+        switch task.priority {
+        case .low: return Color(.systemGray)
+        case .normal: return Color(red: 0.2, green: 0.45, blue: 0.95)
+        case .high: return Color.orange
+        case .urgent: return Color.red
+        }
+    }
     
     private var statusColor: Color {
         switch task.status {
@@ -1926,15 +1984,15 @@ private struct AddProjectTaskView: View {
     let project: Project
     @Binding var isPresented: Bool
     
-    @State private var taskItems: [TaskItemForm] = [TaskItemForm()]
-    @State private var assignmentType: AssignmentType = .operative
-    @State private var selectedOperative: UUID?
-    @State private var selectedManager: UUID?
+    @State private var taskTitle = ""
+    @State private var taskDescription = ""
+    @State private var checklistRows: [TaskItemForm] = []
     @State private var selectedOperatives: Set<UUID> = []
     @State private var selectedManagers: Set<UUID> = []
-    @State private var hasDueDate = false
+    @State private var assignmentTradePreset: String? = nil
     @State private var dueDate = Date()
-    @State private var status: ProjectTask.Status = .todo
+    @State private var priority: ProjectTask.Priority = .normal
+    @State private var creatorLocalChecklistTicks: Set<UUID> = []
     @State private var isSaving = false
     @State private var selectedFile: URL?
     @State private var selectedFileName: String?
@@ -1949,16 +2007,25 @@ private struct AddProjectTaskView: View {
     @State private var errorMessage: String?
     @State private var showingError = false
     
-    enum AssignmentType: String, CaseIterable {
-        case operative = "Operative"
-        case manager = "Manager"
+    private var managerEmailsLowercased: Set<String> {
+        Set(operativeStore.activeManagers.map {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        })
     }
     
     var body: some View {
         NavigationView {
             Form {
-                taskItemsSection
+                titleDescriptionPrioritySection
+                checklistSection
                 assignmentsSection
+                Section {
+                    DatePicker("Schedule", selection: $dueDate, displayedComponents: .date)
+                } header: {
+                    Text("Schedule")
+                } footer: {
+                    Text("A due date is required for every task.")
+                }
                 attachImagesSection
                 attachFileSection
                 .fileImporter(
@@ -1972,25 +2039,19 @@ private struct AddProjectTaskView: View {
                     ImagePicker(images: $selectedImages)
                 }
                 .sheet(isPresented: $showingOperativeSelection) {
-                    OperativeMultiSelectView(selectedOperatives: $selectedOperatives, operatives: operativeStore.allOperatives)
+                    OperativeMultiSelectView(
+                        selectedOperatives: $selectedOperatives,
+                        operatives: operativeStore.activeOperatives,
+                        tradePresetFilter: assignmentTradePreset,
+                        excludedEmailsLowercased: managerEmailsLowercased
+                    )
                 }
                 .sheet(isPresented: $showingManagerSelection) {
-                    ManagerMultiSelectView(selectedManagers: $selectedManagers, managers: operativeStore.managers)
-                }
-                
-                Section("Due Date") {
-                    Toggle("Set Due Date", isOn: $hasDueDate)
-                    if hasDueDate {
-                        DatePicker("Due Date", selection: $dueDate, displayedComponents: .date)
-                    }
-                }
-                
-                Section("Status") {
-                    Picker("Status", selection: $status) {
-                        ForEach(ProjectTask.Status.allCases, id: \.rawValue) { status in
-                            Text(status.rawValue).tag(status)
-                        }
-                    }
+                    ManagerMultiSelectView(
+                        selectedManagers: $selectedManagers,
+                        managers: operativeStore.activeManagers,
+                        tradePresetFilter: assignmentTradePreset
+                    )
                 }
             }
             .navigationTitle("New Task")
@@ -2020,116 +2081,156 @@ private struct AddProjectTaskView: View {
         }
     }
 
-    private var taskItemsSection: some View {
-        Section {
-            ForEach($taskItems) { $item in
-                VStack(alignment: .leading, spacing: 8) {
-                    TextField("Item title", text: $item.title)
-                    TextField("Description (optional)", text: $item.description, axis: .vertical)
-                        .lineLimit(2...4)
+    private var titleDescriptionPrioritySection: some View {
+        Group {
+            Section {
+                TextField("Task title", text: $taskTitle)
+                TextField("Description", text: $taskDescription, axis: .vertical)
+                    .lineLimit(3...10)
+            } header: {
+                Text("Task")
+            }
+            Section {
+                Picker("Priority", selection: $priority) {
+                    ForEach(ProjectTask.Priority.allCases, id: \.self) { level in
+                        Text(level.rawValue).tag(level)
+                    }
                 }
-                .padding(.vertical, 4)
+                .pickerStyle(.segmented)
+            } header: {
+                Text("Priority")
+            }
+        }
+    }
+
+    private var checklistSection: some View {
+        Section {
+            if checklistRows.isEmpty {
+                Text("Optional checklist steps appear here. Tap below to add lines assignees will tick off.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach($checklistRows) { $item in
+                    HStack(alignment: .top, spacing: 10) {
+                        Button {
+                            if creatorLocalChecklistTicks.contains(item.id) {
+                                creatorLocalChecklistTicks.remove(item.id)
+                            } else {
+                                creatorLocalChecklistTicks.insert(item.id)
+                            }
+                        } label: {
+                            Image(systemName: creatorLocalChecklistTicks.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                .font(.title3)
+                                .foregroundColor(creatorLocalChecklistTicks.contains(item.id) ? .green : .secondary)
+                        }
+                        .buttonStyle(.plain)
+                        TextField("Checklist item", text: $item.title)
+                    }
+                    .padding(.vertical, 2)
+                }
             }
             Button(action: {
-                taskItems.append(TaskItemForm())
+                checklistRows.append(TaskItemForm())
             }) {
                 HStack {
                     Image(systemName: "plus.circle.fill")
                         .foregroundColor(.green)
                         .font(.title2)
-                    Text("Add item")
+                    Text("Add checklist item")
                         .foregroundColor(.green)
                 }
             }
         } header: {
-            Text("Task items")
+            Text("Checklist")
         } footer: {
-            Text("Add one or more items. Assignees must tick all items (when more than one) before marking the task complete.")
+            Text("Checklist lines are saved with the task. Ticks here are for your planning only; assignees track progress on the task screen.")
         }
     }
 
     private var assignmentsSection: some View {
-        Section("Assignments") {
-            Picker("Assign To", selection: $assignmentType) {
-                ForEach(AssignmentType.allCases, id: \.self) { type in
-                    Text(type.rawValue).tag(type)
+        Section {
+            Picker("Trade filter", selection: $assignmentTradePreset) {
+                Text("All trades").tag(Optional<String>.none)
+                ForEach(StaffTradeType.pickerCases) { trade in
+                    Text(trade.rawValue).tag(Optional<String>.some(trade.rawValue))
                 }
             }
 
-            if assignmentType == .operative {
-                Button(action: {
-                    showingOperativeSelection = true
-                }) {
-                    HStack {
-                        Text("Select Operatives")
-                        Spacer()
-                        if selectedOperatives.isEmpty {
-                            Text("None selected")
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("\(selectedOperatives.count) selected")
-                                .foregroundColor(.blue)
-                        }
-                        Image(systemName: "chevron.right")
+            Button(action: {
+                showingManagerSelection = true
+            }) {
+                HStack {
+                    Text("Managers")
+                    Spacer()
+                    if selectedManagers.isEmpty {
+                        Text("Tap to select")
                             .foregroundColor(.secondary)
-                            .font(.caption)
+                    } else {
+                        Text("\(selectedManagers.count) selected")
+                            .foregroundColor(.blue)
                     }
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
                 }
+            }
 
-                if !selectedOperatives.isEmpty {
-                    ForEach(Array(selectedOperatives), id: \.self) { operativeId in
-                        if let operative = operativeStore.allOperatives.first(where: { $0.id == operativeId }) {
-                            HStack {
-                                Text(operative.name)
-                                Spacer()
-                                Button(action: {
-                                    selectedOperatives.remove(operativeId)
-                                }) {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundColor(.red)
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                Button(action: {
-                    showingManagerSelection = true
-                }) {
-                    HStack {
-                        Text("Select Managers")
-                            .foregroundColor(selectedManagers.isEmpty ? .red : .primary)
-                        Spacer()
-                        if selectedManagers.isEmpty {
-                            Text("Required")
-                                .foregroundColor(.red)
-                        } else {
-                            Text("\(selectedManagers.count) selected")
-                                .foregroundColor(.blue)
-                        }
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(.secondary)
-                            .font(.caption)
-                    }
-                }
-
-                if !selectedManagers.isEmpty {
-                    ForEach(Array(selectedManagers), id: \.self) { managerId in
-                        if let manager = operativeStore.managers.first(where: { $0.id == managerId }) {
-                            HStack {
-                                Text(manager.fullName)
-                                Spacer()
-                                Button(action: {
-                                    selectedManagers.remove(managerId)
-                                }) {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundColor(.red)
-                                }
+            if !selectedManagers.isEmpty {
+                ForEach(Array(selectedManagers), id: \.self) { managerId in
+                    if let manager = operativeStore.activeManagers.first(where: { $0.id == managerId }) {
+                        HStack {
+                            Text(manager.fullName)
+                            Spacer()
+                            Button(action: {
+                                selectedManagers.remove(managerId)
+                            }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.red)
                             }
                         }
                     }
                 }
             }
+
+            Button(action: {
+                showingOperativeSelection = true
+            }) {
+                HStack {
+                    Text("Operatives")
+                    Spacer()
+                    if selectedOperatives.isEmpty {
+                        Text("Tap to select")
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("\(selectedOperatives.count) selected")
+                            .foregroundColor(.blue)
+                    }
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
+                }
+            }
+
+            if !selectedOperatives.isEmpty {
+                ForEach(Array(selectedOperatives), id: \.self) { operativeId in
+                    if let operative = operativeStore.activeOperatives.first(where: { $0.id == operativeId }) {
+                        HStack {
+                            Text(operative.name)
+                            Spacer()
+                            Button(action: {
+                                selectedOperatives.remove(operativeId)
+                            }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.red)
+                            }
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("Assignments")
+        } footer: {
+            Text("Choose at least one manager and/or operative. Use trade filter to narrow each list. Emails that match a manager profile are excluded from the operative picker so they are only chosen as managers.")
         }
     }
 
@@ -2237,10 +2338,9 @@ private struct AddProjectTaskView: View {
     }
     
     private var canSaveTask: Bool {
-        let atLeastOneItemWithTitle = taskItems.contains { !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        let assignmentValid = (assignmentType == .operative && !selectedOperatives.isEmpty) || 
-                              (assignmentType == .manager && !selectedManagers.isEmpty)
-        return atLeastOneItemWithTitle && assignmentValid
+        let titleOk = !taskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let assignmentOk = !selectedOperatives.isEmpty || !selectedManagers.isEmpty
+        return titleOk && assignmentOk && !isSaving
     }
     
     private func saveTask() {
@@ -2248,7 +2348,11 @@ private struct AddProjectTaskView: View {
         isSaving = true
         let creatorName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
         
-        let items: [ProjectTaskItem] = taskItems
+        let trimmedTitle = taskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let descTrimmed = taskDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let detailsValue: String? = descTrimmed.isEmpty ? nil : descTrimmed
+        
+        let items: [ProjectTaskItem] = checklistRows
             .filter { !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .map { item in
                 ProjectTaskItem(
@@ -2257,23 +2361,23 @@ private struct AddProjectTaskView: View {
                     description: item.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : item.description.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
             }
-        guard !items.isEmpty else { isSaving = false; return }
-        let firstTitle = items[0].title
-        let firstDetails = items[0].description
         
             Task {
-                let assignedOperativeIds = assignmentType == .operative ? Array(selectedOperatives) : []
-                let assignedManagerIds = assignmentType == .manager ? Array(selectedManagers) : []
+                let assignedOperativeIds = Array(selectedOperatives)
+                let assignedManagerIds = Array(selectedManagers)
                 
                 var task = ProjectTask(
                     projectId: project.id,
-                    title: firstTitle,
-                    details: firstDetails,
+                    title: trimmedTitle,
+                    details: detailsValue,
                     createdBy: creatorName,
+                    assignedOperativeId: assignedOperativeIds.first,
+                    assignedManagerId: assignedManagerIds.first,
                     assignedOperativeIds: assignedOperativeIds,
                     assignedManagerIds: assignedManagerIds,
-                    dueDate: hasDueDate ? dueDate : nil,
-                    status: status,
+                    dueDate: dueDate,
+                    priority: priority,
+                    status: .todo,
                     attachedFileURL: nil,
                     attachedFileName: selectedFileName,
                     attachedImageURLs: [],
@@ -2379,20 +2483,23 @@ private struct EditProjectTaskView: View {
     let project: Project
     @Binding var isPresented: Bool
     
-    @State private var taskItems: [TaskItemForm]
-    @State private var assignmentType: AssignmentType
+    @State private var taskTitle: String
+    @State private var taskDescription: String
+    @State private var checklistRows: [TaskItemForm]
     @State private var selectedOperatives: Set<UUID>
     @State private var selectedManagers: Set<UUID>
-    @State private var hasDueDate: Bool
+    @State private var assignmentTradePreset: String?
     @State private var dueDate: Date
     @State private var status: ProjectTask.Status
+    @State private var priority: ProjectTask.Priority
     @State private var isSaving = false
     @State private var showingOperativeSelection = false
     @State private var showingManagerSelection = false
     
-    enum AssignmentType: String, CaseIterable {
-        case operative = "Operative"
-        case manager = "Manager"
+    private var managerEmailsLowercased: Set<String> {
+        Set(operativeStore.activeManagers.map {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        })
     }
     
     init(task: ProjectTask, project: Project, isPresented: Binding<Bool>) {
@@ -2400,114 +2507,179 @@ private struct EditProjectTaskView: View {
         self.project = project
         self._isPresented = isPresented
         
-        let effective = task.effectiveItems
-        let initialItems = effective.isEmpty ? [TaskItemForm()] : effective.map { TaskItemForm(id: $0.id, title: $0.title, description: $0.description ?? "") }
-        _taskItems = State(initialValue: initialItems)
-        
-        let hasOperatives = !task.allAssignedOperativeIds.isEmpty
-        _assignmentType = State(initialValue: hasOperatives ? .operative : .manager)
+        _taskTitle = State(initialValue: task.title)
+        _taskDescription = State(initialValue: task.details ?? "")
+        let rows = task.items.map { TaskItemForm(id: $0.id, title: $0.title, description: $0.description ?? "") }
+        _checklistRows = State(initialValue: rows)
         
         _selectedOperatives = State(initialValue: Set(task.allAssignedOperativeIds))
         _selectedManagers = State(initialValue: Set(task.allAssignedManagerIds))
-        _hasDueDate = State(initialValue: task.dueDate != nil)
+        _assignmentTradePreset = State(initialValue: nil)
         _dueDate = State(initialValue: task.dueDate ?? Date())
         _status = State(initialValue: task.status)
+        _priority = State(initialValue: task.priority)
     }
     
     var body: some View {
         NavigationView {
             Form {
                 Section {
-                    ForEach($taskItems) { $item in
-                        VStack(alignment: .leading, spacing: 8) {
-                            TextField("Item title", text: $item.title)
-                            TextField("Description (optional)", text: $item.description, axis: .vertical)
-                                .lineLimit(2...4)
+                    TextField("Task title", text: $taskTitle)
+                    TextField("Description", text: $taskDescription, axis: .vertical)
+                        .lineLimit(3...10)
+                } header: {
+                    Text("Task")
+                }
+                
+                Section {
+                    Picker("Priority", selection: $priority) {
+                        ForEach(ProjectTask.Priority.allCases, id: \.self) { level in
+                            Text(level.rawValue).tag(level)
                         }
-                        .padding(.vertical, 4)
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Priority")
+                }
+                
+                Section {
+                    if checklistRows.isEmpty {
+                        Text("No checklist lines yet.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach($checklistRows) { $item in
+                            VStack(alignment: .leading, spacing: 8) {
+                                TextField("Checklist item", text: $item.title)
+                                TextField("Note (optional)", text: $item.description, axis: .vertical)
+                                    .lineLimit(2...4)
+                            }
+                            .padding(.vertical, 4)
+                        }
                     }
                     Button(action: {
-                        taskItems.append(TaskItemForm())
+                        checklistRows.append(TaskItemForm())
                     }) {
                         HStack {
                             Image(systemName: "plus.circle.fill")
                                 .foregroundColor(.green)
                                 .font(.title2)
-                            Text("Add item")
+                            Text("Add checklist item")
                                 .foregroundColor(.green)
                         }
                     }
                 } header: {
-                    Text("Task items")
+                    Text("Checklist")
                 }
                 
-                Section("Assignments *") {
-                    Picker("Assign To", selection: $assignmentType) {
-                        ForEach(AssignmentType.allCases, id: \.self) { type in
-                            Text(type.rawValue).tag(type)
+                Section {
+                    Picker("Trade filter", selection: $assignmentTradePreset) {
+                        Text("All trades").tag(Optional<String>.none)
+                        ForEach(StaffTradeType.pickerCases) { trade in
+                            Text(trade.rawValue).tag(Optional<String>.some(trade.rawValue))
                         }
                     }
                     
-                    if assignmentType == .operative {
-                        Button(action: {
-                            showingOperativeSelection = true
-                        }) {
-                            HStack {
-                                Text("Select Operatives")
-                                    .foregroundColor(selectedOperatives.isEmpty ? .red : .primary)
-                                Spacer()
-                                if selectedOperatives.isEmpty {
-                                    Text("Required")
-                                        .foregroundColor(.red)
-                                } else {
-                                    Text("\(selectedOperatives.count) selected")
-                                        .foregroundColor(.blue)
-                                }
-                                Image(systemName: "chevron.right")
+                    Button(action: {
+                        showingManagerSelection = true
+                    }) {
+                        HStack {
+                            Text("Managers")
+                            Spacer()
+                            if selectedManagers.isEmpty {
+                                Text("Tap to select")
                                     .foregroundColor(.secondary)
-                                    .font(.caption)
+                            } else {
+                                Text("\(selectedManagers.count) selected")
+                                    .foregroundColor(.blue)
                             }
-                        }
-                        .sheet(isPresented: $showingOperativeSelection) {
-                            OperativeMultiSelectView(selectedOperatives: $selectedOperatives, operatives: operativeStore.allOperatives)
-                        }
-                    } else {
-                        Button(action: {
-                            showingManagerSelection = true
-                        }) {
-                            HStack {
-                                Text("Select Managers")
-                                    .foregroundColor(selectedManagers.isEmpty ? .red : .primary)
-                                Spacer()
-                                if selectedManagers.isEmpty {
-                                    Text("Required")
-                                        .foregroundColor(.red)
-                                } else {
-                                    Text("\(selectedManagers.count) selected")
-                                        .foregroundColor(.blue)
-                                }
-                                Image(systemName: "chevron.right")
-                                    .foregroundColor(.secondary)
-                                    .font(.caption)
-                            }
-                        }
-                        .sheet(isPresented: $showingManagerSelection) {
-                            ManagerMultiSelectView(selectedManagers: $selectedManagers, managers: operativeStore.managers)
+                            Image(systemName: "chevron.right")
+                                .foregroundColor(.secondary)
+                                .font(.caption)
                         }
                     }
+                    .sheet(isPresented: $showingManagerSelection) {
+                        ManagerMultiSelectView(
+                            selectedManagers: $selectedManagers,
+                            managers: operativeStore.activeManagers,
+                            tradePresetFilter: assignmentTradePreset
+                        )
+                    }
+                    
+                    if !selectedManagers.isEmpty {
+                        ForEach(Array(selectedManagers), id: \.self) { managerId in
+                            if let manager = operativeStore.activeManagers.first(where: { $0.id == managerId }) {
+                                HStack {
+                                    Text(manager.fullName)
+                                    Spacer()
+                                    Button(action: {
+                                        selectedManagers.remove(managerId)
+                                    }) {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundColor(.red)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    Button(action: {
+                        showingOperativeSelection = true
+                    }) {
+                        HStack {
+                            Text("Operatives")
+                            Spacer()
+                            if selectedOperatives.isEmpty {
+                                Text("Tap to select")
+                                    .foregroundColor(.secondary)
+                            } else {
+                                Text("\(selectedOperatives.count) selected")
+                                    .foregroundColor(.blue)
+                            }
+                            Image(systemName: "chevron.right")
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                        }
+                    }
+                    .sheet(isPresented: $showingOperativeSelection) {
+                        OperativeMultiSelectView(
+                            selectedOperatives: $selectedOperatives,
+                            operatives: operativeStore.activeOperatives,
+                            tradePresetFilter: assignmentTradePreset,
+                            excludedEmailsLowercased: managerEmailsLowercased
+                        )
+                    }
+                    
+                    if !selectedOperatives.isEmpty {
+                        ForEach(Array(selectedOperatives), id: \.self) { operativeId in
+                            if let operative = operativeStore.activeOperatives.first(where: { $0.id == operativeId }) {
+                                HStack {
+                                    Text(operative.name)
+                                    Spacer()
+                                    Button(action: {
+                                        selectedOperatives.remove(operativeId)
+                                    }) {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundColor(.red)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Assignments")
                 }
                 
-                Section("Due Date") {
-                    Toggle("Set Due Date", isOn: $hasDueDate)
-                    if hasDueDate {
-                        DatePicker("Due Date", selection: $dueDate, displayedComponents: .date)
-                    }
+                Section {
+                    DatePicker("Schedule", selection: $dueDate, displayedComponents: .date)
+                } header: {
+                    Text("Schedule")
                 }
                 
                 Section("Status") {
                     Picker("Status", selection: $status) {
-                        ForEach(ProjectTask.Status.allCases, id: \.rawValue) { status in
-                            Text(status.rawValue).tag(status)
+                        ForEach(ProjectTask.Status.allCases, id: \.rawValue) { st in
+                            Text(st.rawValue).tag(st)
                         }
                     }
                 }
@@ -2531,17 +2703,20 @@ private struct EditProjectTaskView: View {
     }
     
     private var canSaveTask: Bool {
-        let atLeastOneItemWithTitle = taskItems.contains { !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        let assignmentValid = (assignmentType == .operative && !selectedOperatives.isEmpty) || 
-                              (assignmentType == .manager && !selectedManagers.isEmpty)
-        return atLeastOneItemWithTitle && assignmentValid
+        let titleOk = !taskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let assignmentOk = !selectedOperatives.isEmpty || !selectedManagers.isEmpty
+        return titleOk && assignmentOk && !isSaving
     }
     
     private func saveTask() {
         guard canSaveTask else { return }
         isSaving = true
         
-        let items: [ProjectTaskItem] = taskItems
+        let trimmedTitle = taskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let descTrimmed = taskDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let detailsValue: String? = descTrimmed.isEmpty ? nil : descTrimmed
+        
+        let items: [ProjectTaskItem] = checklistRows
             .filter { !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .map { item in
                 ProjectTaskItem(
@@ -2550,28 +2725,21 @@ private struct EditProjectTaskView: View {
                     description: item.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : item.description.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
             }
-        guard !items.isEmpty else { isSaving = false; return }
         
         Task {
             var updatedTask = task
+            updatedTask.title = trimmedTitle
+            updatedTask.details = detailsValue
             updatedTask.items = items
-            updatedTask.title = items[0].title
-            updatedTask.details = items[0].description
-            updatedTask.dueDate = hasDueDate ? dueDate : nil
+            updatedTask.dueDate = dueDate
+            updatedTask.priority = priority
             updatedTask.status = status
             updatedTask.updatedAt = Date()
             
-            if assignmentType == .operative {
-                updatedTask.assignedOperativeIds = Array(selectedOperatives)
-                updatedTask.assignedOperativeId = selectedOperatives.first
-                updatedTask.assignedManagerIds = []
-                updatedTask.assignedManagerId = nil
-            } else {
-                updatedTask.assignedManagerIds = Array(selectedManagers)
-                updatedTask.assignedManagerId = selectedManagers.first
-                updatedTask.assignedOperativeIds = []
-                updatedTask.assignedOperativeId = nil
-            }
+            updatedTask.assignedOperativeIds = Array(selectedOperatives)
+            updatedTask.assignedOperativeId = selectedOperatives.first
+            updatedTask.assignedManagerIds = Array(selectedManagers)
+            updatedTask.assignedManagerId = selectedManagers.first
             
             await taskStore.updateTask(updatedTask)
             
@@ -3495,12 +3663,28 @@ private struct CompletedTaskDetailView: View {
 private struct OperativeMultiSelectView: View {
     @Binding var selectedOperatives: Set<UUID>
     let operatives: [Operative]
+    var tradePresetFilter: String? = nil
+    var excludedEmailsLowercased: Set<String> = []
     @Environment(\.dismiss) private var dismiss
+    
+    private var displayedOperatives: [Operative] {
+        var list = operatives
+        if !excludedEmailsLowercased.isEmpty {
+            list = list.filter { op in
+                let em = op.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                return !excludedEmailsLowercased.contains(em)
+            }
+        }
+        if let fp = tradePresetFilter?.trimmingCharacters(in: .whitespacesAndNewlines), !fp.isEmpty {
+            list = list.filter { ($0.tradeTypePreset ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == fp }
+        }
+        return list
+    }
     
     var body: some View {
         NavigationView {
             List {
-                ForEach(operatives) { operative in
+                ForEach(displayedOperatives) { operative in
                     Button(action: {
                         if selectedOperatives.contains(operative.id) {
                             selectedOperatives.remove(operative.id)
@@ -3535,12 +3719,21 @@ private struct OperativeMultiSelectView: View {
 private struct ManagerMultiSelectView: View {
     @Binding var selectedManagers: Set<UUID>
     let managers: [Manager]
+    var tradePresetFilter: String? = nil
     @Environment(\.dismiss) private var dismiss
+    
+    private var displayedManagers: [Manager] {
+        var list = managers
+        if let fp = tradePresetFilter?.trimmingCharacters(in: .whitespacesAndNewlines), !fp.isEmpty {
+            list = list.filter { ($0.tradeTypePreset ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == fp }
+        }
+        return list
+    }
     
     var body: some View {
         NavigationView {
             List {
-                ForEach(managers) { manager in
+                ForEach(displayedManagers) { manager in
                     Button(action: {
                         if selectedManagers.contains(manager.id) {
                             selectedManagers.remove(manager.id)

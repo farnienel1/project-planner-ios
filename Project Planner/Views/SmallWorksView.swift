@@ -14,6 +14,7 @@ struct SmallWorksView: View {
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @State private var selectedStatus: ProjectStatus? = nil
     @State private var selectedProject: Project? = nil
     @State private var showingEditProject = false
@@ -110,6 +111,7 @@ struct SmallWorksView: View {
                     .environmentObject(operativeStore)
                     .environmentObject(notificationService)
                     .environmentObject(userStore)
+                    .environmentObject(firebaseBackend)
             }
             .background(
                 Color.clear

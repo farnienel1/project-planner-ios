@@ -19,6 +19,13 @@ enum ProjectWorksRevampColors {
     static let upcomingAmber = Color(red: 0.522, green: 0.310, blue: 0.043) // #854F0B
     static let jobTypePillBg = Color(red: 0.933, green: 0.929, blue: 0.996) // #EEEDFE
     static let jobTypePillInk = Color(red: 0.235, green: 0.204, blue: 0.537) // #3C3489
+    static let requiredPillFg = Color(red: 0.639, green: 0.176, blue: 0.176) // #A32D2D
+    static let requiredPillBg = Color(red: 0.988, green: 0.922, blue: 0.922) // #FCEBEB
+    static let placeholderInk = Color(red: 0.773, green: 0.788, blue: 0.824) // #C5C9D2
+    static let pinRoseBg = Color(red: 0.984, green: 0.918, blue: 0.941) // #FBEAF0
+    static let pinRoseFg = Color(red: 0.600, green: 0.208, blue: 0.337) // #993556
+    static let endDateBg = Color(red: 0.980, green: 0.925, blue: 0.906) // #FAECE7
+    static let endDateFg = Color(red: 0.600, green: 0.235, blue: 0.114) // #993C1D
 }
 
 struct WorksListStatusCounts {

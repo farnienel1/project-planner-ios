@@ -104,25 +104,26 @@ struct TasksDetailView: View {
         var tasks: [ProjectTask]
         
         if userStore.isOperativeMode() {
-            // For operative mode, only show tasks assigned to this operative
-            if let currentUserEmail = userStore.currentUser?.email,
-               let operative = operativeStore.allOperatives.first(where: {
-                   $0.email.lowercased() == currentUserEmail.lowercased()
-               }) {
-                tasks = taskStore.tasks.filter { task in
-                    !task.isCompleted && task.allAssignedOperativeIds.contains(operative.id)
-                }
-            } else {
-                return []
+            let email = userStore.currentUser?.email
+            tasks = taskStore.tasks.filter { task in
+                !task.isCompleted
+                    && task.isAssignedToUser(
+                        userEmail: email,
+                        operatives: operativeStore.allOperatives,
+                        managers: operativeStore.allManagers,
+                        isOperativeMode: true
+                    )
             }
         } else {
-            // For regular users: Super Admin and Admins see all tasks, others see assigned tasks
-            if userStore.canManageUsers() {
-                // Super Admin or Admin - see all active tasks
-                tasks = taskStore.tasks.filter { !$0.isCompleted }
-            } else {
-                // Regular users - show all active tasks (can be refined based on assignment)
-                tasks = taskStore.tasks.filter { !$0.isCompleted }
+            let email = userStore.currentUser?.email
+            tasks = taskStore.tasks.filter { task in
+                !task.isCompleted
+                    && task.isAssignedToUser(
+                        userEmail: email,
+                        operatives: operativeStore.allOperatives,
+                        managers: operativeStore.allManagers,
+                        isOperativeMode: false
+                    )
             }
         }
         
@@ -486,11 +487,22 @@ struct TaskTileView: View {
             
             Divider()
             
-            // Task Title
-            Text(task.title)
-                .font(.title3)
-                .fontWeight(.semibold)
-                .foregroundColor(.primary)
+            // Task Title + priority
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(task.title)
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+                Text(task.priority.rawValue.uppercased())
+                    .font(.system(size: 9, weight: .bold))
+                    .tracking(0.3)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(tilePriorityColor)
+                    .clipShape(Capsule())
+                Spacer(minLength: 0)
+            }
             
             // Task Details
             if let details = task.details, !details.isEmpty {
@@ -601,6 +613,15 @@ struct TaskTileView: View {
     private func managerNames(for ids: [UUID]) -> [String] {
         ids.compactMap { id in
             operativeStore.allManagers.first(where: { $0.id == id })?.fullName
+        }
+    }
+    
+    private var tilePriorityColor: Color {
+        switch task.priority {
+        case .low: return Color(.systemGray)
+        case .normal: return Color(red: 0.2, green: 0.45, blue: 0.95)
+        case .high: return Color.orange
+        case .urgent: return Color.red
         }
     }
     
