@@ -79,6 +79,7 @@ struct HomeView: View {
                 .environmentObject(userStore)
                 .environmentObject(holidayStore)
                 .environmentObject(notificationService)
+                .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingNotifications) {
             NotificationsView()
@@ -93,6 +94,7 @@ struct HomeView: View {
             // Defer slightly so Home can render before notification work; ContentView also refreshes periodically.
             try? await Task.sleep(nanoseconds: 800_000_000)
             await notificationService.loadNotifications()
+            await taskStore.loadData()
         }
         .sheet(isPresented: $showingCreateClient) {
             CreateClientView()

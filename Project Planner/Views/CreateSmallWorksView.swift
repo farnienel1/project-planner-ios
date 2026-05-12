@@ -45,6 +45,7 @@ struct CreateSmallWorksView: View {
     @State private var showingCreateClient = false
     @State private var showingCreateJobType = false
     @State private var showingCreateManager = false
+    @State private var hiddenManagerUserIds: Set<String> = []
 
     private let requiredFieldTotal = 7
 
@@ -144,6 +145,14 @@ struct CreateSmallWorksView: View {
 
                         sectionHeader("Team", showRequiredBadge: true)
                         teamCard
+
+                        sectionHeader("View", showRequiredBadge: false)
+                        CreateWorkVisibilitySection(
+                            hiddenManagerUserIds: $hiddenManagerUserIds,
+                            workKindNoun: "small works job",
+                            palette: .smallWorks
+                        )
+                        .environmentObject(userStore)
 
                         sectionHeader("Description", subtitle: "Optional")
                         descriptionCard
@@ -746,6 +755,10 @@ struct CreateSmallWorksView: View {
         }
 
         let hasPin = pinLatitude != nil && pinLongitude != nil
+        let sanitizedHidden = Set(hiddenManagerUserIds.filter { uid in
+            guard let u = userStore.organizationUsers.first(where: { $0.id == uid }) else { return false }
+            return !u.isExcludedFromManagerVisibilityHiding
+        })
         let project = Project(
             jobNumber: projectJobNumber.trimmingCharacters(in: .whitespacesAndNewlines),
             siteName: projectSiteName.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -762,6 +775,7 @@ struct CreateSmallWorksView: View {
             managerId: selectedManager?.id,
             isLive: true,
             description: projectDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : projectDescription,
+            hiddenManagerUserIds: sanitizedHidden,
             usesMapPinForLocation: false,
             latitude: hasPin ? pinLatitude : nil,
             longitude: hasPin ? pinLongitude : nil

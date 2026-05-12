@@ -45,6 +45,7 @@ struct CreateProjectView: View {
     @State private var showingCreateClient = false
     @State private var showingCreateJobType = false
     @State private var showingCreateManager = false
+    @State private var hiddenManagerUserIds: Set<String> = []
 
     private let requiredFieldTotal = 7
 
@@ -150,6 +151,14 @@ struct CreateProjectView: View {
 
                         sectionHeader("Team", showRequiredBadge: true)
                         teamCard
+
+                        sectionHeader("View", showRequiredBadge: false)
+                        CreateWorkVisibilitySection(
+                            hiddenManagerUserIds: $hiddenManagerUserIds,
+                            workKindNoun: "project",
+                            palette: .projects
+                        )
+                        .environmentObject(userStore)
 
                         sectionHeader("Description", subtitle: "Optional")
                         descriptionCard
@@ -748,6 +757,10 @@ struct CreateProjectView: View {
         let jobTypeEnum = projectWorksType.isEmpty ? .catA : jobTypeFromString(projectWorksType)
         let finalJobType = jobTypeEnum == .smallWorks ? .catA : jobTypeEnum
         let hasPin = pinLatitude != nil && pinLongitude != nil
+        let sanitizedHidden = Set(hiddenManagerUserIds.filter { uid in
+            guard let u = userStore.organizationUsers.first(where: { $0.id == uid }) else { return false }
+            return !u.isExcludedFromManagerVisibilityHiding
+        })
 
         let project = Project(
             jobNumber: projectJobNumber.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -765,6 +778,7 @@ struct CreateProjectView: View {
             managerId: selectedManager?.id,
             isLive: true,
             description: projectDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : projectDescription,
+            hiddenManagerUserIds: sanitizedHidden,
             usesMapPinForLocation: false,
             latitude: hasPin ? pinLatitude : nil,
             longitude: hasPin ? pinLongitude : nil

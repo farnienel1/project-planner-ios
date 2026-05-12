@@ -280,8 +280,7 @@ struct SmallWorksView: View {
                 assignedProjectIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId)
             }
         } else if let currentUser = userStore.currentUser,
-                  !currentUser.isSuperAdmin,
-                  !currentUser.permissions.adminAccess,
+                  !userStore.hasAdminAccess(),
                   currentUser.permissions.manager {
             works = works.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
         }

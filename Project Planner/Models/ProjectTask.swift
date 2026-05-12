@@ -59,6 +59,8 @@ struct ProjectTask: Identifiable, Codable, Hashable {
     var completedAt: Date? // When task was marked as completed
     var completionImages: [String] // Firebase Storage URLs for completion images
     var completionFiles: [String] // Firebase Storage URLs for completion files
+    /// Optional notes from the assignee when marking the task complete (shown on task detail after completion).
+    var completionNotes: String?
     /// Sub-items (multi-item tasks). Empty = legacy single task (title + details).
     var items: [ProjectTaskItem]
     /// For multi-item tasks: which item IDs the assignee has ticked. Only when all are ticked can they mark task completed.
@@ -86,6 +88,7 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         completedAt: Date? = nil,
         completionImages: [String] = [],
         completionFiles: [String] = [],
+        completionNotes: String? = nil,
         items: [ProjectTaskItem] = [],
         completedItemIds: [UUID] = []
     ) {
@@ -110,6 +113,7 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         self.completedAt = completedAt
         self.completionImages = completionImages
         self.completionFiles = completionFiles
+        self.completionNotes = completionNotes
         self.items = items
         self.completedItemIds = completedItemIds
     }
@@ -169,22 +173,36 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         managers: [Manager],
         isOperativeMode: Bool
     ) -> Bool {
-        let raw = userEmail?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let raw = Self.normalizedEmail(userEmail)
         guard !raw.isEmpty else { return false }
         if isOperativeMode {
-            guard let op = operatives.first(where: {
-                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == raw
-            }) else { return false }
+            guard let op = operatives.first(where: { Self.normalizedEmail($0.email) == raw }) else { return false }
             return allAssignedOperativeIds.contains(op.id)
         }
-        if let mgr = managers.first(where: {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == raw
-        }), allAssignedManagerIds.contains(mgr.id) {
+        if let mgr = managers.first(where: { Self.normalizedEmail($0.email) == raw }),
+           allAssignedManagerIds.contains(mgr.id) {
             return true
         }
-        if let op = operatives.first(where: {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == raw
-        }), allAssignedOperativeIds.contains(op.id) {
+        if let op = operatives.first(where: { Self.normalizedEmail($0.email) == raw }),
+           allAssignedOperativeIds.contains(op.id) {
+            return true
+        }
+        return false
+    }
+
+    private static func normalizedEmail(_ value: String?) -> String {
+        value?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    /// True when `createdBy` matches the signed-in user (full name or email, as stored when the task was created).
+    func isCreatedByCurrentUser(_ user: AppUser?) -> Bool {
+        guard let user = user else { return false }
+        let by = createdBy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !by.isEmpty else { return false }
+        let full = user.fullName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let email = user.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if by == full || by == email { return true }
+        if let first = user.fullName.split(separator: " ").first.map({ String($0).lowercased() }), !first.isEmpty, by == first {
             return true
         }
         return false

@@ -1805,6 +1805,7 @@ class FirebaseBackend: ObservableObject {
             let completedAt = (data["completedAt"] as? Timestamp)?.dateValue()
             let completionImages = data["completionImages"] as? [String] ?? []
             let completionFiles = data["completionFiles"] as? [String] ?? []
+            let completionNotes = data["completionNotes"] as? String
             
             // Load attached files/images
             let attachedFileURL = data["attachedFileURL"] as? String
@@ -1846,6 +1847,7 @@ class FirebaseBackend: ObservableObject {
                 completedAt: completedAt,
                 completionImages: completionImages,
                 completionFiles: completionFiles,
+                completionNotes: completionNotes,
                 items: items,
                 completedItemIds: completedItemIds
             )
@@ -1902,6 +1904,10 @@ class FirebaseBackend: ObservableObject {
         
         if !task.completionFiles.isEmpty {
             data["completionFiles"] = task.completionFiles
+        }
+        
+        if let notes = task.completionNotes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
+            data["completionNotes"] = notes
         }
         
         // Add attached images
