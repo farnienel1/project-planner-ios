@@ -117,6 +117,21 @@ struct WorksListSearchRow<FilterMenu: View>: View {
     }
 }
 
+/// Two-letter initials for avatars (matches design HTML chips).
+enum PlannerUIInitials {
+    static func from(_ name: String, maxLen: Int = 2) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "?" }
+        let parts = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        if parts.count >= 2 {
+            let letters = parts.prefix(2).compactMap { $0.first }.map { String($0).uppercased() }
+            return letters.joined()
+        }
+        let s = parts.first ?? trimmed
+        return String(s.prefix(maxLen)).uppercased()
+    }
+}
+
 struct WorksRevampFilterChip: View {
     let title: String
     let isSelected: Bool

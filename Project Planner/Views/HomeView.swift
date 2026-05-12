@@ -182,6 +182,10 @@ struct HomeView: View {
                 .environmentObject(holidayStore)
                 .environmentObject(managerScheduleStore)
                 .environmentObject(subcontractorStore)
+                .environmentObject(appSettings)
+                .environmentObject(firebaseBackend)
+                .environmentObject(taskStore)
+                .environmentObject(notificationService)
         }
         .sheet(isPresented: $showingWeeklyReport) {
             WeeklyReportView()
