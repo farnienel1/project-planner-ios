@@ -11,6 +11,7 @@ struct WeeklyReportView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var subcontractorStore: SubcontractorStore
+    @EnvironmentObject var appSettings: AppSettingsStore
 
     @State private var startDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var endDate: Date = Calendar.current.startOfDay(for: Date())
@@ -347,6 +348,7 @@ struct WeeklyReportView: View {
         }
         
         for booking in managerBookings {
+            guard appSettings.settings.myScheduleOptions.includesManagerScheduleLocation(booking) else { continue }
             guard let manager = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { continue }
             let managerName = manager.fullName.isEmpty ? manager.email : manager.fullName
             let rate = dayRateForUserOnDay(userId: manager.id, fallback: manager.dayRate, date: booking.date)
@@ -362,11 +364,13 @@ struct WeeklyReportView: View {
     
     private func managerAdditionalScheduleRows() -> [ManagerAdditionalScheduleRow] {
         let cal = Calendar.current
+        let opts = appSettings.settings.myScheduleOptions
         let filtered = managerScheduleStore.managerSiteBookings.filter {
             let day = cal.startOfDay(for: $0.date)
             return day >= cal.startOfDay(for: startDate)
                 && day <= cal.startOfDay(for: endDate)
                 && ($0.locationType == .office || $0.locationType == .workingFromHome || $0.locationType == .siteSurvey || $0.locationType == .custom)
+                && opts.includesManagerScheduleLocation($0)
         }
         return filtered.compactMap { booking in
             guard let person = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { return nil }

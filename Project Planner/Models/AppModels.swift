@@ -293,6 +293,16 @@ struct AppUser: Identifiable, Codable, Hashable {
     var profilePhotoURL: String?
     /// Last time this account had app activity (foreground); updated with merge on `users/{id}`.
     var lastSeenAt: Date?
+    /// When false, annual leave is hidden in the app (e.g. self-employed). Only managers/admins with user-management access can turn it back on.
+    var annualLeaveEnabled: Bool
+    /// Paid annual leave allowance for the configured leave year (days; supports half-days via bookings).
+    var annualLeaveDaysPerYear: Double
+    /// First calendar month of the company leave year (1–12).
+    var annualLeaveYearStartMonth: Int
+    /// Last calendar month of the company leave year (1–12). May be before start month (e.g. April–March).
+    var annualLeaveYearEndMonth: Int
+    /// When true, unused allowance from the previous leave year is added to the current year (simple model).
+    var annualLeaveCarriesOver: Bool
     
     init(
         id: String,
@@ -314,7 +324,12 @@ struct AppUser: Identifiable, Codable, Hashable {
         tradeTypePreset: String? = nil,
         tradeTypeCustom: String? = nil,
         profilePhotoURL: String? = nil,
-        lastSeenAt: Date? = nil
+        lastSeenAt: Date? = nil,
+        annualLeaveEnabled: Bool = true,
+        annualLeaveDaysPerYear: Double = AnnualLeavePolicy.defaultDaysPerYear,
+        annualLeaveYearStartMonth: Int = AnnualLeavePolicy.defaultStartMonth,
+        annualLeaveYearEndMonth: Int = AnnualLeavePolicy.defaultEndMonth,
+        annualLeaveCarriesOver: Bool = AnnualLeavePolicy.defaultCarriesOver
     ) {
         self.id = id
         self.email = email
@@ -336,6 +351,11 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.tradeTypeCustom = tradeTypeCustom
         self.profilePhotoURL = profilePhotoURL
         self.lastSeenAt = lastSeenAt
+        self.annualLeaveEnabled = annualLeaveEnabled
+        self.annualLeaveDaysPerYear = AnnualLeavePolicy.clampDaysPerYear(annualLeaveDaysPerYear)
+        self.annualLeaveYearStartMonth = AnnualLeavePolicy.clampMonth(annualLeaveYearStartMonth)
+        self.annualLeaveYearEndMonth = AnnualLeavePolicy.clampMonth(annualLeaveYearEndMonth)
+        self.annualLeaveCarriesOver = annualLeaveCarriesOver
     }
     
     var fullName: String {

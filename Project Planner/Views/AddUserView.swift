@@ -46,6 +46,10 @@ struct AddUserView: View {
     @State private var managerDayRateText = ""
     @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
     @State private var tradeCustomText = ""
+    @State private var annualLeaveDaysText = "25"
+    @State private var annualLeaveStartMonth = 1
+    @State private var annualLeaveEndMonth = 12
+    @State private var annualLeaveCarriesOver = false
     @State private var isCreating = false
     @State private var showSuccess = false
     @State private var errorMessage: String?
@@ -90,6 +94,7 @@ struct AddUserView: View {
                 if mode == .managerAddingOperative {
                     invitedAccountType = .operative
                     applyPermissionsForInvitedType()
+                    resetAnnualLeaveInviteDefaults()
                     assignedManagerUserId = userStore.currentUser?.id
                 }
             }
@@ -224,6 +229,7 @@ struct AddUserView: View {
             .pickerStyle(.inline)
             .onChange(of: invitedAccountType) { _, _ in
                 applyPermissionsForInvitedType()
+                resetAnnualLeaveInviteDefaults()
                 if invitedAccountType != .operative {
                     assignedManagerUserId = nil
                 }
@@ -381,6 +387,8 @@ struct AddUserView: View {
                     assignedManagerUserId = userStore.currentUser?.id
                 }
             }
+
+            annualLeaveInvitationSection
         }
     }
     
@@ -395,6 +403,40 @@ struct AddUserView: View {
         content()
             .background(Color(.systemGray6))
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func resetAnnualLeaveInviteDefaults() {
+        annualLeaveDaysText = String(Int(AnnualLeavePolicy.defaultDaysPerYear))
+        annualLeaveStartMonth = AnnualLeavePolicy.defaultStartMonth
+        annualLeaveEndMonth = AnnualLeavePolicy.defaultEndMonth
+        annualLeaveCarriesOver = AnnualLeavePolicy.defaultCarriesOver
+    }
+
+    private func parseAnnualLeaveDaysForInvite() -> Double {
+        let t = annualLeaveDaysText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let d = Double(t), d > 0 else { return AnnualLeavePolicy.defaultDaysPerYear }
+        return AnnualLeavePolicy.clampDaysPerYear(d)
+    }
+
+    private var annualLeaveInvitationSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Annual leave")
+                .font(.headline)
+            Text("Set how many days they receive each leave year, which months the year runs, and whether unused days carry over.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            permissionInviteCard {
+                AnnualLeaveEntitlementEditor(
+                    daysText: $annualLeaveDaysText,
+                    startMonth: $annualLeaveStartMonth,
+                    endMonth: $annualLeaveEndMonth,
+                    carriesOver: $annualLeaveCarriesOver,
+                    isEnabled: true
+                )
+                .padding(12)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var stepPermissionsControlled: some View {
@@ -555,6 +597,9 @@ struct AddUserView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                if invitedAccountType == .manager || invitedAccountType == .operative {
+                    annualLeaveInvitationSection
+                }
             }
         }
         .onAppear {
@@ -651,6 +696,25 @@ struct AddUserView: View {
                             Spacer()
                             Text(StaffTradeType.displayLabel(presetRaw: tradePresetRaw, custom: tradeCustomText))
                                 .fontWeight(.medium)
+                        }
+                    }
+
+                    if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
+                        let months = AnnualLeavePolicy.shortMonthSymbols()
+                        HStack {
+                            Text("Annual leave:")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text("\(parseAnnualLeaveDaysForInvite()) days / year")
+                                    .fontWeight(.medium)
+                                Text("\(months[annualLeaveStartMonth - 1]) → \(months[annualLeaveEndMonth - 1])")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(annualLeaveCarriesOver ? "Carries over" : "No carry over")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
                 }
@@ -838,6 +902,7 @@ struct AddUserView: View {
                 let t = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
                 return t.isEmpty ? nil : t
             }()
+            let passAnnualLeaveInvite = mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager
             let success = await userStore.inviteUser(
                 firstName: firstName,
                 surname: surname,
@@ -848,7 +913,11 @@ struct AddUserView: View {
                 invitedOperativeDayRate: permissions.operativeMode ? parsedDayRate : nil,
                 invitedManagerDayRate: permissions.manager ? parsedDayRate : nil,
                 invitedTradeTypePreset: needsTrade ? tradePresetRaw : nil,
-                invitedTradeTypeCustom: needsTrade ? tCustom : nil
+                invitedTradeTypeCustom: needsTrade ? tCustom : nil,
+                annualLeaveDaysPerYear: passAnnualLeaveInvite ? parseAnnualLeaveDaysForInvite() : nil,
+                annualLeaveYearStartMonth: passAnnualLeaveInvite ? annualLeaveStartMonth : nil,
+                annualLeaveYearEndMonth: passAnnualLeaveInvite ? annualLeaveEndMonth : nil,
+                annualLeaveCarriesOver: passAnnualLeaveInvite ? annualLeaveCarriesOver : nil
             )
             
             await MainActor.run {

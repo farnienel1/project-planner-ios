@@ -15,6 +15,13 @@ struct HomeUpNextRow: Identifiable {
     let accentColor: Color
 }
 
+/// One calendar day in the Up next list (e.g. Monday 11th May).
+struct HomeUpNextDaySection: Identifiable {
+    let id: String
+    let heading: String
+    let rows: [HomeUpNextRow]
+}
+
 enum HomeUpNextSupport {
     private static let calendar = Calendar.current
 
@@ -141,6 +148,77 @@ enum HomeUpNextSupport {
         rows.sort { $0.sortDate < $1.sortDate }
         if rows.count <= limit { return rows }
         return Array(rows.prefix(limit))
+    }
+
+    /// Groups upcoming rows by calendar day. Shows up to `minDistinctDays` different days when data allows (each day lists all its rows from the merged set).
+    static func upcomingDaySections(
+        minDistinctDays: Int = 2,
+        mergeRowLimit: Int = 48,
+        now: Date,
+        authUserId: String?,
+        currentUserEmail: String?,
+        operatives: [Operative],
+        bookings: [Booking],
+        managerBookings: [ManagerSiteBooking],
+        allProjects: [Project],
+        organizationUsers: [AppUser],
+        accentBlue: Color,
+        accentPurple: Color
+    ) -> [HomeUpNextDaySection] {
+        let merged = upcomingRows(
+            limit: mergeRowLimit,
+            now: now,
+            authUserId: authUserId,
+            currentUserEmail: currentUserEmail,
+            operatives: operatives,
+            bookings: bookings,
+            managerBookings: managerBookings,
+            allProjects: allProjects,
+            organizationUsers: organizationUsers,
+            accentBlue: accentBlue,
+            accentPurple: accentPurple
+        )
+        guard !merged.isEmpty else { return [] }
+
+        var byDay: [Date: [HomeUpNextRow]] = [:]
+        for row in merged {
+            let day = calendar.startOfDay(for: row.sortDate)
+            byDay[day, default: []].append(row)
+        }
+        let sortedDays = byDay.keys.sorted()
+        let dayCount = min(sortedDays.count, minDistinctDays)
+        let chosenDays = Array(sortedDays.prefix(dayCount))
+
+        return chosenDays.map { day in
+            let rows = (byDay[day] ?? []).sorted { $0.sortDate < $1.sortDate }
+            let heading = dayHeadingWithOrdinal(for: day)
+            let id = String(day.timeIntervalSince1970)
+            return HomeUpNextDaySection(id: id, heading: heading, rows: rows)
+        }
+    }
+
+    private static func dayHeadingWithOrdinal(for day: Date) -> String {
+        let d = calendar.component(.day, from: day)
+        let suffix: String
+        if (11...13).contains(d % 100) {
+            suffix = "th"
+        } else {
+            switch d % 10 {
+            case 1: suffix = "st"
+            case 2: suffix = "nd"
+            case 3: suffix = "rd"
+            default: suffix = "th"
+            }
+        }
+        let weekday = DateFormatter()
+        weekday.locale = calendar.locale
+        weekday.calendar = calendar
+        weekday.dateFormat = "EEEE"
+        let month = DateFormatter()
+        month.locale = calendar.locale
+        month.calendar = calendar
+        month.dateFormat = "MMMM"
+        return "\(weekday.string(from: day)) \(d)\(suffix) \(month.string(from: day))"
     }
 
     private static func timeDotString(from date: Date) -> String {

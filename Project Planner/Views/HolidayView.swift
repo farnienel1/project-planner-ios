@@ -8,6 +8,18 @@
 import SwiftUI
 import FirebaseAuth
 
+private enum HolidayChrome {
+    static let canvas = Color(red: 0.97, green: 0.973, blue: 0.98)
+    static let ink = Color(red: 0.043, green: 0.063, blue: 0.125)
+    static let muted = Color(red: 0.42, green: 0.447, blue: 0.502)
+    static let border = Color(red: 0.933, green: 0.941, blue: 0.953)
+    static let accent = Color(red: 0.094, green: 0.373, blue: 0.647)
+    static let taken = Color(red: 0.133, green: 0.545, blue: 0.318)
+    static let pending = Color(red: 0.98, green: 0.62, blue: 0.09)
+    /// Approved half-day on the booking calendar (distinct from pending request orange).
+    static let halfDayBooked = Color(red: 0.95, green: 0.52, blue: 0.12)
+}
+
 struct HolidayView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var holidayStore: HolidayStore
@@ -46,6 +58,8 @@ struct HolidayView: View {
     @State private var showSuccess = false
     @State private var activeSection: HolidaySection = .calendar
     @State private var selectedHolidayTimeSlot: HolidayTimeSlot = .fullDay
+    @State private var showSelfServeBookedAnnualLeaveSheet = false
+    @State private var halfDayBookingEditor: HolidayBooking?
 
     enum HolidaySection: String, CaseIterable {
         case calendar = "Book"
@@ -54,6 +68,80 @@ struct HolidayView: View {
     }
 
     private let calendar = Calendar.current
+
+    private var holidayProfileUser: AppUser? {
+        guard let uid = firebaseBackend.currentUser?.uid else { return nil }
+        return userStore.organizationUsers.first(where: { $0.id == uid }) ?? userStore.currentUser
+    }
+
+    private var annualLeaveSummary: AnnualLeaveUsageSummary? {
+        guard let u = holidayProfileUser else { return nil }
+        let oid = currentOperative?.id
+        return AnnualLeavePolicy.usageSummary(
+            bookings: holidayStore.bookings,
+            profileUserId: u.id,
+            operativeId: oid,
+            daysPerYear: u.annualLeaveDaysPerYear,
+            startMonth: u.annualLeaveYearStartMonth,
+            endMonth: u.annualLeaveYearEndMonth,
+            carriesOver: u.annualLeaveCarriesOver,
+            referenceDate: Date(),
+            calendar: calendar
+        )
+    }
+
+    private var isAnnualLeaveAvailable: Bool {
+        holidayProfileUser?.annualLeaveEnabled ?? true
+    }
+
+    /// Admins and managers who self-book approved leave without a separate approver.
+    private var canShowSelfServeBookedAnnualLeave: Bool {
+        guard let u = userStore.displayUser else { return false }
+        if u.permissions.operativeMode { return false }
+        if userStore.hasAdminAccess() || u.role == .admin { return true }
+        return u.permissions.manager && u.permissions.annualLeaveSelfBook
+    }
+
+    private var selfBookedApprovedHolidayBookings: [HolidayBooking] {
+        guard canShowSelfServeBookedAnnualLeave, let uid = firebaseBackend.currentUser?.uid else { return [] }
+        return holidayStore.bookings
+            .filter {
+                $0.status == .approved &&
+                $0.cancellationRequestedAt == nil &&
+                $0.userId == uid &&
+                !$0.isOperativeRequest
+            }
+            .sorted { $0.startDate > $1.startDate }
+    }
+
+    private enum ApprovedCalendarDayKind {
+        case none
+        case fullDay
+        case halfDay(HolidayBooking)
+    }
+
+    private func approvedCalendarDayKind(for day: Date) -> ApprovedCalendarDayKind {
+        let dayStart = calendar.startOfDay(for: day)
+        guard let uid = firebaseBackend.currentUser?.uid else { return .none }
+        let oid = currentOperative?.id
+        var halfCandidate: HolidayBooking?
+        for booking in holidayStore.bookings {
+            guard booking.status == .approved, booking.cancellationRequestedAt == nil else { continue }
+            let matchesUser = booking.userId == uid
+            let matchesOperative = oid != nil && booking.operativeId == oid
+            guard matchesUser || matchesOperative else { continue }
+            let start = calendar.startOfDay(for: booking.startDate)
+            let end = calendar.startOfDay(for: booking.endDate)
+            guard dayStart >= start && dayStart <= end else { continue }
+            let singleCalendarDay = calendar.isDate(booking.startDate, inSameDayAs: booking.endDate)
+            if booking.timeSlot == .fullDay || !singleCalendarDay {
+                return .fullDay
+            }
+            halfCandidate = booking
+        }
+        if let b = halfCandidate { return .halfDay(b) }
+        return .none
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,12 +154,13 @@ struct HolidayView: View {
                     }
                 }) {
                     Image(systemName: "chevron.left")
-                        .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
+                        .foregroundStyle(HolidayChrome.accent)
                         .font(.system(size: 17, weight: .semibold))
                 }
                 Spacer()
-                Text("Annual Leave")
-                    .font(.headline)
+                Text("Annual leave")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(HolidayChrome.ink)
                 Spacer()
                 Color.clear.frame(width: 20, height: 20)
             }
@@ -80,7 +169,9 @@ struct HolidayView: View {
             .background(Color(.systemBackground))
 
             Group {
-                if holidayStore.isLoading && holidayStore.bookings.isEmpty {
+                if !isAnnualLeaveAvailable {
+                    annualLeaveDisabledPlaceholder
+                } else if holidayStore.isLoading && holidayStore.bookings.isEmpty {
                     VStack(spacing: 12) {
                         ProgressView("Loading…")
                         if let msg = holidayStore.errorMessage, !msg.isEmpty {
@@ -98,7 +189,7 @@ struct HolidayView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 24) {
+                        VStack(alignment: .leading, spacing: 20) {
                             if let msg = holidayStore.errorMessage, !msg.isEmpty {
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Some holiday data could not be synced.")
@@ -120,14 +211,47 @@ struct HolidayView: View {
                             if isRequestMode || canApproveRequests {
                                 Picker("Section", selection: $activeSection) {
                                     Text(isRequestMode ? "Request" : "Book").tag(HolidaySection.calendar)
-                                    Text("My Holiday").tag(HolidaySection.myHoliday)
+                                    Text("My holiday").tag(HolidaySection.myHoliday)
                                     Text("Pending").tag(HolidaySection.requests)
                                 }
                                 .pickerStyle(.segmented)
+                                .tint(HolidayChrome.accent)
                             }
 
                             switch activeSection {
                             case .calendar:
+                                if let summary = annualLeaveSummary {
+                                    leaveUsageHero(summary: summary)
+                                }
+                                if canShowSelfServeBookedAnnualLeave {
+                                    Button {
+                                        showSelfServeBookedAnnualLeaveSheet = true
+                                    } label: {
+                                        HStack(spacing: 10) {
+                                            Image(systemName: "list.bullet.rectangle.portrait.fill")
+                                                .font(.body.weight(.semibold))
+                                            Text("Booked annual leave")
+                                                .font(.subheadline.weight(.semibold))
+                                            Spacer(minLength: 0)
+                                            Image(systemName: "chevron.right")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(HolidayChrome.muted)
+                                        }
+                                        .foregroundStyle(HolidayChrome.ink)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 12)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .fill(Color.white)
+                                                .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .stroke(HolidayChrome.border, lineWidth: 1)
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                                 calendarSection
                             case .myHoliday:
                                 myHolidaySection
@@ -136,9 +260,11 @@ struct HolidayView: View {
                             }
                         }
                         .frame(maxWidth: .infinity)
-                        .padding()
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 16)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(HolidayChrome.canvas)
                     .refreshable {
                         if userStore.isOperativeMode() {
                             operativeStore.loadData()
@@ -178,6 +304,209 @@ struct HolidayView: View {
         } message: {
             if let msg = successMessage { Text(msg) }
         }
+        .sheet(isPresented: $showSelfServeBookedAnnualLeaveSheet) {
+            selfServeBookedAnnualLeaveSheet
+        }
+        .sheet(item: $halfDayBookingEditor) { booking in
+            HalfDayHolidayBookingEditorSheet(
+                booking: booking,
+                onSave: { updated in
+                    Task {
+                        let slotViolation: String? = await MainActor.run {
+                            guard let u = holidayProfileUser else { return nil }
+                            return AnnualLeavePolicy.validateTimeSlotIncreaseAgainstAllowance(
+                                booking: booking,
+                                newTimeSlot: updated.timeSlot,
+                                bookings: holidayStore.bookings,
+                                profileUserId: u.id,
+                                operativeId: currentOperative?.id,
+                                daysPerYear: u.annualLeaveDaysPerYear,
+                                startMonth: u.annualLeaveYearStartMonth,
+                                endMonth: u.annualLeaveYearEndMonth,
+                                carriesOver: u.annualLeaveCarriesOver,
+                                calendar: calendar
+                            )
+                        }
+                        if let slotViolation {
+                            await MainActor.run {
+                                errorMessage = slotViolation
+                                showError = true
+                            }
+                            return
+                        }
+                        do {
+                            try await holidayStore.saveBooking(updated)
+                            await MainActor.run {
+                                halfDayBookingEditor = nil
+                                successMessage = "Leave updated."
+                                showSuccess = true
+                            }
+                        } catch {
+                            await MainActor.run {
+                                errorMessage = error.localizedDescription
+                                showError = true
+                            }
+                        }
+                    }
+                },
+                onCancel: { halfDayBookingEditor = nil }
+            )
+        }
+    }
+
+    private var annualLeaveDisabledPlaceholder: some View {
+        VStack(spacing: 16) {
+            Spacer(minLength: 24)
+            Image(systemName: "calendar.badge.exclamationmark")
+                .font(.system(size: 44))
+                .foregroundStyle(HolidayChrome.muted)
+            Text("Annual leave is turned off")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(HolidayChrome.ink)
+                .multilineTextAlignment(.center)
+            Text("Your organisation has disabled annual leave for this account. Ask an administrator or your line manager to turn it back on in Manage users if that is a mistake.")
+                .font(.subheadline)
+                .foregroundStyle(HolidayChrome.muted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 8)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(HolidayChrome.canvas)
+    }
+
+    private var selfServeBookedAnnualLeaveSheet: some View {
+        NavigationStack {
+            List {
+                Section {
+                    if selfBookedApprovedHolidayBookings.isEmpty {
+                        Text("No booked annual leave.")
+                            .foregroundStyle(HolidayChrome.muted)
+                    } else {
+                        ForEach(selfBookedApprovedHolidayBookings) { booking in
+                            HStack(alignment: .center, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("\(booking.startDate.formatted(date: .abbreviated, time: .omitted)) – \(booking.endDate.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(HolidayChrome.ink)
+                                    Text(booking.timeSlot.rawValue)
+                                        .font(.caption2)
+                                        .foregroundStyle(HolidayChrome.muted)
+                                }
+                                Spacer(minLength: 8)
+                                Button {
+                                    Task { await holidayStore.deleteBooking(booking) }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.title3)
+                                        .symbolRenderingMode(.hierarchical)
+                                        .foregroundStyle(Color.red.opacity(0.85))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Remove booking")
+                            }
+                            .listRowBackground(Color.white)
+                        }
+                    }
+                } footer: {
+                    Text("These days are already approved. Remove a row to delete that booking without a separate approval step.")
+                        .font(.caption)
+                        .foregroundStyle(HolidayChrome.muted)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(HolidayChrome.canvas)
+            .navigationTitle("Booked annual leave")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showSelfServeBookedAnnualLeaveSheet = false }
+                        .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+
+    private func leaveUsageHero(summary: AnnualLeaveUsageSummary) -> some View {
+        let usedPortion = summary.entitlementDays > 0
+            ? min(1, (summary.takenDays + summary.pendingDays) / summary.entitlementDays)
+            : 0
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Current leave year")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(HolidayChrome.muted)
+            Text(summary.leaveYearLabel)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(HolidayChrome.ink)
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Remaining")
+                        .font(.caption2)
+                        .foregroundStyle(HolidayChrome.muted)
+                    Text(formatLeaveDays(summary.remainingDays))
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(HolidayChrome.ink)
+                }
+                Spacer(minLength: 12)
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("Allowance")
+                        .font(.caption2)
+                        .foregroundStyle(HolidayChrome.muted)
+                    Text(formatLeaveDays(summary.entitlementDays))
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(HolidayChrome.accent)
+                }
+            }
+            HStack(spacing: 0) {
+                heroMetric(title: "Taken", value: summary.takenDays, color: HolidayChrome.taken)
+                heroMetric(title: "Pending", value: summary.pendingDays, color: HolidayChrome.pending)
+            }
+            ProgressView(value: usedPortion, total: 1)
+                .tint(HolidayChrome.accent)
+            if summary.carryOverDays > 0.001 {
+                Text("Includes \(formatLeaveDays(summary.carryOverDays)) carried forward")
+                    .font(.caption2)
+                    .foregroundStyle(HolidayChrome.muted)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.99, green: 0.94, blue: 0.90),
+                            Color(red: 0.96, green: 0.97, blue: 0.99),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(HolidayChrome.border, lineWidth: 1)
+        )
+    }
+
+    private func heroMetric(title: String, value: Double, color: Color) -> some View {
+        VStack(spacing: 4) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(HolidayChrome.muted)
+            Text(formatLeaveDays(value))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(color)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func formatLeaveDays(_ d: Double) -> String {
+        if abs(d - floor(d + 0.0001)) < 0.02 {
+            return String(Int((d * 2).rounded() / 2))
+        }
+        return String(format: "%.1f", d)
     }
 
     private var calendarSection: some View {
@@ -185,6 +514,12 @@ struct HolidayView: View {
             monthNavigation
             calendarGrid
             selectedRangeSummary
+            if let allowanceMsg = selectionAllowanceViolationMessage {
+                Text(allowanceMsg)
+                    .font(.footnote)
+                    .foregroundStyle(Color.red.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             submitButton
         }
     }
@@ -203,6 +538,7 @@ struct HolidayView: View {
             Spacer()
             Text(monthYearString(displayedMonth))
                 .font(.headline)
+                .foregroundStyle(HolidayChrome.ink)
             Spacer()
             Button {
                 if let newMonth = calendar.date(byAdding: .month, value: 1, to: displayedMonth) {
@@ -214,6 +550,7 @@ struct HolidayView: View {
                     .frame(width: 44, height: 44)
             }
         }
+        .foregroundStyle(HolidayChrome.accent)
     }
 
     private func monthYearString(_ date: Date) -> String {
@@ -224,13 +561,13 @@ struct HolidayView: View {
 
     private var calendarGrid: some View {
         let days = daysInDisplayedMonth()
-        let weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        let weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 0) {
                 ForEach(weekdays, id: \.self) { d in
                     Text(d)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(HolidayChrome.muted)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -246,8 +583,15 @@ struct HolidayView: View {
             }
         }
         .padding(12)
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white)
+                .shadow(color: Color.black.opacity(0.04), radius: 8, y: 2)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(HolidayChrome.border, lineWidth: 1)
+        )
     }
 
     private func dayCell(date: Date) -> some View {
@@ -255,38 +599,77 @@ struct HolidayView: View {
         let isSelected = selectedDates.contains(day)
         let isInMonth = calendar.isDate(date, equalTo: displayedMonth, toGranularity: .month)
         let isToday = calendar.isDateInToday(day)
+        let approvedKind = approvedCalendarDayKind(for: day)
+        let approvedFullDayLocksCell: Bool = {
+            if case .fullDay = approvedKind { return true }
+            return false
+        }()
+
         return Button {
-            if selectedDates.contains(day) {
-                selectedDates.remove(day)
-            } else {
-                selectedDates.insert(day)
+            switch approvedKind {
+            case .fullDay:
+                break
+            case .halfDay(let b):
+                halfDayBookingEditor = b
+            case .none:
+                let sod = calendar.startOfDay(for: day)
+                if selectedDates.contains(sod) {
+                    selectedDates.remove(sod)
+                } else {
+                    var trial = selectedDates
+                    trial.insert(sod)
+                    if let violation = allowanceViolationForProposedSelection(trial) {
+                        errorMessage = violation
+                        showError = true
+                    } else {
+                        selectedDates = trial
+                    }
+                }
             }
         } label: {
             Text("\(calendar.component(.day, from: date))")
                 .font(.subheadline)
                 .fontWeight(isSelected ? .bold : .regular)
-                .foregroundColor(isInMonth ? (isSelected ? .white : .primary) : .secondary)
+                .foregroundStyle(
+                    isInMonth
+                        ? (isSelected ? Color.white : HolidayChrome.ink)
+                        : HolidayChrome.muted
+                )
                 .frame(width: 36, height: 36)
                 .background(
                     Group {
                         if isSelected {
-                            Color.theme.primary(for: appSettings.settings.colorScheme)
+                            HolidayChrome.accent
                         } else if isToday {
-                            Color.gray.opacity(0.35)
+                            HolidayChrome.border
+                        } else if case .fullDay = approvedKind {
+                            HolidayChrome.taken.opacity(0.55)
+                        } else if case .halfDay = approvedKind {
+                            HolidayChrome.halfDayBooked.opacity(0.35)
                         } else {
                             Color.clear
+                        }
+                    }
+                )
+                .overlay(
+                    Group {
+                        if case .halfDay = approvedKind {
+                            Circle()
+                                .stroke(HolidayChrome.halfDayBooked, lineWidth: 2)
                         }
                     }
                 )
                 .clipShape(Circle())
         }
         .buttonStyle(PlainButtonStyle())
+        .disabled(approvedFullDayLocksCell)
     }
 
     private func daysInDisplayedMonth() -> [Date?] {
         guard let range = calendar.range(of: .day, in: .month, for: displayedMonth),
               let first = calendar.date(from: calendar.dateComponents([.year, .month], from: displayedMonth)) else { return [] }
-        let firstWeekday = calendar.component(.weekday, from: first) - 1
+        let firstWeekdayRaw = calendar.component(.weekday, from: first)
+        let firstWeekday = (firstWeekdayRaw + 5) % 7
         let totalDays = range.count
         var days: [Date?] = Array(repeating: nil, count: firstWeekday)
         for d in 1...totalDays {
@@ -361,6 +744,29 @@ struct HolidayView: View {
         }
     }
 
+    /// Validates selected calendar days + duration against current/pending usage (per leave year).
+    private func allowanceViolationForProposedSelection(_ startOfDays: Set<Date>) -> String? {
+        guard let u = holidayProfileUser else { return nil }
+        let sorted = startOfDays.sorted()
+        guard !sorted.isEmpty else { return nil }
+        return AnnualLeavePolicy.validateProposedDayBookingsAgainstAllowance(
+            selectedStartOfDays: sorted,
+            timeSlot: selectedHolidayTimeSlot,
+            bookings: holidayStore.bookings,
+            profileUserId: u.id,
+            operativeId: currentOperative?.id,
+            daysPerYear: u.annualLeaveDaysPerYear,
+            startMonth: u.annualLeaveYearStartMonth,
+            endMonth: u.annualLeaveYearEndMonth,
+            carriesOver: u.annualLeaveCarriesOver,
+            calendar: calendar
+        )
+    }
+
+    private var selectionAllowanceViolationMessage: String? {
+        allowanceViolationForProposedSelection(selectedDates)
+    }
+
     private func clearSelection() {
         selectedDates.removeAll()
     }
@@ -381,6 +787,18 @@ struct HolidayView: View {
         errorMessage = nil
 
         Task {
+            let allowanceViolation = await MainActor.run {
+                let normalizedSelection = Set(selectedDays.map { calendar.startOfDay(for: $0) })
+                return allowanceViolationForProposedSelection(normalizedSelection)
+            }
+            if let allowanceViolation {
+                await MainActor.run {
+                    errorMessage = allowanceViolation
+                    showError = true
+                    isSaving = false
+                }
+                return
+            }
             do {
                 if isOperativeMode {
                     guard let uid = firebaseBackend.currentUser?.uid else {
@@ -504,13 +922,15 @@ struct HolidayView: View {
     }
 
     private var submitButton: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Picker("Leave duration", selection: $selectedHolidayTimeSlot) {
-                Text("FULL DAY").tag(HolidayTimeSlot.fullDay)
-                Text("AM").tag(HolidayTimeSlot.morning)
-                Text("PM").tag(HolidayTimeSlot.afternoon)
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Duration")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(HolidayChrome.muted)
+            HStack(spacing: 8) {
+                durationChip(.fullDay, label: "Full day")
+                durationChip(.morning, label: "AM")
+                durationChip(.afternoon, label: "PM")
             }
-            .pickerStyle(.segmented)
             selectedDatesPreview
             Button {
                 submitHoliday()
@@ -521,17 +941,40 @@ struct HolidayView: View {
                             .tint(.white)
                     } else {
                         Image(systemName: isRequestMode ? "paperplane.fill" : "checkmark.circle.fill")
-                        Text(isRequestMode ? "Request holiday" : "Book holiday")
+                        Text(isRequestMode ? "Submit request" : "Confirm booking")
                     }
                 }
+                .font(.system(size: 16, weight: .semibold))
                 .frame(maxWidth: .infinity)
-                .padding()
-                .background(!selectedDates.isEmpty ? Color.theme.primary(for: appSettings.settings.colorScheme) : Color.gray)
-                .foregroundColor(.white)
-                .cornerRadius(12)
+                .padding(.vertical, 14)
+                .background(!selectedDates.isEmpty ? HolidayChrome.accent : Color.gray.opacity(0.45))
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
-            .disabled(selectedDates.isEmpty || isSaving)
+            .disabled(selectedDates.isEmpty || isSaving || selectionAllowanceViolationMessage != nil)
         }
+    }
+
+    private func durationChip(_ slot: HolidayTimeSlot, label: String) -> some View {
+        let on = selectedHolidayTimeSlot == slot
+        return Button {
+            selectedHolidayTimeSlot = slot
+        } label: {
+            Text(label)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(on ? HolidayChrome.accent.opacity(0.15) : Color.white)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(on ? HolidayChrome.accent : HolidayChrome.border, lineWidth: on ? 1.5 : 1)
+                )
+                .foregroundStyle(on ? HolidayChrome.accent : HolidayChrome.ink)
+        }
+        .buttonStyle(.plain)
     }
 
     private var currentOperative: Operative? {
@@ -795,6 +1238,54 @@ struct HolidayView: View {
                 }
                 return nil
             }
+    }
+}
+
+private struct HalfDayHolidayBookingEditorSheet: View {
+    let booking: HolidayBooking
+    let onSave: (HolidayBooking) -> Void
+    let onCancel: () -> Void
+    @State private var draftSlot: HolidayTimeSlot
+
+    init(booking: HolidayBooking, onSave: @escaping (HolidayBooking) -> Void, onCancel: @escaping () -> Void) {
+        self.booking = booking
+        self.onSave = onSave
+        self.onCancel = onCancel
+        _draftSlot = State(initialValue: booking.timeSlot)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("Duration", selection: $draftSlot) {
+                        ForEach(HolidayTimeSlot.allCases, id: \.self) { slot in
+                            Text(slot.rawValue).tag(slot)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } footer: {
+                    Text("Choose full day, AM, or PM. Full days appear solid green on the calendar; half days are orange until you switch to a full day.")
+                        .font(.caption)
+                }
+            }
+            .navigationTitle("Update booking")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        var updated = booking
+                        updated.timeSlot = draftSlot
+                        onSave(updated)
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }
 

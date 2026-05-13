@@ -2935,6 +2935,17 @@ class FirebaseBackend: ObservableObject {
         let utc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let profilePhotoRaw = (data["profilePhotoURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let lastSeenAt = (data["lastSeenAt"] as? Timestamp)?.dateValue()
+        let alDays = (data["annualLeaveDaysPerYear"] as? NSNumber)?.doubleValue
+            ?? (data["annualLeaveDaysPerYear"] as? Double)
+            ?? AnnualLeavePolicy.defaultDaysPerYear
+        let alStart = (data["annualLeaveYearStartMonth"] as? NSNumber)?.intValue
+            ?? (data["annualLeaveYearStartMonth"] as? Int)
+            ?? AnnualLeavePolicy.defaultStartMonth
+        let alEnd = (data["annualLeaveYearEndMonth"] as? NSNumber)?.intValue
+            ?? (data["annualLeaveYearEndMonth"] as? Int)
+            ?? AnnualLeavePolicy.defaultEndMonth
+        let alCarry = data["annualLeaveCarriesOver"] as? Bool ?? AnnualLeavePolicy.defaultCarriesOver
+        let alEnabled = data["annualLeaveEnabled"] as? Bool ?? true
         
         return AppUser(
             id: userId,
@@ -2956,7 +2967,12 @@ class FirebaseBackend: ObservableObject {
             tradeTypePreset: (utp?.isEmpty == false) ? utp : nil,
             tradeTypeCustom: (utc?.isEmpty == false) ? utc : nil,
             profilePhotoURL: (profilePhotoRaw?.isEmpty == false) ? profilePhotoRaw : nil,
-            lastSeenAt: lastSeenAt
+            lastSeenAt: lastSeenAt,
+            annualLeaveEnabled: alEnabled,
+            annualLeaveDaysPerYear: alDays,
+            annualLeaveYearStartMonth: alStart,
+            annualLeaveYearEndMonth: alEnd,
+            annualLeaveCarriesOver: alCarry
         )
     }
     
@@ -3221,7 +3237,40 @@ class FirebaseBackend: ObservableObject {
             userData["profilePhotoURL"] = FieldValue.delete()
         }
         
+        userData["annualLeaveDaysPerYear"] = AnnualLeavePolicy.clampDaysPerYear(user.annualLeaveDaysPerYear)
+        userData["annualLeaveYearStartMonth"] = AnnualLeavePolicy.clampMonth(user.annualLeaveYearStartMonth)
+        userData["annualLeaveYearEndMonth"] = AnnualLeavePolicy.clampMonth(user.annualLeaveYearEndMonth)
+        userData["annualLeaveCarriesOver"] = user.annualLeaveCarriesOver
+        userData["annualLeaveEnabled"] = user.annualLeaveEnabled
+        
         try await db.collection("users").document(user.id).setData(userData, merge: true)
+    }
+
+    /// Patch-only: annual leave entitlement fields (managers with operative management use this path).
+    func updateAnnualLeaveEntitlement(
+        userId: String,
+        daysPerYear: Double,
+        startMonth: Int,
+        endMonth: Int,
+        carriesOver: Bool
+    ) async throws {
+        let payload: [String: Any] = [
+            "annualLeaveDaysPerYear": AnnualLeavePolicy.clampDaysPerYear(daysPerYear),
+            "annualLeaveYearStartMonth": AnnualLeavePolicy.clampMonth(startMonth),
+            "annualLeaveYearEndMonth": AnnualLeavePolicy.clampMonth(endMonth),
+            "annualLeaveCarriesOver": carriesOver,
+            "updatedAt": Timestamp(date: Date()),
+        ]
+        try await db.collection("users").document(userId).updateData(payload)
+    }
+
+    /// Patch-only: show or hide annual leave in the app (managers with operative management use this path for operatives).
+    func updateAnnualLeaveEnabled(userId: String, enabled: Bool) async throws {
+        let payload: [String: Any] = [
+            "annualLeaveEnabled": enabled,
+            "updatedAt": Timestamp(date: Date()),
+        ]
+        try await db.collection("users").document(userId).updateData(payload)
     }
 
     /// Keeps `organizations/{orgId}/userEmails/{email}` aligned when a member’s profile email changes.
@@ -3650,7 +3699,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         
         let emailLower = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3734,6 +3783,19 @@ class FirebaseBackend: ObservableObject {
             invitationData["mobileNumber"] = mobileNumber
         }
         
+        let resolvedAnnualLeaveDays = annualLeaveDaysPerYear.map { AnnualLeavePolicy.clampDaysPerYear($0) } ?? AnnualLeavePolicy.defaultDaysPerYear
+        let resolvedAnnualLeaveStart = annualLeaveYearStartMonth.map { AnnualLeavePolicy.clampMonth($0) } ?? AnnualLeavePolicy.defaultStartMonth
+        let resolvedAnnualLeaveEnd = annualLeaveYearEndMonth.map { AnnualLeavePolicy.clampMonth($0) } ?? AnnualLeavePolicy.defaultEndMonth
+        let resolvedAnnualLeaveCarry = annualLeaveCarriesOver ?? AnnualLeavePolicy.defaultCarriesOver
+        let resolvedAnnualLeaveEnabled = annualLeaveEnabled ?? true
+        if permissions.operativeMode || permissions.manager {
+            invitationData["annualLeaveDaysPerYear"] = resolvedAnnualLeaveDays
+            invitationData["annualLeaveYearStartMonth"] = resolvedAnnualLeaveStart
+            invitationData["annualLeaveYearEndMonth"] = resolvedAnnualLeaveEnd
+            invitationData["annualLeaveCarriesOver"] = resolvedAnnualLeaveCarry
+            invitationData["annualLeaveEnabled"] = resolvedAnnualLeaveEnabled
+        }
+        
         print("🔥🔥🔥 DEBUG: Invitation data: \(invitationData)")
         
         try await db.collection("invitations").document(invitationId).setData(invitationData)
@@ -3778,7 +3840,12 @@ class FirebaseBackend: ObservableObject {
                 assignedManagerUserId: operativeManagerId,
                 dayRate: permissions.operativeMode ? invitedOperativeDayRate : (permissions.manager ? invitedManagerDayRate : nil),
                 tradeTypePreset: (permissions.operativeMode || permissions.manager) && inviteTp?.isEmpty == false ? inviteTp : nil,
-                tradeTypeCustom: (permissions.operativeMode || permissions.manager) && inviteTc?.isEmpty == false ? inviteTc : nil
+                tradeTypeCustom: (permissions.operativeMode || permissions.manager) && inviteTc?.isEmpty == false ? inviteTc : nil,
+                annualLeaveEnabled: (permissions.operativeMode || permissions.manager) ? resolvedAnnualLeaveEnabled : true,
+                annualLeaveDaysPerYear: resolvedAnnualLeaveDays,
+                annualLeaveYearStartMonth: resolvedAnnualLeaveStart,
+                annualLeaveYearEndMonth: resolvedAnnualLeaveEnd,
+                annualLeaveCarriesOver: resolvedAnnualLeaveCarry
             )
             
             do {

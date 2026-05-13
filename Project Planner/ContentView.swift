@@ -43,7 +43,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var selectedTab = 0
-    @State private var showMoreMenu = false
+    @State private var showMoreMenuSheet = false
     @State private var previousTab: Int? = nil
     @State private var hideBottomMenu = false
     @State private var showingHolidaySheet = false
@@ -58,14 +58,16 @@ struct ContentView: View {
     
     /// Drives TabView `.id` so the page controller is recreated when role preview adds/removes tabs (avoids UIPageViewController deadlock on invalid selection).
     private var tabViewIdentity: String {
-        var keys: [String] = ["0", "5", "8"]
+        var keys: [String] = ["0", "5"]
+        if userStore.isAnnualLeaveFeatureEnabled() { keys.append("8") }
         if !userStore.isOperativeMode() { keys.append("6") }
         if userStore.canViewProjects() { keys.append(contentsOf: ["1", "2"]) }
         if userStore.canViewOperatives() { keys.append("3") }
         if userStore.hasAdminAccess() { keys.append(contentsOf: ["4", "7"]) }
         if userStore.canManageSubcontractors() { keys.append("9") }
         let preset = userStore.roleTestingPreset.map(\.rawValue) ?? "none"
-        return preset + "|" + keys.sorted().joined(separator: ",")
+        let al = userStore.isAnnualLeaveFeatureEnabled() ? "1" : "0"
+        return preset + "|" + keys.sorted().joined(separator: ",") + "|al" + al
     }
     
     init() {
@@ -101,7 +103,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: tabViewIdentity) { _, _ in
-            showMoreMenu = false
+            showMoreMenuSheet = false
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
@@ -211,14 +213,24 @@ struct ContentView: View {
             // Handle tab selection from HomeView navigation tiles
             // Use async to prevent immediate re-triggering and potential loops
             DispatchQueue.main.async {
+                showMoreMenuSheet = false
                 if let userInfo = notification.userInfo,
                    let tab = userInfo["tab"] as? Int {
                     selectTab(tab)
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .mainMenuEditTabBar)) { _ in
+            showMoreMenuSheet = false
+            DispatchQueue.main.async {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+                    isReorderingTabs = true
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openHoliday"))) { notification in
             DispatchQueue.main.async {
+                guard userStore.isAnnualLeaveFeatureEnabled() else { return }
                 holidaySheetShowRequests = (notification.userInfo?["showRequests"] as? Bool) ?? false
                 showingHolidaySheet = true
             }
@@ -228,7 +240,6 @@ struct ContentView: View {
         }
         .onChange(of: isReorderingTabs) { _, newValue in
             if newValue {
-                showMoreMenu = true
                 jiggleTask?.cancel()
                 jiggleTask = Task {
                     while !Task.isCancelled {
@@ -254,6 +265,12 @@ struct ContentView: View {
                 .environmentObject(firebaseBackend)
                 .environmentObject(notificationService)
                 .environmentObject(appSettings)
+        }
+        .sheet(isPresented: $showMoreMenuSheet) {
+            MainMenuMoreSheet()
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
         }
         .overlay(alignment: .top) {
             if showingBookingToast, let bookingToastText {
@@ -395,7 +412,7 @@ struct ContentView: View {
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
             
-            if (showMoreMenu || isReorderingTabs), !secondaryTabItems.isEmpty {
+            if isReorderingTabs, !secondaryTabItems.isEmpty {
                 if !topSecondary.isEmpty {
                     tabRow(for: topSecondary, isSecondary: false, showsMoreToggle: false)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -504,14 +521,14 @@ extension ContentView {
                         isReorderingTabs.toggle()
                     }
                 } label: {
-                    VStack(spacing: 4) {
+                    VStack(spacing: 2) {
                         Image(systemName: isReorderingTabs ? "checkmark.circle.fill" : "pencil.circle")
-                            .font(.title3)
+                            .font(.system(size: 20, weight: .medium))
                         Text(isReorderingTabs ? "Done" : "Edit")
-                            .font(.caption)
+                            .font(.system(size: 10, weight: .medium))
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 8)
                     .foregroundColor(isReorderingTabs ? Color.theme.primary(for: appSettings.settings.colorScheme) : .primary)
                 }
             } else {
@@ -522,19 +539,21 @@ extension ContentView {
                         if isReorderingTabs {
                             return
                         }
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
-                            showMoreMenu.toggle()
-                        }
+                        showMoreMenuSheet = true
                     } label: {
-                        VStack(spacing: 4) {
-                            Image(systemName: showMoreMenu ? "ellipsis.circle.fill" : "ellipsis.circle")
-                                .font(.title3)
+                        VStack(spacing: 2) {
+                            Image(systemName: showMoreMenuSheet ? "ellipsis.circle.fill" : "ellipsis.circle")
+                                .font(.system(size: 20, weight: .medium))
                             Text("More")
-                                .font(.caption)
+                                .font(.system(size: 10, weight: .medium))
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .foregroundColor(.primary)
+                        .padding(.vertical, 8)
+                        .foregroundColor(
+                            showMoreMenuSheet
+                                ? Color.theme.primary(for: appSettings.settings.colorScheme)
+                                : Color.primary.opacity(0.85)
+                        )
                     }
                 }
             }
@@ -559,11 +578,11 @@ extension ContentView {
             }
             selectTab(config.tag)
         } label: {
-            VStack(spacing: 3) {
+            VStack(spacing: 2) {
                 Image(systemName: config.icon)
-                    .font(.title2)
+                    .font(.system(size: 20, weight: .medium))
                 Text(config.title)
-                    .font(.caption2)
+                    .font(.system(size: 10, weight: .medium))
                     .multilineTextAlignment(.center)
                     .lineLimit(config.multilineTitle ? 2 : 1)
             }
@@ -618,7 +637,8 @@ extension ContentView {
     /// Whether `tag` exists on `mainTabContent`'s `TabView` (keep in sync with conditional tabs there).
     private func isValidTabTag(_ tag: Int) -> Bool {
         switch tag {
-        case 0, 5, 8: return true
+        case 0, 5: return true
+        case 8: return userStore.isAnnualLeaveFeatureEnabled()
         case 1, 2: return userStore.canViewProjects()
         case 3: return userStore.canViewOperatives()
         case 4: return userStore.hasAdminAccess()
@@ -673,9 +693,8 @@ extension ContentView {
                 )
             }
             
-            // Always close more menu when selecting a tab
-            if showMoreMenu {
-                showMoreMenu = false
+            if showMoreMenuSheet {
+                showMoreMenuSheet = false
             }
         }
     }
@@ -708,9 +727,10 @@ extension ContentView {
     }
     
     private var defaultSecondaryTabItems: [TabButtonConfig] {
-        var items: [TabButtonConfig] = [
-            TabButtonConfig(tag: 8, title: "Holiday", icon: "sun.max.fill", multilineTitle: false, requiresPermission: true)
-        ]
+        var items: [TabButtonConfig] = []
+        if userStore.isAnnualLeaveFeatureEnabled() {
+            items.append(TabButtonConfig(tag: 8, title: "Holiday", icon: "sun.max.fill", multilineTitle: false, requiresPermission: true))
+        }
         
         if userStore.isOperativeMode() {
             items.append(TabButtonConfig(tag: 5, title: "Settings", icon: "gearshape.fill", multilineTitle: false, requiresPermission: true))

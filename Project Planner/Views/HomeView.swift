@@ -197,6 +197,7 @@ struct HomeView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
                 .environmentObject(subcontractorStore)
+                .environmentObject(appSettings)
         }
         .sheet(isPresented: $showingOrgSitesMap) {
             OrgSitesMapView()
@@ -225,25 +226,48 @@ struct HomeView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openOrgSitesMapFromMore"))) { _ in
+            showingOrgSitesMap = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openSiteAuditFromMore"))) { _ in
+            showingSiteAudit = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .mainMenuOpenSurface)) { note in
+            guard let raw = note.userInfo?["route"] as? String,
+                  let route = MainMenuSurfaceRoute(rawValue: raw) else { return }
+            switch route {
+            case .clients: showingClientsView = true
+            case .createProject: showingCreateProject = true
+            case .createSmallWorks: showingCreateSmallWorks = true
+            case .skills: showingSkillsManagement = true
+            case .qualifications: showingQualificationsManagement = true
+            case .myQualifications: showingOperativeQualifications = true
+            case .jobTypes: showingJobTypesManagement = true
+            case .wholesalers: showingWholesalers = true
+            case .addUser: showingAddUser = true
+            case .manageUsers: showingManageUsers = true
+            case .tasksDetail: showingTasksDetail = true
+            case .generalAppSettings: showingGeneralAppSettings = true
+            case .orgSitesMap: showingOrgSitesMap = true
+            case .siteAudit: showingSiteAudit = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .mainMenuResetPassword)) { _ in
+            if let email = firebaseBackend.currentUser?.email {
+                Task { try? await firebaseBackend.resetPassword(email: email) }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .mainMenuSignOut)) { _ in
+            userStore.clearOnSignOut()
+            try? firebaseBackend.signOut()
+        }
         .sheet(isPresented: $showingQuickMenu) {
-            QuickMenuSheet(
-                showingClientsView: $showingClientsView,
-                showingCreateProject: $showingCreateProject,
-                showingCreateSmallWorks: $showingCreateSmallWorks,
-                showingSkillsManagement: $showingSkillsManagement,
-                showingQualificationsManagement: $showingQualificationsManagement,
-                showingJobTypesManagement: $showingJobTypesManagement,
-                showingWholesalers: $showingWholesalers,
-                showingOperativeQualifications: $showingOperativeQualifications,
-                showingAddUser: $showingAddUser,
-                showingManageUsers: $showingManageUsers,
-                showingTasksDetail: $showingTasksDetail
-            )
-            .environmentObject(userStore)
-            .environmentObject(firebaseBackend)
-            .environmentObject(appSettings)
-            .environmentObject(projectStore)
-            .environmentObject(operativeStore)
+            QuickMenuSheet()
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(appSettings)
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
         }
         .onAppear {
             managerScheduleStore.loadData()
@@ -600,14 +624,54 @@ struct HomeView: View {
             .sorted()
     }
 
+    /// Capitalises the **second word** on each line (e.g. `Create small` → `Create Small`). For classic
+    /// two-line tiles where the first line is a single word (`Small` / `works`), capitalises the second line.
+    /// Skips forced hyphen wraps like `Qualifi-\ncations` so we do not turn `cations` into `Cations`.
+    private func capitalizeSecondWordsInQuickActionTitle(_ raw: String) -> String {
+        let lines = raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard !lines.isEmpty else { return raw }
+
+        let firstLineTrimmed = lines[0].trimmingCharacters(in: .whitespaces)
+        let firstLineWordCount = firstLineTrimmed.split(separator: " ", omittingEmptySubsequences: true).count
+        let firstLineIsHyphenWrap = firstLineTrimmed.hasSuffix("-")
+
+        func capitalizeWord(_ w: String) -> String {
+            guard let first = w.first else { return w }
+            return String(first).uppercased() + w.dropFirst()
+        }
+
+        var result: [String] = []
+        for (i, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let parts = trimmed.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+
+            if parts.count >= 2 {
+                if i > 0, firstLineWordCount == 1 {
+                    result.append(parts.map { capitalizeWord($0) }.joined(separator: " "))
+                } else {
+                    var r = parts
+                    r[1] = capitalizeWord(r[1])
+                    result.append(r.joined(separator: " "))
+                }
+            } else if parts.count == 1, i > 0, firstLineWordCount == 1, !firstLineIsHyphenWrap {
+                result.append(capitalizeWord(parts[0]))
+            } else {
+                result.append(line)
+            }
+        }
+        return result.joined(separator: "\n")
+    }
+
     private func displayTitleForQuickAction(id: String) -> String {
+        let raw: String
         if id == HomeQuickActionID.staffAddUser.rawValue, !userStore.canManageUsers() {
-            return "Add\noperative"
+            raw = "Add\noperative"
+        } else if id == HomeQuickActionID.staffManageUsersSheet.rawValue, !userStore.canManageUsers() {
+            raw = "Manage\noperatives"
+        } else {
+            raw = HomeQuickActionRegistry.meta(for: id)?.title ?? ""
         }
-        if id == HomeQuickActionID.staffManageUsersSheet.rawValue, !userStore.canManageUsers() {
-            return "Manage\noperatives"
-        }
-        return HomeQuickActionRegistry.meta(for: id)?.title ?? ""
+        return capitalizeSecondWordsInQuickActionTitle(raw)
     }
 
     private func appendQuickAction(id: String) {
@@ -687,6 +751,8 @@ struct HomeView: View {
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 8])
         case HomeQuickActionID.staffGeneralAppSettings.rawValue:
             showingGeneralAppSettings = true
+        case HomeQuickActionID.staffTasks.rawValue:
+            showingTasksDetail = true
         default:
             break
         }
@@ -695,25 +761,26 @@ struct HomeView: View {
     @ViewBuilder
     private func quickActionTileContents(meta: HomeQuickActionMeta, title: String) -> some View {
         let tint = meta.color
-        VStack(spacing: 8) {
+        VStack(spacing: 7) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(tint.opacity(0.22))
-                    .frame(width: 36, height: 36)
+                    .frame(width: 40, height: 40)
                 Image(systemName: meta.symbol)
-                    .font(.system(size: 17))
+                    .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(tint)
             }
             Text(title)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(homeInk)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
+                .minimumScaleFactor(0.88)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 14)
-        .padding(.horizontal, 6)
+        .padding(.vertical, 12)
+        .padding(.horizontal, 5)
         .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
@@ -799,7 +866,7 @@ struct HomeView: View {
             quickActionTileContents(meta: meta, title: title)
                 .draggable(id) {
                     quickActionTileContents(meta: meta, title: title)
-                        .frame(width: 118, height: 100)
+                        .frame(width: 124, height: 104)
                         .opacity(0.9)
                 }
                 .dropDestination(for: String.self) { items, _ in
@@ -823,9 +890,10 @@ struct HomeView: View {
         }
     }
 
-    private var upNextRows: [HomeUpNextRow] {
-        HomeUpNextSupport.upcomingRows(
-            limit: 2,
+    private var upNextDaySections: [HomeUpNextDaySection] {
+        HomeUpNextSupport.upcomingDaySections(
+            minDistinctDays: 2,
+            mergeRowLimit: 48,
             now: Date(),
             authUserId: firebaseBackend.currentUser?.uid,
             currentUserEmail: userStore.currentUser?.email,
@@ -852,46 +920,54 @@ struct HomeView: View {
             }
             .padding(.bottom, 10)
 
-            let rows = upNextRows
-            if rows.isEmpty {
+            let sections = upNextDaySections
+            if sections.isEmpty {
                 Text("No upcoming bookings on your schedule.")
                     .font(.system(size: 13))
                     .foregroundStyle(homeMuted)
                     .padding(.vertical, 8)
             } else {
-                ForEach(rows) { row in
-                    Button {
-                        showingMySchedule = true
-                    } label: {
-                        HStack(spacing: 12) {
-                            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                                .fill(row.accentColor)
-                                .frame(width: 4, height: 36)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(row.title)
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(homeInk)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-                                Text(row.subtitle)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(homeMuted)
+                ForEach(sections) { section in
+                    Text(section.heading)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(homeInk)
+                        .padding(.top, section.id == sections.first?.id ? 0 : 6)
+                        .padding(.bottom, 6)
+
+                    ForEach(section.rows) { row in
+                        Button {
+                            showingMySchedule = true
+                        } label: {
+                            HStack(spacing: 12) {
+                                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                    .fill(row.accentColor)
+                                    .frame(width: 4, height: 36)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(row.title)
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundStyle(homeInk)
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+                                    Text(row.subtitle)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(homeMuted)
+                                }
+                                Spacer(minLength: 0)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(Color(red: 0.77, green: 0.79, blue: 0.82))
                             }
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(Color(red: 0.77, green: 0.79, blue: 0.82))
+                            .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+                            .background(Color.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
+                            )
                         }
-                        .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
-                        )
+                        .buttonStyle(.plain)
+                        .padding(.bottom, 10)
                     }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 10)
                 }
             }
         }
@@ -925,10 +1001,7 @@ struct HomeView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(homeMuted)
             }
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.system(size: 14))
-                .foregroundStyle(Color(red: 0.77, green: 0.79, blue: 0.82))
+            Spacer(minLength: 0)
         }
         .padding(14)
         .background(Color.white)
@@ -1465,609 +1538,6 @@ struct HomeQuickActionAddSheet: View {
     }
 }
 
-struct QuickMenuSheet: View {
-    @EnvironmentObject var userStore: UserStore
-    @EnvironmentObject var firebaseBackend: FirebaseBackend
-    @EnvironmentObject var appSettings: AppSettingsStore
-    @EnvironmentObject var projectStore: ProjectStore
-    @EnvironmentObject var operativeStore: OperativeStore
-    @Environment(\.dismiss) private var dismiss
-
-    @Binding var showingClientsView: Bool
-    @Binding var showingCreateProject: Bool
-    @Binding var showingCreateSmallWorks: Bool
-    @Binding var showingSkillsManagement: Bool
-    @Binding var showingQualificationsManagement: Bool
-    @Binding var showingJobTypesManagement: Bool
-    @Binding var showingWholesalers: Bool
-    @Binding var showingOperativeQualifications: Bool
-    @Binding var showingAddUser: Bool
-    @Binding var showingManageUsers: Bool
-    @Binding var showingTasksDetail: Bool
-
-    private var quickCreateGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color.theme.primary(for: appSettings.settings.colorScheme),
-                ProjectWorksRevampColors.blueLight
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    HStack(alignment: .center) {
-                        Text("Main Menu")
-                            .font(.system(size: 22, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                            .tracking(-0.3)
-                        Spacer(minLength: 12)
-                        Button("Done") { dismiss() }
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 7)
-                            .background(ProjectWorksRevampColors.blue)
-                            .clipShape(Capsule())
-                    }
-                    .padding(.top, 4)
-
-                    if showQuickCreateSection {
-                        quickCreateCard
-                    }
-
-                    if hasNavigateRows {
-                        menuSectionTitle("Navigate")
-                        menuGroupedCard {
-                            if !userStore.isOperativeMode() {
-                                polishedNavigateRow(
-                                    icon: "briefcase.fill",
-                                    iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
-                                    iconTint: ProjectWorksRevampColors.blue,
-                                    title: "Clients",
-                                    subtitle: "\(projectStore.clients.count) on file"
-                                ) {
-                                    showingClientsView = true
-                                }
-                            }
-                            if userStore.canViewProjects() {
-                                polishedNavigateRow(
-                                    icon: "folder.fill",
-                                    iconBackground: Color(red: 0.882, green: 0.961, blue: 0.933),
-                                    iconTint: ProjectWorksRevampColors.activeGreen,
-                                    title: "Projects",
-                                    subtitle: "\(regularProjectsInProgress) in progress"
-                                ) {
-                                    selectTab(1)
-                                }
-                                polishedNavigateRow(
-                                    icon: "hammer.fill",
-                                    iconBackground: Color(red: 0.98, green: 0.933, blue: 0.855),
-                                    iconTint: ProjectWorksRevampColors.upcomingAmber,
-                                    title: "Small works",
-                                    subtitle: "\(smallWorksOpenCount) open"
-                                ) {
-                                    selectTab(2)
-                                }
-                            }
-                            if userStore.canViewOperatives() {
-                                polishedNavigateRow(
-                                    icon: "person.3.fill",
-                                    iconBackground: ProjectWorksRevampColors.jobTypePillBg,
-                                    iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
-                                    title: "Operatives",
-                                    subtitle: "\(activeOperativesCount) team members"
-                                ) {
-                                    selectTab(3)
-                                }
-                            }
-                            if userStore.canViewManagers() {
-                                polishedNavigateRow(
-                                    icon: "person.badge.shield.checkmark.fill",
-                                    iconBackground: Color(red: 0.984, green: 0.918, blue: 0.941),
-                                    iconTint: Color(red: 0.6, green: 0.208, blue: 0.337),
-                                    title: "Managers",
-                                    subtitle: "\(operativeStore.allManagers.count) active"
-                                ) {
-                                    selectTab(4)
-                                }
-                            }
-                        }
-                    }
-
-                    if hasToolsRows {
-                        menuSectionTitle("Tools")
-                        menuGroupedCard {
-                            if userStore.canManageSkills() {
-                                polishedToolRow(
-                                    icon: "wrench.and.screwdriver.fill",
-                                    iconBackground: Color(red: 0.98, green: 0.925, blue: 0.906),
-                                    iconTint: Color(red: 0.6, green: 0.235, blue: 0.114),
-                                    title: "Skills",
-                                    badge: nil
-                                ) {
-                                    showingSkillsManagement = true
-                                }
-                            }
-                            if userStore.canManageQualifications() {
-                                polishedToolRow(
-                                    icon: "graduationcap.fill",
-                                    iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
-                                    iconTint: ProjectWorksRevampColors.blue,
-                                    title: "Qualifications",
-                                    badge: qualificationsExpiringSoonCount > 0
-                                        ? "\(qualificationsExpiringSoonCount) expiring"
-                                        : nil
-                                ) {
-                                    showingQualificationsManagement = true
-                                }
-                            }
-                            if userStore.isOperativeMode() {
-                                polishedToolRow(
-                                    icon: "graduationcap.fill",
-                                    iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
-                                    iconTint: ProjectWorksRevampColors.blue,
-                                    title: "My qualifications",
-                                    badge: nil
-                                ) {
-                                    showingOperativeQualifications = true
-                                }
-                            }
-                            if userStore.hasAdminAccess() {
-                                polishedToolRow(
-                                    icon: "square.grid.2x2.fill",
-                                    iconBackground: Color(red: 0.882, green: 0.961, blue: 0.933),
-                                    iconTint: ProjectWorksRevampColors.activeGreen,
-                                    title: "Job types",
-                                    badge: nil
-                                ) {
-                                    showingJobTypesManagement = true
-                                }
-                                polishedToolRow(
-                                    icon: "building.2.fill",
-                                    iconBackground: Color(red: 0.98, green: 0.933, blue: 0.855),
-                                    iconTint: ProjectWorksRevampColors.upcomingAmber,
-                                    title: "Wholesalers",
-                                    badge: nil
-                                ) {
-                                    showingWholesalers = true
-                                }
-                            }
-                            if userStore.canManageSubcontractors() {
-                                polishedToolRow(
-                                    icon: "person.2.badge.gearshape.fill",
-                                    iconBackground: ProjectWorksRevampColors.jobTypePillBg,
-                                    iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
-                                    title: "Sub contractors",
-                                    badge: nil
-                                ) {
-                                    selectTab(9)
-                                }
-                            }
-                        }
-                    }
-
-                    if showTeamSection {
-                        menuSectionTitle("Team")
-                        menuGroupedCard {
-                            polishedToolRow(
-                                icon: "person.badge.plus.fill",
-                                iconBackground: ProjectWorksRevampColors.jobTypePillBg,
-                                iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
-                                title: userStore.canManageUsers() ? "Add user" : "Add operative",
-                                badge: nil
-                            ) {
-                                showingAddUser = true
-                            }
-                            polishedToolRow(
-                                icon: "person.2.fill",
-                                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
-                                iconTint: ProjectWorksRevampColors.blue,
-                                title: userStore.canManageUsers() ? "Manage users" : "Manage operatives",
-                                badge: nil
-                            ) {
-                                showingManageUsers = true
-                            }
-                        }
-                    }
-
-                    menuSectionTitle("App & account")
-                    menuGroupedCard {
-                        polishedToolRow(
-                            icon: "gearshape.fill",
-                            iconBackground: Color(red: 0.949, green: 0.953, blue: 0.961),
-                            iconTint: ProjectWorksRevampColors.muted,
-                            title: "Settings",
-                            badge: nil
-                        ) {
-                            selectTab(5)
-                        }
-                        if userStore.hasAdminAccess() {
-                            NavigationLink {
-                                GeneralAppSettingsView()
-                                    .environmentObject(appSettings)
-                            } label: {
-                                HStack(spacing: 12) {
-                                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                        .fill(Color(red: 0.902, green: 0.945, blue: 0.984))
-                                        .frame(width: 32, height: 32)
-                                        .overlay(
-                                            Image(systemName: "slider.horizontal.3")
-                                                .font(.system(size: 16, weight: .medium))
-                                                .foregroundStyle(ProjectWorksRevampColors.blue)
-                                        )
-                                    Text("General")
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
-                                }
-                                .padding(.vertical, 11)
-                            }
-                            .buttonStyle(.plain)
-                            Divider().overlay(ProjectWorksRevampColors.border)
-                        }
-                        if !userStore.isOperativeMode() {
-                            polishedToolRow(
-                                icon: "questionmark.circle.fill",
-                                iconBackground: Color(red: 0.882, green: 0.961, blue: 0.933),
-                                iconTint: ProjectWorksRevampColors.activeGreen,
-                                title: "Help & support",
-                                badge: nil
-                            ) {
-                                selectTab(6)
-                            }
-                        }
-                        polishedToolRow(
-                            icon: "key.fill",
-                            iconBackground: ProjectWorksRevampColors.jobTypePillBg,
-                            iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
-                            title: "Reset password",
-                            badge: nil,
-                            showsDivider: false
-                        ) {
-                            if let email = firebaseBackend.currentUser?.email {
-                                Task { try? await firebaseBackend.resetPassword(email: email) }
-                            }
-                        }
-                    }
-
-                    signOutButton
-
-                    Text(appVersionLine)
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 4)
-                }
-                .padding(.horizontal, 18)
-                .padding(.bottom, 24)
-            }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
-            .toolbar(.hidden, for: .navigationBar)
-        }
-    }
-
-    private var appVersionLine: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
-        return "Project Planner · v\(v)"
-    }
-
-    private var showQuickCreateSection: Bool {
-        quickCreateVisibleButtonCount > 0
-    }
-
-    private var quickCreateVisibleButtonCount: Int {
-        (canCreateProject ? 1 : 0) + (canCreateSmallWorks ? 1 : 0) + (canAddUserQuick ? 1 : 0) + 1
-    }
-
-    private var canAddUserQuick: Bool {
-        userStore.canManageUsers()
-            || (!userStore.hasAdminAccess()
-                && userStore.displayUser?.permissions.manager == true
-                && userStore.displayUser?.permissions.operatives == true)
-    }
-
-    private var hasNavigateRows: Bool {
-        !userStore.isOperativeMode()
-            || userStore.canViewProjects()
-            || userStore.canViewOperatives()
-            || userStore.canViewManagers()
-    }
-
-    private var hasToolsRows: Bool {
-        userStore.canManageSkills()
-            || userStore.canManageQualifications()
-            || userStore.isOperativeMode()
-            || userStore.hasAdminAccess()
-            || userStore.canManageSubcontractors()
-    }
-
-    private var showTeamSection: Bool {
-        userStore.canManageUsers()
-            || (!userStore.hasAdminAccess()
-                && userStore.displayUser?.permissions.manager == true
-                && userStore.displayUser?.permissions.operatives == true)
-    }
-
-    private var regularProjectsInProgress: Int {
-        projectStore.projects.filter { $0.jobType != .smallWorks && $0.status == .active }.count
-    }
-
-    private var smallWorksOpenCount: Int {
-        projectStore.smallWorks.filter { $0.status == .active || $0.status == .upcoming }.count
-    }
-
-    private var activeOperativesCount: Int {
-        operativeStore.allOperatives.filter(\.isActive).count
-    }
-
-    private var qualificationsExpiringSoonCount: Int {
-        let today = Calendar.current.startOfDay(for: Date())
-        guard let horizon = Calendar.current.date(byAdding: .day, value: 30, to: today) else { return 0 }
-        var n = 0
-        for op in operativeStore.allOperatives {
-            for (_, exp) in op.qualificationExpiryDates {
-                if exp >= today && exp <= horizon { n += 1 }
-            }
-        }
-        return n
-    }
-
-    private var quickCreateCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Quick create")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .tracking(0.3)
-                    Text("Start something new")
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-                Spacer(minLength: 8)
-                Image(systemName: "sparkles")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background(Color.white.opacity(0.18))
-                    .clipShape(Circle())
-            }
-            HStack(spacing: 8) {
-                if canCreateProject {
-                    quickCreatePillButton(icon: "folder.badge.plus", title: "Project") {
-                        showingCreateProject = true
-                    }
-                }
-                if canCreateSmallWorks {
-                    quickCreatePillButton(icon: "hammer.fill", title: "Small work") {
-                        showingCreateSmallWorks = true
-                    }
-                }
-                if canAddUserQuick {
-                    quickCreatePillButton(icon: "person.badge.plus", title: "User") {
-                        showingAddUser = true
-                    }
-                }
-                quickCreatePillButton(icon: "plus.rectangle.on.rectangle", title: "Task") {
-                    showingTasksDetail = true
-                }
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(quickCreateGradient)
-        )
-    }
-
-    private func quickCreatePillButton(icon: String, title: String, action: @escaping () -> Void) -> some View {
-        Button {
-            dismissAfter(action)
-        } label: {
-            VStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(.white)
-                Text(title)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .padding(.horizontal, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.14))
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func menuSectionTitle(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(ProjectWorksRevampColors.muted)
-            .tracking(0.4)
-            .padding(.leading, 4)
-    }
-
-    private func menuGroupedCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(spacing: 0) {
-            content()
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 4)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
-    }
-
-    private func polishedNavigateRow(
-        icon: String,
-        iconBackground: Color,
-        iconTint: Color,
-        title: String,
-        subtitle: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        VStack(spacing: 0) {
-            Button {
-                dismissAfter(action)
-            } label: {
-                HStack(spacing: 12) {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(iconBackground)
-                        .frame(width: 32, height: 32)
-                        .overlay(
-                            Image(systemName: icon)
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundStyle(iconTint)
-                        )
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                        Text(subtitle)
-                            .font(.system(size: 11))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
-                }
-                .padding(.vertical, 11)
-            }
-            .buttonStyle(.plain)
-            Divider().overlay(ProjectWorksRevampColors.border)
-        }
-    }
-
-    private func polishedToolRow(
-        icon: String,
-        iconBackground: Color,
-        iconTint: Color,
-        title: String,
-        badge: String?,
-        showsDivider: Bool = true,
-        action: @escaping () -> Void
-    ) -> some View {
-        VStack(spacing: 0) {
-            Button {
-                dismissAfter(action)
-            } label: {
-                polishedToolRowLabel(icon: icon, iconBackground: iconBackground, iconTint: iconTint, title: title, badge: badge)
-            }
-            .buttonStyle(.plain)
-            if showsDivider {
-                Divider().overlay(ProjectWorksRevampColors.border)
-            }
-        }
-    }
-
-    private func polishedToolRowLabel(
-        icon: String,
-        iconBackground: Color,
-        iconTint: Color,
-        title: String,
-        badge: String?
-    ) -> some View {
-        HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(iconBackground)
-                .frame(width: 32, height: 32)
-                .overlay(
-                    Image(systemName: icon)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(iconTint)
-                )
-            HStack(spacing: 6) {
-                Text(title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                if let badge {
-                    Text(badge)
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(Color(red: 0.639, green: 0.176, blue: 0.176))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color(red: 0.988, green: 0.922, blue: 0.922))
-                        .clipShape(Capsule())
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
-        }
-        .padding(.vertical, 11)
-    }
-
-    private var signOutButton: some View {
-        Button {
-            dismissAfter {
-                userStore.clearOnSignOut()
-                try? firebaseBackend.signOut()
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-                    .font(.system(size: 16, weight: .medium))
-                Text("Sign out")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .foregroundStyle(Color(red: 0.639, green: 0.176, blue: 0.176))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color(red: 0.988, green: 0.922, blue: 0.922), lineWidth: 0.5)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func dismissAfter(_ action: @escaping () -> Void) {
-        dismiss()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            action()
-        }
-    }
-
-    private func selectTab(_ tab: Int) {
-        NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": tab])
-    }
-
-    private var canCreateProject: Bool {
-        guard let user = userStore.currentUser else { return false }
-        if user.permissions.operativeMode { return false }
-        if user.isSuperAdmin || user.permissions.adminAccess { return true }
-        return user.permissions.manager && user.permissions.projects
-    }
-
-    private var canCreateSmallWorks: Bool {
-        guard let user = userStore.currentUser else { return false }
-        if user.permissions.operativeMode { return false }
-        if user.isSuperAdmin || user.permissions.adminAccess { return true }
-        return user.permissions.manager && user.permissions.smallWorks
-    }
-}
 
 #Preview {
     HomeView()
