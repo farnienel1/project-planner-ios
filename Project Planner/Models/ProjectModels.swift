@@ -33,7 +33,13 @@ struct Project: Identifiable, Codable, Hashable {
     var hiddenManagerUserIds: Set<String>
     /// Operatives hidden from this project/small works by admin.
     var hiddenOperativeUserIds: Set<String>
-    
+    /// When true, primary site location is the map pin; address lines are optional (e.g. from "Set address").
+    var usesMapPinForLocation: Bool
+    /// WGS84 latitude when using map pin (mutually exclusive with address-only mode in the UI).
+    var latitude: Double?
+    /// WGS84 longitude when using map pin.
+    var longitude: Double?
+
     // Legacy support - computed property for backward compatibility
     var siteAddress: String {
         var parts: [String] = []
@@ -41,7 +47,13 @@ struct Project: Identifiable, Codable, Hashable {
         if let line2 = addressLine2, !line2.isEmpty { parts.append(line2) }
         if !townCity.isEmpty { parts.append(townCity) }
         if !postcode.isEmpty { parts.append(postcode) }
-        return parts.joined(separator: ", ")
+        if !parts.isEmpty {
+            return parts.joined(separator: ", ")
+        }
+        if usesMapPinForLocation, let la = latitude, let lo = longitude {
+            return String(format: "%.5f, %.5f", la, lo)
+        }
+        return ""
     }
     
     init(
@@ -63,7 +75,10 @@ struct Project: Identifiable, Codable, Hashable {
         description: String? = nil,
         notes: String? = nil,
         hiddenManagerUserIds: Set<String> = [],
-        hiddenOperativeUserIds: Set<String> = []
+        hiddenOperativeUserIds: Set<String> = [],
+        usesMapPinForLocation: Bool = false,
+        latitude: Double? = nil,
+        longitude: Double? = nil
     ) {
         self.id = id
         self.jobNumber = jobNumber
@@ -86,6 +101,9 @@ struct Project: Identifiable, Codable, Hashable {
         self.updatedAt = Date()
         self.hiddenManagerUserIds = hiddenManagerUserIds
         self.hiddenOperativeUserIds = hiddenOperativeUserIds
+        self.usesMapPinForLocation = usesMapPinForLocation
+        self.latitude = latitude
+        self.longitude = longitude
     }
     
     // Legacy initializer for backward compatibility
@@ -151,6 +169,9 @@ struct Project: Identifiable, Codable, Hashable {
         self.updatedAt = Date()
         self.hiddenManagerUserIds = hiddenManagerUserIds
         self.hiddenOperativeUserIds = hiddenOperativeUserIds
+        self.usesMapPinForLocation = false
+        self.latitude = nil
+        self.longitude = nil
     }
     
     var duration: Int {
@@ -175,6 +196,7 @@ struct Project: Identifiable, Codable, Hashable {
         case client, startDate, endDate, jobType, customJobType, manager, managerId
         case isLive, description, notes, createdAt, updatedAt
         case hiddenManagerUserIds, hiddenOperativeUserIds
+        case usesMapPinForLocation, latitude, longitude
     }
     
     init(from decoder: Decoder) throws {
@@ -200,6 +222,9 @@ struct Project: Identifiable, Codable, Hashable {
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         hiddenManagerUserIds = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenManagerUserIds) ?? []
         hiddenOperativeUserIds = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenOperativeUserIds) ?? []
+        usesMapPinForLocation = try c.decodeIfPresent(Bool.self, forKey: .usesMapPinForLocation) ?? false
+        latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
+        longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
     }
     
     func encode(to encoder: Encoder) throws {
@@ -225,6 +250,9 @@ struct Project: Identifiable, Codable, Hashable {
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(hiddenManagerUserIds, forKey: .hiddenManagerUserIds)
         try c.encode(hiddenOperativeUserIds, forKey: .hiddenOperativeUserIds)
+        try c.encode(usesMapPinForLocation, forKey: .usesMapPinForLocation)
+        try c.encodeIfPresent(latitude, forKey: .latitude)
+        try c.encodeIfPresent(longitude, forKey: .longitude)
     }
 }
 

@@ -7,6 +7,20 @@
 
 import SwiftUI
 
+private enum MyTasksScreenPalette {
+    static let canvas = Color(red: 247 / 255, green: 248 / 255, blue: 250 / 255)
+    static let ink = Color(red: 11 / 255, green: 16 / 255, blue: 32 / 255)
+    static let muted = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255)
+    static let border = Color(red: 238 / 255, green: 240 / 255, blue: 243 / 255)
+    static let blue = Color(red: 24 / 255, green: 95 / 255, blue: 165 / 255)
+    static let blueLight = Color(red: 55 / 255, green: 138 / 255, blue: 221 / 255)
+    static let todoCount = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255)
+    static let inProgressCount = Color(red: 133 / 255, green: 79 / 255, blue: 11 / 255)
+    static let overdueCount = Color(red: 163 / 255, green: 45 / 255, blue: 45 / 255)
+    static let doneCount = Color(red: 15 / 255, green: 110 / 255, blue: 86 / 255)
+    static let stripTodo = Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255)
+}
+
 struct TasksDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var taskStore: ProjectTaskStore
@@ -15,14 +29,30 @@ struct TasksDetailView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var notificationService: NotificationService
-    
-    @State private var sortOrder: TaskSortOrder = .newest
-    
-    enum TaskSortOrder: String, CaseIterable {
-        case newest = "Newest"
-        case oldest = "Oldest"
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+
+    @State private var searchText = ""
+    @State private var listSegment: GlobalMyTasksSegment = .assignedToMe
+    @State private var sortNewestFirst = true
+
+    private enum GlobalMyTasksSegment: Hashable {
+        case assignedToMe
+        case active
+        case overdue
+        case completed
+
+        static let ordered: [GlobalMyTasksSegment] = [.assignedToMe, .active, .overdue, .completed]
+
+        func pillTitle(activeCount: Int, completedCount: Int, overdueCount: Int) -> String {
+            switch self {
+            case .assignedToMe: return "Assigned to me"
+            case .active: return "Active · \(activeCount)"
+            case .overdue: return overdueCount > 0 ? "Overdue · \(overdueCount)" : "Overdue"
+            case .completed: return completedCount > 0 ? "Completed · \(completedCount)" : "Completed"
+            }
+        }
     }
-    
+
     private var qualificationExpiryBannerItems: [(id: String, title: String, subtitle: String)] {
         guard userStore.isOperativeMode(),
               let email = userStore.currentUser?.email else { return [] }
@@ -45,53 +75,201 @@ struct TasksDetailView: View {
         }
         return rows.sorted(by: { $0.1 < $1.1 })
     }
-    
-    private var hasListContent: Bool {
-        !qualificationExpiryBannerItems.isEmpty || !filteredTasks.isEmpty || !pendingHolidayApprovals.isEmpty
+
+    /// Home “Tasks” hub: job tasks only when assigned to the current user (all roles). Holiday items use separate banners.
+    private func taskBelongsInMyList(_ task: ProjectTask) -> Bool {
+        task.isAssignedToUser(
+            userEmail: userStore.currentUser?.email,
+            operatives: operativeStore.allOperatives,
+            managers: operativeStore.allManagers,
+            isOperativeMode: userStore.isOperativeMode()
+        )
     }
-    
+
+    private var userRelevantTasks: [ProjectTask] {
+        taskStore.tasks.filter { taskBelongsInMyList($0) }
+    }
+
+    private var myTasksStats: (todo: Int, inProgress: Int, overdue: Int, done: Int) {
+        let base = userRelevantTasks
+        let cal = Calendar.current
+        let startOfToday = cal.startOfDay(for: Date())
+        let incomplete = base.filter { !$0.isCompleted }
+        let todo = incomplete.filter { $0.status == .todo }.count
+        let inProgress = incomplete.filter { $0.status == .inProgress }.count
+        let overdue = incomplete.filter { task in
+            guard let due = task.dueDate else { return false }
+            return cal.startOfDay(for: due) < startOfToday
+        }.count
+        let done = base.filter { $0.isCompleted }.count
+        return (todo, inProgress, overdue, done)
+    }
+
+    private var activeRelevantCount: Int {
+        userRelevantTasks.filter { !$0.isCompleted }.count
+    }
+
+    private var completedRelevantCount: Int {
+        userRelevantTasks.filter { $0.isCompleted }.count
+    }
+
+    private var overdueRelevantCount: Int {
+        let cal = Calendar.current
+        let startOfToday = cal.startOfDay(for: Date())
+        return userRelevantTasks.filter { task in
+            guard !task.isCompleted, let due = task.dueDate else { return false }
+            return cal.startOfDay(for: due) < startOfToday
+        }.count
+    }
+
+    private var displayedTasks: [ProjectTask] {
+        var list = userRelevantTasks
+        let cal = Calendar.current
+        let startOfToday = cal.startOfDay(for: Date())
+        switch listSegment {
+        case .active:
+            list = list.filter { !$0.isCompleted }
+        case .completed:
+            list = list.filter { $0.isCompleted }
+        case .assignedToMe:
+            list = list.filter { !$0.isCompleted }
+            list = list.filter {
+                $0.isAssignedToUser(
+                    userEmail: userStore.currentUser?.email,
+                    operatives: operativeStore.allOperatives,
+                    managers: operativeStore.allManagers,
+                    isOperativeMode: userStore.isOperativeMode()
+                )
+            }
+        case .overdue:
+            list = list.filter { !$0.isCompleted }
+            list = list.filter { task in
+                guard let due = task.dueDate else { return false }
+                return cal.startOfDay(for: due) < startOfToday
+            }
+        }
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !q.isEmpty {
+            list = list.filter { task in
+                if task.title.lowercased().contains(q) { return true }
+                if (task.details ?? "").lowercased().contains(q) { return true }
+                if let project = projectStore.projects.first(where: { $0.id == task.projectId }) {
+                    if project.jobNumber.lowercased().contains(q) { return true }
+                    if project.siteName.lowercased().contains(q) { return true }
+                }
+                if let sw = projectStore.smallWorks.first(where: { $0.id == task.projectId }) {
+                    if sw.jobNumber.lowercased().contains(q) { return true }
+                    if sw.siteName.lowercased().contains(q) { return true }
+                }
+                return false
+            }
+        }
+        if sortNewestFirst {
+            return list.sorted { $0.createdAt > $1.createdAt }
+        }
+        return list.sorted { $0.createdAt < $1.createdAt }
+    }
+
     var body: some View {
-        NavigationView {
-            Group {
-                if !hasListContent {
-                    emptyStateView
-                } else {
-                    VStack(spacing: 0) {
-                        // Sort Filter
-                        HStack {
-                            Text("Sort by:")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                            Picker("Sort", selection: $sortOrder) {
-                                ForEach(TaskSortOrder.allCases, id: \.self) { order in
-                                    Text(order.rawValue).tag(order)
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if !pendingHolidayApprovals.isEmpty {
+                        holidayBannersSection
+                    }
+                    if !qualificationExpiryBannerItems.isEmpty {
+                        qualificationBannersSection
+                    }
+
+                    let stats = myTasksStats
+                    HStack(spacing: 8) {
+                        statChip(value: stats.todo, label: "To do", valueColor: MyTasksScreenPalette.todoCount)
+                        statChip(value: stats.inProgress, label: "In progress", valueColor: MyTasksScreenPalette.inProgressCount)
+                        statChip(value: stats.overdue, label: "Overdue", valueColor: MyTasksScreenPalette.overdueCount)
+                        statChip(value: stats.done, label: "Done", valueColor: MyTasksScreenPalette.doneCount)
+                    }
+
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 14))
+                            .foregroundStyle(MyTasksScreenPalette.muted)
+                        TextField("Search tasks…", text: $searchText)
+                            .font(.system(size: 12))
+                        Spacer(minLength: 0)
+                        Menu {
+                            Button(sortNewestFirst ? "Sort: Oldest first" : "Sort: Newest first") {
+                                sortNewestFirst.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                                .font(.system(size: 15))
+                                .foregroundStyle(MyTasksScreenPalette.blue)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: 0.5)
+                    )
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(GlobalMyTasksSegment.ordered, id: \.self) { seg in
+                                scopePill(
+                                    title: seg.pillTitle(
+                                        activeCount: activeRelevantCount,
+                                        completedCount: completedRelevantCount,
+                                        overdueCount: overdueRelevantCount
+                                    ),
+                                    isSelected: listSegment == seg
+                                ) {
+                                    listSegment = seg
                                 }
                             }
-                            .pickerStyle(.segmented)
-                            .frame(width: 200)
-                            Spacer()
                         }
-                        .padding()
-                        .background(Color(.secondarySystemBackground))
-                        
-                        tasksList
+                    }
+
+                    if taskStore.isLoading && userRelevantTasks.isEmpty {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(40)
+                    } else if let err = taskStore.errorMessage, userRelevantTasks.isEmpty {
+                        errorState(err)
+                    } else if displayedTasks.isEmpty {
+                        emptyStateCard
+                    } else {
+                        VStack(spacing: 10) {
+                            ForEach(displayedTasks) { task in
+                                MyTasksRedesignTaskCard(task: task)
+                                    .environmentObject(projectStore)
+                                    .environmentObject(operativeStore)
+                                    .environmentObject(taskStore)
+                                    .environmentObject(userStore)
+                                    .environmentObject(firebaseBackend)
+                                    .environmentObject(notificationService)
+                            }
+                        }
                     }
                 }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
             }
+            .background(MyTasksScreenPalette.canvas.ignoresSafeArea())
             .navigationTitle("Tasks")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Done") {
-                        dismiss()
-                    }
+                    Button("Done") { dismiss() }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(MyTasksScreenPalette.ink)
                 }
             }
             .task {
-                print("🔥🔥🔥 DEBUG: TasksDetailView - Loading tasks")
                 await taskStore.loadData()
                 await holidayStore.loadData()
-                print("🔥🔥🔥 DEBUG: TasksDetailView - Tasks loaded: \(taskStore.tasks.count), Filtered: \(filteredTasks.count)")
             }
             .refreshable {
                 await taskStore.loadData()
@@ -99,157 +277,145 @@ struct TasksDetailView: View {
             }
         }
     }
-    
-    private var filteredTasks: [ProjectTask] {
-        var tasks: [ProjectTask]
-        
-        if userStore.isOperativeMode() {
-            // For operative mode, only show tasks assigned to this operative
-            if let currentUserEmail = userStore.currentUser?.email,
-               let operative = operativeStore.allOperatives.first(where: {
-                   $0.email.lowercased() == currentUserEmail.lowercased()
-               }) {
-                tasks = taskStore.tasks.filter { task in
-                    !task.isCompleted && task.allAssignedOperativeIds.contains(operative.id)
-                }
-            } else {
-                return []
-            }
-        } else {
-            // For regular users: Super Admin and Admins see all tasks, others see assigned tasks
-            if userStore.canManageUsers() {
-                // Super Admin or Admin - see all active tasks
-                tasks = taskStore.tasks.filter { !$0.isCompleted }
-            } else {
-                // Regular users - show all active tasks (can be refined based on assignment)
-                tasks = taskStore.tasks.filter { !$0.isCompleted }
-            }
-        }
-        
-        // Apply sort order
-        switch sortOrder {
-        case .newest:
-            return tasks.sorted { $0.createdAt > $1.createdAt }
-        case .oldest:
-            return tasks.sorted { $0.createdAt < $1.createdAt }
-        }
-    }
-    
-    private var emptyStateView: some View {
-        VStack(spacing: 20) {
-            if taskStore.isLoading {
-                ProgressView()
-                    .scaleEffect(1.5)
-                Text("Loading tasks...")
-                    .font(.body)
-                    .foregroundColor(.secondary)
-            } else if let errorMessage = taskStore.errorMessage {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 60))
-                    .foregroundColor(.orange)
-                
-                Text("Error Loading Tasks")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                
-                Text(errorMessage)
-                    .font(.body)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-                
-                Button("Retry") {
-                    Task {
-                        await taskStore.loadData()
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-            } else {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 60))
-                    .foregroundColor(.green)
-                
-                Text("No Tasks")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                
-                Text(qualificationExpiryBannerItems.isEmpty
-                     ? "You have no assigned tasks at the moment."
-                     : "No project tasks right now. See qualification reminders above when you open Tasks from Home.")
-                    .font(.body)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-                
-                if taskStore.tasks.isEmpty {
-                    Text("Total tasks in store: 0")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                } else {
-                    Text("Total tasks: \(taskStore.tasks.count) (filtered out)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
-    }
-    
-    private var tasksList: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                if !pendingHolidayApprovals.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Holiday approvals")
-                            .font(.headline)
-                            .foregroundStyle(.orange)
-                        ForEach(pendingHolidayApprovals) { request in
-                            HolidayApprovalTaskCard(
-                                request: request,
-                                requesterName: requesterName(for: request),
-                                isCancellationRequest: request.cancellationRequestedAt != nil,
-                                onApprove: { approveHolidayRequest(request) },
-                                onDecline: { declineHolidayRequest(request) }
-                            )
-                        }
-                    }
-                    .padding(.horizontal)
-                }
 
-                if !qualificationExpiryBannerItems.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Qualification reminders")
-                            .font(.headline)
-                            .foregroundStyle(.red)
-                        ForEach(qualificationExpiryBannerItems, id: \.id) { item in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(item.title)
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                                    .foregroundStyle(.primary)
-                                Text(item.subtitle)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
-                            .background(Color.red.opacity(0.08))
-                            .cornerRadius(12)
-                        }
-                    }
-                    .padding(.horizontal)
-                }
-                
-                ForEach(filteredTasks) { task in
-                    TaskTileView(task: task)
-                        .environmentObject(projectStore)
-                        .environmentObject(operativeStore)
-                        .environmentObject(taskStore)
-                        .environmentObject(userStore)
-                }
+    private func statChip(value: Int, label: String, valueColor: Color) -> some View {
+        VStack(spacing: 2) {
+            Text("\(value)")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(valueColor)
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundStyle(MyTasksScreenPalette.muted)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 6)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(MyTasksScreenPalette.border, lineWidth: 0.5))
+    }
+
+    private func scopePill(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(isSelected ? Color.white : MyTasksScreenPalette.muted)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(isSelected ? MyTasksScreenPalette.blue : Color.white)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: isSelected ? 0 : 0.5)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var emptyStateCard: some View {
+        VStack(spacing: 14) {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(red: 230 / 255, green: 241 / 255, blue: 251 / 255))
+                .frame(width: 56, height: 56)
+                .overlay(
+                    Image(systemName: "checklist")
+                        .font(.system(size: 26))
+                        .foregroundStyle(MyTasksScreenPalette.blue)
+                )
+            Text(emptyTitle)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(MyTasksScreenPalette.ink)
+            Text(emptySubtitle)
+                .font(.system(size: 12))
+                .foregroundStyle(MyTasksScreenPalette.muted)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(32)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MyTasksScreenPalette.border, lineWidth: 0.5))
+    }
+
+    private var emptyTitle: String {
+        switch listSegment {
+        case .active: return "No active tasks"
+        case .completed: return "No completed tasks"
+        case .assignedToMe: return "Nothing assigned to you"
+        case .overdue: return "No overdue tasks"
+        }
+    }
+
+    private var emptySubtitle: String {
+        switch listSegment {
+        case .active:
+            return "When you are assigned to tasks on a job, they will appear here."
+        case .completed:
+            return "Completed tasks will appear here."
+        case .assignedToMe:
+            return "When someone assigns you on a task, it will show here."
+        case .overdue:
+            return "Overdue tasks still appear under Active. This filter shows only tasks past their due date."
+        }
+    }
+
+    private func errorState(_ message: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 40))
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.system(size: 13))
+                .foregroundStyle(MyTasksScreenPalette.muted)
+                .multilineTextAlignment(.center)
+            Button("Retry") {
+                Task { await taskStore.loadData() }
             }
-            .padding()
+            .buttonStyle(.borderedProminent)
+            .tint(MyTasksScreenPalette.blue)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(24)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var holidayBannersSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Holiday approvals")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(MyTasksScreenPalette.ink)
+            ForEach(pendingHolidayApprovals) { request in
+                HolidayApprovalTaskCard(
+                    request: request,
+                    requesterName: requesterName(for: request),
+                    isCancellationRequest: request.cancellationRequestedAt != nil,
+                    onApprove: { approveHolidayRequest(request) },
+                    onDecline: { declineHolidayRequest(request) }
+                )
+            }
+        }
+    }
+
+    private var qualificationBannersSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Qualification reminders")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(MyTasksScreenPalette.overdueCount)
+            ForEach(qualificationExpiryBannerItems, id: \.id) { item in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(item.title)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                    Text(item.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(MyTasksScreenPalette.muted)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(Color(red: 252 / 255, green: 235 / 255, blue: 235 / 255).opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
         }
     }
 
@@ -269,12 +435,10 @@ struct TasksDetailView: View {
             filtered = []
         }
 
-        switch sortOrder {
-        case .newest:
+        if sortNewestFirst {
             return filtered.sorted { $0.createdAt > $1.createdAt }
-        case .oldest:
-            return filtered.sorted { $0.createdAt < $1.createdAt }
         }
+        return filtered.sorted { $0.createdAt < $1.createdAt }
     }
 
     private func assignedApproverUserId(for request: HolidayBooking) -> String? {
@@ -398,6 +562,297 @@ struct TasksDetailView: View {
     }
 }
 
+// MARK: - Redesigned task row (matches my-tasks HTML)
+
+private struct MyTasksRedesignTaskCard: View {
+    let task: ProjectTask
+    @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var taskStore: ProjectTaskStore
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var notificationService: NotificationService
+
+    @State private var showingTaskDetail = false
+
+    private var resolvedTask: ProjectTask {
+        taskStore.tasks.first(where: { $0.id == task.id }) ?? task
+    }
+
+    var body: some View {
+        Button {
+            showingTaskDetail = true
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(accentStripColor)
+                    .frame(width: 4)
+                    .padding(.vertical, 2)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(resolvedTask.title)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(MyTasksScreenPalette.ink)
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 0)
+                        statusPill
+                    }
+
+                    HStack(spacing: 5) {
+                        Image(systemName: projectLineIcon)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255))
+                        Text(projectLineText)
+                            .font(.system(size: 11))
+                            .foregroundStyle(MyTasksScreenPalette.muted)
+                    }
+
+                    HStack {
+                        HStack(spacing: 5) {
+                            Image(systemName: "checklist")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255))
+                            Text(checklistSummary)
+                                .font(.system(size: 11))
+                                .foregroundStyle(MyTasksScreenPalette.muted)
+                        }
+                        Spacer()
+                        HStack(spacing: 5) {
+                            Image(systemName: "calendar")
+                                .font(.system(size: 12))
+                                .foregroundStyle(dueColor)
+                            Text(dueText)
+                                .font(.system(size: 11, weight: dueWeight))
+                                .foregroundStyle(dueColor)
+                        }
+                    }
+
+                    if checklistProgress > 0 {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule()
+                                    .fill(MyTasksScreenPalette.border)
+                                    .frame(height: 4)
+                                Capsule()
+                                    .fill(progressBarFill)
+                                    .frame(width: geo.size.width * checklistProgress, height: 4)
+                            }
+                        }
+                        .frame(height: 4)
+                    }
+
+                    HStack {
+                        assigneeInitialsRow
+                        Spacer()
+                        priorityPill
+                    }
+                }
+            }
+            .padding(14)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(MyTasksScreenPalette.border, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showingTaskDetail) {
+            CompletedTaskDetailView(task: resolvedTask)
+                .environmentObject(taskStore)
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
+        }
+    }
+
+    private var projectLineIcon: String {
+        if projectStore.smallWorks.contains(where: { $0.id == task.projectId }) {
+            return "hammer.fill"
+        }
+        return "folder.fill"
+    }
+
+    private var projectLineText: String {
+        if let p = projectStore.projects.first(where: { $0.id == task.projectId }) {
+            return "\(p.jobNumber) \(p.siteName)"
+        }
+        if let sw = projectStore.smallWorks.first(where: { $0.id == task.projectId }) {
+            return "\(sw.jobNumber) \(sw.siteName)"
+        }
+        return "Unknown job"
+    }
+
+    private var checklistSummary: String {
+        let items = resolvedTask.effectiveItems
+        if items.count <= 1 { return "No checklist" }
+        let ids = Set(items.map(\.id))
+        let done = Set(resolvedTask.completedItemIds).intersection(ids).count
+        return "\(done) of \(items.count) items"
+    }
+
+    private var checklistProgress: CGFloat {
+        let items = resolvedTask.effectiveItems
+        guard items.count > 1 else { return 0 }
+        let ids = Set(items.map(\.id))
+        let done = Set(resolvedTask.completedItemIds).intersection(ids).count
+        return CGFloat(done) / CGFloat(items.count)
+    }
+
+    private var progressBarFill: Color {
+        if isOverdue { return MyTasksScreenPalette.overdueCount }
+        if resolvedTask.status == .inProgress { return MyTasksScreenPalette.blue }
+        return MyTasksScreenPalette.blue
+    }
+
+    private var isOverdue: Bool {
+        guard !resolvedTask.isCompleted, let due = resolvedTask.dueDate else { return false }
+        return Calendar.current.startOfDay(for: due) < Calendar.current.startOfDay(for: Date())
+    }
+
+    private var dueText: String {
+        guard let due = resolvedTask.dueDate else { return "No date" }
+        let cal = Calendar.current
+        let d0 = cal.startOfDay(for: due)
+        let t0 = cal.startOfDay(for: Date())
+        if resolvedTask.isCompleted || d0 >= t0 {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "EEE d MMM"
+            return fmt.string(from: due)
+        }
+        let days = cal.dateComponents([.day], from: d0, to: t0).day ?? 0
+        if days == 1 { return "Yesterday" }
+        if days > 1 { return "\(days) days ago" }
+        return due.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    private var dueColor: Color {
+        guard let due = resolvedTask.dueDate, !resolvedTask.isCompleted else { return MyTasksScreenPalette.muted }
+        if Calendar.current.startOfDay(for: due) < Calendar.current.startOfDay(for: Date()) {
+            return MyTasksScreenPalette.overdueCount
+        }
+        return MyTasksScreenPalette.muted
+    }
+
+    private var dueWeight: Font.Weight {
+        (dueColor == MyTasksScreenPalette.overdueCount) ? .medium : .regular
+    }
+
+    private var accentStripColor: Color {
+        if isOverdue { return MyTasksScreenPalette.overdueCount }
+        switch resolvedTask.status {
+        case .inProgress: return MyTasksScreenPalette.inProgressCount
+        case .completed: return MyTasksScreenPalette.doneCount
+        case .todo: return MyTasksScreenPalette.stripTodo
+        }
+    }
+
+    @ViewBuilder
+    private var statusPill: some View {
+        switch resolvedTask.status {
+        case .todo:
+            statusCapsule(text: "To do", fg: MyTasksScreenPalette.muted, bg: Color(red: 242 / 255, green: 243 / 255, blue: 245 / 255), icon: "circle.dashed")
+        case .inProgress:
+            statusCapsule(text: "In progress", fg: MyTasksScreenPalette.inProgressCount, bg: Color(red: 250 / 255, green: 238 / 255, blue: 218 / 255), icon: "chart.line.uptrend.xyaxis")
+        case .completed:
+            statusCapsule(text: "Done", fg: MyTasksScreenPalette.doneCount, bg: Color(red: 225 / 255, green: 245 / 255, blue: 238 / 255), icon: "checkmark.circle.fill")
+        }
+    }
+
+    private func statusCapsule(text: String, fg: Color, bg: Color, icon: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .medium))
+            Text(text)
+                .font(.system(size: 9, weight: .medium))
+        }
+        .foregroundStyle(fg)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(bg)
+        .clipShape(Capsule())
+    }
+
+    private var priorityPill: some View {
+        let (fg, bg, dot) = priorityColors
+        return HStack(spacing: 3) {
+            Circle()
+                .fill(dot)
+                .frame(width: 6, height: 6)
+            Text(resolvedTask.priority.rawValue)
+                .font(.system(size: 9, weight: .medium))
+        }
+        .foregroundStyle(fg)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(bg)
+        .clipShape(Capsule())
+    }
+
+    private var priorityColors: (Color, Color, Color) {
+        switch resolvedTask.priority {
+        case .low:
+            return (MyTasksScreenPalette.muted, Color(red: 242 / 255, green: 243 / 255, blue: 245 / 255), MyTasksScreenPalette.muted)
+        case .normal:
+            return (MyTasksScreenPalette.inProgressCount, Color(red: 250 / 255, green: 238 / 255, blue: 218 / 255), MyTasksScreenPalette.inProgressCount)
+        case .high:
+            return (MyTasksScreenPalette.overdueCount, Color(red: 252 / 255, green: 235 / 255, blue: 235 / 255), MyTasksScreenPalette.overdueCount)
+        case .urgent:
+            return (MyTasksScreenPalette.overdueCount, Color(red: 252 / 255, green: 235 / 255, blue: 235 / 255), MyTasksScreenPalette.overdueCount)
+        }
+    }
+
+    private var assigneeInitialsRow: some View {
+        let initials = assigneeInitialsList
+        return HStack(spacing: -6) {
+            ForEach(Array(initials.enumerated()), id: \.offset) { _, ini in
+                Text(ini)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(
+                        LinearGradient(
+                            colors: [MyTasksScreenPalette.blue, MyTasksScreenPalette.blueLight],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
+            }
+        }
+    }
+
+    private var assigneeInitialsList: [String] {
+        var out: [String] = []
+        for id in resolvedTask.allAssignedManagerIds {
+            if let m = operativeStore.allManagers.first(where: { $0.id == id }) {
+                out.append(Self.initials(from: m.fullName))
+            }
+        }
+        for id in resolvedTask.allAssignedOperativeIds {
+            if let o = operativeStore.allOperatives.first(where: { $0.id == id }) {
+                out.append(Self.initials(from: o.name))
+            }
+        }
+        return Array(out.prefix(3))
+    }
+
+    private static func initials(from fullName: String) -> String {
+        let parts = fullName.split(separator: " ").filter { !$0.isEmpty }
+        if parts.count >= 2 {
+            let a = parts[0].prefix(1)
+            let b = parts[1].prefix(1)
+            return String(a + b).uppercased()
+        }
+        if let p = parts.first { return String(p.prefix(2)).uppercased() }
+        return "?"
+    }
+}
+
 private struct HolidayApprovalTaskCard: View {
     let request: HolidayBooking
     let requesterName: String
@@ -446,6 +901,7 @@ private struct HolidayApprovalTaskCard: View {
     }
 }
 
+/// Legacy tile layout (kept for any future reuse); My Tasks uses `MyTasksRedesignTaskCard`.
 struct TaskTileView: View {
     let task: ProjectTask
     @EnvironmentObject var projectStore: ProjectStore
@@ -453,163 +909,16 @@ struct TaskTileView: View {
     @EnvironmentObject var taskStore: ProjectTaskStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
-    
-    @State private var showingCompletionPopup = false
-    
+    @EnvironmentObject var notificationService: NotificationService
+
     var body: some View {
-        Button(action: {
-            if !task.isCompleted {
-                showingCompletionPopup = true
-            }
-        }) {
-        VStack(alignment: .leading, spacing: 12) {
-            // Project/Small Works Info
-            if let project = projectStore.projects.first(where: { $0.id == task.projectId }) {
-                HStack {
-                    Image(systemName: "folder.fill")
-                        .foregroundColor(.blue)
-                    Text("\(project.jobNumber) - \(project.siteName)")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    Spacer()
-                }
-            } else if let smallWork = projectStore.smallWorks.first(where: { $0.id == task.projectId }) {
-                HStack {
-                    Image(systemName: "hammer.fill")
-                        .foregroundColor(.orange)
-                    Text("\(smallWork.jobNumber) - \(smallWork.siteName)")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    Spacer()
-                }
-            }
-            
-            Divider()
-            
-            // Task Title
-            Text(task.title)
-                .font(.title3)
-                .fontWeight(.semibold)
-                .foregroundColor(.primary)
-            
-            // Task Details
-            if let details = task.details, !details.isEmpty {
-                Text(details)
-                    .font(.body)
-                    .foregroundColor(.secondary)
-                    .lineLimit(3)
-            }
-            
-            // Assigned To
-            if !task.allAssignedOperativeIds.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "person.fill")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(operativeNames(for: task.allAssignedOperativeIds).joined(separator: ", "))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            if !task.allAssignedManagerIds.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "person.text.rectangle")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(managerNames(for: task.allAssignedManagerIds).joined(separator: ", "))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            // Due Date
-            if let dueDate = task.dueDate {
-                HStack(spacing: 4) {
-                    Image(systemName: "calendar")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text("Due: \(dueDate, style: .date)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            // Created By
-            HStack(spacing: 4) {
-                Image(systemName: "person.circle")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("Created by \(task.createdBy)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            // Status Badge
-            HStack {
-                Spacer()
-                Text(task.status.rawValue)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(statusColor.opacity(0.1))
-                    .foregroundColor(statusColor)
-                    .cornerRadius(8)
-            }
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(16)
-        .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
-        }
-        .buttonStyle(PlainButtonStyle())
-        .sheet(isPresented: $showingCompletionPopup) {
-            TaskCompletionPopupView(
-                task: task,
-                isPresented: $showingCompletionPopup,
-                onComplete: { completedBy, images, files in
-                    Task {
-                        await completeTask(completedBy: completedBy, images: images, files: files)
-                    }
-                }
-            )
-            .environmentObject(firebaseBackend)
-            .environmentObject(userStore)
+        MyTasksRedesignTaskCard(task: task)
+            .environmentObject(projectStore)
+            .environmentObject(operativeStore)
             .environmentObject(taskStore)
-        }
-    }
-    
-    private func completeTask(completedBy: String, images: [String], files: [String]) async {
-        var updatedTask = task
-        updatedTask.status = .completed
-        updatedTask.completedBy = completedBy
-        updatedTask.completedAt = Date()
-        updatedTask.completionImages = images
-        updatedTask.completionFiles = files
-        updatedTask.updatedAt = Date()
-        
-        await taskStore.updateTask(updatedTask)
-    }
-    
-    private func operativeNames(for ids: [UUID]) -> [String] {
-        ids.compactMap { id in
-            operativeStore.allOperatives.first(where: { $0.id == id })?.name
-        }
-    }
-    
-    private func managerNames(for ids: [UUID]) -> [String] {
-        ids.compactMap { id in
-            operativeStore.allManagers.first(where: { $0.id == id })?.fullName
-        }
-    }
-    
-    private var statusColor: Color {
-        switch task.status {
-        case .todo: return .orange
-        case .inProgress: return .blue
-        case .completed: return .green
-        }
+            .environmentObject(userStore)
+            .environmentObject(firebaseBackend)
+            .environmentObject(notificationService)
     }
 }
 
@@ -619,5 +928,7 @@ struct TaskTileView: View {
         .environmentObject(ProjectStore())
         .environmentObject(OperativeStore())
         .environmentObject(UserStore())
+        .environmentObject(HolidayStore())
+        .environmentObject(NotificationService())
+        .environmentObject(FirebaseBackend())
 }
-

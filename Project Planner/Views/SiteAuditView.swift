@@ -89,8 +89,7 @@ private struct SiteAuditProjectAccess {
         }
         guard userStore.isOperativeMode() else {
             if let currentUser = userStore.currentUser,
-               !currentUser.isSuperAdmin,
-               !currentUser.permissions.adminAccess,
+               !userStore.hasAdminAccess(),
                currentUser.permissions.manager {
                 return all.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
             }

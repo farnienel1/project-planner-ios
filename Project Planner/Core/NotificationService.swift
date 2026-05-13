@@ -455,18 +455,26 @@ class NotificationService: ObservableObject {
                     }
                 }
             }
+
+            let managers = operativeStore.allManagers
+            for managerId in assignedManagerIds {
+                guard let manager = managers.first(where: { $0.id == managerId }) else { continue }
+                if let managerUser = userStore.organizationUsers.first(where: { user in
+                    user.email.lowercased() == manager.email.lowercased() && !user.permissions.operativeMode
+                }) {
+                    let notification = AppNotification(
+                        organizationId: organizationId,
+                        type: .taskCreated,
+                        title: "New Task Assigned",
+                        message: "\(createdBy) assigned you a new task: \(taskTitle)",
+                        userId: managerUser.id,
+                        relatedId: taskId,
+                        requiresPermission: nil
+                    )
+                    await saveNotification(notification)
+                }
+            }
         }
-        
-        // Also notify admins and managers (not operative mode users)
-        let adminManagerNotification = AppNotification(
-            organizationId: organizationId,
-            type: .taskCreated,
-            title: "New Task Created",
-            message: "\(createdBy) created a new task: \(taskTitle)",
-            relatedId: taskId,
-            requiresPermission: "canViewProjects" // Admins and managers can view projects
-        )
-        await saveNotification(adminManagerNotification)
     }
 
     /// `excludeUserIdMatchingRequester` should be the Firebase Auth uid (or app user id) of the person who submitted the request.

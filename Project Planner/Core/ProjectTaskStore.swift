@@ -37,7 +37,10 @@ class ProjectTaskStore: ObservableObject {
         do {
             let loadedTasks = try await firebaseBackend.loadProjectTasks(organizationId: organizationId)
             print("🔥🔥🔥 DEBUG: TaskStore - Loaded \(loadedTasks.count) tasks from Firebase")
-            tasks = loadedTasks
+            // Keep tasks that were just created locally but are not yet visible on the server read (avoids “disappearing” tasks).
+            let loadedIds = Set(loadedTasks.map(\.id))
+            let pendingLocal = tasks.filter { !loadedIds.contains($0.id) }
+            tasks = (loadedTasks + pendingLocal).sorted { $0.createdAt > $1.createdAt }
             isLoading = false
         } catch {
             print("🔥🔥🔥 DEBUG: TaskStore - Error loading tasks: \(error.localizedDescription)")

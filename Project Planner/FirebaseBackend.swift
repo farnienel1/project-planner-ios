@@ -1131,6 +1131,9 @@ class FirebaseBackend: ObservableObject {
         ]
         data["hiddenManagerUserIds"] = Array(project.hiddenManagerUserIds)
         data["hiddenOperativeUserIds"] = Array(project.hiddenOperativeUserIds)
+        data["usesMapPinForLocation"] = project.usesMapPinForLocation
+        if let lat = project.latitude { data["latitude"] = lat }
+        if let lon = project.longitude { data["longitude"] = lon }
         
         // Save managerId if available
         if let managerId = project.managerId {
@@ -1175,6 +1178,25 @@ class FirebaseBackend: ObservableObject {
                 }
             }
             throw error
+        }
+    }
+
+    /// Restores map-pin location fields from Firestore (handles `NSNumber` from Firestore).
+    private static func applyMapPinFields(from data: [String: Any], to project: inout Project) {
+        project.usesMapPinForLocation = data["usesMapPinForLocation"] as? Bool ?? false
+        if let n = data["latitude"] as? NSNumber {
+            project.latitude = n.doubleValue
+        } else if let d = data["latitude"] as? Double {
+            project.latitude = d
+        } else {
+            project.latitude = nil
+        }
+        if let n = data["longitude"] as? NSNumber {
+            project.longitude = n.doubleValue
+        } else if let d = data["longitude"] as? Double {
+            project.longitude = d
+        } else {
+            project.longitude = nil
         }
     }
     
@@ -1250,7 +1272,7 @@ class FirebaseBackend: ObservableObject {
                let townCity = data["townCity"] as? String,
                let postcode = data["postcode"] as? String {
                 // New format
-                project = Project(
+                var decodedProject = Project(
                     id: UUID(uuidString: docId) ?? UUID(),
                     jobNumber: data["jobNumber"] as? String ?? "",
                     siteName: data["siteName"] as? String ?? "Unnamed Project",
@@ -1270,6 +1292,8 @@ class FirebaseBackend: ObservableObject {
                     hiddenManagerUserIds: hiddenManagerUserIds,
                     hiddenOperativeUserIds: hiddenOperativeUserIds
                 )
+                Self.applyMapPinFields(from: data, to: &decodedProject)
+                project = decodedProject
             } else {
                 // Legacy format - use old initializer
                 var legacyProject = Project(
@@ -1290,7 +1314,9 @@ class FirebaseBackend: ObservableObject {
                 // Set managerId and customJobType after initialization since legacy initializer doesn't accept them
                 legacyProject.managerId = managerId
                 legacyProject.customJobType = customJobType
-                project = legacyProject
+                var legacyVar = legacyProject
+                Self.applyMapPinFields(from: data, to: &legacyVar)
+                project = legacyVar
             }
             
             loadedProjects.append(project)
@@ -1462,6 +1488,9 @@ class FirebaseBackend: ObservableObject {
         ]
         data["hiddenManagerUserIds"] = Array(smallWork.hiddenManagerUserIds)
         data["hiddenOperativeUserIds"] = Array(smallWork.hiddenOperativeUserIds)
+        data["usesMapPinForLocation"] = smallWork.usesMapPinForLocation
+        if let lat = smallWork.latitude { data["latitude"] = lat }
+        if let lon = smallWork.longitude { data["longitude"] = lon }
         
         // Save managerId if available
         if let managerId = smallWork.managerId {
@@ -1581,7 +1610,7 @@ class FirebaseBackend: ObservableObject {
                let townCity = data["townCity"] as? String,
                let postcode = data["postcode"] as? String {
                 // New format
-                smallWork = Project(
+                var decodedSmallWork = Project(
                     id: UUID(uuidString: docId) ?? UUID(),
                     jobNumber: data["jobNumber"] as? String ?? "",
                     siteName: data["siteName"] as? String ?? "Unnamed Small Works",
@@ -1601,6 +1630,8 @@ class FirebaseBackend: ObservableObject {
                     hiddenManagerUserIds: hiddenManagerUserIds,
                     hiddenOperativeUserIds: hiddenOperativeUserIds
                 )
+                Self.applyMapPinFields(from: data, to: &decodedSmallWork)
+                smallWork = decodedSmallWork
             } else {
                 // Legacy format - use old initializer
                 var legacySmallWork = Project(
@@ -1621,7 +1652,9 @@ class FirebaseBackend: ObservableObject {
                 // Set managerId and customJobType after initialization since legacy initializer doesn't accept them
                 legacySmallWork.managerId = managerId
                 legacySmallWork.customJobType = customJobType
-                smallWork = legacySmallWork
+                var legacySmallVar = legacySmallWork
+                Self.applyMapPinFields(from: data, to: &legacySmallVar)
+                smallWork = legacySmallVar
             }
             
             loadedSmallWorks.append(smallWork)
@@ -1753,7 +1786,9 @@ class FirebaseBackend: ObservableObject {
             
             let dueDate = (data["dueDate"] as? Timestamp)?.dateValue()
             let details = data["details"] as? String
-            
+            let priorityRaw = data["priority"] as? String
+            let priority = priorityRaw.flatMap { ProjectTask.Priority(rawValue: $0) } ?? .normal
+
             // Load multiple assignments
             var assignedOperativeIds: [UUID] = []
             if let operativeIdsArray = data["assignedOperativeIds"] as? [String] {
@@ -1770,6 +1805,7 @@ class FirebaseBackend: ObservableObject {
             let completedAt = (data["completedAt"] as? Timestamp)?.dateValue()
             let completionImages = data["completionImages"] as? [String] ?? []
             let completionFiles = data["completionFiles"] as? [String] ?? []
+            let completionNotes = data["completionNotes"] as? String
             
             // Load attached files/images
             let attachedFileURL = data["attachedFileURL"] as? String
@@ -1800,6 +1836,7 @@ class FirebaseBackend: ObservableObject {
                 assignedOperativeIds: assignedOperativeIds,
                 assignedManagerIds: assignedManagerIds,
                 dueDate: dueDate,
+                priority: priority,
                 status: status,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
@@ -1810,6 +1847,7 @@ class FirebaseBackend: ObservableObject {
                 completedAt: completedAt,
                 completionImages: completionImages,
                 completionFiles: completionFiles,
+                completionNotes: completionNotes,
                 items: items,
                 completedItemIds: completedItemIds
             )
@@ -1825,6 +1863,7 @@ class FirebaseBackend: ObservableObject {
             "details": task.details ?? "",
             "createdBy": task.createdBy,
             "status": task.status.rawValue,
+            "priority": task.priority.rawValue,
             "createdAt": Timestamp(date: task.createdAt),
             "updatedAt": Timestamp(date: task.updatedAt)
         ]
@@ -1865,6 +1904,10 @@ class FirebaseBackend: ObservableObject {
         
         if !task.completionFiles.isEmpty {
             data["completionFiles"] = task.completionFiles
+        }
+        
+        if let notes = task.completionNotes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
+            data["completionNotes"] = notes
         }
         
         // Add attached images

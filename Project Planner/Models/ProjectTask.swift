@@ -26,7 +26,18 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         case inProgress = "In Progress"
         case completed = "Completed"
     }
-    
+
+    /// Task urgency (shown on tiles and filters). Persisted on the task document.
+    enum Priority: String, Codable, CaseIterable, Hashable {
+        case low = "Low"
+        case normal = "Normal"
+        case high = "High"
+        case urgent = "Urgent"
+    }
+
+    /// Stable id for the synthetic first checklist row built from `title` + `details` (not stored in `items`).
+    static let primaryEffectiveLineItemId = UUID(uuidString: "00000000-0000-4000-8000-000000000001")!
+
     let id: UUID
     var projectId: UUID
     var title: String
@@ -37,6 +48,7 @@ struct ProjectTask: Identifiable, Codable, Hashable {
     var assignedOperativeIds: [UUID] // Multiple operative assignments
     var assignedManagerIds: [UUID] // Multiple manager assignments
     var dueDate: Date?
+    var priority: Priority
     var status: Status
     var createdAt: Date
     var updatedAt: Date
@@ -47,6 +59,8 @@ struct ProjectTask: Identifiable, Codable, Hashable {
     var completedAt: Date? // When task was marked as completed
     var completionImages: [String] // Firebase Storage URLs for completion images
     var completionFiles: [String] // Firebase Storage URLs for completion files
+    /// Optional notes from the assignee when marking the task complete (shown on task detail after completion).
+    var completionNotes: String?
     /// Sub-items (multi-item tasks). Empty = legacy single task (title + details).
     var items: [ProjectTaskItem]
     /// For multi-item tasks: which item IDs the assignee has ticked. Only when all are ticked can they mark task completed.
@@ -63,6 +77,7 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         assignedOperativeIds: [UUID] = [],
         assignedManagerIds: [UUID] = [],
         dueDate: Date? = nil,
+        priority: Priority = .normal,
         status: Status = .todo,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -73,6 +88,7 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         completedAt: Date? = nil,
         completionImages: [String] = [],
         completionFiles: [String] = [],
+        completionNotes: String? = nil,
         items: [ProjectTaskItem] = [],
         completedItemIds: [UUID] = []
     ) {
@@ -86,6 +102,7 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         self.assignedOperativeIds = assignedOperativeIds
         self.assignedManagerIds = assignedManagerIds
         self.dueDate = dueDate
+        self.priority = priority
         self.status = status
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -96,6 +113,7 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         self.completedAt = completedAt
         self.completionImages = completionImages
         self.completionFiles = completionFiles
+        self.completionNotes = completionNotes
         self.items = items
         self.completedItemIds = completedItemIds
     }
@@ -122,12 +140,19 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         status == .completed
     }
     
-    /// Effective list of items: if items is empty, one logical item from title/details (for legacy tasks).
+    /// Effective checklist rows: main line from `title`/`details` plus optional extra `items` (checklist-only saves).
+    /// Legacy multi-item tasks (items already include the first row matching title+details) return `items` unchanged.
     var effectiveItems: [ProjectTaskItem] {
         if items.isEmpty {
-            return [ProjectTaskItem(title: title, description: details)]
+            return [ProjectTaskItem(id: Self.primaryEffectiveLineItemId, title: title, description: details)]
         }
-        return items
+        if let first = items.first,
+           first.title == title,
+           (first.description ?? "") == (details ?? "") {
+            return items
+        }
+        let primary = ProjectTaskItem(id: Self.primaryEffectiveLineItemId, title: title, description: details)
+        return [primary] + items
     }
     
     /// True when task has more than one item (so assignee must tick all before marking complete).
@@ -139,6 +164,48 @@ struct ProjectTask: Identifiable, Codable, Hashable {
     var allItemsTicked: Bool {
         let ids = Set(effectiveItems.map(\.id))
         return ids.isEmpty || ids.isSubset(of: Set(completedItemIds))
+    }
+
+    /// Whether this user appears on any explicit assignment list (operative and/or manager rows).
+    func isAssignedToUser(
+        userEmail: String?,
+        operatives: [Operative],
+        managers: [Manager],
+        isOperativeMode: Bool
+    ) -> Bool {
+        let raw = Self.normalizedEmail(userEmail)
+        guard !raw.isEmpty else { return false }
+        if isOperativeMode {
+            guard let op = operatives.first(where: { Self.normalizedEmail($0.email) == raw }) else { return false }
+            return allAssignedOperativeIds.contains(op.id)
+        }
+        if let mgr = managers.first(where: { Self.normalizedEmail($0.email) == raw }),
+           allAssignedManagerIds.contains(mgr.id) {
+            return true
+        }
+        if let op = operatives.first(where: { Self.normalizedEmail($0.email) == raw }),
+           allAssignedOperativeIds.contains(op.id) {
+            return true
+        }
+        return false
+    }
+
+    private static func normalizedEmail(_ value: String?) -> String {
+        value?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    /// True when `createdBy` matches the signed-in user (full name or email, as stored when the task was created).
+    func isCreatedByCurrentUser(_ user: AppUser?) -> Bool {
+        guard let user = user else { return false }
+        let by = createdBy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !by.isEmpty else { return false }
+        let full = user.fullName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let email = user.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if by == full || by == email { return true }
+        if let first = user.fullName.split(separator: " ").first.map({ String($0).lowercased() }), !first.isEmpty, by == first {
+            return true
+        }
+        return false
     }
 }
 

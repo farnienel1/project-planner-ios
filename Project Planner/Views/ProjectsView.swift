@@ -13,27 +13,31 @@ struct ProjectsView: View {
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     /// Default to all projects so completed / past jobs are not hidden (Active only includes jobs whose dates span today).
     @State private var selectedStatus: ProjectStatus? = nil
     @State private var navigationPath = NavigationPath()
-    
+    @State private var searchText = ""
+    @State private var showingCreateProject = false
+
+    private var listCounts: WorksListStatusCounts {
+        WorksListStatusCounts.from(projectsBeforeStatusFilter)
+    }
+
+    private var canCreateProjects: Bool {
+        guard let u = userStore.currentUser else { return false }
+        if u.permissions.operativeMode { return false }
+        if u.isSuperAdmin || u.permissions.adminAccess { return true }
+        return u.permissions.manager && u.permissions.projects
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            VStack(alignment: .leading, spacing: 0) {
-                // Title row (indented; large nav title is not affected by content padding)
-                Text("Projects")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
-                
-                // Filter Section
-                filterSection
-                
-                // Projects List
-                projectsList
+            ZStack {
+                ProjectWorksRevampColors.canvas.ignoresSafeArea()
+                projectsRootContent
             }
-            .padding(.horizontal, 16)
             .navigationTitle("Projects")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -42,8 +46,27 @@ struct ProjectsView: View {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                     }) {
                         Image(systemName: "chevron.left")
-                            .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
                             .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 36, height: 36)
+                            .background(Color.white)
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
+                    }
+                }
+                if canCreateProjects {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showingCreateProject = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 36, height: 36)
+                                .background(ProjectWorksRevampColors.blue)
+                                .clipShape(Circle())
+                        }
+                        .accessibilityLabel("New project")
                     }
                 }
             }
@@ -76,53 +99,63 @@ struct ProjectsView: View {
                     selectedStatus = .active
                 }
             }
-        }
-    }
-    
-    private var filterSection: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                FilterChip(
-                    title: "All",
-                    isSelected: selectedStatus == nil,
-                    action: { selectedStatus = nil }
-                )
-                
-                FilterChip(
-                    title: "Active",
-                    isSelected: selectedStatus == .active,
-                    action: { selectedStatus = .active }
-                )
-                
-                ForEach(ProjectStatus.allCases.filter { $0 != .active && $0 != .inactive }, id: \.self) { status in
-                    FilterChip(
-                        title: status.rawValue,
-                        isSelected: selectedStatus == status,
-                        action: { selectedStatus = status }
-                    )
-                }
+            .sheet(isPresented: $showingCreateProject) {
+                CreateProjectView()
+                    .environmentObject(projectStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(notificationService)
+                    .environmentObject(userStore)
+                    .environmentObject(firebaseBackend)
             }
-            .padding(.horizontal)
         }
-        .padding(.vertical, 8)
     }
-    
-    private var projectsList: some View {
+
+    private var projectsRootContent: some View {
         Group {
             if projectStore.isLoading {
                 ProgressView("Loading projects...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if filteredProjects.isEmpty {
+            } else if projectsBeforeStatusFilter.isEmpty {
                 emptyStateView
             } else {
-                List(filteredProjects) { project in
-                    NavigationLink(value: project) {
-                        ProjectDetailRowView(project: project)
-                            .environmentObject(userStore)
-                            .environmentObject(operativeStore)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        WorksListStatsRow(counts: listCounts)
+                        WorksListSearchRow(text: $searchText, placeholder: "Search projects, addresses…") {
+                            Menu {
+                                Button("All · \(listCounts.all)") { selectedStatus = nil }
+                                Button("Active · \(listCounts.active)") { selectedStatus = .active }
+                                Button("Upcoming · \(listCounts.upcoming)") { selectedStatus = .upcoming }
+                                Button("Completed · \(listCounts.completed)") { selectedStatus = .completed }
+                            } label: {
+                                Image(systemName: "line.3.horizontal.decrease.circle")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                            }
+                        }
+                        filterChipsRow
+                        if searchFilteredProjects.isEmpty {
+                            if filteredProjects.isEmpty {
+                                emptyStateView
+                            } else {
+                                emptySearchState
+                            }
+                        } else {
+                            LazyVStack(spacing: 10) {
+                                ForEach(searchFilteredProjects) { project in
+                                    NavigationLink(value: project) {
+                                        ProjectDetailRowView(project: project)
+                                            .environmentObject(userStore)
+                                            .environmentObject(operativeStore)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.bottom, 8)
+                        }
                     }
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                    .listRowSeparator(.hidden)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 8)
                 }
                 .navigationDestination(for: Project.self) { project in
                     ProjectDetailView(project: project)
@@ -130,17 +163,62 @@ struct ProjectsView: View {
                         .environmentObject(operativeStore)
                         .environmentObject(projectStore)
                         .background(
-                            // Use background to ensure preference propagates
                             Color.clear
                                 .preference(key: HideBottomMenuKey.self, value: true)
                         )
                 }
-                .listStyle(PlainListStyle())
                 .refreshable {
                     projectStore.loadData()
                 }
             }
         }
+    }
+
+    private var filterChipsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                WorksRevampFilterChip(
+                    title: "All · \(listCounts.all)",
+                    isSelected: selectedStatus == nil,
+                    selectedForeground: ProjectWorksRevampColors.activeGreen
+                ) { selectedStatus = nil }
+                WorksRevampFilterChip(
+                    title: "Active · \(listCounts.active)",
+                    isSelected: selectedStatus == .active,
+                    selectedForeground: ProjectWorksRevampColors.activeGreen
+                ) { selectedStatus = .active }
+                WorksRevampFilterChip(
+                    title: "Upcoming · \(listCounts.upcoming)",
+                    isSelected: selectedStatus == .upcoming,
+                    selectedForeground: ProjectWorksRevampColors.upcomingAmber
+                ) { selectedStatus = .upcoming }
+                WorksRevampFilterChip(
+                    title: "Completed · \(listCounts.completed)",
+                    isSelected: selectedStatus == .completed,
+                    selectedForeground: ProjectWorksRevampColors.muted
+                ) { selectedStatus = .completed }
+            }
+        }
+    }
+
+    private var searchFilteredProjects: [Project] {
+        let base = filteredProjects
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return base }
+        return base.filter { p in
+            p.jobNumber.lowercased().contains(q)
+                || p.siteName.lowercased().contains(q)
+                || p.siteAddress.lowercased().contains(q)
+                || p.client.name.lowercased().contains(q)
+        }
+    }
+
+    private var emptySearchState: some View {
+        Text("No projects match your search.")
+            .font(.subheadline)
+            .foregroundStyle(ProjectWorksRevampColors.muted)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
     }
     
     private var emptyStateView: some View {
@@ -192,8 +270,7 @@ struct ProjectsView: View {
                 assignedProjectIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId)
             }
         } else if let currentUser = userStore.currentUser,
-                  !currentUser.isSuperAdmin,
-                  !currentUser.permissions.adminAccess,
+                  !userStore.hasAdminAccess(),
                   currentUser.permissions.manager {
             projects = projects.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
         }
@@ -236,29 +313,11 @@ struct ProjectsView: View {
     }
 }
 
-struct FilterChip: View {
-    let title: String
-    let isSelected: Bool
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.caption)
-                .fontWeight(.medium)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(isSelected ? Color.blue : Color(.systemGray5))
-                .foregroundColor(isSelected ? .white : .primary)
-                .cornerRadius(16)
-        }
-    }
-}
-
 struct ProjectDetailRowView: View {
     let project: Project
     @EnvironmentObject private var userStore: UserStore
-    
+    @EnvironmentObject private var operativeStore: OperativeStore
+
     var body: some View {
         Group {
             if userStore.isOperativeMode() {
@@ -268,154 +327,191 @@ struct ProjectDetailRowView: View {
             }
         }
     }
-    
+
     private var operativeCompactCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(project.jobNumber)
-                .font(.headline)
-                .fontWeight(.bold)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
             Text(project.siteName)
-                .font(.subheadline)
-                .foregroundColor(.primary)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
             Text(project.siteAddress)
-                .font(.caption)
-                .foregroundColor(.secondary)
+                .font(.system(size: 11))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
                 .lineLimit(3)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+        .padding(14)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
     }
-    
+
     private var fullDetailCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(project.jobNumber)
-                        .font(.headline)
-                        .fontWeight(.bold)
-                    
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(project.jobNumber)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .tracking(-0.2)
+                        jobTypePill
+                    }
                     Text(project.siteName)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
                 }
-                
-                Spacer()
-                
-                VStack(alignment: .trailing, spacing: 4) {
-                    statusBadge
-                    jobTypeBadge
-                }
+                Spacer(minLength: 8)
+                statusPill
             }
-            
-            // Details
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label(project.client.name, systemImage: "building.2")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    Label(project.siteAddress, systemImage: "location")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                }
-                
-                Spacer()
-                
-                VStack(alignment: .trailing, spacing: 4) {
-                    Label(project.manager.displayName, systemImage: "person")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    Label(dateRange, systemImage: "calendar")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+
+            VStack(alignment: .leading, spacing: 6) {
+                rowIcon("building.2", project.client.name)
+                rowIcon("mappin.and.ellipse", project.siteAddress)
+                rowIcon("person", managerDisplayName)
+                rowIcon("calendar", dateRangeDisplay)
             }
-            
-            // Progress bar for active projects
-            if project.status == .active {
-                progressBar
-            }
+
+            listProgressSection
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+        .padding(14)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
     }
-    
-    private var statusBadge: some View {
-        Text(project.status.rawValue)
-            .font(.caption)
-            .fontWeight(.medium)
-            .padding(.horizontal, 8)
+
+    private func rowIcon(_ system: String, _ text: String) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: system)
+                .font(.system(size: 13))
+                .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+                .frame(width: 14, alignment: .center)
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var jobTypePill: some View {
+        Text(jobTypeLabel)
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(ProjectWorksRevampColors.jobTypePillInk)
+            .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(statusColor.opacity(0.2))
-            .foregroundColor(statusColor)
-            .cornerRadius(4)
+            .background(ProjectWorksRevampColors.jobTypePillBg)
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .tracking(0.3)
     }
-    
-    private var jobTypeBadge: some View {
-        Text(project.jobType.rawValue)
-            .font(.caption)
-            .fontWeight(.medium)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .background(jobTypeColor.opacity(0.2))
-            .foregroundColor(jobTypeColor)
-            .cornerRadius(4)
+
+    private var jobTypeLabel: String {
+        if let c = project.customJobType, !c.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return c.uppercased()
+        }
+        return project.jobType.rawValue
     }
-    
-    private var dateRange: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        return "\(formatter.string(from: project.startDate)) - \(formatter.string(from: project.endDate))"
+
+    private var managerDisplayName: String {
+        if let managerId = project.managerId,
+           let manager = operativeStore.allManagers.first(where: { $0.id == managerId }) {
+            return "\(manager.firstName) \(manager.lastName)"
+        }
+        return project.manager.displayName
     }
-    
-    private var statusColor: Color {
+
+    private var dateRangeDisplay: String {
+        let f = DateFormatter()
+        f.dateFormat = "d MMM yyyy"
+        return "\(f.string(from: project.startDate)) – \(f.string(from: project.endDate))"
+    }
+
+    private var statusPill: some View {
+        HStack(spacing: 4) {
+            if project.status == .completed {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .semibold))
+            } else {
+                Circle()
+                    .fill(statusAccent)
+                    .frame(width: 5, height: 5)
+            }
+            Text(project.status.rawValue)
+                .font(.system(size: 10, weight: .medium))
+        }
+        .foregroundStyle(statusPillForeground)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(statusPillBackground)
+        .clipShape(Capsule())
+    }
+
+    private var statusAccent: Color {
         switch project.status {
-        case .upcoming: return .blue
-        case .active: return .green
-        case .completed: return .gray
-        case .inactive: return .red
+        case .active: return ProjectWorksRevampColors.activeGreen
+        case .upcoming: return ProjectWorksRevampColors.upcomingAmber
+        case .completed, .inactive: return ProjectWorksRevampColors.muted
         }
     }
-    
-    private var jobTypeColor: Color {
-        switch project.jobType {
-        case .catA: return .blue
-        case .catB: return .green
-        case .smallWorks: return .orange
-        case .maintenance: return .purple
+
+    private var statusPillForeground: Color {
+        switch project.status {
+        case .active: return ProjectWorksRevampColors.activeGreen
+        case .upcoming: return ProjectWorksRevampColors.upcomingAmber
+        case .completed, .inactive: return ProjectWorksRevampColors.muted
         }
     }
-    
-    private var progressBar: some View {
-        VStack(alignment: .leading, spacing: 4) {
+
+    private var statusPillBackground: Color {
+        switch project.status {
+        case .active: return Color(red: 0.882, green: 0.961, blue: 0.933) // #E1F5EE
+        case .upcoming: return Color(red: 1, green: 0.965, blue: 0.882)
+        case .completed, .inactive: return Color(red: 0.949, green: 0.953, blue: 0.961) // #F2F3F5
+        }
+    }
+
+    private var listProgressSection: some View {
+        let pct = WorksListProgress.fraction(for: project)
+        return VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Text("Progress")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
                 Spacer()
-                Text("\(Int(progressPercentage * 100))%")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Text("\(Int(pct * 100))%")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(project.status == .completed ? ProjectWorksRevampColors.muted : ProjectWorksRevampColors.ink)
             }
-            
-            ProgressView(value: progressPercentage)
-                .progressViewStyle(LinearProgressViewStyle(tint: .blue))
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(ProjectWorksRevampColors.border)
+                        .frame(height: 5)
+                    Capsule()
+                        .fill(
+                            project.status == .completed
+                                ? AnyShapeStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+                                : AnyShapeStyle(
+                                    LinearGradient(
+                                        colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                        )
+                        .frame(width: max(4, geo.size.width * pct), height: 5)
+                }
+            }
+            .frame(height: 5)
         }
-    }
-    
-    private var progressPercentage: Double {
-        let now = Date()
-        let totalDuration = project.endDate.timeIntervalSince(project.startDate)
-        let elapsed = now.timeIntervalSince(project.startDate)
-        return min(max(elapsed / totalDuration, 0), 1)
+        .padding(.top, 4)
     }
 }
 
@@ -536,4 +632,9 @@ struct AddProjectView: View {
 #Preview {
     ProjectsView()
         .environmentObject(ProjectStore())
+        .environmentObject(OperativeStore())
+        .environmentObject(BookingStore())
+        .environmentObject(UserStore())
+        .environmentObject(AppSettingsStore())
+        .environmentObject(NotificationService())
 }

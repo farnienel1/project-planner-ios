@@ -346,6 +346,14 @@ struct AppUser: Identifiable, Codable, Hashable {
     }
 }
 
+extension AppUser {
+    /// Org-wide admins always see every job; they cannot be denied access via View / `hiddenManagerUserIds`.
+    var isExcludedFromManagerVisibilityHiding: Bool {
+        if permissions.operativeMode { return false }
+        return isSuperAdmin || permissions.adminAccess || role == .admin
+    }
+}
+
 // MARK: - Organization Models
 
 struct Organization: Identifiable, Codable, Hashable {

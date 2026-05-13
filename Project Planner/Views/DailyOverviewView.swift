@@ -18,11 +18,30 @@ struct DailyOverviewView: View {
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var subcontractorStore: SubcontractorStore
+    @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var taskStore: ProjectTaskStore
+    @EnvironmentObject var notificationService: NotificationService
     @Environment(\.dismiss) private var dismiss
     @State private var showingPastBookings = false
+    @State private var showingBookLabour = false
+    /// When `displayDate` is nil, the user can change the day from the strip (today’s overview sheet).
+    @State private var selectedCalendarDay: Date = Calendar.current.startOfDay(for: Date())
     
     private var overviewDate: Date {
-        Calendar.current.startOfDay(for: displayDate ?? Date())
+        let cal = Calendar.current
+        if let displayDate {
+            return cal.startOfDay(for: displayDate)
+        }
+        return cal.startOfDay(for: selectedCalendarDay)
+    }
+    
+    private var scheduleOptions: MyScheduleOptions {
+        appSettings.settings.myScheduleOptions
+    }
+    
+    private var canBookLabour: Bool {
+        userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true
     }
     
     private var isHistoric: Bool {
@@ -69,12 +88,91 @@ struct DailyOverviewView: View {
     private var dayCustomBookingsByName: [String: [ManagerSiteBooking]] {
         let list = managerScheduleStore.managerSiteBookings.filter { booking in
             Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) &&
-            booking.locationType == .custom
+                booking.locationType == .custom
         }
         return Dictionary(grouping: list) { booking in
             let name = booking.customLocationName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return name.isEmpty ? "Custom" : name
         }
+    }
+
+    /// Custom location sections respect General → My schedule custom list and toggles.
+    private var filteredCustomBookingsByName: [String: [ManagerSiteBooking]] {
+        dayCustomBookingsByName.filter { _, bookings in
+            bookings.contains { scheduleOptions.includesManagerScheduleLocation($0) }
+        }
+    }
+
+    private var visibleOfficeBookings: [ManagerSiteBooking] {
+        scheduleOptions.showOffice ? dayOfficeBookings : []
+    }
+
+    private var visibleWFHBookings: [ManagerSiteBooking] {
+        scheduleOptions.showWorkingFromHome ? dayWorkingFromHomeBookings : []
+    }
+
+    private var visibleSiteSurveyBookings: [ManagerSiteBooking] {
+        scheduleOptions.showSiteSurvey ? daySiteSurveyBookings : []
+    }
+
+    /// Distinct people with a project or small-work booking on this day (operative bookings + manager site bookings).
+    private var onSitePeopleCount: Int {
+        let cal = Calendar.current
+        var keys = Set<String>()
+        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+            keys.insert("op:\(b.operativeId.uuidString)")
+        }
+        for b in managerScheduleStore.managerSiteBookings {
+            guard cal.isDate(b.date, inSameDayAs: overviewDate) else { continue }
+            guard b.locationType == .project || b.locationType == .smallWork else { continue }
+            keys.insert("u:\(b.userId)")
+        }
+        return keys.count
+    }
+
+    private var officePeopleCount: Int {
+        Set(visibleOfficeBookings.map(\.userId)).count
+    }
+
+    private var wfhPeopleCount: Int {
+        Set(visibleWFHBookings.map(\.userId)).count
+    }
+
+    private var unbookedAllNames: [String] {
+        (unbookedManagerNames + unbookedOperativeNames).sorted()
+    }
+
+    /// Unique people with any same-day booking (operatives on jobs, managers on jobs or “other” locations, subs on jobs).
+    private var bookedPeopleCount: Int {
+        let cal = Calendar.current
+        var keys = Set<String>()
+        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+            keys.insert("op:\(b.operativeId.uuidString)")
+        }
+        for b in managerScheduleStore.managerSiteBookings where cal.isDate(b.date, inSameDayAs: overviewDate) {
+            if scheduleOptions.includesManagerScheduleLocation(b) {
+                keys.insert("u:\(b.userId)")
+            }
+        }
+        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+            keys.insert("sub:\(b.subcontractorId.uuidString)")
+        }
+        return keys.count
+    }
+
+    /// Live projects / small works that appear in today’s overview list.
+    private var liveActiveProjectsOnDayCount: Int {
+        let all = projectStore.projects + projectStore.smallWorks
+        return displayedProjectIds.filter { id in
+            all.first(where: { $0.id == id })?.isLive == true
+        }.count
+    }
+
+    private func shiftOverviewDay(_ delta: Int) {
+        guard displayDate == nil else { return }
+        let cal = Calendar.current
+        guard let d = cal.date(byAdding: .day, value: delta, to: overviewDate) else { return }
+        selectedCalendarDay = cal.startOfDay(for: d)
     }
 
     private var isWeekday: Bool {
@@ -178,122 +276,516 @@ struct DailyOverviewView: View {
     
     private var overviewContent: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                    // Title and Date
+            VStack(alignment: .leading, spacing: 18) {
+                if !isHistoric {
+                    topActionsRow
+                }
+
+                if displayDate == nil && !isHistoric {
+                    dateDayNavigatorCard
+                } else if isHistoric {
+                    historicDateCaption
+                }
+
+                coverageGradientCard
+
+                if isWeekday && !unbookedAllNames.isEmpty {
+                    unbookedLabourRevampCard
+                }
+
+                if !dayHolidays.isEmpty {
+                    annualLeaveRevampBlock
+                }
+
+                officeWFHRevampSection
+
+                if !visibleSiteSurveyBookings.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Daily Overview")
-                            .font(.system(size: 28, weight: .bold))
-                            .foregroundColor(.blue)
-                        
-                        Text(dateFormatter.string(from: overviewDate))
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-
-                        if !isHistoric {
-                            Button(action: { showingPastBookings = true }) {
-                                Label("View By Date", systemImage: "calendar")
-                                    .font(.subheadline)
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 20)
-                    
-                    if isWeekday && (!unbookedManagerNames.isEmpty || !unbookedOperativeNames.isEmpty) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Unbooked Labour")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                                .padding(.horizontal, 20)
-                            VStack(alignment: .leading, spacing: 8) {
-                                ForEach(unbookedManagerNames, id: \.self) { name in
-                                    Label(name, systemImage: "person.badge.key.fill")
-                                        .font(.subheadline)
-                                }
-                                ForEach(unbookedOperativeNames, id: \.self) { name in
-                                    Label(name, systemImage: "person.fill")
-                                        .font(.subheadline)
-                                }
-                            }
-                            .padding(12)
-                            .background(Color.yellow.opacity(0.14))
-                            .cornerRadius(12)
-                            .padding(.horizontal, 20)
-                        }
-                    }
-
-                    // Annual leave
-                    if !dayHolidays.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(isHistoric ? "Annual Leave" : "Annual Leave Today")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                                .padding(.horizontal, 20)
-                            ForEach(dayHolidays) { booking in
-                                OnHolidayRowView(booking: booking)
-                            }
-                            .padding(.horizontal, 20)
-                        }
-                    }
-                    
-                    managerScheduleSection(
-                        title: "Office (Managers/Admins)",
-                        bookings: dayOfficeBookings
-                    )
-                    managerScheduleSection(
-                        title: "Working From Home (Managers/Admins)",
-                        bookings: dayWorkingFromHomeBookings
-                    )
-                    managerScheduleSection(
-                        title: "Site Survey (Managers/Admins)",
-                        bookings: daySiteSurveyBookings
-                    )
-                    ForEach(dayCustomBookingsByName.keys.sorted(), id: \.self) { customName in
-                        managerScheduleSection(
-                            title: "\(customName) (Managers/Admins)",
-                            bookings: dayCustomBookingsByName[customName] ?? []
+                        revampSectionHeader(title: "Site survey", trailing: nil)
+                        managerScheduleRevampCard(
+                            sectionIcon: "mappin.and.ellipse",
+                            iconBackground: ProjectWorksRevampColors.pinRoseBg,
+                            iconForeground: ProjectWorksRevampColors.pinRoseFg,
+                            title: "Site survey",
+                            trailingCaption: "Managers / admins",
+                            bookings: visibleSiteSurveyBookings
                         )
                     }
-                    
-                    // Bookings List
-                    if displayedProjectIds.isEmpty &&
-                        dayHolidays.isEmpty &&
-                        dayOfficeBookings.isEmpty &&
-                        dayWorkingFromHomeBookings.isEmpty &&
-                        daySiteSurveyBookings.isEmpty &&
-                        dayCustomBookingsByName.isEmpty {
-                        noBookingsView
-                    } else if !displayedProjectIds.isEmpty {
-                        LazyVStack(spacing: 16) {
-                            ForEach(Array(displayedProjectIds.sorted(by: { projectId1, projectId2 in
-                                let allProjects = projectStore.projects + projectStore.smallWorks
-                                guard let project1 = allProjects.first(where: { $0.id == projectId1 }),
-                                      let project2 = allProjects.first(where: { $0.id == projectId2 }) else {
-                                    return false
-                                }
-                                return project1.siteName < project2.siteName
-                            })), id: \.self) { projectId in
-                                let allProjects = projectStore.projects + projectStore.smallWorks
-                                if let project = allProjects.first(where: { $0.id == projectId }),
-                                   let bookings = bookingsByProject[projectId] {
-                                    ProjectBookingCard(project: project, bookings: bookings, day: overviewDate)
-                                        .environmentObject(managerScheduleStore)
-                                        .environmentObject(subcontractorStore)
-                                } else if let project = allProjects.first(where: { $0.id == projectId }) {
-                                    ProjectBookingCard(project: project, bookings: [], day: overviewDate)
-                                        .environmentObject(managerScheduleStore)
-                                        .environmentObject(subcontractorStore)
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 20)
+                }
+
+                ForEach(filteredCustomBookingsByName.keys.sorted(), id: \.self) { customName in
+                    VStack(alignment: .leading, spacing: 8) {
+                        revampSectionHeader(title: customName, trailing: nil)
+                        managerScheduleRevampCard(
+                            sectionIcon: "mappin.and.ellipse",
+                            iconBackground: ProjectWorksRevampColors.jobTypePillBg,
+                            iconForeground: ProjectWorksRevampColors.jobTypePillInk,
+                            title: customName,
+                            trailingCaption: "Managers / admins",
+                            bookings: filteredCustomBookingsByName[customName] ?? []
+                        )
                     }
                 }
-                .padding(.bottom, 30)
+
+                liveProjectsRevampSection
+
+                if displayedProjectIds.isEmpty &&
+                    dayHolidays.isEmpty &&
+                    visibleOfficeBookings.isEmpty &&
+                    visibleWFHBookings.isEmpty &&
+                    visibleSiteSurveyBookings.isEmpty &&
+                    filteredCustomBookingsByName.isEmpty {
+                    noBookingsView
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 8)
+            .padding(.bottom, 28)
+        }
+        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+    }
+
+    private var topActionsRow: some View {
+        HStack {
+            Spacer(minLength: 0)
+            Button(action: { showingPastBookings = true }) {
+                Label("View by date", systemImage: "calendar")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.blue)
+            }
+            .buttonStyle(.plain)
         }
     }
-    
+
+    private var historicDateCaption: some View {
+        Text(dateFormatter.string(from: overviewDate))
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(ProjectWorksRevampColors.ink)
+            .frame(maxWidth: .infinity)
+            .padding(14)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+            )
+    }
+
+    private var dateDayNavigatorCard: some View {
+        HStack(spacing: 0) {
+            Button(action: { shiftOverviewDay(-1) }) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            Button(action: { showingPastBookings = true }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                    VStack(spacing: 2) {
+                        Text(dateFormatter.string(from: overviewDate))
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                        Text(Calendar.current.isDateInToday(overviewDate) ? "Today · Tap to change" : "Tap to change")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+            Button(action: { shiftOverviewDay(1) }) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    private var coverageGradientCard: some View {
+        let unbooked = isWeekday ? unbookedAllNames.count : 0
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Today's coverage")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.88))
+                        .textCase(.uppercase)
+                        .tracking(0.3)
+                    Text("\(bookedPeopleCount) people booked")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color.white)
+                }
+                Spacer(minLength: 8)
+                if unbooked > 0 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12, weight: .medium))
+                        Text("\(unbooked) unbooked")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.18))
+                    .clipShape(Capsule())
+                }
+            }
+            HStack(spacing: 8) {
+                coverageStatCell(value: liveActiveProjectsOnDayCount, label: "Project")
+                coverageStatCell(value: onSitePeopleCount, label: "On site")
+                coverageStatCell(value: officePeopleCount, label: "Office")
+                coverageStatCell(value: wfhPeopleCount, label: "WFH")
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LinearGradient(
+                colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func coverageStatCell(value: Int, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(value)")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Color.white)
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.88))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(9)
+        .background(Color.white.opacity(0.14))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private var unbookedLabourRevampCard: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white)
+                    .frame(width: 34, height: 34)
+                Image(systemName: "person.fill.questionmark")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Unbooked labour")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                    Spacer(minLength: 8)
+                    Text("\(unbookedAllNames.count) people")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(unbookedAllNames, id: \.self) { name in
+                            HStack(spacing: 5) {
+                                Text(PlannerUIInitials.from(name))
+                                    .font(.system(size: 8, weight: .medium))
+                                    .foregroundStyle(Color.white)
+                                    .frame(width: 18, height: 18)
+                                    .background(
+                                        LinearGradient(
+                                            colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .clipShape(Circle())
+                                Text(name)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .background(Color.white)
+                            .clipShape(Capsule())
+                        }
+                    }
+                }
+                if canBookLabour {
+                    Button(action: { showingBookLabour = true }) {
+                        Text("Book labour")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(Color.clear)
+                            .overlay(
+                                Capsule().stroke(ProjectWorksRevampColors.requiredPillFg, lineWidth: 0.5)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(14)
+        .background(ProjectWorksRevampColors.requiredPillBg)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var annualLeaveRevampBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            revampSectionHeader(title: isHistoric ? "Annual leave" : "Annual leave today", trailing: nil)
+            ForEach(dayHolidays) { booking in
+                OnHolidayRowView(booking: booking)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var officeWFHRevampSection: some View {
+        let office = visibleOfficeBookings
+        let wfh = visibleWFHBookings
+        let people = Set(office.map(\.userId)).union(Set(wfh.map(\.userId)))
+        if !office.isEmpty || !wfh.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                revampSectionHeader(
+                    title: "Office & WFH",
+                    trailing: "\(people.count) person\(people.count == 1 ? "" : "s")"
+                )
+                VStack(alignment: .leading, spacing: 0) {
+                    if !office.isEmpty {
+                        officeWFHInnerHeader(icon: "building.2.fill", iconBg: Color(red: 0.902, green: 0.945, blue: 0.984), iconTint: ProjectWorksRevampColors.blue, title: "Office", caption: "Managers / admins")
+                        ForEach(Array(office.enumerated()), id: \.element.id) { idx, booking in
+                            managerBookingRevampRow(booking: booking)
+                            if idx < office.count - 1 { Divider().overlay(ProjectWorksRevampColors.border) }
+                        }
+                    }
+                    if !office.isEmpty && !wfh.isEmpty {
+                        Divider().padding(.vertical, 6).overlay(ProjectWorksRevampColors.border)
+                    }
+                    if !wfh.isEmpty {
+                        officeWFHInnerHeader(icon: "house.fill", iconBg: Color(red: 0.882, green: 0.961, blue: 0.933), iconTint: ProjectWorksRevampColors.activeGreen, title: "Working from home", caption: "Managers / admins")
+                        ForEach(Array(wfh.enumerated()), id: \.element.id) { idx, booking in
+                            managerBookingRevampRow(booking: booking)
+                            if idx < wfh.count - 1 { Divider().overlay(ProjectWorksRevampColors.border) }
+                        }
+                    }
+                }
+                .padding(14)
+                .background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+                )
+            }
+        }
+    }
+
+    private func officeWFHInnerHeader(icon: String, iconBg: Color, iconTint: Color, title: String, caption: String) -> some View {
+        HStack {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(iconBg)
+                        .frame(width: 30, height: 30)
+                    Image(systemName: icon)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(iconTint)
+                }
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+            }
+            Spacer()
+            Text(caption)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+        }
+        .padding(.bottom, 10)
+    }
+
+    private var liveProjectsRevampSection: some View {
+        let ids = displayedProjectIds.sorted { id1, id2 in
+            let all = projectStore.projects + projectStore.smallWorks
+            guard let p1 = all.first(where: { $0.id == id1 }), let p2 = all.first(where: { $0.id == id2 }) else { return false }
+            return p1.siteName < p2.siteName
+        }
+        let liveCount = ids.filter { id in (projectStore.projects + projectStore.smallWorks).first(where: { $0.id == id })?.isLive == true }.count
+        return Group {
+            if !ids.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    revampSectionHeader(title: "Live projects", trailing: "\(liveCount) active")
+                    ForEach(ids, id: \.self) { projectId in
+                        let all = projectStore.projects + projectStore.smallWorks
+                        if let project = all.first(where: { $0.id == projectId }) {
+                            liveProjectRevampCard(project: project, bookings: bookingsByProject[projectId] ?? [])
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func liveProjectRevampCard(project: Project, bookings: [Booking]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ProjectBookingCard(project: project, bookings: bookings, day: overviewDate)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(subcontractorStore)
+
+            NavigationLink {
+                ProjectDetailView(project: project)
+                    .environmentObject(bookingStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(userStore)
+                    .environmentObject(holidayStore)
+                    .environmentObject(subcontractorStore)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(notificationService)
+                    .environmentObject(appSettings)
+                    .environmentObject(taskStore)
+            } label: {
+                HStack(spacing: 5) {
+                    Text("Open project")
+                        .font(.system(size: 12, weight: .medium))
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .foregroundStyle(ProjectWorksRevampColors.blue)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(Color(red: 0.969, green: 0.973, blue: 0.980))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+                )
+            }
+            .padding(.top, 8)
+            .buttonStyle(.plain)
+        }
+        .padding(14)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    private func revampSectionHeader(title: String, trailing: String?) -> some View {
+        HStack {
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .tracking(0.4)
+            Spacer()
+            if let trailing {
+                Text(trailing)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
+        }
+        .padding(.leading, 4)
+    }
+
+    private func managerScheduleRevampCard(
+        sectionIcon: String,
+        iconBackground: Color,
+        iconForeground: Color,
+        title: String,
+        trailingCaption: String,
+        bookings: [ManagerSiteBooking]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                HStack(spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(iconBackground)
+                            .frame(width: 30, height: 30)
+                        Image(systemName: sectionIcon)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(iconForeground)
+                    }
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                }
+                Spacer()
+                Text(trailingCaption)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
+            .padding(.bottom, 10)
+
+            ForEach(Array(bookings.enumerated()), id: \.element.id) { idx, booking in
+                managerBookingRevampRow(booking: booking)
+                if idx < bookings.count - 1 {
+                    Divider().overlay(ProjectWorksRevampColors.border)
+                }
+            }
+        }
+        .padding(14)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    private func managerBookingRevampRow(booking: ManagerSiteBooking) -> some View {
+        let name = managerName(for: booking.userId)
+        return HStack(spacing: 10) {
+            Text(managerTimeSlotDisplayText(for: booking.timeSlot))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.pinRoseFg)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(ProjectWorksRevampColors.pinRoseBg)
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            HStack(spacing: 6) {
+                Text(PlannerUIInitials.from(name))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Color.white)
+                    .frame(width: 22, height: 22)
+                    .background(
+                        LinearGradient(
+                            colors: [ProjectWorksRevampColors.pinRoseFg, Color(red: 0.761, green: 0.345, blue: 0.471)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .clipShape(Circle())
+                Text(name)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 6)
+    }
+
     var body: some View {
         Group {
             if isHistoric {
@@ -319,6 +811,21 @@ struct DailyOverviewView: View {
                 .environmentObject(holidayStore)
                 .environmentObject(managerScheduleStore)
                 .environmentObject(subcontractorStore)
+                .environmentObject(appSettings)
+                .environmentObject(firebaseBackend)
+                .environmentObject(taskStore)
+                .environmentObject(notificationService)
+        }
+        .fullScreenCover(isPresented: $showingBookLabour) {
+            BookLabourFlowView(bookDate: overviewDate)
+                .environmentObject(appSettings)
+                .environmentObject(bookingStore)
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
+                .environmentObject(holidayStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(firebaseBackend)
         }
     }
     
