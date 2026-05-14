@@ -65,7 +65,8 @@ fileprivate func segmentHoursForOperative(_ b: Booking, policy: OrgPayrollTimePo
 }
 
 fileprivate struct DayHoursSegmentTotals {
-    var totalWall: Double
+    /// Sum of paid booked hours shown in the day summary (legacy full day uses org paid hours, not raw clock span).
+    var totalPaidHours: Double
     var early: Double
     var mid: Double
     var late: Double
@@ -77,13 +78,13 @@ fileprivate func mergedDaySegments(
     operative: [Booking],
     policy: OrgPayrollTimePolicy
 ) -> DayHoursSegmentTotals {
-    var early: Double = 0, mid: Double = 0, late: Double = 0, ot: Double = 0, wall: Double = 0
+    var early: Double = 0, mid: Double = 0, late: Double = 0, ot: Double = 0, paidSum: Double = 0
     for b in manager {
         let s = segmentHoursForManager(b, policy: policy)
         early += s.early
         mid += s.mid
         late += s.late
-        wall += b.totalBookedHours(policy: policy)
+        paidSum += b.paidBookedHours(policy: policy)
         ot += b.overtimeHoursBeyondPaidStandard(policy: policy)
     }
     for b in operative {
@@ -91,10 +92,10 @@ fileprivate func mergedDaySegments(
         early += s.early
         mid += s.mid
         late += s.late
-        wall += b.totalBookedHours(policy: policy)
+        paidSum += b.paidBookedHours(policy: policy)
         ot += b.overtimeHoursBeyondPaidStandard(policy: policy)
     }
-    return DayHoursSegmentTotals(totalWall: wall, early: early, mid: mid, late: late, otReported: ot)
+    return DayHoursSegmentTotals(totalPaidHours: paidSum, early: early, mid: mid, late: late, otReported: ot)
 }
 
 fileprivate func myScheduleLocationStripeColor(_ t: ManagerLocationType) -> Color {
@@ -115,7 +116,7 @@ fileprivate func managerBookingOtChipText(_ b: ManagerSiteBooking, policy: OrgPa
     return "OT \(ScheduleCoverageFormat.hours(ot))h × \(s)"
 }
 
-/// Clock subtitle: `HH:mm – HH:mm · X hrs` (wall time on the booking day).
+/// Clock range plus paid hours (break deducted for standard window bookings).
 fileprivate func managerBookingClockSubtitle(_ b: ManagerSiteBooking, day: Date, policy: OrgPayrollTimePolicy) -> String {
     let block = b.calendarBlock(on: day, policy: policy)
     let f = DateFormatter()
@@ -129,7 +130,7 @@ fileprivate func managerBookingClockSubtitle(_ b: ManagerSiteBooking, day: Date,
         start = f.string(from: block.start)
         end = f.string(from: block.end)
     }
-    return "\(start) – \(end) · \(ScheduleCoverageFormat.hours(b.totalBookedHours(policy: policy))) hrs"
+    return "\(start) – \(end) · \(ScheduleCoverageFormat.hours(b.paidBookedHours(policy: policy))) hrs"
 }
 
 fileprivate func operativeBookingOtChipText(_ b: Booking, policy: OrgPayrollTimePolicy) -> String? {
@@ -153,7 +154,7 @@ fileprivate func operativeBookingClockSubtitle(_ b: Booking, day: Date, policy: 
         start = f.string(from: block.start)
         end = f.string(from: block.end)
     }
-    return "\(start) – \(end) · \(ScheduleCoverageFormat.hours(b.totalBookedHours(policy: policy))) hrs"
+    return "\(start) – \(end) · \(ScheduleCoverageFormat.hours(b.paidBookedHours(policy: policy))) hrs"
 }
 
 fileprivate struct MyScheduleBookingStripeRow: View {
@@ -279,7 +280,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
         let mF = CGFloat(segments.mid / ttl)
         let lF = CGFloat(segments.late / ttl)
         let ot = segments.otReported
-        let wall = segments.totalWall
+        let paidSum = segments.totalPaidHours
         let paidStd = policy.standardPaidHours
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
@@ -294,7 +295,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 2) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(ScheduleCoverageFormat.hours(wall))
+                        Text(ScheduleCoverageFormat.hours(paidSum))
                             .font(.system(size: 18, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.ink)
                         Text("hrs")

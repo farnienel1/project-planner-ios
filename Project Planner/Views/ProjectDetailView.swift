@@ -75,9 +75,15 @@ struct ProjectDetailView: View {
     }
 
     private var canViewAllTasksOnThisJob: Bool { canConfigureProjectVisibility }
+
+    private var payrollTimePolicy: OrgPayrollTimePolicy {
+        firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+    }
     
     @State private var selectedWeek: Date = Date()
     @State private var showingScheduleOperative = false
+    /// When non-nil, operative schedule opens pre-filled to edit this booking (same project).
+    @State private var scheduleOperativeSeedBooking: Booking? = nil
     @State private var showingScheduleSubcontractor = false
     @State private var showingEditProject = false
     @State private var showingMapOptions = false
@@ -183,14 +189,15 @@ struct ProjectDetailView: View {
             Color.clear
                 .preference(key: HideBottomMenuKey.self, value: true)
         )
-        .sheet(isPresented: $showingScheduleOperative) {
-            ScheduleOperativeView(project: project)
+        .sheet(isPresented: $showingScheduleOperative, onDismiss: { scheduleOperativeSeedBooking = nil }) {
+            ScheduleOperativeView(project: project, editingBooking: scheduleOperativeSeedBooking)
                 .environmentObject(bookingStore)
                 .environmentObject(operativeStore)
                 .environmentObject(projectStore)
                 .environmentObject(holidayStore)
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
                 .preference(key: HideBottomMenuKey.self, value: true)
         }
         .sheet(isPresented: $showingScheduleSubcontractor) {
@@ -630,259 +637,473 @@ struct ProjectDetailView: View {
     }
     
     private var schedulingContent: some View {
-        VStack(spacing: 20) {
-            weekNavigation
-            scheduleOperativeButton
-            weekOverview
+        VStack(spacing: 14) {
+            schedulingProjectContextCard
+            schedulingWeekPickerCard
+            schedulingDualActions
+            schedulingWeekOverviewSection
         }
     }
-    
-    // MARK: - Week Navigation
-    
-    private var weekNavigation: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Button(action: { changeWeek(by: -1) }) {
-                    Image(systemName: "chevron.left")
-                        .foregroundColor(.white)
-                        .frame(width: 32, height: 32)
-                        .background(Color.theme.primary)
-                        .cornerRadius(8)
-                }
-                
-                Spacer()
-                
-                Button("Change Week") {
-                    // Could show date picker here
-                }
-                .font(.headline)
-                .foregroundColor(.white)
-                
-                Spacer()
-                
-                Button(action: { changeWeek(by: 1) }) {
-                    Image(systemName: "chevron.right")
-                        .foregroundColor(.white)
-                        .frame(width: 32, height: 32)
-                        .background(Color.theme.primary)
-                        .cornerRadius(8)
+
+    /// Design reference: `project_planner_scheduling_with_overtime.html` (context card, week strip, dual CTAs, list rows + OT).
+    private var schedulingProjectContextCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(project.jobNumber)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                Text(project.siteName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if project.jobType == .smallWorks {
+                    Text("SMALL WORKS")
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color(red: 0.98, green: 0.933, blue: 0.855))
+                        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                } else if let pill = heroJobTypePillText {
+                    Text(pill.uppercased())
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.jobTypePillInk)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(ProjectWorksRevampColors.jobTypePillBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                 }
             }
-            .padding()
-            .background(Color.theme.primary)
-            .cornerRadius(12)
-            
-            Text(weekOfString)
-                .font(.headline)
-                .fontWeight(.bold)
-                .foregroundColor(.primary)
+            Text(schedulingClientSubtitle)
+                .font(.system(size: 10))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+        }
+        .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    private var schedulingClientSubtitle: String {
+        let loc = [project.townCity, project.postcode].filter { !$0.isEmpty }.joined(separator: " ")
+        if loc.isEmpty { return project.client.name }
+        return "\(project.client.name) · \(loc)"
+    }
+
+    private var schedulingWeekPickerCard: some View {
+        HStack(alignment: .center) {
+            Button(action: { changeWeek(by: -1) }) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
+            .buttonStyle(.plain)
+            VStack(spacing: 2) {
+                Text(schedulingWeekOfTitle)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                Text(schedulingWeekCountsSubtitle)
+                    .font(.system(size: 10))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
+            .frame(maxWidth: .infinity)
+            Button(action: { changeWeek(by: 1) }) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    private var schedulingWeekOfTitle: String {
+        let f = DateFormatter()
+        f.dateFormat = "d MMM yyyy"
+        return "Week of \(f.string(from: weekStartDate))"
+    }
+
+    private var schedulingWeekCountsSubtitle: String {
+        let c = schedulingWeekOperativeAndSubCounts
+        let opLabel = c.ops == 1 ? "op" : "ops"
+        let subLabel = c.subs == 1 ? "sub" : "subs"
+        return "\(c.ops) \(opLabel) · \(c.subs) \(subLabel)"
+    }
+
+    private var schedulingWeekOperativeAndSubCounts: (ops: Int, subs: Int) {
+        var ops = 0
+        var subs = 0
+        for day in weekDays {
+            ops += bookingsForDate(day).count
+            subs += subcontractorBookingsForDate(day).count
+        }
+        return (ops, subs)
+    }
+
+    private var schedulingOperativeGradient: LinearGradient {
+        LinearGradient(
+            colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var schedulingSubcontractorGradient: LinearGradient {
+        LinearGradient(
+            colors: [Color(red: 0.325, green: 0.290, blue: 0.718), Color(red: 0.498, green: 0.467, blue: 0.867)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var schedulingDualActions: some View {
+        HStack(spacing: 7) {
+            Button(action: {
+                scheduleOperativeSeedBooking = nil
+                showingScheduleOperative = true
+            }) {
+                HStack(spacing: 5) {
+                    Image(systemName: "person.badge.plus")
+                        .font(.system(size: 13, weight: .medium))
+                    Text("Operative")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .background(schedulingOperativeGradient)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            Button(action: { showingScheduleSubcontractor = true }) {
+                HStack(spacing: 5) {
+                    Image(systemName: "person.2.badge.plus")
+                        .font(.system(size: 13, weight: .medium))
+                    Text("Sub")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .background(schedulingSubcontractorGradient)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+            }
+            .buttonStyle(.plain)
         }
     }
-    
-    // MARK: - Week Overview
-    
-    private var weekOverview: some View {
-        VStack(alignment: .leading, spacing: 16) {
+
+    private var schedulingWeekOverviewSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Week Overview")
-                    .font(.headline)
-                    .foregroundColor(.primary)
+                Text("Week overview")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
                 Spacer()
                 Button(action: toggleWeekViewMode) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "rectangle.split.3x1")
-                        Text("Change View")
+                    HStack(spacing: 4) {
+                        Image(systemName: "square.grid.2x2")
+                            .font(.system(size: 11, weight: .medium))
+                        Text("Calendar")
+                            .font(.system(size: 10, weight: .medium))
                     }
-                    .font(.caption)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color(.systemGray5))
-                    .cornerRadius(8)
+                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(Color.white)
+                    .clipShape(Capsule())
+                    .overlay(
+                        Capsule()
+                            .stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5)
+                    )
                 }
+                .buttonStyle(.plain)
             }
-            
             if isCompactWeekView {
-                compactWeekOverview
+                schedulingCompactWeekGrid
             } else {
-                standardWeekOverview
+                schedulingListWeekOverview
             }
         }
     }
-    
-    private var standardWeekOverview: some View {
-        VStack(spacing: 12) {
+
+    private var schedulingListWeekOverview: some View {
+        VStack(spacing: 6) {
             ForEach(weekDays, id: \.self) { day in
-                dayBubble(for: day)
+                schedulingDayCard(for: day)
             }
         }
     }
-    
-    private var compactWeekOverview: some View {
-        VStack(spacing: 12) {
+
+    private var schedulingCompactWeekGrid: some View {
+        VStack(spacing: 8) {
             HStack(spacing: 8) {
                 ForEach(weekDays.prefix(5), id: \.self) { day in
-                    compactDayBubble(for: day)
+                    schedulingCompactDayCell(for: day)
                 }
             }
             HStack(spacing: 8) {
                 ForEach(weekDays.suffix(2), id: \.self) { day in
-                    compactDayBubble(for: day)
+                    schedulingCompactDayCell(for: day)
                 }
                 Spacer()
             }
         }
     }
-    
-    private func dayBubble(for date: Date) -> some View {
-        let dayBookings = bookingsForDate(date)
-        let dayManagerBookings = managerBookingsForDate(date)
-        let daySubcontractorBookings = subcontractorBookingsForDate(date)
+
+    private func schedulingShortDayTitle(_ date: Date) -> String {
+        let df = DateFormatter()
+        df.locale = Locale.current
+        df.dateFormat = "EEE · d MMM"
+        var s = df.string(from: date)
+        if Calendar.current.isDateInToday(date) {
+            s += " · Today"
+        }
+        return s
+    }
+
+    private func schedulingDayBookedCount(_ date: Date) -> Int {
+        bookingsForDate(date).count
+            + managerBookingsForDate(date).count
+            + subcontractorBookingsForDate(date).count
+    }
+
+    private func schedulingDayOvertimeTotal(_ date: Date) -> Double {
+        let p = payrollTimePolicy
+        var t = 0.0
+        for b in bookingsForDate(date) {
+            t += b.overtimeHoursBeyondPaidStandard(policy: p)
+        }
+        for b in managerBookingsForDate(date) {
+            t += b.overtimeHoursBeyondPaidStandard(policy: p)
+        }
+        return t
+    }
+
+    private func subcontractorApproximateHours(_ booking: SubcontractorBooking) -> Double {
+        let p = payrollTimePolicy
+        switch booking.timeSlot {
+        case .fullDay, .customHours: return max(p.standardPaidHours, 0)
+        case .morning, .afternoon: return max(p.standardPaidHours, 0) / 2
+        case .evening: return 4
+        case .overtime: return 2
+        }
+    }
+
+    private func subcontractorScheduleLabel(_ booking: SubcontractorBooking) -> String {
+        switch booking.timeSlot {
+        case .fullDay:
+            return "\(payrollTimePolicy.standardDayStart)–\(payrollTimePolicy.standardDayEnd)"
+        default:
+            return booking.timeSlot.displayName
+        }
+    }
+
+    private func formatSchedulingOTHours(_ hours: Double) -> String {
+        let rounded = (hours * 2).rounded() / 2
+        if abs(rounded - rounded.rounded(.towardZero)) < 0.01 {
+            return String(format: "%.0f", rounded)
+        }
+        return String(format: "%.1f", rounded)
+    }
+
+    private func schedulingHoursPill(hours: Double, hasOvertime: Bool) -> some View {
+        let text = "\(formatSchedulingOTHours(hours))h"
+        let bg = hasOvertime ? Color(red: 0.98, green: 0.933, blue: 0.855) : Color(red: 0.882, green: 0.961, blue: 0.933)
+        let fg = hasOvertime ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen
+        return Text(text)
+            .font(.system(size: 8, weight: .medium))
+            .foregroundStyle(fg)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(bg)
+            .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+    }
+
+    private func schedulingAvatar(initials: String, accent: LinearGradient) -> some View {
+        Text(initials)
+            .font(.system(size: 7, weight: .medium))
+            .foregroundStyle(.white)
+            .frame(width: 16, height: 16)
+            .background(accent)
+            .clipShape(Circle())
+    }
+
+    private func schedulingDayCard(for date: Date) -> some View {
         let isToday = Calendar.current.isDateInToday(date)
-        
-        let fullDateString = formattedFullDate(date)
-        
-        return VStack(alignment: .leading, spacing: 12) {
-            // Full date label
-            HStack {
-                Text(fullDateString)
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(isToday ? .white : .primary)
-                
+        let count = schedulingDayBookedCount(date)
+        let dayOT = schedulingDayOvertimeTotal(date)
+        let opBookings = bookingsForDate(date)
+        let mgrBookings = managerBookingsForDate(date)
+        let subBookings = subcontractorBookingsForDate(date)
+        let hasRows = count > 0
+
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(schedulingShortDayTitle(date))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(isToday ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.ink)
                 Spacer()
-            }
-            
-            // Managers, operatives and sub contractors list
-            if !dayManagerBookings.isEmpty || !dayBookings.isEmpty || !daySubcontractorBookings.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(dayManagerBookings, id: \.id) { booking in
-                        let managerName = userStore.organizationUsers.first(where: { $0.id == booking.userId })?.fullName ?? "Unknown Manager"
-                        let timeSlotText = booking.timeSlot.displayName
-                        
-                        HStack {
-                            Text(managerName)
-                                .font(.body)
-                                .foregroundColor(isToday ? .white : .primary)
-                            
-                            Spacer()
-                            
-                            Text(timeSlotText)
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .foregroundColor(isToday ? .white.opacity(0.9) : .secondary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(isToday ? Color.white.opacity(0.2) : Color.purple.opacity(0.15))
-                                .cornerRadius(6)
-                        }
+                VStack(alignment: .trailing, spacing: 2) {
+                    if dayOT > 0.05 {
+                        Text("+\(formatSchedulingOTHours(dayOT))h OT")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
                     }
-                    
-                    ForEach(dayBookings, id: \.id) { booking in
-                        let operative = operativeStore.activeOperatives.first { $0.id == booking.operativeId }
-                        let operativeName = operative?.name ?? "Unknown Operative"
-                        let timeSlotText = booking.timeSlot.displayName
-                        
-                        HStack {
-                            Text(operativeName)
-                                .font(.body)
-                                .foregroundColor(isToday ? .white : .primary)
-                            
-                            Spacer()
-                            
-                            Text(timeSlotText)
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .foregroundColor(isToday ? .white.opacity(0.9) : .secondary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(isToday ? Color.white.opacity(0.2) : Color(.systemGray5))
-                                .cornerRadius(6)
-                        }
-                    }
-                    
-                    ForEach(daySubcontractorBookings, id: \.id) { booking in
-                        let subbie = subcontractorStore.subcontractors.first { $0.id == booking.subcontractorId }
-                        let subbieName = subbie?.name ?? "Unknown Sub Contractor"
-                        let timeSlotText = booking.timeSlot.displayName
-                        
-                        HStack {
-                            Text(subbieName)
-                                .font(.body)
-                                .foregroundColor(isToday ? .white : .primary)
-                            Spacer()
-                            Text(timeSlotText)
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .foregroundColor(isToday ? .white.opacity(0.9) : .secondary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(isToday ? Color.white.opacity(0.2) : Color.indigo.opacity(0.15))
-                                .cornerRadius(6)
-                        }
+                    if count > 0 {
+                        Text("\(count) booked")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                    } else {
+                        Text("No bookings")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
                     }
                 }
-            } else {
-                Text("No bookings")
-                    .font(.subheadline)
-                    .foregroundColor(isToday ? .white.opacity(0.7) : .secondary)
-                    .padding(.vertical, 4)
+            }
+            if hasRows {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(mgrBookings, id: \.id) { booking in
+                        schedulingManagerBookingRow(booking: booking)
+                    }
+                    ForEach(opBookings, id: \.id) { booking in
+                        schedulingOperativeBookingRow(booking: booking) {
+                            scheduleOperativeSeedBooking = booking
+                            showingScheduleOperative = true
+                        }
+                    }
+                    ForEach(subBookings, id: \.id) { booking in
+                        schedulingSubcontractorBookingRow(booking: booking)
+                    }
+                }
             }
         }
+        .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isToday ? Color.theme.primary : Color.white)
-        )
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(isToday ? Color.clear : Color(.systemGray4), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(isToday ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.border, lineWidth: isToday ? 0.5 : 0.5)
         )
-        .shadow(color: .black.opacity(isToday ? 0.2 : 0.05), radius: isToday ? 4 : 2, x: 0, y: 2)
     }
-    
-    private func compactDayBubble(for date: Date) -> some View {
-        let dayBookings = bookingsForDate(date)
-        let dayManagerBookings = managerBookingsForDate(date)
-        let daySubcontractorBookings = subcontractorBookingsForDate(date)
+
+    private func schedulingOperativeBookingRow(booking: Booking, onTap: @escaping () -> Void) -> some View {
+        let op = operativeStore.activeOperatives.first { $0.id == booking.operativeId }
+        let name = op?.name ?? "Unknown operative"
+        let initials = PlannerUIInitials.from(name)
+        let p = payrollTimePolicy
+        let hrs = booking.paidBookedHours(policy: p)
+        let ot = booking.overtimeHoursBeyondPaidStandard(policy: p)
+        return Button(action: onTap) {
+            HStack(spacing: 6) {
+                schedulingAvatar(initials: initials, accent: schedulingOperativeGradient)
+                Text(name)
+                    .font(.system(size: 10))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(booking.scheduleLabel(policy: p))
+                    .font(.system(size: 9))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                schedulingHoursPill(hours: hrs, hasOvertime: ot > 0.05)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(ProjectWorksRevampColors.muted.opacity(0.7))
+            }
+            .padding(EdgeInsets(top: 4, leading: 7, bottom: 4, trailing: 7))
+            .background(ProjectWorksRevampColors.canvas)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func schedulingManagerBookingRow(booking: ManagerSiteBooking) -> some View {
+        let managerName = userStore.organizationUsers.first(where: { $0.id == booking.userId })?.fullName ?? "Manager"
+        let initials = PlannerUIInitials.from(managerName)
+        let p = payrollTimePolicy
+        let hrs = booking.paidBookedHours(policy: p)
+        let ot = booking.overtimeHoursBeyondPaidStandard(policy: p)
+        return HStack(spacing: 6) {
+            schedulingAvatar(initials: initials, accent: schedulingSubcontractorGradient)
+            Text(managerName)
+                .font(.system(size: 10))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(booking.scheduleLabel(policy: p))
+                .font(.system(size: 9))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+            schedulingHoursPill(hours: hrs, hasOvertime: ot > 0.05)
+        }
+        .padding(EdgeInsets(top: 4, leading: 7, bottom: 4, trailing: 7))
+        .background(ProjectWorksRevampColors.canvas)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+
+    private func schedulingSubcontractorBookingRow(booking: SubcontractorBooking) -> some View {
+        let sub = subcontractorStore.subcontractors.first { $0.id == booking.subcontractorId }
+        let name = sub?.name ?? "Subcontractor"
+        let initials = PlannerUIInitials.from(name)
+        let hrs = subcontractorApproximateHours(booking)
+        let ot = max(0, hrs - max(payrollTimePolicy.standardPaidHours, 0))
+        return HStack(spacing: 6) {
+            schedulingAvatar(initials: initials, accent: schedulingSubcontractorGradient)
+            Text(name)
+                .font(.system(size: 10))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(subcontractorScheduleLabel(booking))
+                .font(.system(size: 9))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+            schedulingHoursPill(hours: hrs, hasOvertime: ot > 0.05)
+        }
+        .padding(EdgeInsets(top: 4, leading: 7, bottom: 4, trailing: 7))
+        .background(ProjectWorksRevampColors.canvas)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+
+    private func schedulingCompactDayCell(for date: Date) -> some View {
         let isToday = Calendar.current.isDateInToday(date)
-        let fullDateString = formattedFullDate(date)
-        
-        return VStack(alignment: .leading, spacing: 6) {
-            Text(fullDateString)
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .lineLimit(2)
-                .foregroundColor(isToday ? .white : .primary)
-            if let managerBooking = dayManagerBookings.first {
-                let managerName = userStore.organizationUsers.first(where: { $0.id == managerBooking.userId })?.fullName ?? "Manager"
-                Text(managerName)
-                    .font(.caption2)
-                    .lineLimit(2)
-                    .foregroundColor(isToday ? .white : .primary)
-            } else if let booking = dayBookings.first {
-                let operative = operativeStore.activeOperatives.first { $0.id == booking.operativeId }
-                Text(operative?.name ?? "Unassigned")
-                    .font(.caption2)
-                    .lineLimit(2)
-                    .foregroundColor(isToday ? .white : .primary)
-            } else if let subbieBooking = daySubcontractorBookings.first {
-                let subbie = subcontractorStore.subcontractors.first { $0.id == subbieBooking.subcontractorId }
-                Text(subbie?.name ?? "Sub Contractor")
-                    .font(.caption2)
-                    .lineLimit(2)
-                    .foregroundColor(isToday ? .white : .primary)
+        let count = schedulingDayBookedCount(date)
+        let df = DateFormatter()
+        df.dateFormat = "EEE d"
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(df.string(from: date))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(isToday ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.ink)
+                .lineLimit(1)
+            if count == 0 {
+                Text("—")
+                    .font(.system(size: 9))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
             } else {
-                Text("No bookings")
-                    .font(.caption2)
-                    .foregroundColor(isToday ? .white.opacity(0.7) : .secondary)
+                Text("\(count)")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                Text("booked")
+                    .font(.system(size: 8))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
             }
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(isToday ? Color.theme.primary : Color(.secondarySystemBackground))
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(isToday ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.border, lineWidth: 0.5)
         )
     }
     
@@ -946,37 +1167,6 @@ struct ProjectDetailView: View {
         .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
     }
     
-    // MARK: - Schedule Operative Button
-    
-    private var scheduleOperativeButton: some View {
-        HStack(spacing: 10) {
-            Button(action: { showingScheduleOperative = true }) {
-                Text("Schedule Operative")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.theme.primary)
-                    .cornerRadius(12)
-            }
-            Button(action: { showingScheduleSubcontractor = true }) {
-                Text("Schedule Sub Contractor")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.indigo)
-                    .cornerRadius(12)
-            }
-        }
-    }
-    
     // MARK: - Helper Properties
     
     private var hasValidAddress: Bool {
@@ -998,12 +1188,6 @@ struct ProjectDetailView: View {
             return String(format: "%.5f, %.5f", la, lo)
         }
         return ""
-    }
-    
-    private var weekOfString: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "'Week Of' d MMM yyyy"
-        return formatter.string(from: weekStartDate)
     }
     
     private var weekStartDate: Date {
@@ -1265,11 +1449,12 @@ struct ProjectDetailView: View {
     }
     
     private func bookingsForDate(_ date: Date) -> [Booking] {
-        bookingStore.bookings.filter { booking in
+        let policy = payrollTimePolicy
+        return bookingStore.bookings.filter { booking in
             Calendar.current.isDate(booking.date, inSameDayAs: date) &&
             booking.projectId == project.id &&
             (booking.status == .confirmed || booking.status == .tentative)
-        }.sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+        }.sorted { $0.minutesSortKey(policy: policy) < $1.minutesSortKey(policy: policy) }
     }
     
     private func subcontractorBookingsForDate(_ date: Date) -> [SubcontractorBooking] {
@@ -1281,11 +1466,12 @@ struct ProjectDetailView: View {
     }
     
     private func managerBookingsForDate(_ date: Date) -> [ManagerSiteBooking] {
-        managerScheduleStore.managerSiteBookings.filter { booking in
+        let policy = payrollTimePolicy
+        return managerScheduleStore.managerSiteBookings.filter { booking in
             Calendar.current.isDate(booking.date, inSameDayAs: date) &&
             booking.locationId == project.id &&
             (booking.locationType == .project || booking.locationType == .smallWork)
-        }.sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+        }.sorted { $0.minutesSortKey(policy: policy) < $1.minutesSortKey(policy: policy) }
     }
     
     // MARK: - Helper Methods
@@ -1300,26 +1486,6 @@ struct ProjectDetailView: View {
         bookingStore.loadData()
         managerScheduleStore.loadData()
         Task { await subcontractorStore.loadData() }
-    }
-    
-    private func formattedFullDate(_ date: Date) -> String {
-        let calendar = Calendar.current
-        let day = calendar.component(.day, from: date)
-        let weekdayFormatter = DateFormatter()
-        weekdayFormatter.dateFormat = "EEEE"
-        let monthFormatter = DateFormatter()
-        monthFormatter.dateFormat = "MMMM"
-        return "\(weekdayFormatter.string(from: date)) \(day)\(ordinalSuffix(for: day)) \(monthFormatter.string(from: date))"
-    }
-    
-    private func ordinalSuffix(for day: Int) -> String {
-        if (11...13).contains(day % 100) { return "th" }
-        switch day % 10 {
-        case 1: return "st"
-        case 2: return "nd"
-        case 3: return "rd"
-        default: return "th"
-        }
     }
     
     private var weekViewPreferenceKey: String {
