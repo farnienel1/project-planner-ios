@@ -673,6 +673,19 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: ✅ Stored organization locally: \(organization.name)")
     }
     
+    /// Builds `OrganizationSettings` from a Firestore `organizations/{id}` document, including `payrollTimePolicy`.
+    private static func organizationSettingsFromOrgDocument(_ data: [String: Any]) -> OrganizationSettings {
+        var settings = OrganizationSettings()
+        if let policyDict = data["payrollTimePolicy"] as? [String: Any] {
+            let policy = OrgPayrollTimePolicy.fromFirestore(policyDict)
+            settings.payrollTimePolicy = policy
+            settings.workingHours.startTime = policy.standardDayStart
+            settings.workingHours.endTime = policy.standardDayEnd
+            settings.workingHours.lunchBreak = policy.unpaidBreakMinutes
+        }
+        return settings
+    }
+
     // Async version for better control
     @MainActor
     func loadUserOrganization(userId: String) async {
@@ -845,11 +858,12 @@ class FirebaseBackend: ObservableObject {
             let defaultLongitude = data["defaultLongitude"] as? Double
             print("🔥🔥🔥 DEBUG: ✅ Organization name: \(organizationName), creatorUserId: \(creatorUserId ?? "nil")")
             
+            let orgSettings = Self.organizationSettingsFromOrgDocument(data)
             let organization = Organization(
                 id: UUID(uuidString: organizationId) ?? UUID(),
                 firestoreDocumentId: organizationId,
                 name: organizationName,
-                settings: OrganizationSettings(),
+                settings: orgSettings,
                 officeAddressLine1: officeAddressLine1,
                 officeCity: officeCity,
                 officePostcode: officePostcode,
@@ -2930,7 +2944,12 @@ class FirebaseBackend: ObservableObject {
         let resolvedRole: UserRole = operativeMode ? .operative : role
         
         let assignedManagerUserId = data["assignedManagerUserId"] as? String
-        let dayRate = data["dayRate"] as? Double
+        var dayRate = data["dayRate"] as? Double
+        var hourlyRate = data["hourlyRate"] as? Double
+        // Prefer day rate if both are present (legacy / misconfigured documents).
+        if let dr = dayRate, dr > 0, let hr = hourlyRate, hr > 0 {
+            hourlyRate = nil
+        }
         let utp = (data["tradeTypePreset"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let utc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let profilePhotoRaw = (data["profilePhotoURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2964,6 +2983,7 @@ class FirebaseBackend: ObservableObject {
             policyAcceptedAt: policyAcceptedAt,
             assignedManagerUserId: assignedManagerUserId,
             dayRate: dayRate,
+            hourlyRate: hourlyRate,
             tradeTypePreset: (utp?.isEmpty == false) ? utp : nil,
             tradeTypeCustom: (utc?.isEmpty == false) ? utc : nil,
             profilePhotoURL: (profilePhotoRaw?.isEmpty == false) ? profilePhotoRaw : nil,
@@ -3075,7 +3095,34 @@ class FirebaseBackend: ObservableObject {
         if let defaultLongitude {
             payload["defaultLongitude"] = defaultLongitude
         }
+        payload["payrollTimePolicy"] = OrgPayrollTimePolicy.default.asFirestoreDictionary()
         try await db.collection("organizations").document(id).setData(payload, merge: true)
+    }
+
+    /// Admin: update organisation-wide payroll / working time defaults (`organizations/{orgId}.payrollTimePolicy`).
+    func updateOrganizationPayrollTimePolicy(_ policy: OrgPayrollTimePolicy) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
+            )
+        }
+        try await db.collection("organizations").document(orgId).setData(
+            [
+                "payrollTimePolicy": policy.asFirestoreDictionary(),
+                "updatedAt": Timestamp(date: Date()),
+            ],
+            merge: true
+        )
+        guard var org = currentOrganization else { return }
+        org.settings.payrollTimePolicy = policy
+        org.settings.workingHours.startTime = policy.standardDayStart
+        org.settings.workingHours.endTime = policy.standardDayEnd
+        org.settings.workingHours.lunchBreak = policy.unpaidBreakMinutes
+        org.updatedAt = Date()
+        currentOrganization = org
+        storeOrganizationLocally(org)
     }
     
     /// Super admin: update organisation display name, office location, country, and optional cached map center.
@@ -3206,13 +3253,27 @@ class FirebaseBackend: ObservableObject {
         }
         
         if user.permissions.operativeMode || user.permissions.manager {
-            if let dr = user.dayRate {
-                userData["dayRate"] = dr
+            let dr = user.dayRate
+            let hr = user.hourlyRate
+            let hasDay = (dr ?? 0) > 0
+            let hasHourly = (hr ?? 0) > 0
+            if hasDay && hasHourly {
+                // Should not happen in UI; prefer day rate on save.
+                userData["dayRate"] = dr!
+                userData["hourlyRate"] = FieldValue.delete()
+            } else if hasDay {
+                userData["dayRate"] = dr!
+                userData["hourlyRate"] = FieldValue.delete()
+            } else if hasHourly {
+                userData["hourlyRate"] = hr!
+                userData["dayRate"] = FieldValue.delete()
             } else {
                 userData["dayRate"] = FieldValue.delete()
+                userData["hourlyRate"] = FieldValue.delete()
             }
         } else {
             userData["dayRate"] = FieldValue.delete()
+            userData["hourlyRate"] = FieldValue.delete()
         }
         
         if user.permissions.operativeMode || user.permissions.manager {
@@ -4152,7 +4213,7 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: saveBooking called with organizationId: \(organizationId), bookingId: \(booking.id.uuidString)")
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
         
-        let bookingData: [String: Any] = [
+        var bookingData: [String: Any] = [
             "id": booking.id.uuidString,
             "operativeId": booking.operativeId.uuidString,
             "projectId": booking.projectId.uuidString,
@@ -4164,7 +4225,28 @@ class FirebaseBackend: ObservableObject {
             "createdAt": Timestamp(date: booking.createdAt),
             "updatedAt": Timestamp(date: booking.updatedAt)
         ]
-        
+        if let ws = booking.workStartTime, !ws.isEmpty {
+            bookingData["workStartTime"] = ws
+        } else {
+            bookingData["workStartTime"] = FieldValue.delete()
+        }
+        if let we = booking.workEndTime, !we.isEmpty {
+            bookingData["workEndTime"] = we
+        } else {
+            bookingData["workEndTime"] = FieldValue.delete()
+        }
+        bookingData["isBreakRemoved"] = booking.isBreakRemoved
+        if let otm = booking.otMultiplierOverride {
+            bookingData["otMultiplierOverride"] = otm
+        } else {
+            bookingData["otMultiplierOverride"] = FieldValue.delete()
+        }
+        if let gid = booking.bookingGroupId, !gid.isEmpty {
+            bookingData["bookingGroupId"] = gid
+        } else {
+            bookingData["bookingGroupId"] = FieldValue.delete()
+        }
+
         print("🔥🔥🔥 DEBUG: Saving booking to organizations/\(orgId)/bookings/\(booking.id.uuidString)")
         
         try await db.collection("organizations").document(orgId).collection("bookings").document(booking.id.uuidString).setData(bookingData, merge: true)
@@ -4208,6 +4290,16 @@ class FirebaseBackend: ObservableObject {
             
             let id = UUID(uuidString: doc.documentID) ?? UUID()
             let notes = data["notes"] as? String
+            let workStartTime = data["workStartTime"] as? String
+            let workEndTime = data["workEndTime"] as? String
+            let isBreakRemoved = (data["isBreakRemoved"] as? Bool) ?? false
+            let otMultiplierOverride: Double? = {
+                guard let v = data["otMultiplierOverride"] else { return nil }
+                if let n = v as? NSNumber { return n.doubleValue }
+                if let d = v as? Double { return d }
+                return nil
+            }()
+            let bookingGroupId = data["bookingGroupId"] as? String
             let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
             let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
             
@@ -4220,6 +4312,11 @@ class FirebaseBackend: ObservableObject {
                 bookedBy: bookedBy,
                 notes: notes,
                 status: status,
+                workStartTime: workStartTime,
+                workEndTime: workEndTime,
+                isBreakRemoved: isBreakRemoved,
+                otMultiplierOverride: otMultiplierOverride,
+                bookingGroupId: bookingGroupId,
                 createdAt: createdAt,
                 updatedAt: updatedAt
             )
@@ -4250,6 +4347,22 @@ class FirebaseBackend: ObservableObject {
         if let customLocationName = booking.customLocationName, !customLocationName.isEmpty {
             data["customLocationName"] = customLocationName
         }
+        if let ws = booking.workStartTime, !ws.isEmpty {
+            data["workStartTime"] = ws
+        } else {
+            data["workStartTime"] = FieldValue.delete()
+        }
+        if let we = booking.workEndTime, !we.isEmpty {
+            data["workEndTime"] = we
+        } else {
+            data["workEndTime"] = FieldValue.delete()
+        }
+        data["isBreakRemoved"] = booking.isBreakRemoved
+        if let gid = booking.bookingGroupId, !gid.isEmpty {
+            data["bookingGroupId"] = gid
+        } else {
+            data["bookingGroupId"] = FieldValue.delete()
+        }
         try await db.collection("organizations").document(organizationId).collection("managerSiteBookings").document(booking.id.uuidString).setData(data, merge: true)
     }
 
@@ -4266,9 +4379,27 @@ class FirebaseBackend: ObservableObject {
             let id = UUID(uuidString: doc.documentID) ?? UUID()
             let locationId = (data["locationId"] as? String).flatMap { UUID(uuidString: $0) }
             let customLocationName = data["customLocationName"] as? String
+            let workStartTime = data["workStartTime"] as? String
+            let workEndTime = data["workEndTime"] as? String
+            let isBreakRemoved = (data["isBreakRemoved"] as? Bool) ?? false
+            let bookingGroupId = data["bookingGroupId"] as? String
             let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
             let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-            return ManagerSiteBooking(id: id, userId: userId, date: date, timeSlot: timeSlot, locationType: locationType, locationId: locationId, customLocationName: customLocationName, createdAt: createdAt, updatedAt: updatedAt)
+            return ManagerSiteBooking(
+                id: id,
+                userId: userId,
+                date: date,
+                timeSlot: timeSlot,
+                locationType: locationType,
+                locationId: locationId,
+                customLocationName: customLocationName,
+                workStartTime: workStartTime,
+                workEndTime: workEndTime,
+                isBreakRemoved: isBreakRemoved,
+                bookingGroupId: bookingGroupId,
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            )
         }
     }
 

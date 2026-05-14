@@ -53,6 +53,10 @@ struct HomeView: View {
     @State private var persistedQuickActionIds: [String] = []
     @State private var showingGeneralAppSettings = false
     @State private var hasLoadedQuickActionLayout = false
+    @State private var showingAdminOverviewCustomize = false
+    @State private var draftAdminOverviewMetricIds: [HomeOverviewMetricID] = []
+    @State private var persistedAdminOverviewMetricIds: [HomeOverviewMetricID] = []
+    @State private var hasLoadedAdminOverviewMetrics = false
     
     var body: some View {
         ScrollView {
@@ -172,6 +176,16 @@ struct HomeView: View {
         .fullScreenCover(isPresented: $showingClientsView) {
             ClientsView()
                 .environmentObject(projectStore)
+        }
+        .sheet(isPresented: $showingAdminOverviewCustomize) {
+            AdminHomeOverviewCustomizeSheet(
+                draftMetricIds: $draftAdminOverviewMetricIds,
+                metricValue: { overviewMetricValueString($0) },
+                onSave: {
+                    persistedAdminOverviewMetricIds = draftAdminOverviewMetricIds
+                    savePersistedAdminOverviewMetrics()
+                }
+            )
         }
         .sheet(isPresented: $showingDailyOverview) {
             DailyOverviewView()
@@ -380,6 +394,154 @@ struct HomeView: View {
         }.count
     }
 
+    /// Incomplete tasks assigned to the current user with due date strictly before today.
+    private var tasksOverdueCount: Int {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        return taskStore.tasks.filter { task in
+            guard !task.isCompleted, let due = task.dueDate else { return false }
+            let d0 = cal.startOfDay(for: due)
+            guard d0 < today else { return false }
+            return task.isAssignedToUser(
+                userEmail: userStore.currentUser?.email,
+                operatives: operativeStore.allOperatives,
+                managers: operativeStore.allManagers,
+                isOperativeMode: userStore.isOperativeMode()
+            )
+        }.count
+    }
+
+    private var outstandingTasksAllUsersCount: Int {
+        taskStore.tasks.filter { !$0.isCompleted }.count
+    }
+
+    private var operativesOnSiteTodayCount: Int {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let ids = Set(
+            bookingStore.bookings
+                .filter { cal.isDate($0.date, inSameDayAs: today) && ($0.status == .confirmed || $0.status == .tentative) }
+                .map { $0.operativeId.uuidString }
+        )
+        return ids.count
+    }
+
+    private var managersOnSiteTodayCount: Int {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        return Set(
+            managerScheduleStore.managerSiteBookings
+                .filter {
+                    cal.isDate($0.date, inSameDayAs: today)
+                        && ($0.locationType == ManagerLocationType.project
+                            || $0.locationType == ManagerLocationType.smallWork)
+                }
+                .map(\.userId)
+        ).count
+    }
+
+    private var operativesOnALTodayCount: Int {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let holidays = holidayStore.approvedBookings(covering: today)
+        var keys = Set<String>()
+        for h in holidays {
+            if let oid = h.operativeId {
+                keys.insert("op:\(oid.uuidString)")
+            }
+            if let uid = h.userId?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty,
+               let u = userStore.organizationUsers.first(where: { $0.id == uid }),
+               u.permissions.operativeMode {
+                keys.insert("u:\(uid)")
+            }
+        }
+        return keys.count
+    }
+
+    private var managersOnALTodayCount: Int {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let holidays = holidayStore.approvedBookings(covering: today)
+        var seen = Set<String>()
+        for h in holidays {
+            guard let uid = h.userId?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else { continue }
+            guard let u = userStore.organizationUsers.first(where: { $0.id == uid }) else { continue }
+            guard !u.permissions.operativeMode,
+                  !u.isSuperAdmin,
+                  !u.permissions.adminAccess,
+                  u.permissions.manager,
+                  u.isActive else { continue }
+            seen.insert(uid)
+        }
+        return seen.count
+    }
+
+    private static let defaultAdminOverviewMetricIds: [HomeOverviewMetricID] = [
+        .tasksDueTodayPersonal, .tasksDueWeekPersonal, .warnings
+    ]
+
+    private var adminOverviewStorageKey: String {
+        let uid = firebaseBackend.currentUser?.uid ?? "anonymous"
+        return "homeOverviewMetrics.v1.\(uid)"
+    }
+
+    private func loadPersistedAdminOverviewMetricsIfNeeded() {
+        guard !hasLoadedAdminOverviewMetrics else { return }
+        hasLoadedAdminOverviewMetrics = true
+        if let raw = UserDefaults.standard.array(forKey: adminOverviewStorageKey) as? [String] {
+            let allowed = Set(HomeOverviewMetricID.allCases.map(\.rawValue))
+            let decoded = raw.compactMap { HomeOverviewMetricID(rawValue: $0) }
+                .filter { allowed.contains($0.rawValue) }
+            var seen = Set<HomeOverviewMetricID>()
+            let uniq = decoded.filter { seen.insert($0).inserted }
+            persistedAdminOverviewMetricIds = uniq.isEmpty ? Self.defaultAdminOverviewMetricIds : Array(uniq.prefix(3))
+        } else {
+            persistedAdminOverviewMetricIds = Self.defaultAdminOverviewMetricIds
+        }
+    }
+
+    private func savePersistedAdminOverviewMetrics() {
+        UserDefaults.standard.set(persistedAdminOverviewMetricIds.map(\.rawValue), forKey: adminOverviewStorageKey)
+    }
+
+    private var adminResolvedOverviewMetricIds: [HomeOverviewMetricID] {
+        let base = persistedAdminOverviewMetricIds.isEmpty ? Self.defaultAdminOverviewMetricIds : persistedAdminOverviewMetricIds
+        return Array(base.prefix(3))
+    }
+
+    private func overviewMetricValueString(_ mid: HomeOverviewMetricID) -> String {
+        switch mid {
+        case .tasksDueTodayPersonal: return "\(tasksDueTodayCount)"
+        case .tasksDueWeekPersonal: return "\(tasksDueThisWeekCount)"
+        case .warnings: return "\(warningsService.warningCount)"
+        case .operativesOnSite: return "\(operativesOnSiteTodayCount)"
+        case .managersOnSite: return "\(managersOnSiteTodayCount)"
+        case .operativesOnAL: return "\(operativesOnALTodayCount)"
+        case .managersOnAL: return "\(managersOnALTodayCount)"
+        case .outstandingTasksAllUsers: return "\(outstandingTasksAllUsersCount)"
+        }
+    }
+
+    private func overviewMetricContributesToHeadsUp(_ mid: HomeOverviewMetricID) -> Bool {
+        switch mid {
+        case .tasksDueTodayPersonal: return tasksDueTodayCount > 0
+        case .tasksDueWeekPersonal: return tasksDueThisWeekCount > 0
+        case .warnings: return warningsService.warningCount > 0
+        case .outstandingTasksAllUsers: return outstandingTasksAllUsersCount > 0
+        default: return false
+        }
+    }
+
+    private var todayOverviewIsHeadsUp: Bool {
+        if userStore.isOperativeMode() {
+            return tasksDueTodayCount > 0 || tasksDueThisWeekCount > 0 || tasksOverdueCount > 0
+        }
+        if userStore.hasAdminAccess() {
+            return adminResolvedOverviewMetricIds.contains { overviewMetricContributesToHeadsUp($0) }
+        }
+        return tasksDueTodayCount > 0 || tasksDueThisWeekCount > 0 || warningsService.warningCount > 0
+    }
+
     private var homeDashboardRoot: some View {
         VStack(alignment: .leading, spacing: 0) {
             homeGreetingHeader
@@ -396,12 +558,21 @@ struct HomeView: View {
         .padding(.top, 8)
         .padding(.bottom, 28)
         .onAppear {
+            loadPersistedAdminOverviewMetricsIfNeeded()
             scheduleWarningsRefresh()
         }
         .onChange(of: operativeStore.allOperatives) { _, _ in scheduleWarningsRefresh() }
         .onChange(of: bookingStore.bookings) { _, _ in scheduleWarningsRefresh() }
         .onChange(of: projectStore.projects) { _, _ in scheduleWarningsRefresh() }
         .onChange(of: projectStore.smallWorks) { _, _ in scheduleWarningsRefresh() }
+        .onChange(of: showingAdminOverviewCustomize) { _, isOpen in
+            if isOpen {
+                let base = persistedAdminOverviewMetricIds.isEmpty
+                    ? Self.defaultAdminOverviewMetricIds
+                    : persistedAdminOverviewMetricIds
+                draftAdminOverviewMetricIds = Array(base.prefix(3))
+            }
+        }
     }
 
     private var homeGreetingHeader: some View {
@@ -454,7 +625,7 @@ struct HomeView: View {
     }
 
     private var todayOverviewCard: some View {
-        let onTrack = warningsService.warningCount == 0 && tasksDueTodayCount == 0
+        let headsUp = todayOverviewIsHeadsUp
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -467,8 +638,26 @@ struct HomeView: View {
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(.white)
                 }
-                Spacer()
-                Text(onTrack ? "On track" : "Heads up")
+                Spacer(minLength: 8)
+                if userStore.hasAdminAccess() {
+                    Button {
+                        let base = persistedAdminOverviewMetricIds.isEmpty
+                            ? Self.defaultAdminOverviewMetricIds
+                            : persistedAdminOverviewMetricIds
+                        draftAdminOverviewMetricIds = Array(base.prefix(3))
+                        showingAdminOverviewCustomize = true
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.95))
+                            .padding(8)
+                            .background(.white.opacity(0.14))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Customize dashboard metrics")
+                }
+                Text(headsUp ? "Heads up" : "On track")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 10)
@@ -476,11 +665,7 @@ struct HomeView: View {
                     .background(.white.opacity(0.18))
                     .clipShape(Capsule())
             }
-            HStack(spacing: 10) {
-                overviewStatPill(value: "\(tasksDueTodayCount)", label: "Tasks today")
-                overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "Due this week")
-                overviewStatPill(value: "\(warningsService.warningCount)", label: "Warnings")
-            }
+            overviewMetricPillsRow
         }
         .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
         .background(
@@ -492,6 +677,32 @@ struct HomeView: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .padding(.bottom, 14)
+    }
+
+    @ViewBuilder
+    private var overviewMetricPillsRow: some View {
+        if userStore.isOperativeMode() {
+            HStack(spacing: 10) {
+                overviewStatPill(value: "\(tasksDueTodayCount)", label: "Tasks Due Today")
+                overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "Tasks due this week")
+                overviewStatPill(value: "\(tasksOverdueCount)", label: "Tasks Overdue")
+            }
+        } else if userStore.hasAdminAccess() {
+            HStack(spacing: 10) {
+                ForEach(adminResolvedOverviewMetricIds, id: \.self) { mid in
+                    overviewStatPill(
+                        value: overviewMetricValueString(mid),
+                        label: mid.compactPillTitle
+                    )
+                }
+            }
+        } else {
+            HStack(spacing: 10) {
+                overviewStatPill(value: "\(tasksDueTodayCount)", label: "Due today")
+                overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "This week")
+                overviewStatPill(value: "\(warningsService.warningCount)", label: "Warnings")
+            }
+        }
     }
 
     private func overviewStatPill(value: String, label: String) -> some View {
@@ -903,7 +1114,8 @@ struct HomeView: View {
             allProjects: projectStore.projects,
             organizationUsers: userStore.organizationUsers,
             accentBlue: homeBlue,
-            accentPurple: Color(red: 0.325, green: 0.29, blue: 0.718)
+            accentPurple: Color(red: 0.325, green: 0.29, blue: 0.718),
+            payrollTimePolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         )
     }
 
@@ -1021,14 +1233,19 @@ struct HomeView: View {
     
     /// Debounce: bulk store updates during startup were calling `updateWarnings` repeatedly and freezing the main thread.
     private func scheduleWarningsRefresh() {
-        guard userStore.hasAdminAccess() || userStore.isHomeProfileLoading else { return }
+        let shouldRun = userStore.isHomeProfileLoading
+            || userStore.hasAdminAccess()
+            || (userStore.displayUser?.permissions.manager == true && !userStore.isOperativeMode())
+        guard shouldRun else { return }
         warningsRefreshTask?.cancel()
         warningsRefreshTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 450_000_000)
             guard !Task.isCancelled else { return }
             await Task.yield()
             guard !Task.isCancelled else { return }
-            guard userStore.hasAdminAccess() else { return }
+            let stillEligible = userStore.hasAdminAccess()
+                || (userStore.displayUser?.permissions.manager == true && !userStore.isOperativeMode())
+            guard stillEligible else { return }
             updateWarnings()
         }
     }

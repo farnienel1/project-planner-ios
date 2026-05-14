@@ -244,7 +244,7 @@ struct WeeklyReportView: View {
             let jobNumber = project?.jobNumber ?? "N/A"
             let personName = operative.name
             let key = "\(projectName)|\(jobNumber)|\(personName)|Operative"
-            let dayValue = bookingDayValue(from: booking.timeSlot)
+            let dayValue = bookingDayValue(from: booking)
             totals[key, default: 0] += dayValue
             rowsMap[key] = ProjectWorkRow(
                 projectName: projectName,
@@ -277,7 +277,7 @@ struct WeeklyReportView: View {
             let jobNumber = project?.jobNumber ?? "N/A"
             let personName = user.fullName
             let key = "\(projectName)|\(jobNumber)|\(personName)|Manager"
-            let dayValue = managerDayValue(from: booking.timeSlot)
+            let dayValue = managerDayValue(from: booking)
             totals[key, default: 0] += dayValue
             rowsMap[key] = ProjectWorkRow(
                 projectName: projectName,
@@ -340,7 +340,7 @@ struct WeeklyReportView: View {
                 $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == opEmail
             })
             let rate = dayRateForOperativeBooking(user: user, operative: operative, on: booking.date)
-            let days = bookingDayValue(from: booking.timeSlot)
+            let days = bookingDayValue(from: booking)
             let key = labourRateKey(name: operative.name, role: "Operative", rate: rate)
             var summary = totals[key] ?? LabourRateSummary(name: operative.name, role: "Operative", rate: rate, days: 0)
             summary.days += days
@@ -352,7 +352,7 @@ struct WeeklyReportView: View {
             guard let manager = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { continue }
             let managerName = manager.fullName.isEmpty ? manager.email : manager.fullName
             let rate = dayRateForUserOnDay(userId: manager.id, fallback: manager.dayRate, date: booking.date)
-            let days = managerDayValue(from: booking.timeSlot)
+            let days = managerDayValue(from: booking)
             let key = labourRateKey(name: managerName, role: "Manager", rate: rate)
             var summary = totals[key] ?? LabourRateSummary(name: managerName, role: "Manager", rate: rate, days: 0)
             summary.days += days
@@ -385,8 +385,8 @@ struct WeeklyReportView: View {
             return ManagerAdditionalScheduleRow(
                 personName: personName,
                 location: locationName,
-                timeSlotLabel: booking.timeSlot.displayName,
-                days: managerDayValue(from: booking.timeSlot)
+                timeSlotLabel: booking.scheduleLabel(policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default),
+                days: managerDayValue(from: booking)
             )
         }
         .sorted {
@@ -416,7 +416,7 @@ struct WeeklyReportView: View {
                 subcontractorName: subcontractor.name,
                 subcontractorType: subcontractor.subcontractorType,
                 timeSlotLabel: booking.timeSlot.displayName,
-                days: bookingDayValue(from: booking.timeSlot)
+                days: subcontractorDayValue(from: booking.timeSlot)
             )
         }
         .sorted {
@@ -465,7 +465,11 @@ struct WeeklyReportView: View {
         return Double(days)
     }
 
-    private func bookingDayValue(from timeSlot: TimeSlot) -> Double {
+    private func bookingDayValue(from booking: Booking) -> Double {
+        booking.reportDayValue(policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default)
+    }
+
+    private func subcontractorDayValue(from timeSlot: TimeSlot) -> Double {
         switch timeSlot {
         case .fullDay: return 1
         case .morning, .afternoon: return 0.5
@@ -473,11 +477,8 @@ struct WeeklyReportView: View {
         }
     }
 
-    private func managerDayValue(from timeSlot: ManagerTimeSlot) -> Double {
-        switch timeSlot {
-        case .fullDay: return 1
-        case .morning, .afternoon: return 0.5
-        }
+    private func managerDayValue(from booking: ManagerSiteBooking) -> Double {
+        booking.reportDayValue(policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default)
     }
 
     private func formatDate(_ date: Date) -> String {

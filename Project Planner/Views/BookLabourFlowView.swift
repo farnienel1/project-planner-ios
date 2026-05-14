@@ -58,12 +58,24 @@ struct BookLabourFlowView: View {
     @State private var errorBanner: String?
     @State private var isSaving = false
     @State private var projectListSearchText = ""
+    @State private var bookLabourOperativeClockEdit: BookLabourOperativeClockEdit?
 
     private let calendar = Calendar.current
 
     private var day: Date { calendar.startOfDay(for: bookDate) }
 
     private var scheduleOptions: MyScheduleOptions { appSettings.settings.myScheduleOptions }
+
+    private var payrollTimePolicy: OrgPayrollTimePolicy {
+        firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+    }
+
+    private var canBookStandardDayWindow: Bool {
+        let p = payrollTimePolicy
+        guard let s = ManagerScheduleInterval.parseMinutes(p.standardDayStart),
+              let e = ManagerScheduleInterval.parseMinutes(p.standardDayEnd) else { return false }
+        return e > s
+    }
 
     private var liveProjects: [Project] {
         projectStore.projects.filter { $0.isLive && $0.jobType != .smallWorks }
@@ -132,6 +144,23 @@ struct BookLabourFlowView: View {
                     Button("OK") { errorBanner = nil }
                 } message: {
                     Text(errorBanner ?? "")
+                }
+                .sheet(item: $bookLabourOperativeClockEdit) { ctx in
+                    BookLabourOperativeHoursSheet(
+                        policy: payrollTimePolicy,
+                        onSave: { start, end, breakRemoved in
+                            bookLabourOperativeClockEdit = nil
+                            saveOperativeBooking(
+                                operative: ctx.operative,
+                                project: ctx.project,
+                                slot: .customHours,
+                                workStart: start,
+                                workEnd: end,
+                                breakRemoved: breakRemoved
+                            )
+                        },
+                        onCancel: { bookLabourOperativeClockEdit = nil }
+                    )
                 }
         }
     }
@@ -572,6 +601,48 @@ struct BookLabourFlowView: View {
                             .disabled(isSaving)
                         }
                     }
+                    HStack(spacing: 10) {
+                        Button {
+                            saveOperativeBooking(
+                                operative: op,
+                                project: project,
+                                slot: .customHours,
+                                workStart: payrollTimePolicy.standardDayStart,
+                                workEnd: payrollTimePolicy.standardDayEnd,
+                                breakRemoved: false
+                            )
+                        } label: {
+                            Text("Standard day")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.blue)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Color(red: 0.902, green: 0.961, blue: 0.933))
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
+                                )
+                        }
+                        .disabled(isSaving || !canBookStandardDayWindow)
+
+                        Button {
+                            bookLabourOperativeClockEdit = BookLabourOperativeClockEdit(operative: op, project: project)
+                        } label: {
+                            Text("Custom…")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.blue)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Color(red: 0.996, green: 0.949, blue: 0.878))
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
+                                )
+                        }
+                        .disabled(isSaving)
+                    }
                 }
                 .padding(18)
             }
@@ -798,7 +869,7 @@ struct BookLabourFlowView: View {
             return
         }
         if managerWouldClash(userId: uid, date: day, newSlot: slot) {
-            errorBanner = "This slot clashes with an existing booking (e.g. AM/PM overlap)."
+            errorBanner = "This booking overlaps another in time on that day."
             return
         }
         let booking = ManagerSiteBooking(
@@ -819,18 +890,54 @@ struct BookLabourFlowView: View {
         }
     }
 
-    private func saveOperativeBooking(operative: Operative, project: Project, slot: TimeSlot) {
+    private func saveOperativeBooking(
+        operative: Operative,
+        project: Project,
+        slot: TimeSlot,
+        workStart: String? = nil,
+        workEnd: String? = nil,
+        breakRemoved: Bool = false
+    ) {
         guard let bookedBy = firebaseBackend.currentUser?.uid else {
             errorBanner = "Not signed in."
             return
         }
-        if operativeWouldClash(operativeId: operative.id, slot: slot) {
-            errorBanner = "This slot clashes with an existing booking."
+        if bookingStore.bookings.contains(where: {
+            $0.operativeId == operative.id &&
+                calendar.isDate($0.date, inSameDayAs: day) &&
+                $0.projectId == project.id &&
+                $0.timeSlot == slot &&
+                $0.workStartTime == workStart &&
+                $0.workEndTime == workEnd &&
+                $0.isBreakRemoved == breakRemoved &&
+                $0.status != .cancelled
+        }) {
+            errorBanner = "That booking already exists."
+            return
+        }
+        if operativeWouldClash(
+            operativeId: operative.id,
+            projectId: project.id,
+            slot: slot,
+            workStart: workStart,
+            workEnd: workEnd,
+            breakRemoved: breakRemoved
+        ) {
+            errorBanner = "This booking overlaps another in time on that day."
             return
         }
         isSaving = true
         Task {
-            await bookingStore.bookOperative(operative, on: day, timeSlot: slot, for: project, bookedBy: bookedBy)
+            await bookingStore.bookOperative(
+                operative,
+                on: day,
+                timeSlot: slot,
+                for: project,
+                bookedBy: bookedBy,
+                workStartTime: workStart,
+                workEndTime: workEnd,
+                isBreakRemoved: breakRemoved
+            )
             await MainActor.run {
                 isSaving = false
                 dismiss()
@@ -856,23 +963,44 @@ struct BookLabourFlowView: View {
     private func managerWouldClash(userId: String, date: Date, newSlot: ManagerTimeSlot) -> Bool {
         let existing = managerScheduleStore.bookings(for: userId, on: date)
         if existing.isEmpty { return false }
-        if newSlot == .fullDay { return true }
-        return existing.contains { b in
-            if b.timeSlot == .fullDay { return true }
-            return b.timeSlot == newSlot
-        }
+        let policy = payrollTimePolicy
+        let probe = ManagerSiteBooking(
+            userId: userId,
+            date: date,
+            timeSlot: newSlot,
+            locationType: .office,
+            locationId: nil
+        )
+        return existing.contains { ManagerScheduleInterval.bookingsOverlap(probe, $0, policy: policy) }
     }
 
-    private func operativeWouldClash(operativeId: UUID, slot: TimeSlot) -> Bool {
+    private func operativeWouldClash(
+        operativeId: UUID,
+        projectId: UUID,
+        slot: TimeSlot,
+        workStart: String? = nil,
+        workEnd: String? = nil,
+        breakRemoved: Bool = false
+    ) -> Bool {
         let existing = bookingStore.bookings.filter {
             $0.operativeId == operativeId &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
-                $0.status != .cancelled
+                $0.status != .cancelled &&
+                $0.status != .completed
         }
         if existing.isEmpty { return false }
-        if slot == .fullDay { return !existing.isEmpty }
-        if existing.contains(where: { $0.timeSlot == .fullDay }) { return true }
-        return existing.contains { $0.timeSlot == slot }
+        let policy = payrollTimePolicy
+        let probe = Booking(
+            operativeId: operativeId,
+            projectId: projectId,
+            date: day,
+            timeSlot: slot,
+            bookedBy: "",
+            workStartTime: workStart,
+            workEndTime: workEnd,
+            isBreakRemoved: breakRemoved
+        )
+        return existing.contains { OperativeBookingInterval.bookingsOverlap(probe, $0, policy: policy) }
     }
 
     // MARK: - Candidate building (aligned with DailyOverviewView)
@@ -921,6 +1049,7 @@ struct BookLabourFlowView: View {
     }
 
     private func operativeHasFullDayBooking(operativeId: UUID) -> Bool {
+        let policy = payrollTimePolicy
         let bookings = bookingStore.bookings.filter {
             $0.operativeId == operativeId &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
@@ -929,10 +1058,12 @@ struct BookLabourFlowView: View {
         if bookings.contains(where: { $0.timeSlot == .fullDay }) { return true }
         let hasAM = bookings.contains(where: { $0.timeSlot == .morning })
         let hasPM = bookings.contains(where: { $0.timeSlot == .afternoon })
-        return hasAM && hasPM
+        if hasAM && hasPM { return true }
+        return bookings.contains { OperativeBookingInterval.coversFullStandardDay($0, policy: policy) }
     }
 
     private func managerHasFullDayProjectBooking(userId: String) -> Bool {
+        let policy = payrollTimePolicy
         let bookings = managerScheduleStore.managerSiteBookings.filter { booking in
             let sameDay = calendar.isDate(booking.date, inSameDayAs: day)
             let sameUser = booking.userId == userId
@@ -942,7 +1073,76 @@ struct BookLabourFlowView: View {
         if bookings.contains(where: { $0.timeSlot == .fullDay }) { return true }
         let hasAM = bookings.contains(where: { $0.timeSlot == .morning })
         let hasPM = bookings.contains(where: { $0.timeSlot == .afternoon })
-        return hasAM && hasPM
+        if hasAM && hasPM { return true }
+        return bookings.contains { ManagerScheduleInterval.coversFullStandardDay($0, policy: policy) }
+    }
+}
+
+private struct BookLabourOperativeClockEdit: Identifiable {
+    let id = UUID()
+    let operative: Operative
+    let project: Project
+}
+
+private struct BookLabourOperativeHoursSheet: View {
+    let policy: OrgPayrollTimePolicy
+    let onSave: (String, String, Bool) -> Void
+    let onCancel: () -> Void
+
+    @State private var startText: String
+    @State private var endText: String
+    @State private var breakRemoved = false
+    @State private var errorMessage: String?
+
+    init(policy: OrgPayrollTimePolicy, onSave: @escaping (String, String, Bool) -> Void, onCancel: @escaping () -> Void) {
+        self.policy = policy
+        self.onSave = onSave
+        self.onCancel = onCancel
+        _startText = State(initialValue: policy.standardDayStart)
+        _endText = State(initialValue: policy.standardDayEnd)
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section {
+                    TextField("Start (HH:mm)", text: $startText)
+                        .keyboardType(.numbersAndPunctuation)
+                    TextField("End (HH:mm)", text: $endText)
+                        .keyboardType(.numbersAndPunctuation)
+                    Toggle("No break (on this booking)", isOn: $breakRemoved)
+                }
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Custom hours")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { validateAndSave() }
+                }
+            }
+        }
+    }
+
+    private func validateAndSave() {
+        errorMessage = nil
+        let s = startText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let e = endText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let sm = ManagerScheduleInterval.parseMinutes(s),
+              let em = ManagerScheduleInterval.parseMinutes(e),
+              em > sm else {
+            errorMessage = "Enter valid times (HH:mm) with end after start."
+            return
+        }
+        onSave(s, e, breakRemoved)
     }
 }
 

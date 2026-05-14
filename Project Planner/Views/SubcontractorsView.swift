@@ -7,6 +7,12 @@ struct SubcontractorsView: View {
     
     var body: some View {
         List {
+            Section {
+                Text("Subcontractor bookings stay on AM, PM, and full day (half-day and full-day paid time). Price-work jobs can use those slots alongside your hourly scheduling for direct labour.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
             if subcontractorStore.subcontractors.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "person.2.badge.gearshape.fill")

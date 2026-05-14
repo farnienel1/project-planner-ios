@@ -114,7 +114,10 @@ class ManagerScheduleStore: ObservableObject {
     private func semanticKey(for booking: ManagerSiteBooking) -> String {
         let day = Calendar.current.startOfDay(for: booking.date).timeIntervalSince1970
         let locationKey = booking.locationId?.uuidString ?? (booking.customLocationName?.lowercased() ?? booking.locationType.rawValue)
-        return "\(booking.userId)|\(Int(day))|\(booking.timeSlot.rawValue)|\(booking.locationType.rawValue)|\(locationKey)"
+        let ws = booking.workStartTime ?? ""
+        let we = booking.workEndTime ?? ""
+        let br = booking.isBreakRemoved ? "1" : "0"
+        return "\(booking.userId)|\(Int(day))|\(booking.timeSlot.rawValue)|\(booking.locationType.rawValue)|\(locationKey)|\(ws)|\(we)|\(br)"
     }
     
     private func deduplicated(_ bookings: [ManagerSiteBooking]) -> [ManagerSiteBooking] {
@@ -127,8 +130,12 @@ class ManagerScheduleStore: ObservableObject {
                 latestByKey[key] = booking
             }
         }
+        let policy = OrgPayrollTimePolicy.default
         return latestByKey.values.sorted { lhs, rhs in
             if Calendar.current.startOfDay(for: lhs.date) == Calendar.current.startOfDay(for: rhs.date) {
+                let ka = lhs.minutesSortKey(policy: policy)
+                let kb = rhs.minutesSortKey(policy: policy)
+                if ka != kb { return ka < kb }
                 return lhs.timeSlot.rawValue < rhs.timeSlot.rawValue
             }
             return lhs.date < rhs.date

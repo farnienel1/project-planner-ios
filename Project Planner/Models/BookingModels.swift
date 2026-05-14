@@ -18,6 +18,13 @@ struct Booking: Identifiable, Codable, Hashable {
     var bookedBy: String
     var notes: String?
     var status: BookingStatus
+    /// Clock window when `timeSlot == .customHours`, `"HH:mm"`.
+    var workStartTime: String?
+    var workEndTime: String?
+    var isBreakRemoved: Bool
+    /// When set, weekday OT outside the org standard window uses this multiplier instead of `OrgPayrollTimePolicy.weekdayOutsideStandardMultiplier`.
+    var otMultiplierOverride: Double?
+    var bookingGroupId: String?
     var createdAt: Date
     var updatedAt: Date
     
@@ -30,6 +37,11 @@ struct Booking: Identifiable, Codable, Hashable {
         bookedBy: String,
         notes: String? = nil,
         status: BookingStatus = .confirmed,
+        workStartTime: String? = nil,
+        workEndTime: String? = nil,
+        isBreakRemoved: Bool = false,
+        otMultiplierOverride: Double? = nil,
+        bookingGroupId: String? = nil,
         createdAt: Date? = nil,
         updatedAt: Date? = nil
     ) {
@@ -41,8 +53,35 @@ struct Booking: Identifiable, Codable, Hashable {
         self.bookedBy = bookedBy
         self.notes = notes
         self.status = status
+        self.workStartTime = workStartTime
+        self.workEndTime = workEndTime
+        self.isBreakRemoved = isBreakRemoved
+        self.otMultiplierOverride = otMultiplierOverride
+        self.bookingGroupId = bookingGroupId
         self.createdAt = createdAt ?? Date()
         self.updatedAt = updatedAt ?? Date()
+    }
+}
+
+/// Per-day operative selection in multi-day scheduling (legacy slot and/or explicit hours).
+struct OperativeDayBookingChoice: Equatable, Hashable {
+    var timeSlot: TimeSlot
+    var workStartTime: String?
+    var workEndTime: String?
+    var isBreakRemoved: Bool
+    /// Optional OT multiplier for weekday hours outside the org standard window (nil = org default).
+    var otMultiplierOverride: Double?
+
+    init(timeSlot: TimeSlot, workStartTime: String? = nil, workEndTime: String? = nil, isBreakRemoved: Bool = false, otMultiplierOverride: Double? = nil) {
+        self.timeSlot = timeSlot
+        self.workStartTime = workStartTime
+        self.workEndTime = workEndTime
+        self.isBreakRemoved = isBreakRemoved
+        self.otMultiplierOverride = otMultiplierOverride
+    }
+
+    static func legacy(_ slot: TimeSlot) -> OperativeDayBookingChoice {
+        OperativeDayBookingChoice(timeSlot: slot, workStartTime: nil, workEndTime: nil, isBreakRemoved: false, otMultiplierOverride: nil)
     }
 }
 
@@ -52,6 +91,12 @@ enum TimeSlot: String, CaseIterable, Identifiable, Codable {
     case fullDay = "FULL DAY"
     case evening = "Evening"
     case overtime = "Overtime"
+    case customHours = "CUSTOM_HOURS"
+
+    /// Pickers that only use slot labels (excludes clock-based `customHours`).
+    static var legacyPickerCases: [TimeSlot] {
+        [.morning, .afternoon, .fullDay, .evening, .overtime]
+    }
     
     var id: String { rawValue }
     
@@ -62,6 +107,7 @@ enum TimeSlot: String, CaseIterable, Identifiable, Codable {
         case .fullDay: return "FULL DAY"
         case .evening: return "Evening"
         case .overtime: return "Overtime"
+        case .customHours: return "Hours"
         }
     }
     
@@ -72,13 +118,14 @@ enum TimeSlot: String, CaseIterable, Identifiable, Codable {
         case .fullDay: return "FULL DAY"
         case .evening: return "Eve"
         case .overtime: return "OT"
+        case .customHours: return "Hrs"
         }
     }
     
     var duration: TimeInterval {
         switch self {
         case .morning, .afternoon: return 4 * 3600 // 4 hours
-        case .fullDay: return 8 * 3600 // 8 hours
+        case .fullDay, .customHours: return 8 * 3600 // 8 hours
         case .evening: return 4 * 3600 // 4 hours
         case .overtime: return 2 * 3600 // 2 hours
         }
@@ -89,7 +136,7 @@ enum TimeSlot: String, CaseIterable, Identifiable, Codable {
         let components = calendar.dateComponents([.year, .month, .day], from: Date())
         
         switch self {
-        case .morning, .fullDay:
+        case .morning, .fullDay, .customHours:
             return calendar.date(from: DateComponents(
                 year: components.year,
                 month: components.month,

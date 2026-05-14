@@ -1684,6 +1684,11 @@ struct EditUserView: View {
                     ManageUserCardDivider()
                 }
                 ManageUserDayRateEditRow(dayRateText: $dayRateText, currencySymbol: localeCurrencySymbol())
+                Text("Payroll uses either a day rate or an hourly rate, not both. Saving updates here applies the organisation rule: setting one clears the other on the account.")
+                    .font(.caption2)
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 6)
                 ManageUserCardDivider()
                 tradeTypePickSection
                 if (permissions.operativeMode || permissions.manager || permissions.adminAccess) && !dayRateHistory.isEmpty {

@@ -179,7 +179,12 @@ class BookingStore: ObservableObject {
         timeSlot: TimeSlot,
         for project: Project,
         bookedBy: String,
-        notes: String? = nil
+        notes: String? = nil,
+        workStartTime: String? = nil,
+        workEndTime: String? = nil,
+        isBreakRemoved: Bool = false,
+        otMultiplierOverride: Double? = nil,
+        bookingGroupId: String? = nil
     ) async {
         // Update updatedAt when creating
         var updatedBooking = Booking(
@@ -188,7 +193,12 @@ class BookingStore: ObservableObject {
             date: date,
             timeSlot: timeSlot,
             bookedBy: bookedBy,
-            notes: notes
+            notes: notes,
+            workStartTime: workStartTime,
+            workEndTime: workEndTime,
+            isBreakRemoved: isBreakRemoved,
+            otMultiplierOverride: otMultiplierOverride,
+            bookingGroupId: bookingGroupId
         )
         updatedBooking.updatedAt = Date()
         

@@ -39,6 +39,10 @@ struct DailyOverviewView: View {
     private var scheduleOptions: MyScheduleOptions {
         appSettings.settings.myScheduleOptions
     }
+
+    private var payrollTimePolicy: OrgPayrollTimePolicy {
+        firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+    }
     
     private var canBookLabour: Bool {
         userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true
@@ -59,30 +63,33 @@ struct DailyOverviewView: View {
     }
     
     private var dayOfficeBookings: [ManagerSiteBooking] {
-        managerScheduleStore.managerSiteBookings
+        let p = payrollTimePolicy
+        return managerScheduleStore.managerSiteBookings
             .filter { booking in
                 Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) &&
                 booking.locationType == .office
             }
-            .sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+            .sorted { $0.minutesSortKey(policy: p) < $1.minutesSortKey(policy: p) }
     }
     
     private var dayWorkingFromHomeBookings: [ManagerSiteBooking] {
-        managerScheduleStore.managerSiteBookings
+        let p = payrollTimePolicy
+        return managerScheduleStore.managerSiteBookings
             .filter { booking in
                 Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) &&
                 booking.locationType == .workingFromHome
             }
-            .sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+            .sorted { $0.minutesSortKey(policy: p) < $1.minutesSortKey(policy: p) }
     }
     
     private var daySiteSurveyBookings: [ManagerSiteBooking] {
-        managerScheduleStore.managerSiteBookings
+        let p = payrollTimePolicy
+        return managerScheduleStore.managerSiteBookings
             .filter { booking in
                 Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) &&
                 booking.locationType == .siteSurvey
             }
-            .sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+            .sorted { $0.minutesSortKey(policy: p) < $1.minutesSortKey(policy: p) }
     }
     
     private var dayCustomBookingsByName: [String: [ManagerSiteBooking]] {
@@ -127,6 +134,9 @@ struct DailyOverviewView: View {
             guard b.locationType == .project || b.locationType == .smallWork else { continue }
             keys.insert("u:\(b.userId)")
         }
+        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+            keys.insert("sub:\(b.subcontractorId.uuidString)")
+        }
         return keys.count
     }
 
@@ -160,12 +170,72 @@ struct DailyOverviewView: View {
         return keys.count
     }
 
-    /// Live projects / small works that appear in today’s overview list.
-    private var liveActiveProjectsOnDayCount: Int {
-        let all = projectStore.projects + projectStore.smallWorks
-        return displayedProjectIds.filter { id in
-            all.first(where: { $0.id == id })?.isLive == true
-        }.count
+    /// Wall-clock hours on project / small-work sites (operatives + managers on jobs) for the overview day.
+    private var dayJobSiteLabourHours: Double {
+        let p = payrollTimePolicy
+        let cal = Calendar.current
+        var t = 0.0
+        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+            t += b.totalBookedHours(policy: p)
+        }
+        for b in managerScheduleStore.managerSiteBookings {
+            guard cal.isDate(b.date, inSameDayAs: overviewDate) else { continue }
+            guard b.locationType == .project || b.locationType == .smallWork else { continue }
+            t += b.totalBookedHours(policy: p)
+        }
+        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+            t += b.payrollMirrorBooking().totalBookedHours(policy: p)
+        }
+        return t
+    }
+
+    private var dayJobSiteOvertimeHours: Double {
+        let p = payrollTimePolicy
+        let cal = Calendar.current
+        var t = 0.0
+        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+            t += b.overtimeHoursBeyondPaidStandard(policy: p)
+        }
+        for b in managerScheduleStore.managerSiteBookings {
+            guard cal.isDate(b.date, inSameDayAs: overviewDate) else { continue }
+            guard b.locationType == .project || b.locationType == .smallWork else { continue }
+            t += b.overtimeHoursBeyondPaidStandard(policy: p)
+        }
+        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+            t += b.payrollMirrorBooking().overtimeHoursBeyondPaidStandard(policy: p)
+        }
+        return t
+    }
+
+    /// Portion of job-site hours counted at standard (elapsed minus per-booking “beyond standard” bucket).
+    private var dayJobSiteStandardPortionHours: Double {
+        let p = payrollTimePolicy
+        let cal = Calendar.current
+        var t = 0.0
+        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+            let wall = b.totalBookedHours(policy: p)
+            t += wall - b.overtimeHoursBeyondPaidStandard(policy: p)
+        }
+        for b in managerScheduleStore.managerSiteBookings {
+            guard cal.isDate(b.date, inSameDayAs: overviewDate) else { continue }
+            guard b.locationType == .project || b.locationType == .smallWork else { continue }
+            let wall = b.totalBookedHours(policy: p)
+            t += wall - b.overtimeHoursBeyondPaidStandard(policy: p)
+        }
+        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+            let m = b.payrollMirrorBooking()
+            let wall = m.totalBookedHours(policy: p)
+            t += wall - m.overtimeHoursBeyondPaidStandard(policy: p)
+        }
+        return t
+    }
+
+    private func overviewFormatHours(_ hours: Double) -> String {
+        let rounded = (hours * 2).rounded() / 2
+        if abs(rounded - rounded.rounded(.towardZero)) < 0.01 {
+            return String(format: "%.0f", rounded)
+        }
+        return String(format: "%.1f", rounded)
     }
 
     private func shiftOverviewDay(_ delta: Int) {
@@ -204,16 +274,19 @@ struct DailyOverviewView: View {
     }
 
     private func operativeHasFullDayBooking(_ operativeId: UUID) -> Bool {
+        let policy = payrollTimePolicy
         let bookings = dayBookings.filter {
             $0.operativeId == operativeId && ($0.status == .confirmed || $0.status == .tentative)
         }
         if bookings.contains(where: { $0.timeSlot == .fullDay }) { return true }
         let hasAM = bookings.contains(where: { $0.timeSlot == .morning })
         let hasPM = bookings.contains(where: { $0.timeSlot == .afternoon })
-        return hasAM && hasPM
+        if hasAM && hasPM { return true }
+        return bookings.contains { OperativeBookingInterval.coversFullStandardDay($0, policy: policy) }
     }
 
     private func managerHasFullDayProjectBooking(_ userId: String) -> Bool {
+        let policy = payrollTimePolicy
         let bookings: [ManagerSiteBooking] = managerScheduleStore.managerSiteBookings.filter { booking in
             let sameDay = Calendar.current.isDate(booking.date, inSameDayAs: overviewDate)
             let sameUser = booking.userId == userId
@@ -223,7 +296,8 @@ struct DailyOverviewView: View {
         if bookings.contains(where: { $0.timeSlot == ManagerTimeSlot.fullDay }) { return true }
         let hasAM = bookings.contains(where: { $0.timeSlot == ManagerTimeSlot.morning })
         let hasPM = bookings.contains(where: { $0.timeSlot == ManagerTimeSlot.afternoon })
-        return hasAM && hasPM
+        if hasAM && hasPM { return true }
+        return bookings.contains { ManagerScheduleInterval.coversFullStandardDay($0, policy: policy) }
     }
 
     private var unbookedOperativeNames: [String] {
@@ -288,6 +362,8 @@ struct DailyOverviewView: View {
                 }
 
                 coverageGradientCard
+
+                attendanceMixGradientCard
 
                 if isWeekday && !unbookedAllNames.isEmpty {
                     unbookedLabourRevampCard
@@ -417,38 +493,51 @@ struct DailyOverviewView: View {
 
     private var coverageGradientCard: some View {
         let unbooked = isWeekday ? unbookedAllNames.count : 0
+        let mult = payrollTimePolicy.weekdayOutsideStandardMultiplier
+        let multLabel = abs(mult - mult.rounded()) < 0.05 ? String(format: "%.0f", mult) : String(format: "%.1f", mult)
+        let jobsCount = displayedProjectIds.count
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Today's coverage")
-                        .font(.system(size: 11, weight: .medium))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Today's hours")
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(Color.white.opacity(0.88))
                         .textCase(.uppercase)
-                        .tracking(0.3)
-                    Text("\(bookedPeopleCount) people booked")
-                        .font(.system(size: 15, weight: .medium))
+                        .tracking(0.35)
+                    Text("\(overviewFormatHours(dayJobSiteLabourHours))h · \(onSitePeopleCount) \(onSitePeopleCount == 1 ? "person" : "people")")
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(Color.white)
                 }
                 Spacer(minLength: 8)
-                if unbooked > 0 {
-                    HStack(spacing: 4) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 12, weight: .medium))
-                        Text("\(unbooked) unbooked")
-                            .font(.system(size: 11, weight: .medium))
+                VStack(alignment: .trailing, spacing: 6) {
+                    if dayJobSiteOvertimeHours > 0.05 {
+                        Text("+\(overviewFormatHours(dayJobSiteOvertimeHours))h OT")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Color.white)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 3)
+                            .background(Color.white.opacity(0.18))
+                            .clipShape(Capsule())
                     }
-                    .foregroundStyle(Color.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Color.white.opacity(0.18))
-                    .clipShape(Capsule())
+                    if unbooked > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 12, weight: .medium))
+                            Text("\(unbooked) unbooked")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundStyle(Color.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.18))
+                        .clipShape(Capsule())
+                    }
                 }
             }
-            HStack(spacing: 8) {
-                coverageStatCell(value: liveActiveProjectsOnDayCount, label: "Project")
-                coverageStatCell(value: onSitePeopleCount, label: "On site")
-                coverageStatCell(value: officePeopleCount, label: "Office")
-                coverageStatCell(value: wfhPeopleCount, label: "WFH")
+            HStack(spacing: 7) {
+                coverageStatCell(valueText: overviewFormatHours(dayJobSiteStandardPortionHours), label: "Standard")
+                coverageStatCell(valueText: overviewFormatHours(dayJobSiteOvertimeHours), label: "OT \(multLabel)×")
+                coverageStatCell(valueText: "\(jobsCount)", label: "Jobs")
             }
         }
         .padding(.horizontal, 18)
@@ -464,19 +553,74 @@ struct DailyOverviewView: View {
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    private func coverageStatCell(value: Int, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+    /// Office / WFH / on-site headcount for admins and managers planning team attendance (separate from job-hours summary).
+    private var attendanceMixGradientCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Team attendance")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .textCase(.uppercase)
+                    .tracking(0.35)
+                Text("Where people are booked today")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.white)
+            }
+            HStack(spacing: 7) {
+                attendanceStatCapsule(value: officePeopleCount, label: "Office", systemImage: "building.2.fill")
+                attendanceStatCapsule(value: wfhPeopleCount, label: "WFH", systemImage: "house.fill")
+                attendanceStatCapsule(value: onSitePeopleCount, label: "On site", systemImage: "mappin.and.ellipse")
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(red: 0.145, green: 0.22, blue: 0.38),
+                    Color(red: 0.28, green: 0.38, blue: 0.52),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func attendanceStatCapsule(value: Int, label: String, systemImage: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.92))
+                Text(label)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.88))
+            }
             Text("\(value)")
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(Color.white)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color.white.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func coverageStatCell(valueText: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(valueText)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.white)
             Text(label)
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(Color.white.opacity(0.88))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(9)
+        .padding(8)
         .background(Color.white.opacity(0.14))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     private var unbookedLabourRevampCard: some View {
@@ -627,11 +771,10 @@ struct DailyOverviewView: View {
             guard let p1 = all.first(where: { $0.id == id1 }), let p2 = all.first(where: { $0.id == id2 }) else { return false }
             return p1.siteName < p2.siteName
         }
-        let liveCount = ids.filter { id in (projectStore.projects + projectStore.smallWorks).first(where: { $0.id == id })?.isLive == true }.count
         return Group {
             if !ids.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    revampSectionHeader(title: "Live projects", trailing: "\(liveCount) active")
+                    revampSectionHeader(title: "By project", trailing: nil)
                     ForEach(ids, id: \.self) { projectId in
                         let all = projectStore.projects + projectStore.smallWorks
                         if let project = all.first(where: { $0.id == projectId }) {
@@ -757,7 +900,7 @@ struct DailyOverviewView: View {
     private func managerBookingRevampRow(booking: ManagerSiteBooking) -> some View {
         let name = managerName(for: booking.userId)
         return HStack(spacing: 10) {
-            Text(managerTimeSlotDisplayText(for: booking.timeSlot))
+            Text(managerTimeSlotDisplayText(for: booking))
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(ProjectWorksRevampColors.pinRoseFg)
                 .padding(.horizontal, 7)
@@ -791,14 +934,16 @@ struct DailyOverviewView: View {
             if isHistoric {
                 overviewContent
             } else {
-                NavigationView {
+                NavigationStack {
                     overviewContent
+                        .navigationTitle("Daily overview")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .navigationBarTrailing) {
                                 Button("Done") { dismiss() }
                             }
                         }
+                        .appChromeNavigationBarSurface()
                 }
             }
         }
@@ -832,12 +977,13 @@ struct DailyOverviewView: View {
     private var noBookingsView: some View {
         VStack(spacing: 16) {
             Text("No bookings")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
         .padding(.horizontal, 20)
+        .appChromeCardContainer()
     }
     
     @ViewBuilder
@@ -851,7 +997,7 @@ struct DailyOverviewView: View {
                 VStack(spacing: 8) {
                     ForEach(bookings, id: \.id) { booking in
                         HStack(spacing: 8) {
-                            Text(managerTimeSlotDisplayText(for: booking.timeSlot))
+                            Text(managerTimeSlotDisplayText(for: booking))
                                 .font(.caption)
                                 .fontWeight(.semibold)
                                 .foregroundColor(.white)
@@ -876,12 +1022,8 @@ struct DailyOverviewView: View {
 }
 
 private extension DailyOverviewView {
-    func managerTimeSlotDisplayText(for timeSlot: ManagerTimeSlot) -> String {
-        switch timeSlot {
-        case .morning: return "AM"
-        case .afternoon: return "PM"
-        case .fullDay: return "FULL DAY"
-        }
+    func managerTimeSlotDisplayText(for booking: ManagerSiteBooking) -> String {
+        booking.scheduleLabel(policy: payrollTimePolicy)
     }
     
     func managerName(for userId: String) -> String {
@@ -942,23 +1084,25 @@ struct HistoricDailyOverviewView: View {
     }
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Select date")
-                        .font(.headline)
-                        .foregroundColor(.primary)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
                     DatePicker("", selection: $selectedDate, in: minDate...maxDate, displayedComponents: .date)
                         .datePickerStyle(.graphical)
+                        .tint(ProjectWorksRevampColors.blue)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 8)
-                
-                Divider()
+                .padding(16)
+                .appChromeCardContainer()
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
                 
                 DailyOverviewView(displayDate: selectedDate)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
             .navigationTitle("Date Overview")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -966,6 +1110,7 @@ struct HistoricDailyOverviewView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .appChromeNavigationBarSurface()
         }
     }
 }
@@ -993,7 +1138,7 @@ struct ManagerScheduleRowView: View {
 
     var body: some View {
         HStack {
-            Text(booking.timeSlot.displayName)
+            Text(booking.scheduleLabel(policy: .default))
                 .font(.caption)
                 .fontWeight(.semibold)
                 .foregroundColor(.white)
@@ -1012,9 +1157,7 @@ struct ManagerScheduleRowView: View {
             Spacer()
         }
         .padding(12)
-        .background(Color.white)
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.08), radius: 2, x: 0, y: 1)
+        .appChromeCardContainer(cornerRadius: 12)
     }
 }
 
@@ -1026,75 +1169,26 @@ struct ProjectBookingCard: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var subcontractorStore: SubcontractorStore
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Project Identifier and Name
-            HStack(alignment: .firstTextBaseline) {
-                Text(project.jobNumber)
-                    .font(.headline)
-                    .foregroundColor(.blue)
-                
-                Text(project.siteName)
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                
-                Spacer()
-                
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-            }
-            
-            bookingSection(title: "Managers/Admins", rows: managerRows, color: .purple)
-            bookingSection(title: "Operatives", rows: operativeRows, color: .blue)
-            bookingSection(title: "Sub Contractors", rows: subcontractorRows, color: .indigo)
-        }
-        .padding(16)
-        .background(Color.white)
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+
+    private var payrollTimePolicy: OrgPayrollTimePolicy {
+        firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
     }
-    
-    private func bookingSection(title: String, rows: [(slot: String, name: String)], color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.secondary)
-            if rows.isEmpty {
-                Text("None")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            } else {
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    HStack(spacing: 8) {
-                        Text(row.slot)
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(color)
-                            .cornerRadius(8)
-                        Text(row.name)
-                            .font(.subheadline)
-                            .foregroundColor(.primary)
-                        Spacer()
-                    }
-                }
-            }
-        }
-    }
-    
+
+    private var smallWorksFlow: Bool { project.jobType == .smallWorks }
+
     private var sortedBookings: [Booking] {
         bookings.sorted { booking1, booking2 in
-            // Sort by time slot order: AM, PM, FULL DAY, etc.
             let order1 = timeSlotOrder(booking1.timeSlot)
             let order2 = timeSlotOrder(booking2.timeSlot)
             if order1 != order2 {
                 return order1 < order2
             }
-            // If same time slot, sort by operative name
+            let k1 = booking1.minutesSortKey(policy: payrollTimePolicy)
+            let k2 = booking2.minutesSortKey(policy: payrollTimePolicy)
+            if k1 != k2 {
+                return k1 < k2
+            }
             if let operative1 = operativeStore.operatives.first(where: { $0.id == booking1.operativeId }),
                let operative2 = operativeStore.operatives.first(where: { $0.id == booking2.operativeId }) {
                 return operative1.name < operative2.name
@@ -1102,74 +1196,234 @@ struct ProjectBookingCard: View {
             return false
         }
     }
-    
-    private var operativeRows: [(slot: String, name: String)] {
-        sortedBookings.compactMap { booking in
-            guard let operative = operativeStore.operatives.first(where: { $0.id == booking.operativeId }) else { return nil }
-            return (timeSlotDisplayText(for: booking.timeSlot), operative.name)
-        }
-    }
-    
-    private var managerRows: [(slot: String, name: String)] {
+
+    private var managerBookingsThisProjectDay: [ManagerSiteBooking] {
         managerScheduleStore.managerSiteBookings
             .filter { booking in
                 booking.locationId == project.id &&
-                (booking.locationType == .project || booking.locationType == .smallWork) &&
-                Calendar.current.isDate(booking.date, inSameDayAs: day)
+                    (booking.locationType == .project || booking.locationType == .smallWork) &&
+                    Calendar.current.isDate(booking.date, inSameDayAs: day)
             }
-            .map { booking in
-                (managerTimeSlotDisplayText(for: booking.timeSlot), managerName(userId: booking.userId))
-            }
+            .sorted { $0.minutesSortKey(policy: payrollTimePolicy) < $1.minutesSortKey(policy: payrollTimePolicy) }
     }
-    
-    private var subcontractorRows: [(slot: String, name: String)] {
+
+    private var subcontractorBookingsThisProjectDay: [SubcontractorBooking] {
         subcontractorStore.bookings
             .filter { booking in
                 booking.projectId == project.id &&
-                Calendar.current.isDate(booking.date, inSameDayAs: day) &&
-                booking.status != .cancelled
+                    Calendar.current.isDate(booking.date, inSameDayAs: day) &&
+                    booking.status != .cancelled
             }
-            .sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
-            .map { booking in
-                let name = subcontractorStore.subcontractors.first(where: { $0.id == booking.subcontractorId })?.name ?? "Sub Contractor"
-                return (timeSlotDisplayText(for: booking.timeSlot), name)
-            }
+            .sorted { $0.payrollMirrorBooking().minutesSortKey(policy: payrollTimePolicy) < $1.payrollMirrorBooking().minutesSortKey(policy: payrollTimePolicy) }
     }
-    
+
+    private var cardPeopleCount: Int {
+        sortedBookings.count + managerBookingsThisProjectDay.count + subcontractorBookingsThisProjectDay.count
+    }
+
+    private var cardBookedHours: Double {
+        let p = payrollTimePolicy
+        var t = sortedBookings.reduce(0.0) { $0 + $1.totalBookedHours(policy: p) }
+        t += managerBookingsThisProjectDay.reduce(0.0) { $0 + $1.totalBookedHours(policy: p) }
+        t += subcontractorBookingsThisProjectDay.reduce(0.0) { $0 + $1.payrollMirrorBooking().totalBookedHours(policy: p) }
+        return t
+    }
+
+    private var cardOvertimeHours: Double {
+        let p = payrollTimePolicy
+        var t = sortedBookings.reduce(0.0) { $0 + $1.overtimeHoursBeyondPaidStandard(policy: p) }
+        t += managerBookingsThisProjectDay.reduce(0.0) { $0 + $1.overtimeHoursBeyondPaidStandard(policy: p) }
+        t += subcontractorBookingsThisProjectDay.reduce(0.0) { $0 + $1.payrollMirrorBooking().overtimeHoursBeyondPaidStandard(policy: p) }
+        return t
+    }
+
+    private var mergedPersonRows: [ProjectDayPersonRow] {
+        let p = payrollTimePolicy
+        var keyed: [(Int, String, ProjectDayPersonRow)] = []
+        for b in sortedBookings {
+            guard let op = operativeStore.operatives.first(where: { $0.id == b.operativeId }) else { continue }
+            let sub = b.scheduleCoverageSubtitle(policy: p)
+            let row = ProjectDayPersonRow(
+                id: "op-\(b.id.uuidString)",
+                name: op.name,
+                subtitle: sub.text,
+                subtitleOvertime: sub.emphasizedOvertime,
+                pillText: b.scheduleCoveragePillHours(policy: p),
+                pillOvertime: sub.emphasizedOvertime,
+                initials: PlannerUIInitials.from(op.name),
+                gradientPair: initialsGradient(for: op.name)
+            )
+            let tie = op.name
+            keyed.append((b.minutesSortKey(policy: p), tie, row))
+        }
+        for b in managerBookingsThisProjectDay {
+            let sub = b.scheduleCoverageSubtitle(policy: p)
+            let row = ProjectDayPersonRow(
+                id: "mgr-\(b.id.uuidString)",
+                name: managerName(userId: b.userId),
+                subtitle: sub.text,
+                subtitleOvertime: sub.emphasizedOvertime,
+                pillText: b.scheduleCoveragePillHours(policy: p),
+                pillOvertime: sub.emphasizedOvertime,
+                initials: PlannerUIInitials.from(managerName(userId: b.userId)),
+                gradientPair: initialsGradient(for: managerName(userId: b.userId))
+            )
+            let tie = managerName(userId: b.userId)
+            keyed.append((b.minutesSortKey(policy: p), tie, row))
+        }
+        for b in subcontractorBookingsThisProjectDay {
+            let mirror = b.payrollMirrorBooking()
+            let sub = mirror.scheduleCoverageSubtitle(policy: p)
+            let baseName = subcontractorStore.subcontractors.first(where: { $0.id == b.subcontractorId })?.name ?? "Subcontractor"
+            let row = ProjectDayPersonRow(
+                id: "sub-\(b.id.uuidString)",
+                name: "\(baseName) · Sub",
+                subtitle: sub.text,
+                subtitleOvertime: sub.emphasizedOvertime,
+                pillText: mirror.scheduleCoveragePillHours(policy: p),
+                pillOvertime: sub.emphasizedOvertime,
+                initials: PlannerUIInitials.from(baseName),
+                gradientPair: initialsGradient(for: baseName)
+            )
+            keyed.append((mirror.minutesSortKey(policy: p), baseName, row))
+        }
+        return keyed.sorted {
+            if $0.0 != $1.0 { return $0.0 < $1.0 }
+            return $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending
+        }.map(\.2)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(smallWorksFlow ? Color(red: 0.98, green: 0.933, blue: 0.855) : Color(red: 0.882, green: 0.961, blue: 0.933))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: smallWorksFlow ? "hammer.fill" : "folder.fill")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(smallWorksFlow ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(project.jobNumber)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(smallWorksFlow ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.blue)
+                        Text(project.siteName)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                        if smallWorksFlow {
+                            Text("SMALL WORKS")
+                                .font(.system(size: 8, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(ProjectWorksRevampColors.upcomingAmber.opacity(0.18))
+                                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    HStack(spacing: 4) {
+                        Text("\(cardPeopleCount) \(cardPeopleCount == 1 ? "person" : "people") · \(ScheduleCoverageFormat.hours(cardBookedHours))h booked")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                        if cardOvertimeHours > 0.05 {
+                            Text("· +\(ScheduleCoverageFormat.hours(cardOvertimeHours))h OT")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+                        }
+                    }
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+                    .padding(.top, 2)
+            }
+            .padding(.bottom, 10)
+            Divider().overlay(ProjectWorksRevampColors.border)
+                .padding(.bottom, 8)
+            ForEach(Array(mergedPersonRows.enumerated()), id: \.1.id) { idx, row in
+                projectPersonRowView(row)
+                if idx < mergedPersonRows.count - 1 {
+                    Divider().overlay(ProjectWorksRevampColors.border)
+                }
+            }
+        }
+    }
+
+    private func projectPersonRowView(_ row: ProjectDayPersonRow) -> some View {
+        HStack(alignment: .center, spacing: 9) {
+            Text(row.initials)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(Color.white)
+                .frame(width: 26, height: 26)
+                .background(
+                    LinearGradient(colors: row.gradientPair, startPoint: .topLeading, endPoint: .bottomTrailing)
+                )
+                .clipShape(Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.name)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .lineLimit(1)
+                Text(row.subtitle)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(row.subtitleOvertime ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Text(row.pillText)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(row.pillOvertime ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(row.pillOvertime ? ProjectWorksRevampColors.upcomingAmber.opacity(0.16) : Color(red: 0.882, green: 0.961, blue: 0.933))
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        }
+        .padding(.vertical, 7)
+    }
+
     private func managerName(userId: String) -> String {
         if let user = userStore.organizationUsers.first(where: { $0.id == userId }) {
             return user.fullName.isEmpty ? user.email : user.fullName
         }
         return userId
     }
-    
+
+    private func initialsGradient(for name: String) -> [Color] {
+        let palettes: [[Color]] = [
+            [Color(red: 0.094, green: 0.373, blue: 0.651), Color(red: 0.216, green: 0.541, blue: 0.867)],
+            [Color(red: 0.6, green: 0.208, blue: 0.337), Color(red: 0.761, green: 0.333, blue: 0.471)],
+            [Color(red: 0.325, green: 0.29, blue: 0.718), Color(red: 0.498, green: 0.467, blue: 0.867)],
+            [Color(red: 0.2, green: 0.55, blue: 0.42), Color(red: 0.35, green: 0.72, blue: 0.55)],
+        ]
+        var hasher = Hasher()
+        hasher.combine(name)
+        let idx = abs(hasher.finalize()) % palettes.count
+        return palettes[idx]
+    }
+
     private func timeSlotOrder(_ timeSlot: TimeSlot) -> Int {
         switch timeSlot {
         case .morning: return 1
         case .afternoon: return 2
         case .fullDay: return 3
+        case .customHours: return 3
         case .evening: return 4
         case .overtime: return 5
         }
     }
-    
-    private func timeSlotDisplayText(for timeSlot: TimeSlot) -> String {
-        switch timeSlot {
-        case .morning: return "AM"
-        case .afternoon: return "PM"
-        case .fullDay: return "FULL DAY"
-        case .evening: return "EVENING"
-        case .overtime: return "OVERTIME"
-        }
-    }
-    
-    private func managerTimeSlotDisplayText(for timeSlot: ManagerTimeSlot) -> String {
-        switch timeSlot {
-        case .morning: return "AM"
-        case .afternoon: return "PM"
-        case .fullDay: return "FULL DAY"
-        }
-    }
+}
+
+private struct ProjectDayPersonRow: Identifiable {
+    let id: String
+    let name: String
+    let subtitle: String
+    let subtitleOvertime: Bool
+    let pillText: String
+    let pillOvertime: Bool
+    let initials: String
+    let gradientPair: [Color]
 }
 
 

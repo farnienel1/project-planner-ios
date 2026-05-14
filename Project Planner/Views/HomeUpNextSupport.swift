@@ -25,25 +25,31 @@ struct HomeUpNextDaySection: Identifiable {
 enum HomeUpNextSupport {
     private static let calendar = Calendar.current
 
-    static func sortDate(operativeBooking b: Booking) -> Date {
-        let day = calendar.startOfDay(for: b.date)
-        switch b.timeSlot {
-        case .morning, .fullDay:
-            return calendar.date(byAdding: .hour, value: 8, to: day) ?? day
-        case .afternoon:
-            return calendar.date(byAdding: .hour, value: 13, to: day) ?? day
-        case .evening, .overtime:
-            return calendar.date(byAdding: .hour, value: 17, to: day) ?? day
-        }
+    static func sortDate(operativeBooking b: Booking, policy: OrgPayrollTimePolicy = .default) -> Date {
+        b.calendarBlock(on: b.date, policy: policy).start
     }
 
-    static func sortDate(managerBooking b: ManagerSiteBooking) -> Date {
+    static func sortDate(managerBooking b: ManagerSiteBooking, policy: OrgPayrollTimePolicy = .default) -> Date {
         let day = calendar.startOfDay(for: b.date)
+        if let s = b.workStartTime, let mins = ManagerScheduleInterval.parseMinutes(s) {
+            return calendar.date(byAdding: .minute, value: mins, to: day) ?? day
+        }
+        guard let ds = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
+              let de = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd),
+              de > ds else {
+            switch b.timeSlot {
+            case .morning, .fullDay, .customHours:
+                return calendar.date(byAdding: .hour, value: 8, to: day) ?? day
+            case .afternoon:
+                return calendar.date(byAdding: .hour, value: 13, to: day) ?? day
+            }
+        }
+        let mid = ds + (de - ds) / 2
         switch b.timeSlot {
-        case .morning, .fullDay:
-            return calendar.date(byAdding: .hour, value: 8, to: day) ?? day
+        case .morning, .fullDay, .customHours:
+            return calendar.date(byAdding: .minute, value: ds, to: day) ?? day
         case .afternoon:
-            return calendar.date(byAdding: .hour, value: 13, to: day) ?? day
+            return calendar.date(byAdding: .minute, value: mid, to: day) ?? day
         }
     }
 
@@ -82,7 +88,8 @@ enum HomeUpNextSupport {
         allProjects: [Project],
         organizationUsers: [AppUser],
         accentBlue: Color,
-        accentPurple: Color
+        accentPurple: Color,
+        payrollTimePolicy: OrgPayrollTimePolicy = .default
     ) -> [HomeUpNextRow] {
         var rows: [HomeUpNextRow] = []
         let emailKey = currentUserEmail?
@@ -97,7 +104,7 @@ enum HomeUpNextSupport {
                 b.operativeId == op.id && b.status != .cancelled && b.status != .completed
             }
             for b in mine {
-                let start = sortDate(operativeBooking: b)
+                let start = sortDate(operativeBooking: b, policy: payrollTimePolicy)
                 guard start >= now else { continue }
                 let proj = project(forProjectId: b.projectId, allProjects: allProjects)
                 let site = proj?.siteName ?? "Scheduled work"
@@ -128,12 +135,12 @@ enum HomeUpNextSupport {
         if let authUserId {
             let mine = managerBookings.filter { $0.userId == authUserId }
             for b in mine {
-                let start = sortDate(managerBooking: b)
+                let start = sortDate(managerBooking: b, policy: payrollTimePolicy)
                 guard start >= now else { continue }
                 let loc = managerLocationTitle(booking: b, allProjects: allProjects)
                 let title = loc
                 let timeStr = timeDotString(from: start)
-                let slot = b.timeSlot.displayName
+                let slot = b.scheduleLabel(policy: payrollTimePolicy)
                 let subtitle = "\(timeStr) · \(slot)"
                 rows.append(HomeUpNextRow(
                     id: b.id,
@@ -163,7 +170,8 @@ enum HomeUpNextSupport {
         allProjects: [Project],
         organizationUsers: [AppUser],
         accentBlue: Color,
-        accentPurple: Color
+        accentPurple: Color,
+        payrollTimePolicy: OrgPayrollTimePolicy = .default
     ) -> [HomeUpNextDaySection] {
         let merged = upcomingRows(
             limit: mergeRowLimit,
@@ -176,7 +184,8 @@ enum HomeUpNextSupport {
             allProjects: allProjects,
             organizationUsers: organizationUsers,
             accentBlue: accentBlue,
-            accentPurple: accentPurple
+            accentPurple: accentPurple,
+            payrollTimePolicy: payrollTimePolicy
         )
         guard !merged.isEmpty else { return [] }
 

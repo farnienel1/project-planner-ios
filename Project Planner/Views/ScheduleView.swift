@@ -16,22 +16,23 @@ struct ScheduleView: View {
     @State private var showingAddBooking = false
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack(spacing: 0) {
-                // Date Picker
                 datePickerSection
-                
-                // Schedule Content
                 scheduleContent
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
             .navigationTitle("Schedule")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { showingAddBooking = true }) {
                         Image(systemName: "plus")
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
                     }
                 }
             }
+            .appChromeNavigationBarSurface()
             .sheet(isPresented: $showingAddBooking) {
                 AddBookingView(selectedDate: selectedDate)
                     .environmentObject(bookingStore)
@@ -49,10 +50,14 @@ struct ScheduleView: View {
                 displayedComponents: .date
             )
             .datePickerStyle(.graphical)
-            .padding(.horizontal)
-            
-            Divider()
+            .tint(ProjectWorksRevampColors.blue)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
+        .padding(.vertical, 10)
+        .appChromeCardContainer()
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
     }
     
     private var scheduleContent: some View {
@@ -84,7 +89,8 @@ struct ScheduleView: View {
     private var daySummarySection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Day Summary")
-                .font(.headline)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
             
             HStack(spacing: 16) {
                 SummaryCard(
@@ -109,22 +115,23 @@ struct ScheduleView: View {
                 )
             }
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+        .padding(16)
+        .appChromeCardContainer()
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
     }
     
     private var bookingsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Bookings")
-                    .font(.headline)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
                 Spacer()
                 if !bookingsForSelectedDate.isEmpty {
                     Text("\(bookingsForSelectedDate.count) total")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
                 }
             }
             
@@ -138,21 +145,22 @@ struct ScheduleView: View {
                 }
             }
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+        .padding(16)
+        .appChromeCardContainer()
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
     }
     
     private var conflictsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Conflicts")
-                .font(.headline)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
             
             if conflictsForSelectedDate.isEmpty {
                 Text("No conflicts detected")
                     .font(.subheadline)
-                    .foregroundColor(.green)
+                    .foregroundStyle(ProjectWorksRevampColors.activeGreen)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding()
             } else {
@@ -163,10 +171,10 @@ struct ScheduleView: View {
                 }
             }
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+        .padding(16)
+        .appChromeCardContainer()
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
     }
     
     private var emptyBookingsView: some View {
@@ -177,22 +185,23 @@ struct ScheduleView: View {
             
             Text("No bookings for this date")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundStyle(ProjectWorksRevampColors.muted)
             
             Button("Add Booking") {
                 showingAddBooking = true
             }
             .buttonStyle(.bordered)
+            .tint(ProjectWorksRevampColors.blue)
         }
         .frame(maxWidth: .infinity)
         .padding()
     }
     
     private var bookingsForSelectedDate: [Booking] {
-        bookingStore.bookings.filter { 
+        bookingStore.bookings.filter {
             Calendar.current.isDate($0.date, inSameDayAs: selectedDate) &&
             ($0.status == .confirmed || $0.status == .tentative)
-        }.sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
+        }.sorted { $0.minutesSortKey(policy: .default) < $1.minutesSortKey(policy: .default) }
     }
     
     private var uniqueOperativesForDate: [UUID] {
@@ -232,9 +241,13 @@ struct SummaryCard: View {
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(8)
+        .padding(12)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
     }
 }
 
@@ -282,9 +295,13 @@ struct BookingDetailRowView: View {
             // Status indicator
             statusBadge
         }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(8)
+        .padding(12)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
     }
     
     private var timeSlotIcon: some View {
@@ -293,7 +310,7 @@ struct BookingDetailRowView: View {
             return Image(systemName: "sunrise")
         case .afternoon:
             return Image(systemName: "sun.max")
-        case .fullDay:
+        case .fullDay, .customHours:
             return Image(systemName: "calendar.day.timeline.left")
         case .evening:
             return Image(systemName: "sunset")
@@ -306,7 +323,7 @@ struct BookingDetailRowView: View {
         switch booking.timeSlot {
         case .morning: return .orange
         case .afternoon: return .yellow
-        case .fullDay: return .blue
+        case .fullDay, .customHours: return .blue
         case .evening: return .purple
         case .overtime: return .red
         }
@@ -317,6 +334,7 @@ struct BookingDetailRowView: View {
         case .morning: return "AM"
         case .afternoon: return "PM"
         case .fullDay: return "Full"
+        case .customHours: return "Hrs"
         case .evening: return "Eve"
         case .overtime: return "OT"
         }
@@ -381,9 +399,13 @@ struct ConflictRowView: View {
                 .foregroundColor(severityColor)
                 .cornerRadius(4)
         }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(8)
+        .padding(12)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
     }
     
     private var severityColor: Color {
@@ -429,7 +451,7 @@ struct AddBookingView: View {
                     }
                     
                     Picker("Time Slot", selection: $selectedTimeSlot) {
-                        ForEach(TimeSlot.allCases) { slot in
+                        ForEach(TimeSlot.legacyPickerCases, id: \.self) { slot in
                             Text(slot.displayName).tag(slot)
                         }
                     }

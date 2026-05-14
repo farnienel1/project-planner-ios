@@ -100,3 +100,18 @@ struct SubcontractorBooking: Identifiable, Codable, Hashable {
         self.updatedAt = updatedAt
     }
 }
+
+extension SubcontractorBooking {
+    /// Mirror as an operative-style `Booking` so scheduling helpers (hours, subtitles) stay consistent.
+    func payrollMirrorBooking() -> Booking {
+        Booking(
+            id: id,
+            operativeId: subcontractorId,
+            projectId: projectId,
+            date: date,
+            timeSlot: timeSlot,
+            bookedBy: bookedBy,
+            status: status
+        )
+    }
+}
