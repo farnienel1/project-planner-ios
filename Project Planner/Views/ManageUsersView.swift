@@ -738,6 +738,11 @@ struct EditUserView: View {
     @State private var isApplyingUserType = false
     @State private var userTypeChangeMessage: String?
     @State private var showingDeactivateConfirmation = false
+    @State private var annualLeaveDaysText: String
+    @State private var annualLeaveStartMonth: Int
+    @State private var annualLeaveEndMonth: Int
+    @State private var annualLeaveCarriesOver: Bool
+    @State private var annualLeaveEnabledDraft: Bool
 
     init(user: AppUser, suppressAdminAccessToggle: Bool = false) {
         self.user = user
@@ -752,6 +757,19 @@ struct EditUserView: View {
         self._editSurname = State(initialValue: user.surname)
         self._editEmail = State(initialValue: user.email)
         self._editMobile = State(initialValue: user.mobileNumber ?? "")
+        self._annualLeaveDaysText = State(initialValue: EditUserView.formatAnnualLeaveDaysText(user.annualLeaveDaysPerYear))
+        self._annualLeaveStartMonth = State(initialValue: user.annualLeaveYearStartMonth)
+        self._annualLeaveEndMonth = State(initialValue: user.annualLeaveYearEndMonth)
+        self._annualLeaveCarriesOver = State(initialValue: user.annualLeaveCarriesOver)
+        self._annualLeaveEnabledDraft = State(initialValue: user.annualLeaveEnabled)
+    }
+
+    private static func formatAnnualLeaveDaysText(_ days: Double) -> String {
+        let rounded = (days * 10).rounded() / 10
+        if abs(rounded - Double(Int(rounded))) < 0.001 {
+            return String(Int(rounded))
+        }
+        return String(format: "%.1f", rounded)
     }
     
     private var isManagerOperativeOnly: Bool {
@@ -810,6 +828,76 @@ struct EditUserView: View {
             s != user.surname.trimmingCharacters(in: .whitespacesAndNewlines) ||
             e != user.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ||
             m != origM
+    }
+
+    private var shouldShowAnnualLeaveAccessToggle: Bool {
+        if userStore.isOrganizationCreator(userId: user.id) { return false }
+        guard userStore.canEditTargetUserPermissions(displayedUser) else { return false }
+        return permissions.operativeMode || user.role == .operative || permissions.manager || permissions.adminAccess
+    }
+
+    private var annualLeaveAccessDirty: Bool {
+        guard shouldShowAnnualLeaveAccessToggle else { return false }
+        return annualLeaveEnabledDraft != displayedUser.annualLeaveEnabled
+    }
+
+    private var annualLeaveAccessSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ManageUserSectionTitle(text: "Annual leave in app")
+            ManageUserCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle(isOn: $annualLeaveEnabledDraft) {
+                        Text("Annual leave enabled")
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                    }
+                    .disabled(!canEditPermissionsMatrix)
+                    Text("Turn off for self-employed staff who do not use paid annual leave. Their Holiday tab and annual leave entry points are hidden until this is turned back on here.")
+                        .font(.caption)
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                }
+                .padding(14)
+            }
+        }
+    }
+
+    private var shouldShowAnnualLeaveEntitlementSection: Bool {
+        if userStore.isOrganizationCreator(userId: user.id) { return false }
+        guard userStore.canEditTargetUserPermissions(displayedUser) else { return false }
+        guard annualLeaveEnabledDraft else { return false }
+        return permissions.operativeMode || user.role == .operative || permissions.manager
+    }
+
+    private func parsedAnnualLeaveDaysForSave() -> Double? {
+        let t = annualLeaveDaysText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let d = Double(t), d > 0 else { return nil }
+        return AnnualLeavePolicy.clampDaysPerYear(d)
+    }
+
+    private var annualLeaveEntitlementDirty: Bool {
+        guard shouldShowAnnualLeaveEntitlementSection else { return false }
+        let s = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        guard let p = parsedAnnualLeaveDaysForSave() else { return true }
+        return abs(p - s.annualLeaveDaysPerYear) > 0.0001
+            || annualLeaveStartMonth != s.annualLeaveYearStartMonth
+            || annualLeaveEndMonth != s.annualLeaveYearEndMonth
+            || annualLeaveCarriesOver != s.annualLeaveCarriesOver
+    }
+
+    private var annualLeaveEntitlementSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ManageUserSectionTitle(text: "Annual leave")
+            ManageUserCard {
+                AnnualLeaveEntitlementEditor(
+                    daysText: $annualLeaveDaysText,
+                    startMonth: $annualLeaveStartMonth,
+                    endMonth: $annualLeaveEndMonth,
+                    carriesOver: $annualLeaveCarriesOver,
+                    isEnabled: canEditPermissionsMatrix
+                )
+                .padding(14)
+            }
+        }
     }
 
     private var headerDisplayName: String {
@@ -941,16 +1029,20 @@ struct EditUserView: View {
                 isActive != user.isActive ||
                 operativeProfileChanged ||
                 staffDayRateChanged ||
-                tradeChanged
+                tradeChanged ||
+                annualLeaveAccessDirty ||
+                annualLeaveEntitlementDirty
         }
-        if canEditPermissionsMatrix && (identityDirty || operativeProfileChanged || tradeChanged || staffDayRateChanged) {
+        if canEditPermissionsMatrix && (identityDirty || operativeProfileChanged || tradeChanged || staffDayRateChanged || annualLeaveAccessDirty || annualLeaveEntitlementDirty) {
             return true
         }
         if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative) {
             return identityDirty ||
                 permissions.materials != user.permissions.materials ||
                 permissions.siteAudit != user.permissions.siteAudit ||
-                tradeChanged
+                tradeChanged ||
+                annualLeaveAccessDirty ||
+                annualLeaveEntitlementDirty
         }
         return false
     }
@@ -978,6 +1070,12 @@ struct EditUserView: View {
                             operativeAndManagerSetupCard
                         }
                     }
+                    if shouldShowAnnualLeaveAccessToggle {
+                        annualLeaveAccessSection
+                    }
+                    if shouldShowAnnualLeaveEntitlementSection {
+                        annualLeaveEntitlementSection
+                    }
                     if canUseAdminAccountTools && !userStore.isOrganizationCreator(userId: user.id) {
                         activeToggleChromeSection
                     }
@@ -995,6 +1093,11 @@ struct EditUserView: View {
                 editSurname = u.surname
                 editEmail = u.email
                 editMobile = u.mobileNumber ?? ""
+                annualLeaveDaysText = EditUserView.formatAnnualLeaveDaysText(u.annualLeaveDaysPerYear)
+                annualLeaveStartMonth = u.annualLeaveYearStartMonth
+                annualLeaveEndMonth = u.annualLeaveYearEndMonth
+                annualLeaveCarriesOver = u.annualLeaveCarriesOver
+                annualLeaveEnabledDraft = u.annualLeaveEnabled
             }
             .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
             .navigationTitle(editNavigationTitle)
@@ -1581,6 +1684,11 @@ struct EditUserView: View {
                     ManageUserCardDivider()
                 }
                 ManageUserDayRateEditRow(dayRateText: $dayRateText, currencySymbol: localeCurrencySymbol())
+                Text("Payroll uses either a day rate or an hourly rate, not both. Saving updates here applies the organisation rule: setting one clears the other on the account.")
+                    .font(.caption2)
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 6)
                 ManageUserCardDivider()
                 tradeTypePickSection
                 if (permissions.operativeMode || permissions.manager || permissions.adminAccess) && !dayRateHistory.isEmpty {
@@ -2317,6 +2425,29 @@ struct EditUserView: View {
             )
         }
 
+        var annualLeaveEnabledSuccess = true
+        if canEditPermissionsMatrix && annualLeaveAccessDirty {
+            annualLeaveEnabledSuccess = await userStore.updateUserAnnualLeaveEnabled(userId: user.id, enabled: annualLeaveEnabledDraft)
+        }
+
+        var annualLeaveSuccess = true
+        if canEditPermissionsMatrix && annualLeaveEntitlementDirty {
+            guard let days = parsedAnnualLeaveDaysForSave() else {
+                await MainActor.run {
+                    isUpdating = false
+                    saveErrorMessage = "Enter a valid annual leave allowance (a positive number of days)."
+                }
+                return
+            }
+            annualLeaveSuccess = await userStore.updateUserAnnualLeaveEntitlement(
+                userId: user.id,
+                daysPerYear: days,
+                startMonth: annualLeaveStartMonth,
+                endMonth: annualLeaveEndMonth,
+                carriesOver: annualLeaveCarriesOver
+            )
+        }
+
         if didPersistPermissions && permissionsSuccess {
             await holidayStore.loadData()
         }
@@ -2324,7 +2455,7 @@ struct EditUserView: View {
         await MainActor.run {
             isUpdating = false
             showingDayRateEffectiveChoice = false
-            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess {
+            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess {
                 dismiss()
             } else {
                 saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."

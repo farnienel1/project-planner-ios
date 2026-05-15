@@ -47,6 +47,8 @@ struct CreateProjectView: View {
     @State private var showingCreateManager = false
     @State private var hiddenManagerUserIds: Set<String> = []
 
+    @FocusState private var focusedFieldKey: String?
+
     private let requiredFieldTotal = 7
 
     private func jobTypeFromString(_ type: String) -> JobType {
@@ -63,9 +65,13 @@ struct CreateProjectView: View {
         var n = 0
         if !projectJobNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { n += 1 }
         if !projectSiteName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { n += 1 }
-        if !projectAddressLine1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { n += 1 }
-        if !projectTownCity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { n += 1 }
-        if !projectPostcode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { n += 1 }
+        if hasMapPin {
+            n += 3
+        } else {
+            if !projectAddressLine1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { n += 1 }
+            if !projectTownCity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { n += 1 }
+            if !projectPostcode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { n += 1 }
+        }
         if selectedClient != nil { n += 1 }
         if selectedManager != nil { n += 1 }
         return n
@@ -330,13 +336,23 @@ struct CreateProjectView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .tracking(0.4)
-                Text("REQUIRED")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(ProjectWorksRevampColors.requiredPillBg)
-                    .clipShape(Capsule())
+                if hasMapPin {
+                    Text("MAP PIN SET")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Color(red: 0.882, green: 0.961, blue: 0.933))
+                        .clipShape(Capsule())
+                } else {
+                    Text("REQUIRED")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(ProjectWorksRevampColors.requiredPillBg)
+                        .clipShape(Capsule())
+                }
             }
             Spacer()
         }
@@ -352,6 +368,7 @@ struct CreateProjectView: View {
                 label: "Project reference",
                 prompt: "e.g. C646",
                 text: $projectJobNumber,
+                fieldKey: "jobNumber",
                 required: true
             )
             Divider().overlay(ProjectWorksRevampColors.border)
@@ -362,6 +379,7 @@ struct CreateProjectView: View {
                 label: "Site name",
                 prompt: "e.g. Lancelot Place",
                 text: $projectSiteName,
+                fieldKey: "siteName",
                 required: true
             )
         }
@@ -413,6 +431,7 @@ struct CreateProjectView: View {
                 label: "Address line 1",
                 prompt: "Building number and street",
                 text: $projectAddressLine1,
+                fieldKey: "address1",
                 required: true
             )
             Divider().overlay(ProjectWorksRevampColors.border)
@@ -423,6 +442,7 @@ struct CreateProjectView: View {
                 label: "Address line 2 · Optional",
                 prompt: "Flat, unit, floor",
                 text: $projectAddressLine2,
+                fieldKey: "address2",
                 required: false
             )
             Divider().overlay(ProjectWorksRevampColors.border)
@@ -433,6 +453,7 @@ struct CreateProjectView: View {
                 label: "Town / City",
                 prompt: "e.g. London",
                 text: $projectTownCity,
+                fieldKey: "town",
                 required: true
             )
             Divider().overlay(ProjectWorksRevampColors.border)
@@ -443,6 +464,7 @@ struct CreateProjectView: View {
                 label: "Postcode",
                 prompt: "e.g. SW7 1DR",
                 text: $projectPostcode,
+                fieldKey: "postcode",
                 required: true,
                 autocapitalization: .characters
             )
@@ -517,7 +539,8 @@ struct CreateProjectView: View {
                 .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
                 .allowsHitTesting(false)
         }
-        .padding(.vertical, 10)
+        .frame(minHeight: 48, alignment: .center)
+        .contentShape(Rectangle())
     }
 
     private var durationBanner: some View {
@@ -712,6 +735,7 @@ struct CreateProjectView: View {
         label: String,
         prompt: String,
         text: Binding<String>,
+        fieldKey: String,
         required: Bool,
         autocapitalization: TextInputAutocapitalization = .never
     ) -> some View {
@@ -724,18 +748,31 @@ struct CreateProjectView: View {
                 Text(label)
                     .font(.system(size: 11))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { focusedFieldKey = fieldKey }
                 TextField("", text: text, prompt: Text(prompt).foregroundStyle(ProjectWorksRevampColors.placeholderInk))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                     .textInputAutocapitalization(autocapitalization)
+                    .focused($focusedFieldKey, equals: fieldKey)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
             }
             if required {
-                Image(systemName: "asterisk")
+                Image(systemName: hasMapPin && ["address1", "town", "postcode"].contains(fieldKey) ? "checkmark.circle.fill" : "asterisk")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                    .foregroundStyle(
+                        hasMapPin && ["address1", "town", "postcode"].contains(fieldKey)
+                            ? ProjectWorksRevampColors.activeGreen
+                            : ProjectWorksRevampColors.requiredPillFg
+                    )
             }
         }
-        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onTapGesture { focusedFieldKey = fieldKey }
     }
 
     private func createProject() {
@@ -779,7 +816,7 @@ struct CreateProjectView: View {
             isLive: true,
             description: projectDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : projectDescription,
             hiddenManagerUserIds: sanitizedHidden,
-            usesMapPinForLocation: false,
+            usesMapPinForLocation: hasPin,
             latitude: hasPin ? pinLatitude : nil,
             longitude: hasPin ? pinLongitude : nil
         )

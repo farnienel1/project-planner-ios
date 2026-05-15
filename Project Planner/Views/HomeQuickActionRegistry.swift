@@ -45,6 +45,7 @@ enum HomeQuickActionID: String, CaseIterable {
     case staffHelp = "staff-help"
     case staffHoliday = "staff-holiday"
     case staffGeneralAppSettings = "staff-general-app"
+    case staffTasks = "staff-tasks"
 
     /// Never offer these on the home screen (picker / persistence strip).
     static let barredFromHome: Set<String> = [
@@ -141,6 +142,8 @@ enum HomeQuickActionRegistry {
             return HomeQuickActionMeta(id: id, symbol: "sun.max.fill", title: "Holiday", tint: rust)
         case HomeQuickActionID.staffGeneralAppSettings.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "slider.horizontal.3", title: "General\napp", tint: purple)
+        case HomeQuickActionID.staffTasks.rawValue:
+            return HomeQuickActionMeta(id: id, symbol: "plus.rectangle.on.rectangle", title: "Tasks", tint: blue)
         default:
             return nil
         }
@@ -152,9 +155,11 @@ enum HomeQuickActionRegistry {
 
         switch id {
         case HomeQuickActionID.opProjects.rawValue, HomeQuickActionID.opSmallWorks.rawValue,
-             HomeQuickActionID.opAnnualLeave.rawValue, HomeQuickActionID.opSchedule.rawValue,
+             HomeQuickActionID.opSchedule.rawValue,
              HomeQuickActionID.opSettings.rawValue:
             return userStore.isOperativeMode()
+        case HomeQuickActionID.opAnnualLeave.rawValue:
+            return userStore.isOperativeMode() && userStore.isAnnualLeaveFeatureEnabled()
         case HomeQuickActionID.opSiteAudit.rawValue:
             return userStore.isOperativeMode() && (userStore.canViewSiteAudit() || userStore.isHomeProfileLoading)
 
@@ -168,6 +173,7 @@ enum HomeQuickActionRegistry {
             return !userStore.isOperativeMode() && userStore.canViewProjects()
         case HomeQuickActionID.staffAnnualLeave.rawValue:
             return !userStore.isOperativeMode()
+                && userStore.isAnnualLeaveFeatureEnabled()
                 && (userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true || userStore.isHomeProfileLoading)
         case HomeQuickActionID.staffSchedule.rawValue:
             return !userStore.isOperativeMode() && userStore.canViewProjects()
@@ -207,9 +213,11 @@ enum HomeQuickActionRegistry {
         case HomeQuickActionID.staffHelp.rawValue:
             return !userStore.isOperativeMode()
         case HomeQuickActionID.staffHoliday.rawValue:
-            return true
+            return userStore.isAnnualLeaveFeatureEnabled()
         case HomeQuickActionID.staffGeneralAppSettings.rawValue:
             return !userStore.isOperativeMode() && userStore.hasAdminAccess()
+        case HomeQuickActionID.staffTasks.rawValue:
+            return !userStore.isOperativeMode()
         default:
             return false
         }
@@ -239,6 +247,9 @@ enum HomeQuickActionRegistry {
         }
         if isEligible(id: HomeQuickActionID.staffDailyOverview.rawValue, userStore: userStore) {
             items.append(HomeQuickActionID.staffDailyOverview.rawValue)
+        }
+        if isEligible(id: HomeQuickActionID.staffTasks.rawValue, userStore: userStore) {
+            items.append(HomeQuickActionID.staffTasks.rawValue)
         }
         if isEligible(id: HomeQuickActionID.staffProjects.rawValue, userStore: userStore) {
             items.append(HomeQuickActionID.staffProjects.rawValue)

@@ -38,39 +38,95 @@ struct OrganizationSetupView: View {
         "Upload Logo",
         "Complete Setup"
     ]
-    
+
+    /// Segment progress — `DesignReference/project_planner_org_setup_revamp.html`.
+    private var organizationSetupProgressHeader: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 4) {
+                ForEach(0..<steps.count, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(index <= currentStep ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.border)
+                        .frame(height: 4)
+                }
+            }
+            .padding(.horizontal, 18)
+            Text("Step \(currentStep + 1) of \(steps.count) · \(steps[currentStep])")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+        }
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+    }
+
+    private var organizationSetupBottomBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 10) {
+                if currentStep > 0 {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            currentStep -= 1
+                        }
+                    } label: {
+                        Text("Back")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 10)
+                            .background(ProjectWorksRevampColors.canvas)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button {
+                    if currentStep == steps.count - 1 {
+                        completeSetup()
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            currentStep += 1
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(currentStep == steps.count - 1 ? "Complete setup" : "Continue")
+                            .font(.system(size: 12, weight: .medium))
+                        if currentStep < steps.count - 1 {
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .background(
+                        canProceed
+                            ? ProjectWorksRevampColors.blue
+                            : ProjectWorksRevampColors.muted.opacity(0.45)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canProceed)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(Color.white)
+        }
+    }
     
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // Progress indicator
-                VStack(spacing: 16) {
-                    HStack {
-                        ForEach(0..<steps.count, id: \.self) { index in
-                            Circle()
-                                .fill(index <= currentStep ? Color.theme.primary : Color.gray.opacity(0.3))
-                                .frame(width: 12, height: 12)
-                            
-                            if index < steps.count - 1 {
-                                Rectangle()
-                                    .fill(index < currentStep ? Color.theme.primary : Color.gray.opacity(0.3))
-                                    .frame(height: 2)
-                            }
-                        }
-                    }
-                    .padding(.horizontal)
-                    
-                    Text(steps[currentStep])
-                        .font(.headline)
-                        .foregroundStyle(Color.theme.primary)
-                }
-                .padding(.vertical, 20)
-                
+                organizationSetupProgressHeader
                 Divider()
-                
-                // Content
                 ScrollView {
-                    VStack(spacing: 24) {
+                    VStack(spacing: 22) {
                         switch currentStep {
                         case 0:
                             organizationDetailsStep
@@ -88,45 +144,23 @@ struct OrganizationSetupView: View {
                             EmptyView()
                         }
                     }
-                    .padding()
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 20)
+                    .padding(.bottom, 24)
                 }
-                
-                Spacer()
-                
-                // Navigation buttons
-                HStack(spacing: 16) {
-                    if currentStep > 0 {
-                        Button("Back") {
-                            withAnimation {
-                                currentStep -= 1
-                            }
-                        }
-                        .buttonStyle(SecondaryButtonStyle())
-                    }
-                    
-                    Spacer()
-                    
-                    Button(currentStep == steps.count - 1 ? "Complete Setup" : "Next") {
-                        if currentStep == steps.count - 1 {
-                            completeSetup()
-                        } else {
-                            withAnimation {
-                                currentStep += 1
-                            }
-                        }
-                    }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .disabled(!canProceed)
-                }
-                .padding()
             }
-            .navigationTitle("Setup Organisation")
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                organizationSetupBottomBar
+            }
+            .navigationTitle("Set up organisation")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         dismiss()
                     }
+                    .foregroundStyle(ProjectWorksRevampColors.blue)
                 }
             }
         }
@@ -156,23 +190,124 @@ struct OrganizationSetupView: View {
     // MARK: - Step Views
     
     private var organizationDetailsStep: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Let's set up your organisation")
-                .font(.title2)
-                .fontWeight(.bold)
-            
-            Text("Enter your organisation details to get started")
-                .foregroundStyle(.secondary)
-            
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Organisation Name")
-                        .font(.headline)
-                    TextField("Enter organisation name", text: $organizationName)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 76, height: 76)
+                    Image(systemName: "rocket.fill")
+                        .font(.system(size: 34, weight: .medium))
+                        .foregroundStyle(.white)
                 }
+                .shadow(color: ProjectWorksRevampColors.blue.opacity(0.28), radius: 16, x: 0, y: 10)
+                Text("Let's set up your company")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                Text("A few quick questions about how your business runs.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
+            VStack(spacing: 8) {
+                organizationSetupRoadmapRow(
+                    icon: "building.2.fill",
+                    title: "Your organisation",
+                    subtitle: "Name, logo, location",
+                    iconTint: ProjectWorksRevampColors.blue,
+                    iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984)
+                )
+                organizationSetupRoadmapRow(
+                    icon: "clock.fill",
+                    title: "Working hours & overtime",
+                    subtitle: "Standard day, OT rates",
+                    iconTint: Color(red: 0.325, green: 0.290, blue: 0.718),
+                    iconBackground: ProjectWorksRevampColors.jobTypePillBg
+                )
+                organizationSetupRoadmapRow(
+                    icon: "beach.umbrella.fill",
+                    title: "Annual leave",
+                    subtitle: "Allowance & carry-over",
+                    iconTint: ProjectWorksRevampColors.endDateFg,
+                    iconBackground: ProjectWorksRevampColors.endDateBg
+                )
+                organizationSetupRoadmapRow(
+                    icon: "person.crop.circle.badge.checkmark",
+                    title: "Your account",
+                    subtitle: "You'll be the first admin",
+                    iconTint: ProjectWorksRevampColors.activeGreen,
+                    iconBackground: Color(red: 0.882, green: 0.961, blue: 0.933)
+                )
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 3) {
+                    Text("Organisation name")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                    Text("*")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                }
+                TextField("Enter organisation name", text: $organizationName)
+                    .font(.system(size: 13, weight: .medium))
+                    .padding(11)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(
+                                organizationName.isEmpty
+                                    ? ProjectWorksRevampColors.searchBorder
+                                    : ProjectWorksRevampColors.blue,
+                                lineWidth: organizationName.isEmpty ? 0.5 : 1
+                            )
+                    )
             }
         }
+    }
+
+    private func organizationSetupRoadmapRow(
+        icon: String,
+        title: String,
+        subtitle: String,
+        iconTint: Color,
+        iconBackground: Color
+    ) -> some View {
+        HStack(alignment: .center, spacing: 11) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(iconBackground)
+                    .frame(width: 28, height: 28)
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(iconTint)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                Text(subtitle)
+                    .font(.system(size: 10))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
     }
 
     private var officeLocationStep: some View {
@@ -227,8 +362,7 @@ struct OrganizationSetupView: View {
     }
     
     private var adminAccountStep: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 20) {
                 Text("Create Admin Account")
                     .font(.title2)
                     .fontWeight(.bold)
@@ -334,9 +468,6 @@ struct OrganizationSetupView: View {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(Color.gray.opacity(0.1))
                 )
-                
-            }
-            .padding()
         }
     }
     

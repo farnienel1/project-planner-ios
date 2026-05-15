@@ -16,6 +16,11 @@ struct BookingClashWarningView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+
+    private var payrollTimePolicy: OrgPayrollTimePolicy {
+        firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+    }
     
     private var clashesByOperative: [(operativeName: String, items: [ScheduleOperativeView.BookingClash])] {
         let grouped = Dictionary(grouping: clashes) { $0.operative.name }
@@ -113,7 +118,12 @@ struct ClashDetailCard: View {
     
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var operativeStore: OperativeStore
-    
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+
+    private var payrollTimePolicy: OrgPayrollTimePolicy {
+        firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -146,9 +156,9 @@ struct ClashDetailCard: View {
                 
                 BookingDetailRow(title: "Date", value: clash.date, isDate: true)
                 
-                BookingDetailRow(title: "New Booking Time", value: clash.newTimeSlot.displayName)
+                BookingDetailRow(title: "New Booking Time", value: clash.newChoice.scheduleLabel(policy: payrollTimePolicy))
                 
-                BookingDetailRow(title: "Existing Booking Time", value: clash.existingBooking.timeSlot.displayName)
+                BookingDetailRow(title: "Existing Booking Time", value: clash.existingBooking.scheduleLabel(policy: payrollTimePolicy))
                 
                 if let project = clash.existingProject {
                     BookingDetailRow(title: "Existing Project", value: "\(project.jobNumber) - \(project.siteName)")
@@ -244,6 +254,7 @@ private struct BookingDetailRow: View {
         onCancel: {},
         onContinue: {}
     )
+    .environmentObject(FirebaseBackend())
 }
 
 

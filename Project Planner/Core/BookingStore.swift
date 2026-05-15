@@ -142,7 +142,14 @@ class BookingStore: ObservableObject {
     
     func addBooking(_ booking: Booking) async {
         bookings.append(booking)
-        await saveData()
+        await saveData(syncingBookingIds: [booking.id])
+    }
+
+    /// Append multiple bookings then sync only the new rows (much faster than repeated full saves).
+    func addBookings(_ newBookings: [Booking]) async {
+        guard !newBookings.isEmpty else { return }
+        bookings.append(contentsOf: newBookings)
+        await saveData(syncingBookingIds: Set(newBookings.map(\.id)))
     }
     
     func updateBooking(_ booking: Booking) async {
@@ -179,7 +186,12 @@ class BookingStore: ObservableObject {
         timeSlot: TimeSlot,
         for project: Project,
         bookedBy: String,
-        notes: String? = nil
+        notes: String? = nil,
+        workStartTime: String? = nil,
+        workEndTime: String? = nil,
+        isBreakRemoved: Bool = false,
+        otMultiplierOverride: Double? = nil,
+        bookingGroupId: String? = nil
     ) async {
         // Update updatedAt when creating
         var updatedBooking = Booking(
@@ -188,7 +200,12 @@ class BookingStore: ObservableObject {
             date: date,
             timeSlot: timeSlot,
             bookedBy: bookedBy,
-            notes: notes
+            notes: notes,
+            workStartTime: workStartTime,
+            workEndTime: workEndTime,
+            isBreakRemoved: isBreakRemoved,
+            otMultiplierOverride: otMultiplierOverride,
+            bookingGroupId: bookingGroupId
         )
         updatedBooking.updatedAt = Date()
         
@@ -351,7 +368,7 @@ class BookingStore: ObservableObject {
     
     // MARK: - Persistence
     
-    private func saveData() async {
+    private func saveData(syncingBookingIds: Set<UUID>? = nil) async {
         do {
             // Save to local storage
             try await persistenceService.saveBookingData(bookings: bookings)
@@ -368,9 +385,12 @@ class BookingStore: ObservableObject {
                 
                 print("🔥🔥🔥 DEBUG: Saving bookings to Firebase for organization: \(organizationId)")
                 
-                // Save bookings to Firebase (only save changes, not all bookings every time)
-                // For now, save all bookings - can be optimized later
-                let bookingsToSave = bookings
+                let bookingsToSave: [Booking]
+                if let ids = syncingBookingIds, !ids.isEmpty {
+                    bookingsToSave = bookings.filter { ids.contains($0.id) }
+                } else {
+                    bookingsToSave = bookings
+                }
                 var failedCount = 0
                 for booking in bookingsToSave {
                     do {

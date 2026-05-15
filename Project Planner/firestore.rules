@@ -229,6 +229,11 @@ service cloud.firestore {
            request.resource.data.diff(resource.data).changedKeys().hasOnly([
              'assignedManagerUserId',
              'dayRate',
+             'annualLeaveEnabled',
+             'annualLeaveDaysPerYear',
+             'annualLeaveYearStartMonth',
+             'annualLeaveYearEndMonth',
+             'annualLeaveCarriesOver',
              'updatedAt'
            ]);
   }

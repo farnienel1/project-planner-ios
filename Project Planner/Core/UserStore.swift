@@ -393,6 +393,11 @@ class UserStore: ObservableObject {
             || currentUser.permissions.adminAccess
             || currentUser.role == .admin
     }
+
+    /// When false, hide the Holiday tab and annual-leave entry points (managed per user).
+    func isAnnualLeaveFeatureEnabled() -> Bool {
+        displayUser?.annualLeaveEnabled ?? true
+    }
     
     // Simplified permission checks using user.permissions. Operatives get restricted access.
     func canManageUsers() -> Bool {
@@ -616,7 +621,7 @@ class UserStore: ObservableObject {
              // MARK: - User Invitation
              
     /// For operative invitations, pass the line manager's Firebase Auth UID (`users` document id).
-    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil) async -> Bool {
+    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil) async -> Bool {
         print("🔥🔥🔥 DEBUG: inviteUser called with firstName: \(firstName), surname: \(surname), email: \(email)")
         
         errorMessage = nil
@@ -763,7 +768,11 @@ class UserStore: ObservableObject {
                 invitedOperativeDayRate: invitedOperativeDayRate,
                 invitedManagerDayRate: invitedManagerDayRate,
                 invitedTradeTypePreset: invitedTradeTypePreset,
-                invitedTradeTypeCustom: invitedTradeTypeCustom
+                invitedTradeTypeCustom: invitedTradeTypeCustom,
+                annualLeaveDaysPerYear: annualLeaveDaysPerYear,
+                annualLeaveYearStartMonth: annualLeaveYearStartMonth,
+                annualLeaveYearEndMonth: annualLeaveYearEndMonth,
+                annualLeaveCarriesOver: annualLeaveCarriesOver
             )
             print("🔥🔥🔥 DEBUG: createUserInvitation succeeded")
             
@@ -1280,6 +1289,94 @@ class UserStore: ObservableObject {
                      return false
                  }
              }
+
+    /// Persists annual leave entitlement on `users/{userId}`. Admins use full `saveUser`; managers with operative management use a narrow patch allowed by Firestore rules.
+    func updateUserAnnualLeaveEntitlement(
+        userId: String,
+        daysPerYear: Double,
+        startMonth: Int,
+        endMonth: Int,
+        carriesOver: Bool
+    ) async -> Bool {
+        guard let firebaseBackend = firebaseBackend else { return false }
+        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+        var updated = organizationUsers[index]
+        if updated.isSuperAdmin && isOrganizationCreator(userId: updated.id) {
+            return false
+        }
+        let clampedDays = AnnualLeavePolicy.clampDaysPerYear(daysPerYear)
+        let sm = AnnualLeavePolicy.clampMonth(startMonth)
+        let em = AnnualLeavePolicy.clampMonth(endMonth)
+
+        updated.annualLeaveDaysPerYear = clampedDays
+        updated.annualLeaveYearStartMonth = sm
+        updated.annualLeaveYearEndMonth = em
+        updated.annualLeaveCarriesOver = carriesOver
+
+        do {
+            if hasAdminAccess() {
+                try await firebaseBackend.saveUser(updated)
+            } else if isActingManagerOperativeManagementOnly(),
+                      updated.permissions.operativeMode || updated.role == .operative {
+                try await firebaseBackend.updateAnnualLeaveEntitlement(
+                    userId: userId,
+                    daysPerYear: clampedDays,
+                    startMonth: sm,
+                    endMonth: em,
+                    carriesOver: carriesOver
+                )
+            } else {
+                return false
+            }
+            organizationUsers[index] = updated
+            if var cu = currentUser, cu.id == userId {
+                cu.annualLeaveDaysPerYear = clampedDays
+                cu.annualLeaveYearStartMonth = sm
+                cu.annualLeaveYearEndMonth = em
+                cu.annualLeaveCarriesOver = carriesOver
+                currentUser = cu
+            }
+            return true
+        } catch {
+            print("🔥🔥🔥 DEBUG: updateUserAnnualLeaveEntitlement error: \(error)")
+            errorMessage = "Could not save annual leave settings: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    /// Persists `annualLeaveEnabled` on `users/{userId}`. Admins use full `saveUser`; managers with operative management use a narrow patch allowed by Firestore rules.
+    func updateUserAnnualLeaveEnabled(userId: String, enabled: Bool) async -> Bool {
+        guard let firebaseBackend = firebaseBackend else { return false }
+        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+        if isOrganizationCreator(userId: userId) { return false }
+        var updated = organizationUsers[index]
+        if updated.isSuperAdmin && isOrganizationCreator(userId: updated.id) {
+            return false
+        }
+
+        updated.annualLeaveEnabled = enabled
+
+        do {
+            if hasAdminAccess() {
+                try await firebaseBackend.saveUser(updated)
+            } else if isActingManagerOperativeManagementOnly(),
+                      updated.permissions.operativeMode || updated.role == .operative {
+                try await firebaseBackend.updateAnnualLeaveEnabled(userId: userId, enabled: enabled)
+            } else {
+                return false
+            }
+            organizationUsers[index] = updated
+            if var cu = currentUser, cu.id == userId {
+                cu.annualLeaveEnabled = enabled
+                currentUser = cu
+            }
+            return true
+        } catch {
+            print("🔥🔥🔥 DEBUG: updateUserAnnualLeaveEnabled error: \(error)")
+            errorMessage = "Could not save annual leave access: \(error.localizedDescription)"
+            return false
+        }
+    }
 
              /// Updates operative-specific profile fields on the user account and synchronizes linked operative day rate.
              func updateOperativeProfileFields(

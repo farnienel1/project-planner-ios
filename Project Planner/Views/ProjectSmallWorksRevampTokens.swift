@@ -157,3 +157,25 @@ struct WorksRevampFilterChip: View {
         .buttonStyle(.plain)
     }
 }
+
+// MARK: - App chrome (DesignReference home HTML — #F7F8FA canvas + nav bar)
+
+extension View {
+    /// Matches `project_planner_home_with_up_next_restored.html`: content and navigation bar share the same canvas.
+    func appChromeNavigationBarSurface() -> some View {
+        self
+            .toolbarBackground(ProjectWorksRevampColors.canvas, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+    }
+
+    /// White card with 14pt radius and hairline border (quick actions / list rows in mocks).
+    func appChromeCardContainer(cornerRadius: CGFloat = 14) -> some View {
+        self
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+            )
+    }
+}
