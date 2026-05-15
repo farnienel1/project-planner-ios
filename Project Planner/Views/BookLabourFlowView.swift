@@ -59,8 +59,15 @@ struct BookLabourFlowView: View {
     @State private var isSaving = false
     @State private var projectListSearchText = ""
     @State private var bookLabourOperativeClockEdit: BookLabourOperativeClockEdit?
+    @State private var pendingOperativeOverlap: PendingOperativeBookLabourOverlap?
 
     private let calendar = Calendar.current
+
+    private struct PendingOperativeBookLabourOverlap {
+        let message: String
+        let detailLines: [String]
+        let onConfirm: () -> Void
+    }
 
     private var day: Date { calendar.startOfDay(for: bookDate) }
 
@@ -566,6 +573,7 @@ struct BookLabourFlowView: View {
     @ViewBuilder
     private func pickSlotOperativeView(person: BookLabourCandidate, project: Project) -> some View {
         if let op = person.linkedOperative {
+            ZStack(alignment: .top) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     bookLabourPersonSummaryCard(person: person)
@@ -647,6 +655,20 @@ struct BookLabourFlowView: View {
                 .padding(18)
             }
             .scrollIndicators(.hidden)
+
+                if let pending = pendingOperativeOverlap {
+                    ScheduleOverlapWarningPanel(
+                        message: pending.message,
+                        detailLines: pending.detailLines,
+                        onCancel: { pendingOperativeOverlap = nil },
+                        onConfirm: {
+                            let run = pending.onConfirm
+                            pendingOperativeOverlap = nil
+                            run()
+                        }
+                    )
+                }
+            }
         } else {
             Text("No operative profile for this user.")
                 .foregroundStyle(ProjectWorksRevampColors.muted)
@@ -896,7 +918,8 @@ struct BookLabourFlowView: View {
         slot: TimeSlot,
         workStart: String? = nil,
         workEnd: String? = nil,
-        breakRemoved: Bool = false
+        breakRemoved: Bool = false,
+        allowOverlap: Bool = false
     ) {
         guard let bookedBy = firebaseBackend.currentUser?.uid else {
             errorBanner = "Not signed in."
@@ -915,15 +938,30 @@ struct BookLabourFlowView: View {
             errorBanner = "That booking already exists."
             return
         }
-        if operativeWouldClash(
-            operativeId: operative.id,
-            projectId: project.id,
-            slot: slot,
-            workStart: workStart,
-            workEnd: workEnd,
-            breakRemoved: breakRemoved
-        ) {
-            errorBanner = "This booking overlaps another in time on that day."
+        if !allowOverlap,
+           let clashLines = operativeClashDetailLines(
+                operativeId: operative.id,
+                projectId: project.id,
+                slot: slot,
+                workStart: workStart,
+                workEnd: workEnd,
+                breakRemoved: breakRemoved
+           ) {
+            pendingOperativeOverlap = PendingOperativeBookLabourOverlap(
+                message: "This booking overlaps another in time on \(bookFlowDayLine).",
+                detailLines: clashLines,
+                onConfirm: {
+                    saveOperativeBooking(
+                        operative: operative,
+                        project: project,
+                        slot: slot,
+                        workStart: workStart,
+                        workEnd: workEnd,
+                        breakRemoved: breakRemoved,
+                        allowOverlap: true
+                    )
+                }
+            )
             return
         }
         isSaving = true
@@ -942,6 +980,42 @@ struct BookLabourFlowView: View {
                 isSaving = false
                 dismiss()
             }
+        }
+    }
+
+    private func operativeClashDetailLines(
+        operativeId: UUID,
+        projectId: UUID,
+        slot: TimeSlot,
+        workStart: String?,
+        workEnd: String?,
+        breakRemoved: Bool
+    ) -> [String]? {
+        let existing = bookingStore.bookings.filter {
+            $0.operativeId == operativeId &&
+                calendar.isDate($0.date, inSameDayAs: day) &&
+                $0.status != .cancelled &&
+                $0.status != .completed
+        }
+        guard !existing.isEmpty else { return nil }
+        let policy = payrollTimePolicy
+        let probe = Booking(
+            operativeId: operativeId,
+            projectId: projectId,
+            date: day,
+            timeSlot: slot,
+            bookedBy: "",
+            workStartTime: workStart,
+            workEndTime: workEnd,
+            isBreakRemoved: breakRemoved
+        )
+        let overlapping = existing.filter { OperativeBookingInterval.bookingsOverlap(probe, $0, policy: policy) }
+        guard !overlapping.isEmpty else { return nil }
+        return overlapping.map { booking in
+            let p = projectStore.projects.first(where: { $0.id == booking.projectId })
+                ?? projectStore.smallWorks.first(where: { $0.id == booking.projectId })
+            let label = p.map { "\($0.jobNumber) \($0.siteName)" } ?? "Another job"
+            return "\(booking.scheduleLabel(policy: policy)) · \(label)"
         }
     }
 

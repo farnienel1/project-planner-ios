@@ -64,8 +64,10 @@ class ManagerScheduleStore: ObservableObject {
         let key = semanticKey(for: normalizedBooking)
         
         // Hard stop for duplicate slot+day+location taps (including rapid multi-taps).
-        if pendingSemanticKeys.contains(key) ||
-            managerSiteBookings.contains(where: { semanticKey(for: $0) == key }) {
+        let clashesWithOther = managerSiteBookings.contains { other in
+            other.id != normalizedBooking.id && semanticKey(for: other) == key
+        }
+        if pendingSemanticKeys.contains(key) || clashesWithOther {
             return
         }
         pendingSemanticKeys.insert(key)

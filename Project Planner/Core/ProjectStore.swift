@@ -824,9 +824,13 @@ class ProjectStore: ObservableObject {
         projects.filter { $0.isLive && $0.jobType != .smallWorks }
     }
     
+    /// Live small-works rows — subset of `projects` (same ids). Do not concatenate with `projects`.
     var smallWorks: [Project] {
         projects.filter { $0.isLive && $0.jobType == .smallWorks }
     }
+
+    /// All loaded works for scheduling/warnings lookups (includes small works).
+    var allWorks: [Project] { projects }
     
     var upcomingProjects: [Project] {
         projects.filter { $0.status == ProjectStatus.upcoming }

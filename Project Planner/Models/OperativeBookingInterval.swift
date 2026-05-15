@@ -52,6 +52,17 @@ enum OperativeBookingInterval {
         return closedIntervalsOverlap(ia, ib)
     }
 
+    /// Wall-clock hours overlapping the org standard day window (`standardDayStart`–`standardDayEnd`).
+    static func hoursInsideStandardClockWindow(booking: Booking, policy: OrgPayrollTimePolicy) -> Double {
+        guard let iv = clashInterval(for: booking, policy: policy),
+              let ds = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
+              let de = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd), de > ds else { return 0 }
+        let overlapStart = max(iv.0, ds)
+        let overlapEnd = min(iv.1, de)
+        guard overlapEnd > overlapStart else { return 0 }
+        return Double(overlapEnd - overlapStart) / 60.0
+    }
+
     static func coversFullStandardDay(_ booking: Booking, policy: OrgPayrollTimePolicy) -> Bool {
         guard let iv = clashInterval(for: booking, policy: policy),
               let ws = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
@@ -146,20 +157,9 @@ extension Booking {
     }
 
     func reportDayValue(policy: OrgPayrollTimePolicy = .default) -> Double {
-        if let s = workStartTime, let e = workEndTime,
-           let sm = ManagerScheduleInterval.parseMinutes(s),
-           let em = ManagerScheduleInterval.parseMinutes(e), em > sm {
-            let hrs = Double(em - sm) / 60.0
-            let paid = max(policy.standardPaidHours, 0.01)
-            return min(1.5, hrs / paid)
-        }
-        switch timeSlot {
-        case .fullDay: return 1
-        case .morning, .afternoon: return 0.5
-        case .evening: return 0.5
-        case .overtime: return 0.25
-        case .customHours: return 1
-        }
+        let paidHrs = paidBookedHours(policy: policy)
+        let standard = max(policy.standardPaidHours, 0.01)
+        return min(1.5, paidHrs / standard)
     }
 
     func calendarBlock(on day: Date, policy: OrgPayrollTimePolicy = .default) -> (start: Date, end: Date) {

@@ -20,8 +20,8 @@ struct HomeView: View {
     @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
-    @StateObject private var warningsService = WarningsService()
-    
+    @State private var homeWarningCount: Int = 0
+    @State private var cachedUpNextSections: [HomeUpNextDaySection] = []
     @State private var showingCreateClient = false
     @State private var showingNotifications = false
     @State private var showingCreateProject = false
@@ -46,7 +46,6 @@ struct HomeView: View {
     // Navigation states for menu items
     @State private var showingClientsView = false
     @State private var showingQuickMenu = false
-    @State private var warningsRefreshTask: Task<Void, Never>?
     @State private var isCustomisingQuickActions = false
     @State private var showingAddQuickActionPicker = false
     @State private var showingQuickActionCustomizeHint = false
@@ -70,10 +69,15 @@ struct HomeView: View {
         .toolbar(.hidden, for: .navigationBar)
         .background(homeCanvasBackground.ignoresSafeArea(edges: .top))
         .sheet(isPresented: $showingWarningsDetail) {
-            WarningsDetailView(warningsService: warningsService)
+            WarningsDetailView(warningsService: WarningsService.shared)
                 .environmentObject(projectStore)
                 .environmentObject(userStore)
                 .environmentObject(operativeStore)
+                .environmentObject(bookingStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(appSettings)
+                .environmentObject(holidayStore)
         }
         .sheet(isPresented: $showingTasksDetail) {
             TasksDetailView()
@@ -513,7 +517,7 @@ struct HomeView: View {
         switch mid {
         case .tasksDueTodayPersonal: return "\(tasksDueTodayCount)"
         case .tasksDueWeekPersonal: return "\(tasksDueThisWeekCount)"
-        case .warnings: return "\(warningsService.warningCount)"
+        case .warnings: return "\(homeWarningCount)"
         case .operativesOnSite: return "\(operativesOnSiteTodayCount)"
         case .managersOnSite: return "\(managersOnSiteTodayCount)"
         case .operativesOnAL: return "\(operativesOnALTodayCount)"
@@ -526,7 +530,7 @@ struct HomeView: View {
         switch mid {
         case .tasksDueTodayPersonal: return tasksDueTodayCount > 0
         case .tasksDueWeekPersonal: return tasksDueThisWeekCount > 0
-        case .warnings: return warningsService.warningCount > 0
+        case .warnings: return homeWarningCount > 0
         case .outstandingTasksAllUsers: return outstandingTasksAllUsersCount > 0
         default: return false
         }
@@ -539,7 +543,7 @@ struct HomeView: View {
         if userStore.hasAdminAccess() {
             return adminResolvedOverviewMetricIds.contains { overviewMetricContributesToHeadsUp($0) }
         }
-        return tasksDueTodayCount > 0 || tasksDueThisWeekCount > 0 || warningsService.warningCount > 0
+        return tasksDueTodayCount > 0 || tasksDueThisWeekCount > 0 || homeWarningCount > 0
     }
 
     private var homeDashboardRoot: some View {
@@ -559,12 +563,10 @@ struct HomeView: View {
         .padding(.bottom, 28)
         .onAppear {
             loadPersistedAdminOverviewMetricsIfNeeded()
-            scheduleWarningsRefresh()
         }
-        .onChange(of: operativeStore.allOperatives) { _, _ in scheduleWarningsRefresh() }
-        .onChange(of: bookingStore.bookings) { _, _ in scheduleWarningsRefresh() }
-        .onChange(of: projectStore.projects) { _, _ in scheduleWarningsRefresh() }
-        .onChange(of: projectStore.smallWorks) { _, _ in scheduleWarningsRefresh() }
+        .task(id: homeDataRefreshTrigger) {
+            await refreshHomeDerivedData()
+        }
         .onChange(of: showingAdminOverviewCustomize) { _, isOpen in
             if isOpen {
                 let base = persistedAdminOverviewMetricIds.isEmpty
@@ -700,7 +702,7 @@ struct HomeView: View {
             HStack(spacing: 10) {
                 overviewStatPill(value: "\(tasksDueTodayCount)", label: "Due today")
                 overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "This week")
-                overviewStatPill(value: "\(warningsService.warningCount)", label: "Warnings")
+                overviewStatPill(value: "\(assignedTasksCount)", label: "Tasks")
             }
         }
     }
@@ -728,9 +730,9 @@ struct HomeView: View {
                     iconTint: Color(red: 0.64, green: 0.18, blue: 0.18),
                     iconBackground: Color(red: 0.99, green: 0.92, blue: 0.92),
                     title: "Warnings",
-                    value: warningsService.warningCount == 0 ? "All clear" : "\(warningsService.warningCount) active"
+                    value: homeWarningCount == 0 ? "All clear" : "\(homeWarningCount) active"
                 ) {
-                    DispatchQueue.main.async { showingWarningsDetail = true }
+                    Task { await openWarningsDetail() }
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -1101,24 +1103,6 @@ struct HomeView: View {
         }
     }
 
-    private var upNextDaySections: [HomeUpNextDaySection] {
-        HomeUpNextSupport.upcomingDaySections(
-            minDistinctDays: 2,
-            mergeRowLimit: 48,
-            now: Date(),
-            authUserId: firebaseBackend.currentUser?.uid,
-            currentUserEmail: userStore.currentUser?.email,
-            operatives: operativeStore.allOperatives,
-            bookings: bookingStore.bookings,
-            managerBookings: managerScheduleStore.managerSiteBookings,
-            allProjects: projectStore.projects,
-            organizationUsers: userStore.organizationUsers,
-            accentBlue: homeBlue,
-            accentPurple: Color(red: 0.325, green: 0.29, blue: 0.718),
-            payrollTimePolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
-        )
-    }
-
     private var upNextSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
@@ -1132,7 +1116,7 @@ struct HomeView: View {
             }
             .padding(.bottom, 10)
 
-            let sections = upNextDaySections
+            let sections = cachedUpNextSections
             if sections.isEmpty {
                 Text("No upcoming bookings on your schedule.")
                     .font(.system(size: 13))
@@ -1231,23 +1215,95 @@ struct HomeView: View {
         return name.capitalized
     }
     
-    /// Debounce: bulk store updates during startup were calling `updateWarnings` repeatedly and freezing the main thread.
-    private func scheduleWarningsRefresh() {
-        let shouldRun = userStore.isHomeProfileLoading
-            || userStore.hasAdminAccess()
-            || (userStore.displayUser?.permissions.manager == true && !userStore.isOperativeMode())
-        guard shouldRun else { return }
-        warningsRefreshTask?.cancel()
-        warningsRefreshTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 450_000_000)
+    private var homeDataRefreshTrigger: HomeDataRefreshTrigger {
+        HomeDataRefreshTrigger(
+            operativeCount: operativeStore.allOperatives.count,
+            bookingCount: bookingStore.bookings.count,
+            projectCount: projectStore.projects.count,
+            smallWorksCount: projectStore.smallWorks.count,
+            managerBookingCount: managerScheduleStore.managerSiteBookings.count,
+            holidayCount: holidayStore.bookings.count,
+            userCount: userStore.organizationUsers.count,
+            isHomeProfileLoading: userStore.isHomeProfileLoading,
+            currentUserId: userStore.currentUser?.id
+        )
+    }
+
+    /// Rebuild Up Next + warning count off the main thread; Home does not observe `WarningsService` (avoids full-tree redraws).
+    private func refreshHomeDerivedData() async {
+        guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        guard !Task.isCancelled else { return }
+        guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
+
+        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let operatives = operativeStore.allOperatives
+        let bookings = bookingStore.bookings
+        // Small works are already in `projects` (smallWorks is a filter) — never concatenate both.
+        let projects = projectStore.projects
+        let users = userStore.organizationUsers
+        let managerBookings = managerScheduleStore.managerSiteBookings
+        let authUserId = firebaseBackend.currentUser?.uid
+        let userEmail = userStore.currentUser?.email
+        let blue = homeBlue
+        let purple = Color(red: 0.325, green: 0.29, blue: 0.718)
+
+        async let upNextTask: [HomeUpNextDaySection] = Task.detached(priority: .utility) {
+            HomeUpNextSupport.upcomingDaySections(
+                minDistinctDays: 2,
+                mergeRowLimit: 48,
+                now: Date(),
+                authUserId: authUserId,
+                currentUserEmail: userEmail,
+                operatives: operatives,
+                bookings: bookings,
+                managerBookings: managerBookings,
+                allProjects: projects,
+                organizationUsers: users,
+                accentBlue: blue,
+                accentPurple: purple,
+                payrollTimePolicy: policy
+            )
+        }.value
+
+        if userStore.hasAdminAccess() {
+            let cal = Calendar.current
+            let today = cal.startOfDay(for: Date())
+            let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
+            let tomorrowProjectIds = Set(
+                bookings
+                    .filter {
+                        cal.isDate($0.date, inSameDayAs: tomorrow) &&
+                            ($0.status == .confirmed || $0.status == .tentative)
+                    }
+                    .map(\.projectId)
+            )
+            let projectsTomorrow = projects.filter { tomorrowProjectIds.contains($0.id) }
+            await WarningsService.shared.updateWarningsAsync(
+                operatives: operatives,
+                bookings: bookings,
+                projects: projects,
+                users: users,
+                managerSiteBookings: managerBookings,
+                holidayBookings: holidayStore.bookings,
+                payrollTimePolicy: policy,
+                labourCoverageStart: cal.date(byAdding: .day, value: -14, to: today),
+                labourCoverageEnd: cal.date(byAdding: .day, value: 28, to: today),
+                materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
+                projectsWithTomorrowBookings: projectsTomorrow
+            )
             guard !Task.isCancelled else { return }
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            let stillEligible = userStore.hasAdminAccess()
-                || (userStore.displayUser?.permissions.manager == true && !userStore.isOperativeMode())
-            guard stillEligible else { return }
-            updateWarnings()
+            homeWarningCount = WarningsService.shared.warningCount
         }
+
+        cachedUpNextSections = await upNextTask
+    }
+
+    private func openWarningsDetail() async {
+        if userStore.hasAdminAccess() {
+            await refreshHomeDerivedData()
+        }
+        showingWarningsDetail = true
     }
     
     private var assignedTasksCount: Int {
@@ -1332,20 +1388,10 @@ struct HomeView: View {
         return n
     }
     
-    private func updateWarnings() {
-        warningsService.updateWarnings(
-            operatives: operativeStore.allOperatives,
-            bookings: bookingStore.bookings,
-            projects: projectStore.projects + projectStore.smallWorks,
-            managers: operativeStore.allManagers,
-            users: userStore.organizationUsers
-        )
-    }
-    
     private var taskLimitWarningBanner: some View {
         Group {
             // Avoid scanning every project’s task count while `currentUser` is nil — that can freeze the main thread during startup.
-            if userStore.hasAdminAccess() {
+            if userStore.hasAdminAccess(), userStore.currentUser != nil {
                 let projectsAtLimit = projectStore.projects.filter { project in
                     taskStore.taskCount(for: project.id) >= 500
                 }
@@ -1755,6 +1801,18 @@ struct HomeQuickActionAddSheet: View {
     }
 }
 
+
+private struct HomeDataRefreshTrigger: Equatable {
+    var operativeCount: Int
+    var bookingCount: Int
+    var projectCount: Int
+    var smallWorksCount: Int
+    var managerBookingCount: Int
+    var holidayCount: Int
+    var userCount: Int
+    var isHomeProfileLoading: Bool
+    var currentUserId: String?
+}
 
 #Preview {
     HomeView()

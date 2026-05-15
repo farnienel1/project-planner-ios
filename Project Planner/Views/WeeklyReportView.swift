@@ -13,6 +13,8 @@ struct WeeklyReportView: View {
     @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var appSettings: AppSettingsStore
 
+    @StateObject private var warningsService = WarningsService()
+    @State private var showingWarningsDetail = false
     @State private var startDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var endDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var isGenerating = false
@@ -32,6 +34,7 @@ struct WeeklyReportView: View {
                     DatePicker("Start", selection: $startDate, displayedComponents: .date)
                     DatePicker("End", selection: $endDate, in: startDate..., displayedComponents: .date)
                 }
+                schedulingClashesSection
                 Section {
                     Button {
                         generateCSVReport()
@@ -64,8 +67,146 @@ struct WeeklyReportView: View {
             }
             .onAppear {
                 setThisWeekRange()
+                refreshReportWarnings()
+            }
+            .onChange(of: startDate) { _, _ in refreshReportWarnings() }
+            .onChange(of: endDate) { _, _ in refreshReportWarnings() }
+            .onChange(of: bookingStore.bookings) { _, _ in refreshReportWarnings() }
+            .onChange(of: managerScheduleStore.managerSiteBookings) { _, _ in refreshReportWarnings() }
+            .sheet(isPresented: $showingWarningsDetail) {
+                WarningsDetailView(warningsService: warningsService)
+                    .environmentObject(projectStore)
+                    .environmentObject(userStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(appSettings)
+                    .environmentObject(holidayStore)
             }
         }
+    }
+
+    private var reportDateRange: ClosedRange<Date> {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: startDate)
+        let end = cal.startOfDay(for: endDate)
+        return start...end
+    }
+
+    @ViewBuilder
+    private var schedulingClashesSection: some View {
+        let range = reportDateRange
+        let operativeClashes = warningsService.operativeBookingClashes(in: range)
+        let managerUnresolved = warningsService.unresolvedManagerClashes(in: range)
+        let managerApproved = warningsService.approvedManagerClashes(in: range)
+        let unbooked = warningsService.unbookedLabourWarnings(in: range)
+        let materials = warningsService.materialsCutoffWarnings(in: range)
+        let hasAny = !operativeClashes.isEmpty || !managerUnresolved.isEmpty || !managerApproved.isEmpty
+            || !unbooked.isEmpty || !materials.isEmpty
+
+        Section("Warnings in this period") {
+            if !hasAny {
+                Text("No high, medium, or low priority warnings for these dates.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Button("Open Warnings") { showingWarningsDetail = true }
+
+            if !operativeClashes.isEmpty {
+                Text("High — operative booking clashes (\(operativeClashes.count))")
+                    .font(.footnote.weight(.semibold))
+                Text("Remove a booking on Warnings to clear. These are not ticked for the report.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(operativeClashes.prefix(5)) { warning in
+                    clashSummaryLabel(warning, status: "High")
+                }
+            }
+
+            if !unbooked.isEmpty {
+                Text("High — unbooked labour (\(unbooked.count) day\(unbooked.count == 1 ? "" : "s"))")
+                    .font(.footnote.weight(.semibold))
+                ForEach(unbooked.prefix(3)) { warning in
+                    clashSummaryLabel(warning, status: "High")
+                }
+            }
+
+            if !managerUnresolved.isEmpty {
+                Text("Medium — manager/admin clashes (\(managerUnresolved.count))")
+                    .font(.footnote.weight(.semibold))
+                Text("Tick “Approve for weekly report” on Warnings to include intentional overlaps in the CSV.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(managerUnresolved.prefix(5)) { warning in
+                    clashSummaryLabel(warning, status: "Needs tick")
+                }
+            }
+
+            if !managerApproved.isEmpty {
+                Text("Medium — approved for report (\(managerApproved.count))")
+                    .font(.footnote.weight(.semibold))
+                ForEach(managerApproved.prefix(5)) { warning in
+                    clashSummaryLabel(warning, status: "Ticked")
+                }
+            }
+
+            if !materials.isEmpty {
+                Text("Low — material orders not placed by 16:00 (\(materials.count))")
+                    .font(.footnote.weight(.semibold))
+                ForEach(materials.prefix(3)) { warning in
+                    clashSummaryLabel(warning, status: "Low")
+                }
+            }
+        }
+    }
+
+    private func clashSummaryLabel(_ warning: Warning, status: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(status)
+                    .font(.caption.weight(.medium))
+                Text(warning.severity.rawValue.capitalized)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Text(warning.title)
+                .font(.subheadline)
+            Text(warning.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func refreshReportWarnings() {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
+        let tomorrowProjectIds = Set(
+            bookingStore.bookings
+                .filter {
+                    cal.isDate($0.date, inSameDayAs: tomorrow) &&
+                        ($0.status == .confirmed || $0.status == .tentative)
+                }
+                .map(\.projectId)
+        )
+        let allProjects = projectStore.projects
+        let projectsTomorrow = allProjects.filter { tomorrowProjectIds.contains($0.id) }
+        warningsService.updateWarnings(
+            operatives: operativeStore.allOperatives,
+            bookings: bookingStore.bookings,
+            projects: allProjects,
+            managers: operativeStore.allManagers,
+            users: userStore.organizationUsers,
+            managerSiteBookings: managerScheduleStore.managerSiteBookings,
+            holidayBookings: holidayStore.bookings,
+            payrollTimePolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
+            labourCoverageStart: cal.date(byAdding: .day, value: -14, to: today),
+            labourCoverageEnd: cal.date(byAdding: .day, value: 28, to: today),
+            materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
+            projectsWithTomorrowBookings: projectsTomorrow
+        )
     }
 
     private func setThisWeekRange() {
@@ -131,6 +272,33 @@ struct WeeklyReportView: View {
         var rows: [[String]] = []
         rows.append(["Weekly Report"])
         rows.append(["From", formatDate(startDate), "To", formatDate(endDate)])
+        rows.append([])
+        let range = reportDateRange
+        rows.append(["WARNINGS SUMMARY"])
+        rows.append(["Priority", "Status", "Type", "Date", "Title", "Detail"])
+
+        for warning in warningsService.operativeBookingClashes(in: range) {
+            rows.append(clashCSVCells(warning, status: "Active — remove booking"))
+        }
+        for warning in warningsService.unbookedLabourWarnings(in: range) {
+            rows.append(clashCSVCells(warning, status: "Active"))
+        }
+        for warning in warningsService.unresolvedManagerClashes(in: range) {
+            rows.append(clashCSVCells(warning, status: "Not ticked for report"))
+        }
+        for warning in warningsService.approvedManagerClashes(in: range) {
+            rows.append(clashCSVCells(warning, status: "Ticked — on report"))
+        }
+        for warning in warningsService.materialsCutoffWarnings(in: range) {
+            rows.append(clashCSVCells(warning, status: "Active"))
+        }
+        if warningsService.operativeBookingClashes(in: range).isEmpty
+            && warningsService.unbookedLabourWarnings(in: range).isEmpty
+            && warningsService.unresolvedManagerClashes(in: range).isEmpty
+            && warningsService.approvedManagerClashes(in: range).isEmpty
+            && warningsService.materialsCutoffWarnings(in: range).isEmpty {
+            rows.append(["", "", "", "", "No warnings in period", ""])
+        }
         rows.append([])
         rows.append(["PROJECT BREAKDOWN"])
         rows.append(["Project", "Job Number", "Person", "Trade", "Role", "Days"])
@@ -502,6 +670,27 @@ struct WeeklyReportView: View {
             return "\"\(input.replacingOccurrences(of: "\"", with: "\"\""))\""
         }
         return input
+    }
+
+    private func clashCSVCells(_ warning: Warning, status: String) -> [String] {
+        [
+            status,
+            warning.severity.rawValue.capitalized,
+            clashTypeLabel(warning.type),
+            warning.occurrenceDate.map(formatDate) ?? "",
+            warning.title,
+            warning.message
+        ]
+    }
+
+    private func clashTypeLabel(_ type: Warning.WarningType) -> String {
+        switch type {
+        case .operativeBookingClash: return "Operative booking clash"
+        case .managerLocationClash: return "Manager/admin clash"
+        case .unbookedLabour: return "Unbooked labour"
+        case .materialsCutoff: return "Material order not placed"
+        default: return type.rawValue
+        }
     }
 }
 

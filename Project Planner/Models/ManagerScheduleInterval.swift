@@ -151,20 +151,11 @@ extension ManagerSiteBooking {
         }
     }
 
-    /// Rough “day units” for reports: legacy 0.5/1; hour bookings scale by duration vs org standard paid hours.
+    /// Rough “day units” for reports from paid hours (includes break toggle and OT).
     func reportDayValue(policy: OrgPayrollTimePolicy = .default) -> Double {
-        if let s = workStartTime, let e = workEndTime,
-           let sm = ManagerScheduleInterval.parseMinutes(s),
-           let em = ManagerScheduleInterval.parseMinutes(e), em > sm {
-            let hrs = Double(em - sm) / 60.0
-            let paid = max(policy.standardPaidHours, 0.01)
-            return min(1.5, hrs / paid)
-        }
-        switch timeSlot {
-        case .fullDay: return 1
-        case .morning, .afternoon: return 0.5
-        case .customHours: return 1
-        }
+        let paidHrs = paidBookedHours(policy: policy)
+        let standard = max(policy.standardPaidHours, 0.01)
+        return min(1.5, paidHrs / standard)
     }
 
     /// Start/end instants on the booking’s calendar day (for Calendar export and reminders).

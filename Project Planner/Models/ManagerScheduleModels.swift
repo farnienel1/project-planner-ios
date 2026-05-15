@@ -100,3 +100,25 @@ enum ManagerLocationType: String, CaseIterable, Identifiable, Codable {
         }
     }
 }
+
+extension ManagerSiteBooking {
+    /// Maps a persisted manager booking into the hours editor (always opens as a clock window).
+    func hoursEditChoice(policy: OrgPayrollTimePolicy) -> OperativeDayBookingChoice {
+        if timeSlot == .customHours,
+           let s = workStartTime, let e = workEndTime,
+           !s.isEmpty, !e.isEmpty {
+            return OperativeDayBookingChoice(
+                timeSlot: .customHours,
+                workStartTime: s,
+                workEndTime: e,
+                isBreakRemoved: isBreakRemoved
+            )
+        }
+        return OperativeDayBookingChoice(
+            timeSlot: .customHours,
+            workStartTime: policy.standardDayStart,
+            workEndTime: policy.standardDayEnd,
+            isBreakRemoved: isBreakRemoved
+        )
+    }
+}

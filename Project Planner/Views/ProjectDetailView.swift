@@ -84,6 +84,7 @@ struct ProjectDetailView: View {
     @State private var showingScheduleOperative = false
     /// When non-nil, operative schedule opens pre-filled to edit this booking (same project).
     @State private var scheduleOperativeSeedBooking: Booking? = nil
+    @State private var bookingEditTarget: DailyOverviewEditTarget?
     @State private var showingScheduleSubcontractor = false
     @State private var showingEditProject = false
     @State private var showingMapOptions = false
@@ -198,6 +199,10 @@ struct ProjectDetailView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
                 .environmentObject(notificationService)
+                .preference(key: HideBottomMenuKey.self, value: true)
+        }
+        .sheet(item: $bookingEditTarget) { target in
+            projectDetailBookingEditSheet(for: target)
                 .preference(key: HideBottomMenuKey.self, value: true)
         }
         .sheet(isPresented: $showingScheduleSubcontractor) {
@@ -939,6 +944,65 @@ struct ProjectDetailView: View {
             .clipShape(Circle())
     }
 
+    private static let bookingEditDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEE d MMM"
+        return f
+    }()
+
+    private func bookingEditSubtitle(date: Date) -> String {
+        "\(Self.bookingEditDateFormatter.string(from: date)) · \(project.jobNumber) \(project.siteName)"
+    }
+
+    @ViewBuilder
+    private func projectDetailBookingEditSheet(for target: DailyOverviewEditTarget) -> some View {
+        switch target {
+        case .operative(let booking, let project, let personName):
+            OperativeCustomHoursSheet(
+                policy: payrollTimePolicy,
+                title: "Edit booking",
+                subtitle: bookingEditSubtitle(date: booking.date),
+                headerName: personName,
+                headerInitials: PlannerUIInitials.from(personName),
+                allowsOtMultiplierOverride: true,
+                initialChoice: OperativeDayBookingChoice(from: booking),
+                onSave: { start, end, isBreakRemoved, otMult in
+                    bookingEditTarget = nil
+                    var updated = booking
+                    updated.timeSlot = .customHours
+                    updated.workStartTime = start
+                    updated.workEndTime = end
+                    updated.isBreakRemoved = isBreakRemoved
+                    updated.otMultiplierOverride = otMult
+                    updated.updatedAt = Date()
+                    Task { await bookingStore.updateBooking(updated) }
+                },
+                onCancel: { bookingEditTarget = nil }
+            )
+        case .manager(let booking, let locationTitle, let personName):
+            OperativeCustomHoursSheet(
+                policy: payrollTimePolicy,
+                title: "Edit booking",
+                subtitle: bookingEditSubtitle(date: booking.date),
+                headerName: personName,
+                headerInitials: PlannerUIInitials.from(personName),
+                allowsOtMultiplierOverride: false,
+                initialChoice: booking.hoursEditChoice(policy: payrollTimePolicy),
+                onSave: { start, end, isBreakRemoved, _ in
+                    bookingEditTarget = nil
+                    var updated = booking
+                    updated.timeSlot = .customHours
+                    updated.workStartTime = start
+                    updated.workEndTime = end
+                    updated.isBreakRemoved = isBreakRemoved
+                    updated.updatedAt = Date()
+                    Task { await managerScheduleStore.saveBooking(updated) }
+                },
+                onCancel: { bookingEditTarget = nil }
+            )
+        }
+    }
+
     private func schedulingDayCard(for date: Date) -> some View {
         let isToday = Calendar.current.isDateInToday(date)
         let count = schedulingDayBookedCount(date)
@@ -978,8 +1042,12 @@ struct ProjectDetailView: View {
                     }
                     ForEach(opBookings, id: \.id) { booking in
                         schedulingOperativeBookingRow(booking: booking) {
-                            scheduleOperativeSeedBooking = booking
-                            showingScheduleOperative = true
+                            let name = operativeStore.activeOperatives.first { $0.id == booking.operativeId }?.name ?? "Operative"
+                            bookingEditTarget = .operative(
+                                booking: booking,
+                                project: project,
+                                personName: name
+                            )
                         }
                     }
                     ForEach(subBookings, id: \.id) { booking in
@@ -1034,21 +1102,33 @@ struct ProjectDetailView: View {
         let p = payrollTimePolicy
         let hrs = booking.paidBookedHours(policy: p)
         let ot = booking.overtimeHoursBeyondPaidStandard(policy: p)
-        return HStack(spacing: 6) {
-            schedulingAvatar(initials: initials, accent: schedulingSubcontractorGradient)
-            Text(managerName)
-                .font(.system(size: 10))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            Text(booking.scheduleLabel(policy: p))
-                .font(.system(size: 9))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-            schedulingHoursPill(hours: hrs, hasOvertime: ot > 0.05)
+        return Button {
+            bookingEditTarget = .manager(
+                booking: booking,
+                locationTitle: "\(project.jobNumber) \(project.siteName)",
+                personName: managerName
+            )
+        } label: {
+            HStack(spacing: 6) {
+                schedulingAvatar(initials: initials, accent: schedulingSubcontractorGradient)
+                Text(managerName)
+                    .font(.system(size: 10))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(booking.scheduleLabel(policy: p))
+                    .font(.system(size: 9))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                schedulingHoursPill(hours: hrs, hasOvertime: ot > 0.05)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(ProjectWorksRevampColors.muted.opacity(0.7))
+            }
+            .padding(EdgeInsets(top: 4, leading: 7, bottom: 4, trailing: 7))
+            .background(ProjectWorksRevampColors.canvas)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
-        .padding(EdgeInsets(top: 4, leading: 7, bottom: 4, trailing: 7))
-        .background(ProjectWorksRevampColors.canvas)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .buttonStyle(.plain)
     }
 
     private func schedulingSubcontractorBookingRow(booking: SubcontractorBooking) -> some View {

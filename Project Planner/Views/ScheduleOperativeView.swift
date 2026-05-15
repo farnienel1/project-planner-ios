@@ -43,8 +43,11 @@ struct ScheduleOperativeView: View {
     @State private var quickSelectDays: Int? = nil
     @State private var showingBookingConfirmation = false
     @State private var isBooking = false
-    @State private var showingClashWarning = false
-    @State private var detectedClashes: [BookingClash] = []
+    /// Operatives with a time overlap awaiting ✓ (add to list) or ✕ (remove).
+    @State private var clashReviewOperativeIds: Set<UUID> = []
+    @State private var operativeClashSummaries: [UUID: [BookingClash]] = [:]
+    /// User approved overlap for these operatives (✓ on warning panel).
+    @State private var approvedOverlapOperativeIds: Set<UUID> = []
     @State private var didApplyOrgDefaultHours = false
     @State private var didApplyEditingBookingPrefill = false
     /// `operativeOverrideKey` → booking id to delete before creating the replacement on confirm.
@@ -79,7 +82,7 @@ struct ScheduleOperativeView: View {
     
     var body: some View {
         NavigationView {
-            ZStack {
+            ZStack(alignment: .top) {
                 ProjectWorksRevampColors.canvas
                     .ignoresSafeArea()
                 
@@ -98,27 +101,14 @@ struct ScheduleOperativeView: View {
                     .padding(.top, 10)
                     .padding(.bottom, 100)
                 }
+
+                if !clashReviewOperativeIds.isEmpty {
+                    operativeClashReviewBanner
+                }
             }
             .navigationTitle("Schedule booking")
             .navigationBarTitleDisplayMode(.inline)
             .appChromeNavigationBarSurface()
-            .sheet(isPresented: $showingClashWarning) {
-                BookingClashWarningView(
-                    clashes: $detectedClashes,
-                    isPresented: $showingClashWarning,
-                    onCancel: {
-                        showingClashWarning = false
-                    },
-                    onContinue: {
-                        showingClashWarning = false
-                        proceedWithBooking()
-                    }
-                )
-                .environmentObject(projectStore)
-                .environmentObject(userStore)
-                .environmentObject(operativeStore)
-                .environmentObject(firebaseBackend)
-            }
             .sheet(item: $operativeCustomHoursPick) { pick in
                 OperativeCustomHoursSheet(
                     policy: payrollTimePolicy,
@@ -193,6 +183,7 @@ struct ScheduleOperativeView: View {
             }
             .onChange(of: selectedDates) { oldSet, newSet in
                 removeUnavailableSelectedOperatives()
+                approvedOverlapOperativeIds.removeAll()
                 if oldSet.isEmpty && !newSet.isEmpty {
                     for opId in selectedOperatives {
                         if let d = operativeDefaultChoice[opId] {
@@ -200,6 +191,18 @@ struct ScheduleOperativeView: View {
                         }
                     }
                 }
+                reconcileOperativeClashState()
+            }
+            .onChange(of: selectedOperatives) { _, _ in
+                reconcileOperativeClashState()
+            }
+            .onChange(of: operativeSlotOverrides.count) { _, _ in
+                approvedOverlapOperativeIds.removeAll()
+                reconcileOperativeClashState()
+            }
+            .onChange(of: sharedBulkChoice) { _, _ in
+                approvedOverlapOperativeIds.removeAll()
+                reconcileOperativeClashState()
             }
             .onAppear {
                 Task { await holidayStore.loadData() }
@@ -921,7 +924,7 @@ struct ScheduleOperativeView: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(selectedOperatives.isEmpty || selectedDates.isEmpty || isBooking)
+                .disabled(selectedOperatives.isEmpty || selectedDates.isEmpty || isBooking || !clashReviewOperativeIds.isEmpty)
                 .padding(.horizontal, 14)
             }
             .padding(.vertical, 12)
@@ -992,61 +995,114 @@ struct ScheduleOperativeView: View {
         return days
     }
     
-    private func bookOperatives() {
-        guard !selectedOperatives.isEmpty, !selectedDates.isEmpty else { return }
-        
-        // Check for clashes before booking
-        let clashes = detectClashes()
-        
-        if !clashes.isEmpty {
-            detectedClashes = clashes
-            showingClashWarning = true
-        } else {
-            proceedWithBooking()
-        }
+    private var operativeClashReviewBanner: some View {
+        let groups: [(operative: Operative, clashes: [BookingClash])] = clashReviewOperativeIds.compactMap { id in
+            guard let op = selectableOperatives.first(where: { $0.id == id }),
+                  let clashes = operativeClashSummaries[id], !clashes.isEmpty else { return nil }
+            return (op, clashes)
+        }.sorted { $0.operative.name.localizedCaseInsensitiveCompare($1.operative.name) == .orderedAscending }
+
+        return OperativeClashReviewPanel(
+            clashesByOperative: groups,
+            onApprove: { approveClashOperative($0) },
+            onDismissOperative: { dismissClashOperative($0) },
+            onCancelAll: {
+                clashReviewOperativeIds.removeAll()
+                operativeClashSummaries.removeAll()
+                approvedOverlapOperativeIds.removeAll()
+            },
+            onConfirmBooking: { proceedWithBooking() },
+            canConfirmBooking: !selectedOperatives.isEmpty && !selectedDates.isEmpty && clashReviewOperativeIds.isEmpty && !isBooking
+        )
+        .environmentObject(projectStore)
+        .environmentObject(firebaseBackend)
     }
-    
-    private func detectClashes() -> [BookingClash] {
-        var clashes: [BookingClash] = []
-        let operatives = selectableOperatives.filter { selectedOperatives.contains($0.id) }
-        let dates = Array(selectedDates.sorted())
-        
-        let policy = payrollTimePolicy
-        for operative in operatives {
-            for date in dates {
-                let choice = resolvedChoice(operativeId: operative.id, date: date)
-                let probeNew = choice.bookingProbe(
-                    operativeId: operative.id,
-                    projectId: project.id,
-                    date: date,
-                    bookedBy: loggedInUserName
-                )
-                let existingBookings = bookingStore.bookings.filter { booking in
-                    booking.operativeId == operative.id &&
-                        Calendar.current.isDate(booking.date, inSameDayAs: date) &&
-                        (booking.status == .confirmed || booking.status == .tentative)
-                }
 
-                for existingBooking in existingBookings {
-                    if existingBooking.projectId == project.id {
-                        continue
-                    }
-                    if OperativeBookingInterval.bookingsOverlap(probeNew, existingBooking, policy: policy) {
-                        let existingProject = projectStore.projects.first(where: { $0.id == existingBooking.projectId }) ??
-                            projectStore.smallWorks.first(where: { $0.id == existingBooking.projectId })
+    private func approveClashOperative(_ operativeId: UUID) {
+        approvedOverlapOperativeIds.insert(operativeId)
+        reconcileOperativeClashState()
+    }
 
-                        clashes.append(BookingClash(
-                            operative: operative,
-                            date: date,
-                            newChoice: choice,
-                            existingBooking: existingBooking,
-                            existingProject: existingProject
-                        ))
-                    }
-                }
+    private func dismissClashOperative(_ operativeId: UUID) {
+        clashReviewOperativeIds.remove(operativeId)
+        operativeClashSummaries.removeValue(forKey: operativeId)
+        approvedOverlapOperativeIds.remove(operativeId)
+        selectedOperatives.remove(operativeId)
+        clearOverrides(for: operativeId)
+    }
+
+    private func reconcileOperativeClashState() {
+        guard !selectedDates.isEmpty else {
+            clashReviewOperativeIds.removeAll()
+            operativeClashSummaries.removeAll()
+            return
+        }
+        let pool = selectedOperatives.union(clashReviewOperativeIds).union(approvedOverlapOperativeIds)
+        var nextSelected: Set<UUID> = []
+        var nextReview: Set<UUID> = []
+        var summaries: [UUID: [BookingClash]] = [:]
+
+        for opId in pool {
+            guard selectableOperatives.contains(where: { $0.id == opId }) else { continue }
+            let clashes = detectClashes(forOperativeId: opId)
+            if clashes.isEmpty {
+                nextSelected.insert(opId)
+            } else if approvedOverlapOperativeIds.contains(opId) {
+                nextSelected.insert(opId)
+                summaries[opId] = clashes
+            } else {
+                nextReview.insert(opId)
+                summaries[opId] = clashes
             }
         }
 
+        selectedOperatives = nextSelected
+        clashReviewOperativeIds = nextReview
+        operativeClashSummaries = summaries
+        approvedOverlapOperativeIds = approvedOverlapOperativeIds.intersection(nextSelected)
+    }
+
+    private func bookOperatives() {
+        guard !selectedDates.isEmpty else { return }
+        reconcileOperativeClashState()
+        guard clashReviewOperativeIds.isEmpty else { return }
+        guard !selectedOperatives.isEmpty else { return }
+        proceedWithBooking()
+    }
+    
+    private func detectClashes(forOperativeId operativeId: UUID) -> [BookingClash] {
+        guard let operative = selectableOperatives.first(where: { $0.id == operativeId }) else { return [] }
+        var clashes: [BookingClash] = []
+        let dates = Array(selectedDates.sorted())
+        let policy = payrollTimePolicy
+        for date in dates {
+            let choice = resolvedChoice(operativeId: operative.id, date: date)
+            let probeNew = choice.bookingProbe(
+                operativeId: operative.id,
+                projectId: project.id,
+                date: date,
+                bookedBy: loggedInUserName
+            )
+            let existingBookings = bookingStore.bookings.filter { booking in
+                booking.operativeId == operative.id &&
+                    Calendar.current.isDate(booking.date, inSameDayAs: date) &&
+                    (booking.status == .confirmed || booking.status == .tentative)
+            }
+
+            for existingBooking in existingBookings {
+                if OperativeBookingInterval.bookingsOverlap(probeNew, existingBooking, policy: policy) {
+                    let existingProject = projectStore.projects.first(where: { $0.id == existingBooking.projectId }) ??
+                        projectStore.smallWorks.first(where: { $0.id == existingBooking.projectId })
+                    clashes.append(BookingClash(
+                        operative: operative,
+                        date: date,
+                        newChoice: choice,
+                        existingBooking: existingBooking,
+                        existingProject: existingProject
+                    ))
+                }
+            }
+        }
         return clashes
     }
 
@@ -1092,17 +1148,9 @@ struct ScheduleOperativeView: View {
         Task {
             let operatives = selectableOperatives.filter { selectedOperatives.contains($0.id) }
             let dates = Array(selectedDates.sorted())
-            var createdBookingCount = 0
+            var newBookings: [Booking] = []
             var createdDatesByOperative: [UUID: Set<Date>] = [:]
-            
-            // Cancelled clashes are explicitly skipped from booking creation.
-            let cancelledClashKeys = Set(
-                detectedClashes
-                    .filter(\.cancelled)
-                    .map(\.bookingKey)
-            )
-            
-            // Create bookings for each operative on each selected date
+
             for operative in operatives {
                 for date in dates {
                     let ovKey = operativeOverrideKey(operative.id, date)
@@ -1113,20 +1161,6 @@ struct ScheduleOperativeView: View {
                     }
 
                     let choice = resolvedChoice(operativeId: operative.id, date: date)
-                    let bookingKey = BookingKey(
-                        operativeId: operative.id,
-                        dateKey: slotKey(for: date),
-                        timeSlot: choice.timeSlot,
-                        workStart: choice.workStartTime,
-                        workEnd: choice.workEndTime,
-                        isBreakRemoved: choice.isBreakRemoved,
-                        otMultiplierOverride: choice.otMultiplierOverride
-                    )
-
-                    if cancelledClashKeys.contains(bookingKey) {
-                        continue
-                    }
-
                     let duplicateExists = bookingStore.bookings.contains { booking in
                         booking.projectId == project.id &&
                             booking.operativeId == operative.id &&
@@ -1140,27 +1174,29 @@ struct ScheduleOperativeView: View {
                     }
 
                     if !duplicateExists && !isOperativeOnApprovedHoliday(operative: operative, date: date) {
-                        await bookingStore.bookOperative(
-                            operative,
-                            on: date,
+                        var booking = Booking(
+                            operativeId: operative.id,
+                            projectId: project.id,
+                            date: date,
                             timeSlot: choice.timeSlot,
-                            for: project,
                             bookedBy: loggedInUserName,
                             workStartTime: choice.workStartTime,
                             workEndTime: choice.workEndTime,
                             isBreakRemoved: choice.isBreakRemoved,
                             otMultiplierOverride: choice.otMultiplierOverride
                         )
-                        createdBookingCount += 1
+                        booking.updatedAt = Date()
+                        newBookings.append(booking)
                         createdDatesByOperative[operative.id, default: []].insert(Calendar.current.startOfDay(for: date))
                     }
                 }
             }
-            
-            if createdBookingCount > 0 {
+
+            if !newBookings.isEmpty {
+                await bookingStore.addBookings(newBookings)
                 await notificationService.notifyBookingBatchCreated(
                     projectName: project.siteName,
-                    bookingCount: createdBookingCount,
+                    bookingCount: newBookings.count,
                     createdBy: loggedInUserName
                 )
                 let bookedRecipients = createdDatesByOperative.map { (operativeId, dates) in
@@ -1178,9 +1214,10 @@ struct ScheduleOperativeView: View {
             
             await MainActor.run {
                 isBooking = false
-                showingBookingConfirmation = true
-                detectedClashes = []
-                // Stay on Schedule Operative page; reset selections so user can continue booking quickly.
+                showingBookingConfirmation = newBookings.isEmpty ? false : true
+                clashReviewOperativeIds.removeAll()
+                operativeClashSummaries.removeAll()
+                approvedOverlapOperativeIds.removeAll()
                 selectedDates.removeAll()
                 selectedOperatives.removeAll()
                 dateSlotChoices.removeAll()
@@ -1243,322 +1280,7 @@ private struct OperativeCustomHoursPick: Identifiable {
     }
 }
 
-/// Edit / custom hours sheet aligned with `project_planner_break_toggle_and_grouped_overview.html`.
-private struct OperativeCustomHoursSheet: View {
-    let policy: OrgPayrollTimePolicy
-    var title: String
-    var subtitle: String?
-    var allowsOtMultiplierOverride: Bool
-    let initialChoice: OperativeDayBookingChoice?
-    let onSave: (String, String, Bool, Double?) -> Void
-    let onCancel: () -> Void
-
-    @State private var startText: String
-    @State private var endText: String
-    @State private var breakRemoved = false
-    @State private var otMultText: String
-    @State private var errorMessage: String?
-
-    init(
-        policy: OrgPayrollTimePolicy,
-        title: String = "Edit booking",
-        subtitle: String? = nil,
-        allowsOtMultiplierOverride: Bool = false,
-        initialChoice: OperativeDayBookingChoice?,
-        onSave: @escaping (String, String, Bool, Double?) -> Void,
-        onCancel: @escaping () -> Void
-    ) {
-        self.policy = policy
-        self.title = title
-        self.subtitle = subtitle
-        self.allowsOtMultiplierOverride = allowsOtMultiplierOverride
-        self.initialChoice = initialChoice
-        self.onSave = onSave
-        self.onCancel = onCancel
-        let ic = initialChoice
-        let start: String
-        let end: String
-        let br: Bool
-        let otm: String
-        if let ic, ic.timeSlot == .customHours, let s = ic.workStartTime, let e = ic.workEndTime, !s.isEmpty, !e.isEmpty {
-            start = s
-            end = e
-            br = ic.isBreakRemoved
-            if let m = ic.otMultiplierOverride {
-                otm = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
-            } else {
-                otm = ""
-            }
-        } else {
-            start = policy.standardDayStart
-            end = policy.standardDayEnd
-            br = false
-            otm = ""
-        }
-        _startText = State(initialValue: start)
-        _endText = State(initialValue: end)
-        _breakRemoved = State(initialValue: br)
-        _otMultText = State(initialValue: otm)
-    }
-
-    private var resolvedOtMultiplierOverride: Double? {
-        guard allowsOtMultiplierOverride else { return nil }
-        let t = otMultText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.isEmpty { return nil }
-        let normalized = t.replacingOccurrences(of: ",", with: ".")
-        return Double(normalized)
-    }
-
-    private var probeBooking: Booking {
-        OperativeDayBookingChoice(
-            timeSlot: .customHours,
-            workStartTime: startText.trimmingCharacters(in: .whitespacesAndNewlines),
-            workEndTime: endText.trimmingCharacters(in: .whitespacesAndNewlines),
-            isBreakRemoved: breakRemoved,
-            otMultiplierOverride: resolvedOtMultiplierOverride
-        ).bookingProbe(operativeId: UUID(), projectId: UUID(), date: Date(), bookedBy: "")
-    }
-
-    private var breakdownPaidHours: Double {
-        probeBooking.paidBookedHours(policy: policy)
-    }
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(.system(size: 11))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                            .padding(.horizontal, 4)
-                    }
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("HOURS")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                            .tracking(0.4)
-                            .padding(.leading, 4)
-                        HStack(spacing: 8) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("START")
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                                TextField("HH:mm", text: $startText)
-                                    .font(.system(size: 16, weight: .medium))
-                                    .keyboardType(.numbersAndPunctuation)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(10)
-                            .background(ProjectWorksRevampColors.canvas)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("END")
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                                TextField("HH:mm", text: $endText)
-                                    .font(.system(size: 16, weight: .medium))
-                                    .keyboardType(.numbersAndPunctuation)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(10)
-                            .background(ProjectWorksRevampColors.canvas)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
-                    }
-                    .padding(12)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-                    )
-
-                    if allowsOtMultiplierOverride {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("OVERTIME MULTIPLIER")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
-                                .tracking(0.4)
-                                .padding(.leading, 4)
-                            VStack(alignment: .leading, spacing: 4) {
-                                TextField("Optional — e.g. \(String(format: "%.1f", policy.weekdayOutsideStandardMultiplier))", text: $otMultText)
-                                    .font(.system(size: 15, weight: .medium))
-                                    .keyboardType(.decimalPad)
-                                Text("Applies to hours outside \(policy.standardDayStart)–\(policy.standardDayEnd). Leave empty for organisation default.")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                            }
-                            .padding(12)
-                            .background(Color.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-                            )
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 12) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                    .fill(breakRemoved ? Color(red: 0.949, green: 0.953, blue: 0.961) : Color(red: 0.98, green: 0.933, blue: 0.855))
-                                    .frame(width: 32, height: 32)
-                                Image(systemName: breakRemoved ? "cup.and.saucer.fill" : "cup.and.saucer.fill")
-                                    .font(.system(size: 15))
-                                    .foregroundStyle(breakRemoved ? ProjectWorksRevampColors.muted : ProjectWorksRevampColors.upcomingAmber)
-                            }
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Unpaid break")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                                Text(breakRemoved ? "Removed · full elapsed hours paid" : "Deducted around midday (org default)")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(breakRemoved ? ProjectWorksRevampColors.endDateFg : ProjectWorksRevampColors.muted)
-                            }
-                            Spacer()
-                            Toggle("", isOn: $breakRemoved)
-                                .labelsHidden()
-                        }
-                    }
-                    .padding(12)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-                    )
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Breakdown")
-                                .font(.system(size: 11, weight: .medium))
-                            Spacer()
-                            Text(String(format: "%.1f", breakdownPaidHours) + "h paid")
-                                .font(.system(size: 13, weight: .medium))
-                        }
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                        HStack {
-                            Text("Elapsed")
-                                .font(.system(size: 11))
-                                .foregroundStyle(ProjectWorksRevampColors.blue)
-                            Spacer()
-                            Text(String(format: "%.1f", probeBooking.totalBookedHours(policy: policy)) + "h · 1×")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.blue)
-                        }
-                        if !breakRemoved, policy.standardUnpaidBreakHours > 0.05 {
-                            HStack {
-                                Label("Less unpaid break", systemImage: "cup.and.saucer.fill")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                                Spacer()
-                                Text("−\(String(format: "%.1f", policy.standardUnpaidBreakHours))h")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                            }
-                        }
-                        let otH = probeBooking.overtimeHoursBeyondPaidStandard(policy: policy)
-                        if otH > 0.05 {
-                            let mult = probeBooking.effectiveWeekdayOtMultiplier(policy: policy)
-                            let multStr = abs(mult - mult.rounded()) < 0.05 ? String(format: "%.0f", mult) : String(format: "%.1f", mult)
-                            HStack {
-                                Text("Outside standard window")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                                Spacer()
-                                Text("\(String(format: "%.1f", otH))h × \(multStr)")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                            }
-                        }
-                    }
-                    .padding(12)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-                    )
-
-                    if breakRemoved {
-                        HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 12))
-                                .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                            Text("Operative will be paid for the full elapsed hours. Make sure this is agreed.")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                        }
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(red: 0.98, green: 0.933, blue: 0.855))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    } else {
-                        HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: "info.circle")
-                                .font(.system(size: 12))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
-                            Text("Toggle break off for a working lunch or short shift.")
-                                .font(.system(size: 10))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
-                        }
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(ProjectWorksRevampColors.canvas)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.red)
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 16)
-            }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { validateAndSave() }
-                        .fontWeight(.semibold)
-                }
-            }
-        }
-    }
-
-    private func validateAndSave() {
-        errorMessage = nil
-        let s = startText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let e = endText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let sm = ManagerScheduleInterval.parseMinutes(s),
-              let em = ManagerScheduleInterval.parseMinutes(e),
-              em > sm else {
-            errorMessage = "Enter valid times (HH:mm) with end after start."
-            return
-        }
-        var otOut: Double? = nil
-        if allowsOtMultiplierOverride {
-            let raw = otMultText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !raw.isEmpty {
-                let normalized = raw.replacingOccurrences(of: ",", with: ".")
-                guard let v = Double(normalized), v >= 1.0, v <= 10.0 else {
-                    errorMessage = "OT multiplier must be a number between 1 and 10 (or leave blank for org default)."
-                    return
-                }
-                otOut = v
-            }
-        }
-        onSave(s, e, breakRemoved, otOut)
-    }
-}
+// OperativeCustomHoursSheet — see BookingHoursEditSheet.swift
 
 extension Array {
     func chunked(into size: Int) -> [[Element]] {

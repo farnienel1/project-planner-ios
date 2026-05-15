@@ -7,6 +7,20 @@
 
 import SwiftUI
 
+// MARK: - Daily overview booking edit
+
+enum DailyOverviewEditTarget: Identifiable {
+    case operative(booking: Booking, project: Project, personName: String)
+    case manager(booking: ManagerSiteBooking, locationTitle: String, personName: String)
+
+    var id: String {
+        switch self {
+        case .operative(let b, _, _): return "op-\(b.id.uuidString)"
+        case .manager(let b, _, _): return "mgr-\(b.id.uuidString)"
+        }
+    }
+}
+
 struct DailyOverviewView: View {
     /// When nil, shows today. When set, shows that day (for historic overview).
     var displayDate: Date? = nil
@@ -25,6 +39,7 @@ struct DailyOverviewView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showingPastBookings = false
     @State private var showingBookLabour = false
+    @State private var bookingEditTarget: DailyOverviewEditTarget?
     /// When `displayDate` is nil, the user can change the day from the strip (today’s overview sheet).
     @State private var selectedCalendarDay: Date = Calendar.current.startOfDay(for: Date())
     
@@ -361,9 +376,7 @@ struct DailyOverviewView: View {
                     historicDateCaption
                 }
 
-                coverageGradientCard
-
-                attendanceMixGradientCard
+                todayAtAGlanceHeroCard
 
                 if isWeekday && !unbookedAllNames.isEmpty {
                     unbookedLabourRevampCard
@@ -373,7 +386,7 @@ struct DailyOverviewView: View {
                     annualLeaveRevampBlock
                 }
 
-                officeWFHRevampSection
+                otherScheduleRevampSection
 
                 if !visibleSiteSurveyBookings.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -389,28 +402,12 @@ struct DailyOverviewView: View {
                     }
                 }
 
-                ForEach(filteredCustomBookingsByName.keys.sorted(), id: \.self) { customName in
-                    VStack(alignment: .leading, spacing: 8) {
-                        revampSectionHeader(title: customName, trailing: nil)
-                        managerScheduleRevampCard(
-                            sectionIcon: "mappin.and.ellipse",
-                            iconBackground: ProjectWorksRevampColors.jobTypePillBg,
-                            iconForeground: ProjectWorksRevampColors.jobTypePillInk,
-                            title: customName,
-                            trailingCaption: "Managers / admins",
-                            bookings: filteredCustomBookingsByName[customName] ?? []
-                        )
-                    }
-                }
-
                 liveProjectsRevampSection
 
                 if displayedProjectIds.isEmpty &&
                     dayHolidays.isEmpty &&
-                    visibleOfficeBookings.isEmpty &&
-                    visibleWFHBookings.isEmpty &&
-                    visibleSiteSurveyBookings.isEmpty &&
-                    filteredCustomBookingsByName.isEmpty {
+                    !hasOtherScheduleContent &&
+                    visibleSiteSurveyBookings.isEmpty {
                     noBookingsView
                 }
             }
@@ -491,57 +488,146 @@ struct DailyOverviewView: View {
         )
     }
 
-    private var coverageGradientCard: some View {
-        let unbooked = isWeekday ? unbookedAllNames.count : 0
+    private var glanceHeadlinePeopleCount: Int {
+        max(onSitePeopleCount, bookedPeopleCount)
+    }
+
+    private var glanceUnbookedCount: Int {
+        isWeekday ? unbookedAllNames.count : 0
+    }
+
+    private var teamLocationBarFractions: (office: CGFloat, wfh: CGFloat, onSite: CGFloat, unbooked: CGFloat) {
+        let office = CGFloat(officePeopleCount)
+        let wfh = CGFloat(wfhPeopleCount)
+        let onSite = CGFloat(onSitePeopleCount)
+        let unbooked = CGFloat(glanceUnbookedCount)
+        let total = office + wfh + onSite + unbooked
+        guard total > 0 else { return (0, 0, 0, 0) }
+        return (office / total, wfh / total, onSite / total, unbooked / total)
+    }
+
+    /// Unified summary hero (`project_planner_daily_overview_unified_hero.html`) — display only, not tappable.
+    private var todayAtAGlanceHeroCard: some View {
+        let unbooked = glanceUnbookedCount
         let mult = payrollTimePolicy.weekdayOutsideStandardMultiplier
         let multLabel = abs(mult - mult.rounded()) < 0.05 ? String(format: "%.0f", mult) : String(format: "%.1f", mult)
         let jobsCount = displayedProjectIds.count
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Today's hours")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.88))
-                        .textCase(.uppercase)
-                        .tracking(0.35)
-                    Text("\(overviewFormatHours(dayJobSiteLabourHours))h · \(onSitePeopleCount) \(onSitePeopleCount == 1 ? "person" : "people")")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Color.white)
-                }
-                Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 6) {
-                    if dayJobSiteOvertimeHours > 0.05 {
-                        Text("+\(overviewFormatHours(dayJobSiteOvertimeHours))h OT")
+        let people = glanceHeadlinePeopleCount
+        let bar = teamLocationBarFractions
+        let isToday = Calendar.current.isDateInToday(overviewDate)
+        let glanceTitle = isToday ? "Today at a glance" : "Day at a glance"
+
+        return ZStack(alignment: .topTrailing) {
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [Color.white.opacity(0.1), Color.clear],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 65
+                    )
+                )
+                .frame(width: 130, height: 130)
+                .offset(x: 28, y: -28)
+                .allowsHitTesting(false)
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(glanceTitle.uppercased())
                             .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color.white)
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 3)
-                            .background(Color.white.opacity(0.18))
-                            .clipShape(Capsule())
+                            .foregroundStyle(Color.white.opacity(0.85))
+                            .tracking(0.4)
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text("\(overviewFormatHours(dayJobSiteLabourHours))h")
+                                .font(.system(size: 28, weight: .medium))
+                                .foregroundStyle(Color.white)
+                                .tracking(-0.5)
+                            Text("· \(people) \(people == 1 ? "person" : "people")")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(Color.white.opacity(0.85))
+                        }
                     }
+                    Spacer(minLength: 8)
                     if unbooked > 0 {
                         HStack(spacing: 4) {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 12, weight: .medium))
-                            Text("\(unbooked) unbooked")
                                 .font(.system(size: 11, weight: .medium))
+                            Text("\(unbooked) unbooked")
+                                .font(.system(size: 10, weight: .medium))
                         }
                         .foregroundStyle(Color.white)
-                        .padding(.horizontal, 10)
+                        .padding(.horizontal, 9)
                         .padding(.vertical, 4)
                         .background(Color.white.opacity(0.18))
                         .clipShape(Capsule())
                     }
                 }
+                .padding(.bottom, 14)
+
+                HStack(spacing: 7) {
+                    glanceStatPill(value: overviewFormatHours(dayJobSiteStandardPortionHours), label: "Standard hrs")
+                    glanceStatPill(
+                        value: overviewFormatHours(dayJobSiteOvertimeHours),
+                        label: "OT \(multLabel)×"
+                    )
+                    glanceStatPill(value: "\(jobsCount)", label: jobsCount == 1 ? "Job active" : "Jobs active")
+                }
+                .padding(.bottom, 14)
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.2))
+                    .frame(height: 0.5)
+                    .padding(.bottom, 12)
+
+                HStack {
+                    Text("WHERE THE TEAM IS")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.85))
+                        .tracking(0.4)
+                    Spacer()
+                    Text("\(bookedPeopleCount) booked · \(unbooked) unbooked")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.7))
+                }
+                .padding(.bottom, 10)
+
+                teamLocationDistributionBar(office: bar.office, wfh: bar.wfh, onSite: bar.onSite, unbooked: bar.unbooked)
+                    .padding(.bottom, 8)
+
+                HStack(spacing: 12) {
+                    glanceLocationLegendItem(
+                        systemImage: "building.2.fill",
+                        count: officePeopleCount,
+                        label: "Office",
+                        dimmed: officePeopleCount == 0
+                    )
+                    glanceLocationLegendItem(
+                        systemImage: "house.fill",
+                        count: wfhPeopleCount,
+                        label: "WFH",
+                        dimmed: wfhPeopleCount == 0
+                    )
+                    glanceLocationLegendItem(
+                        systemImage: "hammer.fill",
+                        count: onSitePeopleCount,
+                        label: "On site",
+                        dimmed: onSitePeopleCount == 0
+                    )
+                    Spacer(minLength: 0)
+                    if unbooked > 0 {
+                        HStack(spacing: 5) {
+                            Image(systemName: "person.fill.questionmark")
+                                .font(.system(size: 12, weight: .medium))
+                            Text("\(unbooked)")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundStyle(Color.white)
+                    }
+                }
             }
-            HStack(spacing: 7) {
-                coverageStatCell(valueText: overviewFormatHours(dayJobSiteStandardPortionHours), label: "Standard")
-                coverageStatCell(valueText: overviewFormatHours(dayJobSiteOvertimeHours), label: "OT \(multLabel)×")
-                coverageStatCell(valueText: "\(jobsCount)", label: "Jobs")
-            }
+            .padding(18)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             LinearGradient(
@@ -550,77 +636,94 @@ struct DailyOverviewView: View {
                 endPoint: .bottomTrailing
             )
         )
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(glanceTitle). \(overviewFormatHours(dayJobSiteLabourHours)) hours across \(people) people.")
     }
 
-    /// Office / WFH / on-site headcount for admins and managers planning team attendance (separate from job-hours summary).
-    private var attendanceMixGradientCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Team attendance")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.9))
-                    .textCase(.uppercase)
-                    .tracking(0.35)
-                Text("Where people are booked today")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color.white)
-            }
-            HStack(spacing: 7) {
-                attendanceStatCapsule(value: officePeopleCount, label: "Office", systemImage: "building.2.fill")
-                attendanceStatCapsule(value: wfhPeopleCount, label: "WFH", systemImage: "house.fill")
-                attendanceStatCapsule(value: onSitePeopleCount, label: "On site", systemImage: "mappin.and.ellipse")
-            }
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color(red: 0.145, green: 0.22, blue: 0.38),
-                    Color(red: 0.28, green: 0.38, blue: 0.52),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private func attendanceStatCapsule(value: Int, label: String, systemImage: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.92))
-                Text(label)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.88))
-            }
-            Text("\(value)")
+    private func glanceStatPill(value: String, label: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(Color.white)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(Color.white.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private func coverageStatCell(valueText: String, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(valueText)
-                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(Color.white)
             Text(label)
                 .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.88))
+                .foregroundStyle(Color.white.opacity(0.85))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 9)
+        .padding(.horizontal, 8)
         .background(Color.white.opacity(0.14))
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+    }
+
+    private func teamLocationDistributionBar(office: CGFloat, wfh: CGFloat, onSite: CGFloat, unbooked: CGFloat) -> some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            HStack(spacing: 0) {
+                if office > 0 {
+                    Rectangle()
+                        .fill(Color.white)
+                        .frame(width: max(1, w * office))
+                }
+                if wfh > 0 {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.6))
+                        .frame(width: max(1, w * wfh))
+                }
+                if onSite > 0 {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.85))
+                        .frame(width: max(1, w * onSite))
+                }
+                if unbooked > 0 {
+                    glanceUnbookedStripeFill()
+                        .frame(width: max(1, w * unbooked))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        }
+        .frame(height: 8)
+        .background(Color.black.opacity(0.18))
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+
+    private struct GlanceUnbookedStripeFill: View {
+        var body: some View {
+            GeometryReader { geo in
+                Path { path in
+                    let step: CGFloat = 6
+                    var x: CGFloat = -geo.size.height
+                    while x < geo.size.width + geo.size.height {
+                        path.move(to: CGPoint(x: x, y: geo.size.height))
+                        path.addLine(to: CGPoint(x: x + geo.size.height, y: 0))
+                        x += step
+                    }
+                }
+                .stroke(Color.white.opacity(0.35), lineWidth: 2)
+                .background(Color.white.opacity(0.15))
+            }
+        }
+    }
+
+    private func glanceUnbookedStripeFill() -> some View {
+        GlanceUnbookedStripeFill()
+    }
+
+    private func glanceLocationLegendItem(systemImage: String, count: Int, label: String, dimmed: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
+            Text("\(count)")
+                .font(.system(size: 11, weight: .medium))
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+        }
+        .foregroundStyle(Color.white.opacity(dimmed ? 0.55 : 1))
     }
 
     private var unbookedLabourRevampCard: some View {
@@ -694,41 +797,75 @@ struct DailyOverviewView: View {
 
     private var annualLeaveRevampBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
-            revampSectionHeader(title: isHistoric ? "Annual leave" : "Annual leave today", trailing: nil)
-            ForEach(dayHolidays) { booking in
-                OnHolidayRowView(booking: booking)
+            revampSectionHeader(title: "Annual leave", trailing: nil)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(dayHolidays.enumerated()), id: \.element.id) { idx, booking in
+                    OnHolidayRowView(booking: booking)
+                    if idx < dayHolidays.count - 1 {
+                        Divider().overlay(ProjectWorksRevampColors.border)
+                    }
+                }
             }
+            .padding(14)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+            )
         }
     }
 
+    private var hasOtherScheduleContent: Bool {
+        !visibleOfficeBookings.isEmpty ||
+            !visibleWFHBookings.isEmpty ||
+            !filteredCustomBookingsByName.isEmpty
+    }
+
     @ViewBuilder
-    private var officeWFHRevampSection: some View {
+    private var otherScheduleRevampSection: some View {
         let office = visibleOfficeBookings
         let wfh = visibleWFHBookings
-        let people = Set(office.map(\.userId)).union(Set(wfh.map(\.userId)))
-        if !office.isEmpty || !wfh.isEmpty {
+        let customGroups = filteredCustomBookingsByName
+        let customBookings = customGroups.values.flatMap { $0 }
+        let people = Set(office.map(\.userId))
+            .union(Set(wfh.map(\.userId)))
+            .union(Set(customBookings.map(\.userId)))
+        if hasOtherScheduleContent {
             VStack(alignment: .leading, spacing: 8) {
                 revampSectionHeader(
-                    title: "Office & WFH",
+                    title: "Other",
                     trailing: "\(people.count) person\(people.count == 1 ? "" : "s")"
                 )
                 VStack(alignment: .leading, spacing: 0) {
-                    if !office.isEmpty {
-                        officeWFHInnerHeader(icon: "building.2.fill", iconBg: Color(red: 0.902, green: 0.945, blue: 0.984), iconTint: ProjectWorksRevampColors.blue, title: "Office", caption: "Managers / admins")
-                        ForEach(Array(office.enumerated()), id: \.element.id) { idx, booking in
-                            managerBookingRevampRow(booking: booking)
-                            if idx < office.count - 1 { Divider().overlay(ProjectWorksRevampColors.border) }
-                        }
-                    }
-                    if !office.isEmpty && !wfh.isEmpty {
-                        Divider().padding(.vertical, 6).overlay(ProjectWorksRevampColors.border)
-                    }
-                    if !wfh.isEmpty {
-                        officeWFHInnerHeader(icon: "house.fill", iconBg: Color(red: 0.882, green: 0.961, blue: 0.933), iconTint: ProjectWorksRevampColors.activeGreen, title: "Working from home", caption: "Managers / admins")
-                        ForEach(Array(wfh.enumerated()), id: \.element.id) { idx, booking in
-                            managerBookingRevampRow(booking: booking)
-                            if idx < wfh.count - 1 { Divider().overlay(ProjectWorksRevampColors.border) }
-                        }
+                    otherScheduleBlock(
+                        needsTopDivider: false,
+                        icon: "building.2.fill",
+                        iconBg: Color(red: 0.902, green: 0.945, blue: 0.984),
+                        iconTint: ProjectWorksRevampColors.blue,
+                        title: "Office",
+                        bookings: office,
+                        locationTitle: "Office"
+                    )
+                    otherScheduleBlock(
+                        needsTopDivider: !office.isEmpty,
+                        icon: "house.fill",
+                        iconBg: Color(red: 0.882, green: 0.961, blue: 0.933),
+                        iconTint: ProjectWorksRevampColors.activeGreen,
+                        title: "Working from home",
+                        bookings: wfh,
+                        locationTitle: "Working from home"
+                    )
+                    ForEach(Array(customGroups.keys.sorted().enumerated()), id: \.element) { idx, customName in
+                        otherScheduleBlock(
+                            needsTopDivider: !office.isEmpty || !wfh.isEmpty || idx > 0,
+                            icon: "mappin.and.ellipse",
+                            iconBg: ProjectWorksRevampColors.jobTypePillBg,
+                            iconTint: ProjectWorksRevampColors.jobTypePillInk,
+                            title: customName,
+                            bookings: customGroups[customName] ?? [],
+                            locationTitle: customName
+                        )
                     }
                 }
                 .padding(14)
@@ -742,7 +879,29 @@ struct DailyOverviewView: View {
         }
     }
 
-    private func officeWFHInnerHeader(icon: String, iconBg: Color, iconTint: Color, title: String, caption: String) -> some View {
+    @ViewBuilder
+    private func otherScheduleBlock(
+        needsTopDivider: Bool,
+        icon: String,
+        iconBg: Color,
+        iconTint: Color,
+        title: String,
+        bookings: [ManagerSiteBooking],
+        locationTitle: String
+    ) -> some View {
+        if !bookings.isEmpty {
+            if needsTopDivider {
+                Divider().padding(.vertical, 6).overlay(ProjectWorksRevampColors.border)
+            }
+            otherScheduleInnerHeader(icon: icon, iconBg: iconBg, iconTint: iconTint, title: title, caption: "Managers / admins")
+            ForEach(Array(bookings.enumerated()), id: \.element.id) { idx, booking in
+                managerBookingRevampRow(booking: booking, locationTitle: locationTitle, editable: false)
+                if idx < bookings.count - 1 { Divider().overlay(ProjectWorksRevampColors.border) }
+            }
+        }
+    }
+
+    private func otherScheduleInnerHeader(icon: String, iconBg: Color, iconTint: Color, title: String, caption: String) -> some View {
         HStack {
             HStack(spacing: 10) {
                 ZStack {
@@ -778,7 +937,10 @@ struct DailyOverviewView: View {
                     ForEach(ids, id: \.self) { projectId in
                         let all = projectStore.projects + projectStore.smallWorks
                         if let project = all.first(where: { $0.id == projectId }) {
-                            liveProjectRevampCard(project: project, bookings: bookingsByProject[projectId] ?? [])
+                            liveProjectRevampCard(
+                                project: project,
+                                bookings: bookingsByProject[projectId] ?? []
+                            )
                         }
                     }
                 }
@@ -789,9 +951,29 @@ struct DailyOverviewView: View {
     @ViewBuilder
     private func liveProjectRevampCard(project: Project, bookings: [Booking]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            ProjectBookingCard(project: project, bookings: bookings, day: overviewDate)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(subcontractorStore)
+            ProjectBookingCard(
+                project: project,
+                bookings: bookings,
+                day: overviewDate,
+                canEditBookings: canBookLabour,
+                onEditOperative: { booking in
+                    guard let op = operativeStore.operatives.first(where: { $0.id == booking.operativeId }) else { return }
+                    bookingEditTarget = .operative(
+                        booking: booking,
+                        project: project,
+                        personName: op.name
+                    )
+                },
+                onEditManager: { booking in
+                    bookingEditTarget = .manager(
+                        booking: booking,
+                        locationTitle: "\(project.jobNumber) \(project.siteName)",
+                        personName: managerName(for: booking.userId)
+                    )
+                }
+            )
+            .environmentObject(managerScheduleStore)
+            .environmentObject(subcontractorStore)
 
             NavigationLink {
                 ProjectDetailView(project: project)
@@ -882,7 +1064,7 @@ struct DailyOverviewView: View {
             .padding(.bottom, 10)
 
             ForEach(Array(bookings.enumerated()), id: \.element.id) { idx, booking in
-                managerBookingRevampRow(booking: booking)
+                managerBookingRevampRow(booking: booking, locationTitle: title)
                 if idx < bookings.count - 1 {
                     Divider().overlay(ProjectWorksRevampColors.border)
                 }
@@ -897,9 +1079,11 @@ struct DailyOverviewView: View {
         )
     }
 
-    private func managerBookingRevampRow(booking: ManagerSiteBooking) -> some View {
+    @ViewBuilder
+    private func managerBookingRevampRow(booking: ManagerSiteBooking, locationTitle: String, editable: Bool = true) -> some View {
         let name = managerName(for: booking.userId)
-        return HStack(spacing: 10) {
+        let canEditRow = canBookLabour && editable
+        let row = HStack(spacing: 10) {
             Text(managerTimeSlotDisplayText(for: booking))
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(ProjectWorksRevampColors.pinRoseFg)
@@ -920,13 +1104,40 @@ struct DailyOverviewView: View {
                         )
                     )
                     .clipShape(Circle())
-                Text(name)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                    Text(booking.scheduleLabel(policy: payrollTimePolicy))
+                        .font(.system(size: 10))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 0)
+            if canEditRow {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+            }
         }
         .padding(.vertical, 6)
+        .contentShape(Rectangle())
+
+        if canEditRow {
+            Button {
+                bookingEditTarget = .manager(
+                    booking: booking,
+                    locationTitle: locationTitle,
+                    personName: name
+                )
+            } label: {
+                row
+            }
+            .buttonStyle(.plain)
+        } else {
+            row
+        }
     }
 
     var body: some View {
@@ -971,6 +1182,9 @@ struct DailyOverviewView: View {
                 .environmentObject(holidayStore)
                 .environmentObject(managerScheduleStore)
                 .environmentObject(firebaseBackend)
+        }
+        .sheet(item: $bookingEditTarget) { target in
+            dailyOverviewEditSheet(for: target)
         }
     }
     
@@ -1032,6 +1246,99 @@ private extension DailyOverviewView {
         }
         return userId
     }
+
+    private static let editDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEE d MMM"
+        return f
+    }()
+
+    func editSheetSubtitle(date: Date, locationTitle: String) -> String {
+        "\(Self.editDateFormatter.string(from: date)) · \(locationTitle)"
+    }
+
+    @ViewBuilder
+    func dailyOverviewEditSheet(for target: DailyOverviewEditTarget) -> some View {
+        switch target {
+        case .operative(let booking, let project, let personName):
+            OperativeCustomHoursSheet(
+                policy: payrollTimePolicy,
+                title: "Edit booking",
+                subtitle: editSheetSubtitle(date: booking.date, locationTitle: "\(project.jobNumber) \(project.siteName)"),
+                headerName: personName,
+                headerInitials: PlannerUIInitials.from(personName),
+                allowsOtMultiplierOverride: true,
+                initialChoice: OperativeDayBookingChoice(from: booking),
+                onSave: { start, end, breakRemoved, otMult in
+                    bookingEditTarget = nil
+                    saveOperativeBookingEdit(
+                        booking: booking,
+                        start: start,
+                        end: end,
+                        breakRemoved: breakRemoved,
+                        otMultiplierOverride: otMult
+                    )
+                },
+                onCancel: { bookingEditTarget = nil }
+            )
+        case .manager(let booking, let locationTitle, let personName):
+            OperativeCustomHoursSheet(
+                policy: payrollTimePolicy,
+                title: "Edit booking",
+                subtitle: editSheetSubtitle(date: booking.date, locationTitle: locationTitle),
+                headerName: personName,
+                headerInitials: PlannerUIInitials.from(personName),
+                allowsOtMultiplierOverride: false,
+                initialChoice: booking.hoursEditChoice(policy: payrollTimePolicy),
+                onSave: { start, end, breakRemoved, _ in
+                    bookingEditTarget = nil
+                    saveManagerBookingEdit(
+                        booking: booking,
+                        start: start,
+                        end: end,
+                        breakRemoved: breakRemoved
+                    )
+                },
+                onCancel: { bookingEditTarget = nil }
+            )
+        }
+    }
+
+    func saveOperativeBookingEdit(
+        booking: Booking,
+        start: String,
+        end: String,
+        breakRemoved: Bool,
+        otMultiplierOverride: Double?
+    ) {
+        var updated = booking
+        updated.timeSlot = .customHours
+        updated.workStartTime = start
+        updated.workEndTime = end
+        updated.isBreakRemoved = breakRemoved
+        updated.otMultiplierOverride = otMultiplierOverride
+        updated.updatedAt = Date()
+        Task {
+            await bookingStore.updateBooking(updated)
+        }
+    }
+
+    func saveManagerBookingEdit(
+        booking: ManagerSiteBooking,
+        start: String,
+        end: String,
+        breakRemoved: Bool
+    ) {
+        var updated = booking
+        updated.timeSlot = .customHours
+        updated.workStartTime = start
+        updated.workEndTime = end
+        updated.isBreakRemoved = breakRemoved
+        updated.updatedAt = Date()
+        Task {
+            await managerScheduleStore.saveBooking(updated)
+        }
+    }
 }
 
 struct OnHolidayRowView: View {
@@ -1042,7 +1349,7 @@ struct OnHolidayRowView: View {
     private var displayName: String {
         if let uid = booking.userId,
            let user = userStore.organizationUsers.first(where: { $0.id == uid }) {
-            return user.fullName
+            return user.fullName.isEmpty ? user.email : user.fullName
         }
         if let oid = booking.operativeId,
            let operative = operativeStore.operatives.first(where: { $0.id == oid }) {
@@ -1050,20 +1357,41 @@ struct OnHolidayRowView: View {
         }
         return "On holiday"
     }
+
+    private var initialsGradient: [Color] {
+        let palettes: [[Color]] = [
+            [Color(red: 0.094, green: 0.373, blue: 0.651), Color(red: 0.216, green: 0.541, blue: 0.867)],
+            [Color(red: 0.6, green: 0.208, blue: 0.337), Color(red: 0.761, green: 0.333, blue: 0.471)],
+            [Color(red: 0.325, green: 0.29, blue: 0.718), Color(red: 0.498, green: 0.467, blue: 0.867)],
+            [Color(red: 0.2, green: 0.55, blue: 0.42), Color(red: 0.35, green: 0.72, blue: 0.55)],
+        ]
+        var hasher = Hasher()
+        hasher.combine(displayName)
+        let index = abs(hasher.finalize()) % palettes.count
+        return palettes[index]
+    }
     
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sun.max.fill")
-                .font(.subheadline)
-                .foregroundColor(.orange)
-            Text(displayName)
-                .font(.subheadline)
-                .foregroundColor(.primary)
-            Spacer()
+        HStack(spacing: 10) {
+            Text(PlannerUIInitials.from(displayName))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(Color.white)
+                .frame(width: 22, height: 22)
+                .background(
+                    LinearGradient(colors: initialsGradient, startPoint: .topLeading, endPoint: .bottomTrailing)
+                )
+                .clipShape(Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(displayName)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                Text("Annual leave")
+                    .font(.system(size: 10))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
+            Spacer(minLength: 0)
         }
-        .padding(12)
-        .background(Color.orange.opacity(0.12))
-        .cornerRadius(12)
+        .padding(.vertical, 6)
     }
 }
 
@@ -1165,6 +1493,9 @@ struct ProjectBookingCard: View {
     let project: Project
     let bookings: [Booking]
     let day: Date
+    var canEditBookings: Bool = false
+    var onEditOperative: ((Booking) -> Void)?
+    var onEditManager: ((ManagerSiteBooking) -> Void)?
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
@@ -1251,7 +1582,9 @@ struct ProjectBookingCard: View {
                 pillText: b.scheduleCoveragePillHours(policy: p),
                 pillOvertime: sub.emphasizedOvertime,
                 initials: PlannerUIInitials.from(op.name),
-                gradientPair: initialsGradient(for: op.name)
+                gradientPair: initialsGradient(for: op.name),
+                operativeBooking: b,
+                managerBooking: nil
             )
             let tie = op.name
             keyed.append((b.minutesSortKey(policy: p), tie, row))
@@ -1266,7 +1599,9 @@ struct ProjectBookingCard: View {
                 pillText: b.scheduleCoveragePillHours(policy: p),
                 pillOvertime: sub.emphasizedOvertime,
                 initials: PlannerUIInitials.from(managerName(userId: b.userId)),
-                gradientPair: initialsGradient(for: managerName(userId: b.userId))
+                gradientPair: initialsGradient(for: managerName(userId: b.userId)),
+                operativeBooking: nil,
+                managerBooking: b
             )
             let tie = managerName(userId: b.userId)
             keyed.append((b.minutesSortKey(policy: p), tie, row))
@@ -1283,7 +1618,9 @@ struct ProjectBookingCard: View {
                 pillText: mirror.scheduleCoveragePillHours(policy: p),
                 pillOvertime: sub.emphasizedOvertime,
                 initials: PlannerUIInitials.from(baseName),
-                gradientPair: initialsGradient(for: baseName)
+                gradientPair: initialsGradient(for: baseName),
+                operativeBooking: nil,
+                managerBooking: nil
             )
             keyed.append((mirror.minutesSortKey(policy: p), baseName, row))
         }
@@ -1334,10 +1671,6 @@ struct ProjectBookingCard: View {
                         }
                     }
                 }
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
-                    .padding(.top, 2)
             }
             .padding(.bottom, 10)
             Divider().overlay(ProjectWorksRevampColors.border)
@@ -1351,8 +1684,10 @@ struct ProjectBookingCard: View {
         }
     }
 
+    @ViewBuilder
     private func projectPersonRowView(_ row: ProjectDayPersonRow) -> some View {
-        HStack(alignment: .center, spacing: 9) {
+        let isEditable = canEditBookings && (row.operativeBooking != nil || row.managerBooking != nil)
+        let content = HStack(alignment: .center, spacing: 9) {
             Text(row.initials)
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(Color.white)
@@ -1379,8 +1714,29 @@ struct ProjectBookingCard: View {
                 .padding(.vertical, 2)
                 .background(row.pillOvertime ? ProjectWorksRevampColors.upcomingAmber.opacity(0.16) : Color(red: 0.882, green: 0.961, blue: 0.933))
                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            if isEditable {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+            }
         }
         .padding(.vertical, 7)
+        .contentShape(Rectangle())
+
+        if isEditable {
+            Button {
+                if let b = row.operativeBooking {
+                    onEditOperative?(b)
+                } else if let b = row.managerBooking {
+                    onEditManager?(b)
+                }
+            } label: {
+                content
+            }
+            .buttonStyle(.plain)
+        } else {
+            content
+        }
     }
 
     private func managerName(userId: String) -> String {
@@ -1424,6 +1780,8 @@ private struct ProjectDayPersonRow: Identifiable {
     let pillOvertime: Bool
     let initials: String
     let gradientPair: [Color]
+    let operativeBooking: Booking?
+    let managerBooking: ManagerSiteBooking?
 }
 
 

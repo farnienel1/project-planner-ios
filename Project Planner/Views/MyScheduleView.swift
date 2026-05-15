@@ -19,6 +19,13 @@ fileprivate struct SecondBookingDialog: Identifiable {
     let onConfirm: () -> Void
 }
 
+fileprivate struct PendingScheduleOverlapResolution: Identifiable {
+    let id = UUID()
+    let message: String
+    let detailLines: [String]
+    let onContinue: () -> Void
+}
+
 fileprivate struct CustomHoursEditorContext: Identifiable {
     let id = UUID()
     let days: [Date]
@@ -544,9 +551,7 @@ struct ManagerScheduleContentView: View {
     /// Expanded "Book yourself in" item: true = Office, non-nil UUID = that project/small work (only one expanded at a time).
     @State private var expandedStandardLocation: ManagerLocationType?
     @State private var expandedLocationId: UUID?
-    @State private var clashWarning: String?
-    @State private var clashWarningFading = false
-    @State private var clashWarningWorkItem: DispatchWorkItem?
+    @State private var pendingOverlapResolution: PendingScheduleOverlapResolution?
     @State private var isMultiDaySelectionEnabled = false
     @State private var selectedDates: Set<Date> = []
     @State private var expandedCustomLocationName: String?
@@ -612,15 +617,17 @@ struct ManagerScheduleContentView: View {
                     .frame(height: 0.5)
                     .padding(.horizontal, 18)
                     .padding(.top, 4)
-                if let day = selectedDate ?? weekDates.first {
+                if let day = selectedDate {
                     dayContent(for: day)
                 }
             }
-            if clashWarning != nil {
-                clashWarningTile
-                    .opacity(clashWarningFading ? 0 : 1)
-                    .animation(.easeOut(duration: 0.4), value: clashWarningFading)
+            if let pending = pendingOverlapResolution {
+                scheduleOverlapWarningTile(pending)
             }
+        }
+        .onAppear {
+            weekStart = Date()
+            selectedDate = calendar.startOfDay(for: Date())
         }
         .sheet(item: $customHoursContext) { ctx in
             ManagerCustomHoursSheet(
@@ -668,60 +675,27 @@ struct ManagerScheduleContentView: View {
         }
     }
 
-    private var clashWarningTile: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                .font(.body)
-            Text("Warning — time overlap")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
-            Spacer(minLength: 8)
-            Button {
-                clearClashWarning()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .frame(width: 24, height: 24)
+    private func scheduleOverlapWarningTile(_ pending: PendingScheduleOverlapResolution) -> some View {
+        ScheduleOverlapWarningPanel(
+            message: pending.message,
+            detailLines: pending.detailLines,
+            onCancel: { pendingOverlapResolution = nil },
+            onConfirm: {
+                let proceed = pending.onContinue
+                pendingOverlapResolution = nil
+                proceed()
             }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(ProjectWorksRevampColors.upcomingAmber.opacity(0.55), lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
-        .padding(.horizontal, 18)
-        .padding(.top, 12)
     }
 
-    private func clearClashWarning() {
-        clashWarningWorkItem?.cancel()
-        clashWarningWorkItem = nil
-        withAnimation(.easeOut(duration: 0.4)) {
-            clashWarningFading = true
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            clashWarning = nil
-            clashWarningFading = false
-        }
+    private func wouldClashWithHoliday(on day: Date) -> Bool {
+        !myHolidayBookings(on: day).isEmpty
     }
 
-    private func showClashWarning() {
-        clashWarningWorkItem?.cancel()
-        clashWarningFading = false
-        clashWarning = "shown"
-        let work = DispatchWorkItem { [self] in
-            clearClashWarning()
+    private func holidayOverlapLines(on day: Date) -> [String] {
+        myHolidayBookings(on: day).map { holiday in
+            holiday.status == .pending ? "Pending annual leave" : "Annual leave"
         }
-        clashWarningWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
     }
 
     private func bookingProbe(
@@ -823,39 +797,117 @@ struct ManagerScheduleContentView: View {
         locationType: ManagerLocationType,
         locationId: UUID?,
         customLocationName: String?,
-        replaceBookingId: UUID? = nil
+        replaceBookingId: UUID? = nil,
+        allowOverlap: Bool = false
     ) {
         guard let uid = firebaseBackend.currentUser?.uid else { return }
         let normalizedDays = days.map { calendar.startOfDay(for: $0) }
-        for day in normalizedDays {
-            if isDuplicateBooking(
-                on: day,
-                timeSlot: timeSlot,
-                workStart: workStart,
-                workEnd: workEnd,
-                breakRemoved: breakRemoved,
-                locationType: locationType,
-                locationId: locationId,
-                customLocationName: customLocationName,
-                ignoringBookingId: replaceBookingId
-            ) {
-                showClashWarning()
-                return
-            }
-            let probe = bookingProbe(
-                userId: uid,
-                day: day,
-                timeSlot: timeSlot,
-                workStart: workStart,
-                workEnd: workEnd,
-                breakRemoved: breakRemoved,
-                locationType: locationType,
-                locationId: locationId,
-                customLocationName: customLocationName
-            )
-            if wouldClashProbe(on: day, probe: probe, ignoringBookingId: replaceBookingId) {
-                showClashWarning()
-                return
+        if !allowOverlap {
+            for day in normalizedDays {
+                var detailLines: [String] = []
+                if isDuplicateBooking(
+                    on: day,
+                    timeSlot: timeSlot,
+                    workStart: workStart,
+                    workEnd: workEnd,
+                    breakRemoved: breakRemoved,
+                    locationType: locationType,
+                    locationId: locationId,
+                    customLocationName: customLocationName,
+                    ignoringBookingId: replaceBookingId
+                ) {
+                    detailLines.append("This matches a booking you already have on \(fullDateLabel(day)).")
+                    presentOverlapWarning(
+                        message: "This booking overlaps something already on your schedule.",
+                        detailLines: detailLines,
+                        days: normalizedDays,
+                        timeSlot: timeSlot,
+                        workStart: workStart,
+                        workEnd: workEnd,
+                        breakRemoved: breakRemoved,
+                        locationType: locationType,
+                        locationId: locationId,
+                        customLocationName: customLocationName,
+                        replaceBookingId: replaceBookingId
+                    )
+                    return
+                }
+                if wouldClashWithHoliday(on: day) {
+                    detailLines = holidayOverlapLines(on: day)
+                    let holidayProbe = bookingProbe(
+                        userId: uid,
+                        day: day,
+                        timeSlot: timeSlot,
+                        workStart: workStart,
+                        workEnd: workEnd,
+                        breakRemoved: breakRemoved,
+                        locationType: locationType,
+                        locationId: locationId,
+                        customLocationName: customLocationName
+                    )
+                    let newLabel = newBookingSummaryLabel(
+                        timeSlot: timeSlot,
+                        workStart: workStart,
+                        workEnd: workEnd,
+                        breakRemoved: breakRemoved
+                    )
+                    detailLines.append("New booking: \(newLabel) — \(locationNameString(for: holidayProbe))")
+                    presentOverlapWarning(
+                        message: "You are on annual leave this day. Booking anyway will create a time overlap.",
+                        detailLines: detailLines,
+                        days: normalizedDays,
+                        timeSlot: timeSlot,
+                        workStart: workStart,
+                        workEnd: workEnd,
+                        breakRemoved: breakRemoved,
+                        locationType: locationType,
+                        locationId: locationId,
+                        customLocationName: customLocationName,
+                        replaceBookingId: replaceBookingId
+                    )
+                    return
+                }
+                let probe = bookingProbe(
+                    userId: uid,
+                    day: day,
+                    timeSlot: timeSlot,
+                    workStart: workStart,
+                    workEnd: workEnd,
+                    breakRemoved: breakRemoved,
+                    locationType: locationType,
+                    locationId: locationId,
+                    customLocationName: customLocationName
+                )
+                if wouldClashProbe(on: day, probe: probe, ignoringBookingId: replaceBookingId) {
+                    let policy = payrollTimePolicy
+                    let existing = managerScheduleStore.myBookings(on: day)
+                        .filter { $0.id != replaceBookingId }
+                        .filter { ManagerScheduleInterval.bookingsOverlap(probe, $0, policy: policy) }
+                    detailLines = existing.map {
+                        "\($0.scheduleLabel(policy: policy)) — \(locationNameString(for: $0))"
+                    }
+                    let newLabel = newBookingSummaryLabel(
+                        timeSlot: timeSlot,
+                        workStart: workStart,
+                        workEnd: workEnd,
+                        breakRemoved: breakRemoved
+                    )
+                    detailLines.append("New booking: \(newLabel) — \(locationNameString(for: probe))")
+                    presentOverlapWarning(
+                        message: "This booking overlaps another in time on \(fullDateLabel(day)).",
+                        detailLines: detailLines,
+                        days: normalizedDays,
+                        timeSlot: timeSlot,
+                        workStart: workStart,
+                        workEnd: workEnd,
+                        breakRemoved: breakRemoved,
+                        locationType: locationType,
+                        locationId: locationId,
+                        customLocationName: customLocationName,
+                        replaceBookingId: replaceBookingId
+                    )
+                    return
+                }
             }
         }
 
@@ -880,7 +932,7 @@ struct ManagerScheduleContentView: View {
             }
         }
 
-        if normalizedDays.count == 1, let only = normalizedDays.first {
+        if !allowOverlap, normalizedDays.count == 1, let only = normalizedDays.first {
             let existing = managerScheduleStore.myBookings(on: only).filter { $0.id != replaceBookingId }
             if !existing.isEmpty {
                 let newLabel = newBookingSummaryLabel(
@@ -898,6 +950,39 @@ struct ManagerScheduleContentView: View {
             }
         }
         commit()
+    }
+
+    private func presentOverlapWarning(
+        message: String,
+        detailLines: [String],
+        days: [Date],
+        timeSlot: ManagerTimeSlot,
+        workStart: String?,
+        workEnd: String?,
+        breakRemoved: Bool,
+        locationType: ManagerLocationType,
+        locationId: UUID?,
+        customLocationName: String?,
+        replaceBookingId: UUID?
+    ) {
+        pendingOverlapResolution = PendingScheduleOverlapResolution(
+            message: message,
+            detailLines: detailLines,
+            onContinue: {
+                runBookingFlow(
+                    days: days,
+                    timeSlot: timeSlot,
+                    workStart: workStart,
+                    workEnd: workEnd,
+                    breakRemoved: breakRemoved,
+                    locationType: locationType,
+                    locationId: locationId,
+                    customLocationName: customLocationName,
+                    replaceBookingId: replaceBookingId,
+                    allowOverlap: true
+                )
+            }
+        )
     }
 
     private var weekSelector: some View {
@@ -958,9 +1043,16 @@ struct ManagerScheduleContentView: View {
     private func moveWeek(by delta: Int) {
         if let newStart = calendar.date(byAdding: .weekOfYear, value: delta, to: weekStart) {
             weekStart = newStart
-            if let first = weekDates.first {
-                selectedDate = first
-            }
+            selectDefaultDayInCurrentWeek()
+        }
+    }
+
+    private func selectDefaultDayInCurrentWeek() {
+        let today = calendar.startOfDay(for: Date())
+        if weekDates.contains(where: { calendar.isDate($0, inSameDayAs: today) }) {
+            selectedDate = today
+        } else if let first = weekDates.first {
+            selectedDate = first
         }
     }
 
