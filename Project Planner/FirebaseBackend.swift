@@ -2944,7 +2944,7 @@ class FirebaseBackend: ObservableObject {
         let resolvedRole: UserRole = operativeMode ? .operative : role
         
         let assignedManagerUserId = data["assignedManagerUserId"] as? String
-        var dayRate = data["dayRate"] as? Double
+        let dayRate = data["dayRate"] as? Double
         var hourlyRate = data["hourlyRate"] as? Double
         // Prefer day rate if both are present (legacy / misconfigured documents).
         if let dr = dayRate, dr > 0, let hr = hourlyRate, hr > 0 {

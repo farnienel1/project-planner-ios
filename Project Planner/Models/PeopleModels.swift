@@ -76,7 +76,7 @@ struct OrganizationSkill: Identifiable, Hashable, Codable, Sendable {
     var createdAt: Date
     var updatedAt: Date
 
-    static let defaultTrade = "General"
+    nonisolated static let defaultTrade = "General"
 
     nonisolated init(
         id: String = UUID().uuidString,
