@@ -7,11 +7,11 @@ Secrets.plist
 *.local.xcconfig
 *.secrets.xcconfig
 
-# Accidental duplicate copies (macOS / merges) — do not commit
-* 2
-* 2.*
-**/* 2/
-**/* 3/
+# Accidental duplicate copies (macOS Finder "Copy") — do not commit
+* [0-9]
+* [0-9].*
+**/* [0-9]/
+**/* [0-9].*
 
 # Firebase / Node caches in repo
 **/.firebase/
