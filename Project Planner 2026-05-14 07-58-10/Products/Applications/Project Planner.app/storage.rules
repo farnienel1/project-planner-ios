@@ -1,0 +1,13 @@
+rules_version = '2';
+// Firebase Storage rules for task attachments (images and files).
+// Deploy: firebase deploy --only storage
+// Enable Storage in Firebase Console and add FirebaseStorage to your Xcode project (Firebase iOS SDK).
+// Paths: organizations/{orgId}/tasks/{taskId}/images/..., siteAudits/{auditId}/images/..., .../files/...
+// Only authenticated users can read/write; task visibility is enforced by the app (Firestore rules control who sees which tasks).
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /organizations/{orgId}/{allPaths=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
