@@ -77,13 +77,19 @@ class NotificationService: ObservableObject {
             return
         }
 
-        let notificationsEnabled = appSettingsStore?.settings.notifications.materialOrderCutOff ?? true
+        let notificationSettings = appSettingsStore?.settings.notifications ?? NotificationSettings()
+        let notificationsEnabled = notificationSettings.materialOrderCutOff
         guard notificationsEnabled else {
             LocalNotificationService.shared.removeDailyMaterialCutOffReminder()
             return
         }
 
-        await LocalNotificationService.shared.scheduleDailyMaterialCutOffReminder(hour: 16, minute: 0)
+        await LocalNotificationService.shared.scheduleDailyMaterialCutOffReminder(
+            hour: notificationSettings.materialCutOffHour,
+            minute: notificationSettings.materialCutOffMinute,
+            includeSaturday: notificationSettings.materialCutOffOnSaturday,
+            includeSunday: notificationSettings.materialCutOffOnSunday
+        )
     }
 
     /// Schedules local notifications 3 months and 1 month before each qualification expiry (09:00 on that day).
@@ -401,6 +407,23 @@ class NotificationService: ObservableObject {
         
         await saveNotification(notification1)
         await saveNotification(notification2)
+    }
+
+    /// Notifies admins with warnings access when someone removes a warning without resolving the underlying issue.
+    func notifyWarningRemoved(warning: Warning, removedBy: String) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+
+        let detail = warning.removalNotificationDetail
+        let notification = AppNotification(
+            organizationId: organizationId,
+            type: .warningRemoved,
+            title: "Warning Removed",
+            message: "\(removedBy) removed a warning: \(detail) Review and resolve manually if still needed.",
+            relatedId: nil,
+            requiresPermission: "hasAdminAccess"
+        )
+        await saveNotification(notification)
     }
     
     func notifyTaskCompleted(taskId: UUID, taskTitle: String, completedBy: String, assignedToUserId: String) async {

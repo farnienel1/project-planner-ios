@@ -11,7 +11,7 @@ import UserNotifications
 @MainActor
 class LocalNotificationService {
     static let shared = LocalNotificationService()
-    static let dailyMaterialCutoffIdentifier = "daily-material-order-cutoff-16h"
+    static let dailyMaterialCutoffIdentifierPrefix = "daily-material-order-cutoff"
     static let qualificationExpiryIdentifierPrefix = "qual-exp-v2-"
     
     private init() {}
@@ -68,6 +68,9 @@ class LocalNotificationService {
         case .bookingClash:
             content.title = "Booking Clash Detected"
             content.body = details.isEmpty ? "A booking clash has been detected for John Smith on December 1, 2025." : details
+        case .warningRemoved:
+            content.title = "Warning Removed"
+            content.body = details.isEmpty ? "An admin removed a booking clash warning. Review and resolve manually if still needed." : details
         case .holidayRequestSubmitted:
             content.title = "Holiday Request"
             content.body = details.isEmpty ? "An operative has submitted a holiday request." : details
@@ -133,7 +136,12 @@ class LocalNotificationService {
         }
     }
 
-    func scheduleDailyMaterialCutOffReminder(hour: Int = 16, minute: Int = 0) async {
+    func scheduleDailyMaterialCutOffReminder(
+        hour: Int = 16,
+        minute: Int = 0,
+        includeSaturday: Bool = false,
+        includeSunday: Bool = false
+    ) async {
         let authorized = await requestAuthorization()
         guard authorized else {
             print("🔥🔥🔥 DEBUG: Notification permission not granted")
@@ -141,34 +149,52 @@ class LocalNotificationService {
         }
 
         let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [Self.dailyMaterialCutoffIdentifier])
+        center.removePendingNotificationRequests(withIdentifiers: materialCutOffWeekdayIdentifiers())
 
         let content = UNMutableNotificationContent()
         content.title = "Material order cut off"
         content.body = "Material order cut off"
         content.sound = .default
 
-        var components = DateComponents()
-        components.hour = hour
-        components.minute = minute
-        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
-        let request = UNNotificationRequest(
-            identifier: Self.dailyMaterialCutoffIdentifier,
-            content: content,
-            trigger: trigger
-        )
-
-        do {
-            try await center.add(request)
-            print("✅ Daily material cut off reminder scheduled for \(hour):\(String(format: "%02d", minute))")
-        } catch {
-            print("🔥🔥🔥 DEBUG: Error scheduling daily material cut off reminder: \(error)")
+        let weekdays = materialReminderWeekdays(includeSaturday: includeSaturday, includeSunday: includeSunday)
+        for weekday in weekdays {
+            var components = DateComponents()
+            components.weekday = weekday
+            components.hour = hour
+            components.minute = minute
+            let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
+            let request = UNNotificationRequest(
+                identifier: materialCutOffIdentifier(for: weekday),
+                content: content,
+                trigger: trigger
+            )
+            do {
+                try await center.add(request)
+            } catch {
+                print("🔥🔥🔥 DEBUG: Error scheduling daily material cut off reminder (weekday \(weekday)): \(error)")
+            }
         }
+        print("✅ Material cut off reminders scheduled for \(weekdays.count) day(s) at \(hour):\(String(format: "%02d", minute))")
     }
 
     func removeDailyMaterialCutOffReminder() {
         UNUserNotificationCenter.current()
-            .removePendingNotificationRequests(withIdentifiers: [Self.dailyMaterialCutoffIdentifier])
+            .removePendingNotificationRequests(withIdentifiers: materialCutOffWeekdayIdentifiers())
+    }
+
+    private func materialReminderWeekdays(includeSaturday: Bool, includeSunday: Bool) -> [Int] {
+        var weekdays: [Int] = [2, 3, 4, 5, 6] // Mon-Fri
+        if includeSaturday { weekdays.append(7) }
+        if includeSunday { weekdays.append(1) }
+        return weekdays
+    }
+
+    private func materialCutOffIdentifier(for weekday: Int) -> String {
+        "\(Self.dailyMaterialCutoffIdentifierPrefix)-\(weekday)"
+    }
+
+    private func materialCutOffWeekdayIdentifiers() -> [String] {
+        (1...7).map(materialCutOffIdentifier(for:))
     }
 
     /// Clears all pending one-shot qualification expiry reminders (3-month and 1-month) before rescheduling.

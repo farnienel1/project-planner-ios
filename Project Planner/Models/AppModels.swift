@@ -489,6 +489,8 @@ struct OrganizationSettings: Codable, Hashable {
     var holidayCalendar: HolidayCalendar
     /// Company-wide defaults for standard day, breaks, and overtime (editable in Organisation settings).
     var payrollTimePolicy: OrgPayrollTimePolicy
+    /// Warning detection horizon and unbooked-labour rules.
+    var warningDetection: OrgWarningDetectionSettings
     
     init(
         allowSelfRegistration: Bool = true,
@@ -496,7 +498,8 @@ struct OrganizationSettings: Codable, Hashable {
         defaultUserRole: UserRole = .basic,
         workingHours: WorkingHours = WorkingHours(),
         holidayCalendar: HolidayCalendar = HolidayCalendar(),
-        payrollTimePolicy: OrgPayrollTimePolicy = .default
+        payrollTimePolicy: OrgPayrollTimePolicy = .default,
+        warningDetection: OrgWarningDetectionSettings = .default
     ) {
         self.allowSelfRegistration = allowSelfRegistration
         self.requireEmailVerification = requireEmailVerification
@@ -504,11 +507,13 @@ struct OrganizationSettings: Codable, Hashable {
         self.workingHours = workingHours
         self.holidayCalendar = holidayCalendar
         self.payrollTimePolicy = payrollTimePolicy
+        self.warningDetection = warningDetection
     }
 
     enum CodingKeys: String, CodingKey {
         case allowSelfRegistration, requireEmailVerification, defaultUserRole, workingHours, holidayCalendar
         case payrollTimePolicy
+        case warningDetection
     }
 
     init(from decoder: Decoder) throws {
@@ -519,6 +524,7 @@ struct OrganizationSettings: Codable, Hashable {
         workingHours = try c.decodeIfPresent(WorkingHours.self, forKey: .workingHours) ?? WorkingHours()
         holidayCalendar = try c.decodeIfPresent(HolidayCalendar.self, forKey: .holidayCalendar) ?? HolidayCalendar()
         payrollTimePolicy = try c.decodeIfPresent(OrgPayrollTimePolicy.self, forKey: .payrollTimePolicy) ?? .default
+        warningDetection = try c.decodeIfPresent(OrgWarningDetectionSettings.self, forKey: .warningDetection) ?? .default
     }
 
     func encode(to encoder: Encoder) throws {
@@ -529,6 +535,7 @@ struct OrganizationSettings: Codable, Hashable {
         try c.encode(workingHours, forKey: .workingHours)
         try c.encode(holidayCalendar, forKey: .holidayCalendar)
         try c.encode(payrollTimePolicy, forKey: .payrollTimePolicy)
+        try c.encode(warningDetection, forKey: .warningDetection)
     }
 }
 
@@ -835,17 +842,53 @@ struct MyScheduleOptions: Codable, Sendable, Hashable {
     var showWorkingFromHome: Bool
     var showSiteSurvey: Bool
     var customItems: [String]
+    var customItemEnabled: [String: Bool]
     
     nonisolated init(
         showOffice: Bool = true,
         showWorkingFromHome: Bool = true,
         showSiteSurvey: Bool = true,
-        customItems: [String] = []
+        customItems: [String] = [],
+        customItemEnabled: [String: Bool] = [:]
     ) {
         self.showOffice = showOffice
         self.showWorkingFromHome = showWorkingFromHome
         self.showSiteSurvey = showSiteSurvey
         self.customItems = customItems
+        if customItemEnabled.isEmpty {
+            self.customItemEnabled = Dictionary(uniqueKeysWithValues: customItems.map { ($0, true) })
+        } else {
+            self.customItemEnabled = customItemEnabled
+        }
+    }
+
+    nonisolated enum CodingKeys: String, CodingKey {
+        case showOffice, showWorkingFromHome, showSiteSurvey, customItems, customItemEnabled
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        showOffice = try container.decodeIfPresent(Bool.self, forKey: .showOffice) ?? true
+        showWorkingFromHome = try container.decodeIfPresent(Bool.self, forKey: .showWorkingFromHome) ?? true
+        showSiteSurvey = try container.decodeIfPresent(Bool.self, forKey: .showSiteSurvey) ?? true
+        customItems = try container.decodeIfPresent([String].self, forKey: .customItems) ?? []
+        let rawMap = try container.decodeIfPresent([String: Bool].self, forKey: .customItemEnabled) ?? [:]
+        if rawMap.isEmpty {
+            customItemEnabled = Dictionary(uniqueKeysWithValues: customItems.map { ($0, true) })
+        } else {
+            // Keep only known custom items and default missing values to true.
+            customItemEnabled = Dictionary(uniqueKeysWithValues: customItems.map { ($0, rawMap[$0] ?? true) })
+        }
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(showOffice, forKey: .showOffice)
+        try container.encode(showWorkingFromHome, forKey: .showWorkingFromHome)
+        try container.encode(showSiteSurvey, forKey: .showSiteSurvey)
+        try container.encode(customItems, forKey: .customItems)
+        let normalized = Dictionary(uniqueKeysWithValues: customItems.map { ($0, customItemEnabled[$0] ?? true) })
+        try container.encode(normalized, forKey: .customItemEnabled)
     }
 }
 
@@ -855,23 +898,36 @@ struct NotificationSettings: Codable, Sendable {
     var operativeAvailability: Bool
     var dailyReports: Bool
     var materialOrderCutOff: Bool
+    var materialCutOffHour: Int
+    var materialCutOffMinute: Int
+    var materialCutOffOnSaturday: Bool
+    var materialCutOffOnSunday: Bool
     
     nonisolated init(
         bookingConflicts: Bool = true,
         projectDeadlines: Bool = true,
         operativeAvailability: Bool = false,
         dailyReports: Bool = false,
-        materialOrderCutOff: Bool = true
+        materialOrderCutOff: Bool = true,
+        materialCutOffHour: Int = 16,
+        materialCutOffMinute: Int = 0,
+        materialCutOffOnSaturday: Bool = false,
+        materialCutOffOnSunday: Bool = false
     ) {
         self.bookingConflicts = bookingConflicts
         self.projectDeadlines = projectDeadlines
         self.operativeAvailability = operativeAvailability
         self.dailyReports = dailyReports
         self.materialOrderCutOff = materialOrderCutOff
+        self.materialCutOffHour = materialCutOffHour
+        self.materialCutOffMinute = materialCutOffMinute
+        self.materialCutOffOnSaturday = materialCutOffOnSaturday
+        self.materialCutOffOnSunday = materialCutOffOnSunday
     }
     
     nonisolated enum CodingKeys: String, CodingKey {
         case bookingConflicts, projectDeadlines, operativeAvailability, dailyReports, materialOrderCutOff
+        case materialCutOffHour, materialCutOffMinute, materialCutOffOnSaturday, materialCutOffOnSunday
     }
     
     nonisolated init(from decoder: Decoder) throws {
@@ -881,6 +937,10 @@ struct NotificationSettings: Codable, Sendable {
         operativeAvailability = try container.decodeIfPresent(Bool.self, forKey: .operativeAvailability) ?? false
         dailyReports = try container.decodeIfPresent(Bool.self, forKey: .dailyReports) ?? false
         materialOrderCutOff = try container.decodeIfPresent(Bool.self, forKey: .materialOrderCutOff) ?? true
+        materialCutOffHour = try container.decodeIfPresent(Int.self, forKey: .materialCutOffHour) ?? 16
+        materialCutOffMinute = try container.decodeIfPresent(Int.self, forKey: .materialCutOffMinute) ?? 0
+        materialCutOffOnSaturday = try container.decodeIfPresent(Bool.self, forKey: .materialCutOffOnSaturday) ?? false
+        materialCutOffOnSunday = try container.decodeIfPresent(Bool.self, forKey: .materialCutOffOnSunday) ?? false
     }
     
     nonisolated func encode(to encoder: Encoder) throws {
@@ -890,6 +950,10 @@ struct NotificationSettings: Codable, Sendable {
         try container.encode(operativeAvailability, forKey: .operativeAvailability)
         try container.encode(dailyReports, forKey: .dailyReports)
         try container.encode(materialOrderCutOff, forKey: .materialOrderCutOff)
+        try container.encode(materialCutOffHour, forKey: .materialCutOffHour)
+        try container.encode(materialCutOffMinute, forKey: .materialCutOffMinute)
+        try container.encode(materialCutOffOnSaturday, forKey: .materialCutOffOnSaturday)
+        try container.encode(materialCutOffOnSunday, forKey: .materialCutOffOnSunday)
     }
 }
 

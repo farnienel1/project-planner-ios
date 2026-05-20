@@ -556,6 +556,7 @@ struct ManagerScheduleContentView: View {
     @State private var selectedDates: Set<Date> = []
     @State private var expandedCustomLocationName: String?
     @State private var customHoursContext: CustomHoursEditorContext?
+    @State private var operativeBookingEditTarget: Booking?
     @State private var secondBookingDialog: SecondBookingDialog?
 
     private var weekDates: [Date] {
@@ -650,6 +651,32 @@ struct ManagerScheduleContentView: View {
                     )
                 },
                 onCancel: { customHoursContext = nil }
+            )
+        }
+        .sheet(item: $operativeBookingEditTarget) { booking in
+            let p = projectStore.projects.first(where: { $0.id == booking.projectId }) ??
+                projectStore.smallWorks.first(where: { $0.id == booking.projectId })
+            let personName = operativeStore.allOperatives.first { $0.id == booking.operativeId }?.name ?? "Booking"
+            OperativeCustomHoursSheet(
+                policy: payrollTimePolicy,
+                title: "Edit booking",
+                subtitle: p.map { "\($0.jobNumber) \($0.siteName)" } ?? "Project booking",
+                headerName: personName,
+                headerInitials: PlannerUIInitials.from(personName),
+                allowsOtMultiplierOverride: true,
+                initialChoice: OperativeDayBookingChoice(from: booking),
+                onSave: { start, end, isBreakRemoved, otMult in
+                    operativeBookingEditTarget = nil
+                    var updated = booking
+                    updated.timeSlot = .customHours
+                    updated.workStartTime = start
+                    updated.workEndTime = end
+                    updated.isBreakRemoved = isBreakRemoved
+                    updated.otMultiplierOverride = otMult
+                    updated.updatedAt = Date()
+                    Task { await bookingStore.updateBooking(updated) }
+                },
+                onCancel: { operativeBookingEditTarget = nil }
             )
         }
         .confirmationDialog(
@@ -1183,7 +1210,9 @@ struct ManagerScheduleContentView: View {
             } else if appSettings.settings.myScheduleOptions.showSiteSurvey {
                 expandedCustomLocationName = nil
                 expandedStandardLocation = .siteSurvey
-            } else if let first = appSettings.settings.myScheduleOptions.customItems.first {
+            } else if let first = appSettings.settings.myScheduleOptions.customItems.first(where: {
+                appSettings.settings.myScheduleOptions.customItemEnabled[$0] ?? true
+            }) {
                 expandedStandardLocation = nil
                 expandedCustomLocationName = first
             } else {
@@ -1291,7 +1320,13 @@ struct ManagerScheduleContentView: View {
                                 title: p.map { "\($0.jobNumber) \($0.siteName)" } ?? "Project booking",
                                 subtitle: operativeBookingClockSubtitle(b, day: day, policy: policy),
                                 otChip: operativeBookingOtChipText(b, policy: policy),
-                                showActions: false
+                                showActions: true,
+                                onEdit: {
+                                    operativeBookingEditTarget = b
+                                },
+                                onDelete: {
+                                    Task { await bookingStore.deleteBooking(b) }
+                                }
                             )
                         }
                     } header: {
@@ -1333,7 +1368,7 @@ struct ManagerScheduleContentView: View {
                                 day: day
                             )
                         }
-                        ForEach(appSettings.settings.myScheduleOptions.customItems, id: \.self) { customItem in
+                        ForEach(appSettings.settings.myScheduleOptions.customItems.filter { appSettings.settings.myScheduleOptions.customItemEnabled[$0] ?? true }, id: \.self) { customItem in
                             standardLocationRow(
                                 title: customItem,
                                 type: .custom,

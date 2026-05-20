@@ -20,7 +20,8 @@ service cloud.firestore {
 
   function materialManagerLikeUser(userData) {
     return adminLikeUser(userData) ||
-           ('manager' in userData && truthyBool(userData.manager));
+           ('manager' in userData && truthyBool(userData.manager)) ||
+           ('role' in userData && userData.role == 'manager');
   }
   
   // True if users/{auth.uid}.organizationId matches this org (string case-insensitive, DocumentReference exact path,
@@ -456,6 +457,11 @@ service cloud.firestore {
           canUpdateOwnMaterial(organizationId) ||
           isOnlyClaimingLegacyOwnMaterial(organizationId);
         allow delete: if isOrganizationMaterialManager(organizationId) || canDeleteOwnMaterial(organizationId);
+      }
+
+      match /materialCatalogue/{catalogueItemId} {
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update, delete: if isOrganizationMaterialManager(organizationId);
       }
       
       match /managerSiteBookings/{bookingId} {
