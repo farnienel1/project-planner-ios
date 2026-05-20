@@ -16,10 +16,14 @@ struct WarningsDetailView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var notificationService: NotificationService
 
     @State private var filterChip: WarningsFilterChip = .all
     @State private var openDayDate: Date?
+    @State private var openBookLabourDate: Date?
     @State private var openProjectId: UUID?
+    @State private var warningPendingDismiss: Warning?
+    @State private var showingWarningsSettings = false
 
     var body: some View {
         NavigationStack {
@@ -37,8 +41,42 @@ struct WarningsDetailView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") { dismiss() }
                 }
+                if userStore.hasAdminAccess() {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button {
+                            showingWarningsSettings = true
+                        } label: {
+                            Image(systemName: "gearshape")
+                                .font(.system(size: 17, weight: .medium))
+                        }
+                        .accessibilityLabel("Warning settings")
+                    }
+                }
+            }
+            .navigationDestination(isPresented: $showingWarningsSettings) {
+                OrganisationWarningsSettingsView(
+                    exitsToHomeOnBack: true,
+                    onExitToHome: {
+                        showingWarningsSettings = false
+                        dismiss()
+                    },
+                    onSaved: {
+                        showingWarningsSettings = false
+                    }
+                )
+                .environmentObject(firebaseBackend)
+                .environmentObject(operativeStore)
+                .environmentObject(bookingStore)
+                .environmentObject(projectStore)
+                .environmentObject(userStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(holidayStore)
+                .environmentObject(appSettings)
             }
             .appChromeNavigationBarSurface()
+            .task {
+                await refreshWarningsAsync()
+            }
             .sheet(item: $openDayDate) { day in
                 NavigationStack {
                     DailyOverviewView(displayDate: day)
@@ -50,6 +88,35 @@ struct WarningsDetailView: View {
                         .environmentObject(firebaseBackend)
                         .environmentObject(appSettings)
                 }
+            }
+            .fullScreenCover(item: $openBookLabourDate) { day in
+                BookLabourFlowView(bookDate: day)
+                    .environmentObject(appSettings)
+                    .environmentObject(bookingStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(userStore)
+                    .environmentObject(holidayStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(notificationService)
+            }
+            .alert(
+                "Remove this warning?",
+                isPresented: Binding(
+                    get: { warningPendingDismiss != nil },
+                    set: { if !$0 { warningPendingDismiss = nil } }
+                ),
+                presenting: warningPendingDismiss
+            ) { warning in
+                Button("Cancel", role: .cancel) {
+                    warningPendingDismiss = nil
+                }
+                Button("Remove warning", role: .destructive) {
+                    confirmRemoveWarning(warning)
+                }
+            } message: { warning in
+                Text("Are you sure you want to remove this warning? It will be hidden from the list and other admins will be notified. You may still need to resolve the issue manually.\n\n\(warning.removalNotificationDetail)")
             }
         }
     }
@@ -94,8 +161,8 @@ struct WarningsDetailView: View {
         return [
             .all: all.count,
             .clashes: all.filter { $0.type == .operativeBookingClash || $0.type == .managerLocationClash }.count,
-            .materials: all.filter { $0.type == .materialsCutoff }.count,
-            .expiring: all.filter { $0.type == .qualificationExpiry || $0.type == .operativeNotVerified }.count
+            .unbooked: all.filter { $0.type == .unbookedLabour }.count,
+            .materials: all.filter { $0.type == .materialsCutoff }.count
         ]
     }
 
@@ -105,10 +172,10 @@ struct WarningsDetailView: View {
         case .all: return sorted
         case .clashes:
             return sorted.filter { $0.type == .operativeBookingClash || $0.type == .managerLocationClash }
+        case .unbooked:
+            return sorted.filter { $0.type == .unbookedLabour }
         case .materials:
             return sorted.filter { $0.type == .materialsCutoff }
-        case .expiring:
-            return sorted.filter { $0.type == .qualificationExpiry || $0.type == .operativeNotVerified }
         }
     }
 
@@ -120,7 +187,8 @@ struct WarningsDetailView: View {
                 warning: warning,
                 onRemoveA: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingAId) },
                 onRemoveB: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingBId) },
-                onOpenDay: { openDayDate = warning.occurrenceDate }
+                onOpenDay: { openDayDate = warning.occurrenceDate },
+                onRemoveWarning: { requestRemoveWarning(warning) }
             )
         case .managerLocationClash:
             ManagerClashWarningCard(
@@ -128,7 +196,8 @@ struct WarningsDetailView: View {
                 onRemoveA: { removeManagerBooking(warning, entry: warning.managerClash?.entryA) },
                 onRemoveB: { removeManagerBooking(warning, entry: warning.managerClash?.entryB) },
                 onApprove: { warningsService.approveWarning(warning) },
-                onOpenDay: { openDayDate = warning.occurrenceDate }
+                onOpenDay: { openDayDate = warning.occurrenceDate },
+                onRemoveWarning: { requestRemoveWarning(warning) }
             )
         case .unbookedLabour:
             unbookedCard(warning)
@@ -162,6 +231,18 @@ struct WarningsDetailView: View {
                     .padding(.vertical, 9)
             }
             .buttonStyle(.bordered)
+            if userStore.hasAdminAccess(), let warningDay = warning.occurrenceDate {
+                Button {
+                    openBookLabourDate = warningDay
+                } label: {
+                    Text("Book labour")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            WarningRemoveButton { requestRemoveWarning(warning) }
         }
         .padding(16)
         .background(Color.white)
@@ -185,6 +266,7 @@ struct WarningsDetailView: View {
             Text("Managers should confirm material lists with site teams.")
                 .font(.system(size: 11))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
+            WarningRemoveButton { requestRemoveWarning(warning) }
         }
         .padding(16)
         .background(Color.white)
@@ -201,11 +283,27 @@ struct WarningsDetailView: View {
             Text(warning.message)
                 .font(.system(size: 12))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
+            WarningRemoveButton { requestRemoveWarning(warning) }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func requestRemoveWarning(_ warning: Warning) {
+        warningPendingDismiss = warning
+    }
+
+    private func confirmRemoveWarning(_ warning: Warning) {
+        warningPendingDismiss = nil
+        let removedBy = userStore.currentUser?.fullName
+            ?? userStore.currentUser?.email
+            ?? "An admin"
+        warningsService.dismissWarning(warning)
+        Task {
+            await notificationService.notifyWarningRemoved(warning: warning, removedBy: removedBy)
+        }
     }
 
     private func removeOperativeBooking(_ warning: Warning, bookingId: UUID?) {
@@ -218,42 +316,37 @@ struct WarningsDetailView: View {
     }
 
     private func removeManagerBooking(_ warning: Warning, entry: Warning.ClashTimelineEntry?) {
-        guard let entry,
-              let mgrId = entry.managerBookingId,
-              let booking = managerScheduleStore.managerSiteBookings.first(where: { $0.id == mgrId }) else { return }
-        Task {
-            await managerScheduleStore.deleteBooking(booking)
-            refreshWarnings()
+        guard let entry else { return }
+        if let mgrId = entry.managerBookingId,
+           let booking = managerScheduleStore.managerSiteBookings.first(where: { $0.id == mgrId }) {
+            Task {
+                await managerScheduleStore.deleteBooking(booking)
+                refreshWarnings()
+            }
+            return
+        }
+        if let opBooking = bookingStore.bookings.first(where: { $0.id == entry.bookingId }) {
+            Task {
+                await bookingStore.deleteBooking(opBooking)
+                refreshWarnings()
+            }
         }
     }
 
     private func refreshWarnings() {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
-        let tomorrowIds = Set(
-            bookingStore.bookings
-                .filter {
-                    cal.isDate($0.date, inSameDayAs: tomorrow) &&
-                        ($0.status == .confirmed || $0.status == .tentative)
-                }
-                .map(\.projectId)
-        )
-        let allProjects = projectStore.projects
-        let projectsTomorrow = allProjects.filter { tomorrowIds.contains($0.id) }
-        warningsService.updateWarnings(
-            operatives: operativeStore.allOperatives,
-            bookings: bookingStore.bookings,
-            projects: allProjects,
-            managers: operativeStore.allManagers,
-            users: userStore.organizationUsers,
-            managerSiteBookings: managerScheduleStore.managerSiteBookings,
-            holidayBookings: holidayStore.bookings,
-            payrollTimePolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
-            labourCoverageStart: cal.date(byAdding: .day, value: -14, to: today),
-            labourCoverageEnd: cal.date(byAdding: .day, value: 28, to: today),
-            materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
-            projectsWithTomorrowBookings: projectsTomorrow
+        Task { await refreshWarningsAsync() }
+    }
+
+    private func refreshWarningsAsync() async {
+        await WarningsRefreshHelper.refreshSharedWarnings(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings
         )
     }
 }
@@ -271,4 +364,5 @@ extension Date: @retroactive Identifiable {
         .environmentObject(ManagerScheduleStore())
         .environmentObject(FirebaseBackend())
         .environmentObject(AppSettingsStore())
+        .environmentObject(NotificationService())
 }

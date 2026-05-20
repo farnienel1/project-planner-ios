@@ -280,108 +280,162 @@ fileprivate struct MyScheduleDayNavigatorCard: View {
 fileprivate struct MyScheduleTodaysHoursCard: View {
     let policy: OrgPayrollTimePolicy
     let segments: DayHoursSegmentTotals
+    var annualLeaveLabel: String? = nil
 
+    @ViewBuilder
     var body: some View {
-        let ttl = max(0.01, segments.early + segments.mid + segments.late)
-        let eF = CGFloat(segments.early / ttl)
-        let mF = CGFloat(segments.mid / ttl)
-        let lF = CGFloat(segments.late / ttl)
-        let ot = segments.otReported
-        let paidSum = segments.totalPaidHours
-        let paidStd = policy.standardPaidHours
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Today's hours")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                    Text("Standard \(policy.standardDayStart)–\(policy.standardDayEnd) · \(ScheduleCoverageFormat.hours(paidStd)) hrs")
-                        .font(.system(size: 11))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                }
-                Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(ScheduleCoverageFormat.hours(paidSum))
-                            .font(.system(size: 18, weight: .medium))
+        if let annualLeaveLabel, !annualLeaveLabel.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Today's hours")
+                            .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.ink)
-                        Text("hrs")
+                        Text("Standard \(policy.standardDayStart)–\(policy.standardDayEnd)")
                             .font(.system(size: 11))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                     }
-                    if ot > 0.05 {
-                        Text("+\(ScheduleCoverageFormat.hours(ot)) overtime")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color(red: 0.522, green: 0.310, blue: 0.043))
+                    Spacer(minLength: 8)
+                    Text("Annual Leave")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.62, green: 0.24, blue: 0.11))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color(red: 0.98, green: 0.933, blue: 0.855))
+                        .clipShape(Capsule())
+                }
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color(red: 0.60, green: 0.24, blue: 0.11), Color(red: 0.78, green: 0.40, blue: 0.27)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(height: 28)
+                    .overlay(alignment: .center) {
+                        Text(annualLeaveLabel)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+                HStack {
+                    ForEach(["6:00", "9:00", "12:00", "15:00", "18:00"], id: \.self) { t in
+                        Text(t)
+                            .font(.system(size: 9))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .frame(maxWidth: .infinity)
                     }
                 }
             }
-            GeometryReader { geo in
-                let w = geo.size.width
-                let h = geo.size.height
-                let hatchEarly = Color(red: 0.902, green: 0.945, blue: 0.984)
-                let hatchLate = Color(red: 0.98, green: 0.933, blue: 0.855)
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
-                    if eF > 0.02 {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(hatchEarly)
-                            .frame(width: max(6, w * eF), height: h)
+            .padding(14)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+            )
+        } else {
+            let ttl = max(0.01, segments.early + segments.mid + segments.late)
+            let eF = CGFloat(segments.early / ttl)
+            let mF = CGFloat(segments.mid / ttl)
+            let lF = CGFloat(segments.late / ttl)
+            let ot = segments.otReported
+            let paidSum = segments.totalPaidHours
+            let paidStd = policy.standardPaidHours
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Today's hours")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                        Text("Standard \(policy.standardDayStart)–\(policy.standardDayEnd) · \(ScheduleCoverageFormat.hours(paidStd)) hrs")
+                            .font(.system(size: 11))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
                     }
-                    if mF > 0.02 {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .frame(width: max(8, w * mF), height: h)
-                            .offset(x: w * eF)
-                            .overlay(alignment: .leading) {
-                                if w * mF > 72 {
-                                    Text("\(ScheduleCoverageFormat.hours(segments.mid)) hrs standard")
-                                        .font(.system(size: 10, weight: .medium))
-                                        .foregroundStyle(.white)
-                                        .padding(.leading, 8)
-                                }
-                            }
-                    }
-                    if lF > 0.02 {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(hatchLate)
-                            .frame(width: max(6, w * lF), height: h)
-                            .offset(x: w * (eF + mF))
-                        if lF * w > 40 {
-                            Text(multCaption)
+                    Spacer(minLength: 8)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text(ScheduleCoverageFormat.hours(paidSum))
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                            Text("hrs")
+                                .font(.system(size: 11))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                        }
+                        if ot > 0.05 {
+                            Text("+\(ScheduleCoverageFormat.hours(ot)) overtime")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(Color(red: 0.522, green: 0.310, blue: 0.043))
-                                .frame(width: w * lF, alignment: .trailing)
-                                .offset(x: w * (eF + mF))
                         }
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            }
-            .frame(height: 28)
-            HStack {
-                ForEach(["6:00", "9:00", "12:00", "15:00", "18:00"], id: \.self) { t in
-                    Text(t)
-                        .font(.system(size: 9))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                        .frame(maxWidth: .infinity)
+                GeometryReader { geo in
+                    let w = geo.size.width
+                    let h = geo.size.height
+                    let hatchEarly = Color(red: 0.902, green: 0.945, blue: 0.984)
+                    let hatchLate = Color(red: 0.98, green: 0.933, blue: 0.855)
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
+                        if eF > 0.02 {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(hatchEarly)
+                                .frame(width: max(6, w * eF), height: h)
+                        }
+                        if mF > 0.02 {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                                .frame(width: max(8, w * mF), height: h)
+                                .offset(x: w * eF)
+                                .overlay(alignment: .leading) {
+                                    if w * mF > 72 {
+                                        Text("\(ScheduleCoverageFormat.hours(segments.mid)) hrs standard")
+                                            .font(.system(size: 10, weight: .medium))
+                                            .foregroundStyle(.white)
+                                            .padding(.leading, 8)
+                                    }
+                                }
+                        }
+                        if lF > 0.02 {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(hatchLate)
+                                .frame(width: max(6, w * lF), height: h)
+                                .offset(x: w * (eF + mF))
+                            if lF * w > 40 {
+                                Text(multCaption)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(Color(red: 0.522, green: 0.310, blue: 0.043))
+                                    .frame(width: w * lF, alignment: .trailing)
+                                    .offset(x: w * (eF + mF))
+                            }
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .frame(height: 28)
+                HStack {
+                    ForEach(["6:00", "9:00", "12:00", "15:00", "18:00"], id: \.self) { t in
+                        Text(t)
+                            .font(.system(size: 9))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .frame(maxWidth: .infinity)
+                    }
                 }
             }
+            .padding(14)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+            )
         }
-        .padding(14)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
     }
 
     private var multCaption: String {
@@ -544,6 +598,7 @@ struct ManagerScheduleContentView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject var notificationService: NotificationService
 
     private let calendar = Calendar.current
     @State private var weekStart: Date = Date()
@@ -558,6 +613,22 @@ struct ManagerScheduleContentView: View {
     @State private var customHoursContext: CustomHoursEditorContext?
     @State private var operativeBookingEditTarget: Booking?
     @State private var secondBookingDialog: SecondBookingDialog?
+    @State private var isBookYourselfExpanded = false
+    @State private var isProjectsExpanded = false
+    @State private var isSmallWorksExpanded = false
+    @State private var searchText = ""
+    @State private var expandedSearchItemId: String?
+    @State private var showAddBookingSheet = false
+    @State private var addToCalendarMessage: String?
+    @State private var showingAnnualLeavePage = false
+
+    private struct LocationSearchItem: Identifiable {
+        let id: String
+        let title: String
+        let locationType: ManagerLocationType
+        let locationId: UUID?
+        let customLocationName: String?
+    }
 
     private var weekDates: [Date] {
         guard let start = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: weekStart)) else { return [] }
@@ -572,16 +643,102 @@ struct ManagerScheduleContentView: View {
         projectStore.projects.filter { $0.isLive && $0.jobType == .smallWorks }
     }
 
-    private var payrollTimePolicy: OrgPayrollTimePolicy {
-        firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+    private var myManagerId: UUID? {
+        guard let email = userStore.currentUser?.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        return operativeStore.allManagers.first {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+        }?.id
     }
 
-    /// Standard day button requires a parseable org window.
-    private var canBookStandardDayWindow: Bool {
-        let p = payrollTimePolicy
-        guard let s = ManagerScheduleInterval.parseMinutes(p.standardDayStart),
-              let e = ManagerScheduleInterval.parseMinutes(p.standardDayEnd) else { return false }
-        return e > s
+    private var myManagedProjects: [Project] {
+        guard let managerId = myManagerId else { return [] }
+        return liveProjects
+            .filter { $0.managerId == managerId }
+            .sorted { lhs, rhs in
+                if lhs.jobNumber != rhs.jobNumber { return lhs.jobNumber < rhs.jobNumber }
+                return lhs.siteName.localizedCaseInsensitiveCompare(rhs.siteName) == .orderedAscending
+            }
+    }
+
+    private var myManagedSmallWorks: [Project] {
+        guard let managerId = myManagerId else { return [] }
+        return liveSmallWorks
+            .filter { $0.managerId == managerId }
+            .sorted { lhs, rhs in
+                if lhs.jobNumber != rhs.jobNumber { return lhs.jobNumber < rhs.jobNumber }
+                return lhs.siteName.localizedCaseInsensitiveCompare(rhs.siteName) == .orderedAscending
+            }
+    }
+
+    private var searchableLocationItems: [LocationSearchItem] {
+        var out: [LocationSearchItem] = []
+        if appSettings.settings.myScheduleOptions.showOffice {
+            out.append(LocationSearchItem(
+                id: "std:office",
+                title: "Office",
+                locationType: .office,
+                locationId: nil,
+                customLocationName: nil
+            ))
+        }
+        if appSettings.settings.myScheduleOptions.showWorkingFromHome {
+            out.append(LocationSearchItem(
+                id: "std:wfh",
+                title: "Working From Home",
+                locationType: .workingFromHome,
+                locationId: nil,
+                customLocationName: nil
+            ))
+        }
+        if appSettings.settings.myScheduleOptions.showSiteSurvey {
+            out.append(LocationSearchItem(
+                id: "std:survey",
+                title: "Site Survey",
+                locationType: .siteSurvey,
+                locationId: nil,
+                customLocationName: nil
+            ))
+        }
+        for customItem in appSettings.settings.myScheduleOptions.customItems where (appSettings.settings.myScheduleOptions.customItemEnabled[customItem] ?? true) {
+            out.append(LocationSearchItem(
+                id: "custom:\(customItem.lowercased())",
+                title: customItem,
+                locationType: .custom,
+                locationId: nil,
+                customLocationName: customItem
+            ))
+        }
+        for p in liveProjects {
+            out.append(LocationSearchItem(
+                id: "project:\(p.id.uuidString)",
+                title: "\(p.jobNumber) \(p.siteName)",
+                locationType: .project,
+                locationId: p.id,
+                customLocationName: nil
+            ))
+        }
+        for p in liveSmallWorks {
+            out.append(LocationSearchItem(
+                id: "small:\(p.id.uuidString)",
+                title: "\(p.jobNumber) \(p.siteName)",
+                locationType: .smallWork,
+                locationId: p.id,
+                customLocationName: nil
+            ))
+        }
+        return out
+    }
+
+    private var filteredSearchItems: [LocationSearchItem] {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return [] }
+        return searchableLocationItems.filter {
+            $0.title.localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    private var payrollTimePolicy: OrgPayrollTimePolicy {
+        firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
     }
 
     /// Some admins/managers also have an operative profile and can be booked onto projects/small works.
@@ -606,6 +763,18 @@ struct ManagerScheduleContentView: View {
                 return targetDay >= start && targetDay <= end
             }
             .sorted { $0.startDate < $1.startDate }
+    }
+
+    private func annualLeaveDisplayLabel(on day: Date) -> String? {
+        guard let holiday = myHolidayBookings(on: day).first else { return nil }
+        switch holiday.timeSlot {
+        case .fullDay:
+            return "Annual Leave - Full Day"
+        case .morning:
+            return "Annual Leave - AM"
+        case .afternoon:
+            return "Annual Leave - PM"
+        }
     }
 
     var body: some View {
@@ -653,6 +822,41 @@ struct ManagerScheduleContentView: View {
                 onCancel: { customHoursContext = nil }
             )
         }
+        .sheet(isPresented: $showAddBookingSheet) {
+            ManagerSelfBookingLocationPickerSheet(
+                day: selectedDate ?? Date(),
+                policy: payrollTimePolicy,
+                companyCustomLocations: appSettings.settings.myScheduleOptions.customItems.filter {
+                    appSettings.settings.myScheduleOptions.customItemEnabled[$0] ?? true
+                },
+                showOffice: appSettings.settings.myScheduleOptions.showOffice,
+                showWorkingFromHome: appSettings.settings.myScheduleOptions.showWorkingFromHome,
+                showSiteSurvey: appSettings.settings.myScheduleOptions.showSiteSurvey,
+                projects: liveProjects,
+                smallWorks: liveSmallWorks,
+                myManagedProjects: myManagedProjects,
+                myManagedSmallWorks: myManagedSmallWorks,
+                onBook: { locationType, locationId, customName, slot, customStart, customEnd in
+                    showAddBookingSheet = false
+                    let daysToBook: [Date] = {
+                        if isMultiDaySelectionEnabled, !selectedDates.isEmpty {
+                            return selectedDates.map { calendar.startOfDay(for: $0) }.sorted()
+                        }
+                        return [calendar.startOfDay(for: selectedDate ?? Date())]
+                    }()
+                    runBookingFlow(
+                        days: daysToBook,
+                        timeSlot: slot,
+                        workStart: customStart,
+                        workEnd: customEnd,
+                        breakRemoved: false,
+                        locationType: locationType,
+                        locationId: locationId,
+                        customLocationName: customName
+                    )
+                }
+            )
+        }
         .sheet(item: $operativeBookingEditTarget) { booking in
             let p = projectStore.projects.first(where: { $0.id == booking.projectId }) ??
                 projectStore.smallWorks.first(where: { $0.id == booking.projectId })
@@ -679,6 +883,15 @@ struct ManagerScheduleContentView: View {
                 onCancel: { operativeBookingEditTarget = nil }
             )
         }
+        .sheet(isPresented: $showingAnnualLeavePage) {
+            HolidayView(presentedAsSheet: true)
+                .environmentObject(holidayStore)
+                .environmentObject(userStore)
+                .environmentObject(operativeStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
+                .environmentObject(appSettings)
+        }
         .confirmationDialog(
             secondBookingDialog?.title ?? "",
             isPresented: Binding(
@@ -699,6 +912,11 @@ struct ManagerScheduleContentView: View {
             if let m = secondBookingDialog?.message {
                 Text(m)
             }
+        }
+        .alert("Calendar", isPresented: .constant(addToCalendarMessage != nil)) {
+            Button("OK") { addToCalendarMessage = nil }
+        } message: {
+            if let msg = addToCalendarMessage { Text(msg) }
         }
     }
 
@@ -721,7 +939,13 @@ struct ManagerScheduleContentView: View {
 
     private func holidayOverlapLines(on day: Date) -> [String] {
         myHolidayBookings(on: day).map { holiday in
-            holiday.status == .pending ? "Pending annual leave" : "Annual leave"
+            let slotLabel: String
+            switch holiday.timeSlot {
+            case .fullDay: slotLabel = "Full Day"
+            case .morning: slotLabel = "AM"
+            case .afternoon: slotLabel = "PM"
+            }
+            return holiday.status == .pending ? "Pending annual leave - \(slotLabel)" : "Annual leave - \(slotLabel)"
         }
     }
 
@@ -1198,36 +1422,10 @@ struct ManagerScheduleContentView: View {
         return f.string(from: date)
     }
 
-    private func expandBookYourselfForAddBooking() {
-        withAnimation(.easeInOut(duration: 0.2)) {
-            expandedLocationId = nil
-            if appSettings.settings.myScheduleOptions.showOffice {
-                expandedCustomLocationName = nil
-                expandedStandardLocation = .office
-            } else if appSettings.settings.myScheduleOptions.showWorkingFromHome {
-                expandedCustomLocationName = nil
-                expandedStandardLocation = .workingFromHome
-            } else if appSettings.settings.myScheduleOptions.showSiteSurvey {
-                expandedCustomLocationName = nil
-                expandedStandardLocation = .siteSurvey
-            } else if let first = appSettings.settings.myScheduleOptions.customItems.first(where: {
-                appSettings.settings.myScheduleOptions.customItemEnabled[$0] ?? true
-            }) {
-                expandedStandardLocation = nil
-                expandedCustomLocationName = first
-            } else {
-                expandedCustomLocationName = nil
-                expandedStandardLocation = .office
-            }
-        }
-    }
-
-    private func dashedAddBookingButton(scrollToBookYourself: @escaping () -> Void) -> some View {
+    private func dashedAddBookingButton() -> some View {
+    private func dashedAddBookingButton() -> some View {
         Button {
-            expandBookYourselfForAddBooking()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                scrollToBookYourself()
-            }
+            showAddBookingSheet = true
         } label: {
             Text("+ Add booking")
                 .font(.system(size: 14, weight: .semibold))
@@ -1250,12 +1448,9 @@ struct ManagerScheduleContentView: View {
         let bookings = managerScheduleStore.myBookings(on: day)
         let operativeBookings = myOperativeBookings(on: day)
         let holidayBookings = myHolidayBookings(on: day)
-        let isExpandedOffice = expandedStandardLocation == .office
-        let isExpandedWorkingFromHome = expandedStandardLocation == .workingFromHome
-        let isExpandedSiteSurvey = expandedStandardLocation == .siteSurvey
-        return ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+        let annualLeaveLabel = annualLeaveDisplayLabel(on: day)
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
                     MyScheduleDayNavigatorCard(
                         day: day,
                         onPrev: { shiftSelectedDay(by: -1) },
@@ -1263,25 +1458,34 @@ struct ManagerScheduleContentView: View {
                     )
                     MyScheduleTodaysHoursCard(
                         policy: policy,
-                        segments: mergedDaySegments(manager: bookings, operative: operativeBookings, policy: policy)
+                        segments: mergedDaySegments(manager: bookings, operative: operativeBookings, policy: policy),
+                        annualLeaveLabel: annualLeaveLabel
                     )
 
                 if !holidayBookings.isEmpty {
                     Section {
                         ForEach(holidayBookings) { holiday in
-                            HStack {
-                                Label("Holiday", systemImage: "sun.max.fill")
-                                    .font(.subheadline)
-                                    .foregroundColor(.orange)
-                                Spacer()
-                                Text(holiday.status == .pending ? "Pending" : "Approved")
-                                    .font(.caption)
-                                    .foregroundColor(holiday.status == .pending ? .orange : .green)
+                            Button {
+                                showingAnnualLeavePage = true
+                            } label: {
+                                HStack {
+                                    Label("Annual Leave", systemImage: "sun.max.fill")
+                                        .font(.subheadline)
+                                        .foregroundColor(.orange)
+                                    Spacer()
+                                    Text(holiday.timeSlot == .fullDay ? "Full Day" : holiday.timeSlot.rawValue)
+                                        .font(.caption)
+                                        .foregroundColor(.orange)
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(.orange.opacity(0.8))
+                                }
+                                .padding(.vertical, 4)
                             }
-                            .padding(.vertical, 4)
+                            .buttonStyle(.plain)
                         }
                     } header: {
-                        Text("Your holiday")
+                        Text("Annual leave")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(ProjectWorksRevampColors.ink)
                     }
@@ -1298,9 +1502,7 @@ struct ManagerScheduleContentView: View {
                             bookingRow(b: b)
                         }
                     }
-                    dashedAddBookingButton {
-                        proxy.scrollTo("book-yourself-anchor", anchor: .top)
-                    }
+                    dashedAddBookingButton()
                     .padding(.top, 4)
                 } header: {
                     Text("Bookings")
@@ -1338,100 +1540,15 @@ struct ManagerScheduleContentView: View {
                     }
                 }
 
-                Section {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Book yourself in")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                            .id("book-yourself-anchor")
-                        if appSettings.settings.myScheduleOptions.showOffice {
-                            standardLocationRow(
-                                title: "Office",
-                                type: .office,
-                                isExpanded: isExpandedOffice,
-                                day: day
-                            )
-                        }
-                        if appSettings.settings.myScheduleOptions.showWorkingFromHome {
-                            standardLocationRow(
-                                title: "Working From Home",
-                                type: .workingFromHome,
-                                isExpanded: isExpandedWorkingFromHome,
-                                day: day
-                            )
-                        }
-                        if appSettings.settings.myScheduleOptions.showSiteSurvey {
-                            standardLocationRow(
-                                title: "Site Survey",
-                                type: .siteSurvey,
-                                isExpanded: isExpandedSiteSurvey,
-                                day: day
-                            )
-                        }
-                        ForEach(appSettings.settings.myScheduleOptions.customItems.filter { appSettings.settings.myScheduleOptions.customItemEnabled[$0] ?? true }, id: \.self) { customItem in
-                            standardLocationRow(
-                                title: customItem,
-                                type: .custom,
-                                customName: customItem,
-                                isExpanded: expandedCustomLocationName == customItem,
-                                day: day
-                            )
-                        }
-
-                        Text("Projects")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                            .padding(.top, 8)
-                        ForEach(liveProjects, id: \.id) { p in
-                            expandableLocationRow(
-                                title: "\(p.jobNumber) \(p.siteName)",
-                                isExpanded: expandedLocationId == p.id && expandedStandardLocation == nil
-                            ) {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    expandedStandardLocation = nil
-                                    expandedCustomLocationName = nil
-                                    if expandedLocationId == p.id {
-                                        expandedLocationId = nil
-                                    } else {
-                                        expandedLocationId = p.id
-                                    }
-                                }
-                            }
-                            if expandedLocationId == p.id, expandedStandardLocation == nil {
-                                slotButtons(day: day, locationType: .project, locationId: p.id)
-                            }
-                        }
-
-                        Text("Small Works")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                            .padding(.top, 8)
-                        ForEach(liveSmallWorks, id: \.id) { p in
-                            expandableLocationRow(
-                                title: "\(p.jobNumber) \(p.siteName)",
-                                isExpanded: expandedLocationId == p.id && expandedStandardLocation == nil
-                            ) {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    expandedStandardLocation = nil
-                                    expandedCustomLocationName = nil
-                                    if expandedLocationId == p.id {
-                                        expandedLocationId = nil
-                                    } else {
-                                        expandedLocationId = p.id
-                                    }
-                                }
-                            }
-                            if expandedLocationId == p.id, expandedStandardLocation == nil {
-                                slotButtons(day: day, locationType: .smallWork, locationId: p.id)
-                            }
-                        }
-                    }
-                }
-                }
-                .padding()
+                Text("Tap + Add booking to choose company locations, projects, or small works.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .padding(.horizontal, 2)
+                addManagerWeekToCalendarButton
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func bookingRow(b: ManagerSiteBooking) -> some View {
@@ -1533,7 +1650,6 @@ struct ManagerScheduleContentView: View {
             }
             return [calendar.startOfDay(for: day)]
         }()
-        let p = payrollTimePolicy
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 14) {
                 ForEach([ManagerTimeSlot.fullDay, ManagerTimeSlot.morning, ManagerTimeSlot.afternoon], id: \.self) { slot in
@@ -1558,26 +1674,6 @@ struct ManagerScheduleContentView: View {
                 }
             }
             HStack(spacing: 14) {
-                Button("Standard day") {
-                    runBookingFlow(
-                        days: daysToBook,
-                        timeSlot: .customHours,
-                        workStart: p.standardDayStart,
-                        workEnd: p.standardDayEnd,
-                        breakRemoved: false,
-                        locationType: locationType,
-                        locationId: locationId,
-                        customLocationName: customLocationName
-                    )
-                }
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(ProjectWorksRevampColors.activeGreen.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .disabled(!canBookStandardDayWindow)
-
                 Button("Custom…") {
                     customHoursContext = CustomHoursEditorContext(
                         days: daysToBook,
@@ -1592,6 +1688,7 @@ struct ManagerScheduleContentView: View {
                 .padding(.vertical, 12)
                 .background(ProjectWorksRevampColors.upcomingAmber.opacity(0.14))
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                Spacer(minLength: 0)
             }
         }
         .padding(.leading, 14)
@@ -1623,6 +1720,623 @@ struct ManagerScheduleContentView: View {
         Task {
             await managerScheduleStore.saveBooking(b)
         }
+    }
+
+    private var myManagerBookingsThisWeek: [ManagerSiteBooking] {
+        guard let uid = firebaseBackend.currentUser?.uid else { return [] }
+        return managerScheduleStore.managerSiteBookings.filter { booking in
+            booking.userId == uid &&
+            weekDates.contains { calendar.isDate(booking.date, inSameDayAs: $0) }
+        }
+    }
+
+    private var myOperativeBookingsThisWeek: [Booking] {
+        weekDates.flatMap { myOperativeBookings(on: $0) }
+    }
+
+    private var addManagerWeekToCalendarButton: some View {
+        Button(action: addCurrentWeekToCalendar) {
+            Label("Add this week to Calendar", systemImage: "calendar.badge.plus")
+                .font(.system(size: 15, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(ProjectWorksRevampColors.blue)
+        .padding(.top, 4)
+    }
+
+    private func addCurrentWeekToCalendar() {
+        let eventStore = EKEventStore()
+        let status = EKEventStore.authorizationStatus(for: .event)
+        if status == .denied || status == .restricted {
+            addToCalendarMessage = "Calendar access is off for Project Planner on this iPhone. Turn it on in iOS Settings > Privacy & Security > Calendars."
+            return
+        }
+        if status == .notDetermined {
+            if #available(iOS 17.0, *) {
+                Task {
+                    let granted = (try? await eventStore.requestWriteOnlyAccessToEvents()) ?? false
+                    await MainActor.run {
+                        if granted {
+                            performAddToCalendar(eventStore: eventStore)
+                        } else {
+                            addToCalendarMessage = "Calendar access is needed to add events."
+                        }
+                    }
+                }
+            } else {
+                eventStore.requestAccess(to: .event) { granted, _ in
+                    DispatchQueue.main.async {
+                        if granted {
+                            performAddToCalendar(eventStore: eventStore)
+                        } else {
+                            addToCalendarMessage = "Calendar access is needed to add events."
+                        }
+                    }
+                }
+            }
+            return
+        }
+        performAddToCalendar(eventStore: eventStore)
+    }
+
+    private func performAddToCalendar(eventStore: EKEventStore) {
+        var added = 0
+        for b in myManagerBookingsThisWeek {
+            let event = EKEvent(eventStore: eventStore)
+            event.title = "\(locationNameString(for: b)) – \(b.scheduleLabel(policy: payrollTimePolicy))"
+            let block = b.calendarBlock(on: b.date, policy: payrollTimePolicy)
+            event.startDate = block.start
+            event.endDate = block.end
+            event.calendar = eventStore.defaultCalendarForNewEvents
+            do {
+                try eventStore.save(event, span: .thisEvent)
+                added += 1
+            } catch {
+                addToCalendarMessage = "Could not add some events: \(error.localizedDescription)"
+                return
+            }
+        }
+        for b in myOperativeBookingsThisWeek {
+            guard let project = projectStore.projects.first(where: { $0.id == b.projectId }) ??
+                    projectStore.smallWorks.first(where: { $0.id == b.projectId }) else { continue }
+            let event = EKEvent(eventStore: eventStore)
+            event.title = "\(project.jobNumber) \(project.siteName) – \(b.scheduleLabel(policy: payrollTimePolicy))"
+            let block = b.calendarBlock(on: b.date, policy: payrollTimePolicy)
+            event.startDate = block.start
+            event.endDate = block.end
+            event.calendar = eventStore.defaultCalendarForNewEvents
+            do {
+                try eventStore.save(event, span: .thisEvent)
+                added += 1
+            } catch {
+                addToCalendarMessage = "Could not add some events: \(error.localizedDescription)"
+                return
+            }
+        }
+        addToCalendarMessage = added > 0 ? "Added \(added) event(s) to your calendar." : "No bookings this week to add."
+    }
+}
+
+// MARK: - Manager self-booking location picker (from + Add booking)
+
+fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
+    let day: Date
+    let policy: OrgPayrollTimePolicy
+    let companyCustomLocations: [String]
+    let showOffice: Bool
+    let showWorkingFromHome: Bool
+    let showSiteSurvey: Bool
+    let projects: [Project]
+    let smallWorks: [Project]
+    let myManagedProjects: [Project]
+    let myManagedSmallWorks: [Project]
+    let onBook: (ManagerLocationType, UUID?, String?, ManagerTimeSlot, String?, String?) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var searchText = ""
+
+    fileprivate struct BookingTarget: Identifiable, Hashable {
+        let id: String
+        let title: String
+        let subtitle: String?
+        let locationType: ManagerLocationType
+        let locationId: UUID?
+        let customLocationName: String?
+    }
+
+    private var normalizedSearch: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private var companyTargets: [BookingTarget] {
+        var rows: [BookingTarget] = []
+        if showOffice {
+            rows.append(BookingTarget(id: "office", title: "Office", subtitle: nil, locationType: .office, locationId: nil, customLocationName: nil))
+        }
+        if showWorkingFromHome {
+            rows.append(BookingTarget(id: "wfh", title: "Working from home", subtitle: nil, locationType: .workingFromHome, locationId: nil, customLocationName: nil))
+        }
+        if showSiteSurvey {
+            rows.append(BookingTarget(id: "survey", title: "Site survey", subtitle: nil, locationType: .siteSurvey, locationId: nil, customLocationName: nil))
+        }
+        for custom in companyCustomLocations {
+            rows.append(BookingTarget(id: "custom-\(custom)", title: custom, subtitle: "Custom location", locationType: .custom, locationId: nil, customLocationName: custom))
+        }
+        return rows
+    }
+
+    private func projectTargets(_ list: [Project], prefix: String) -> [BookingTarget] {
+        list.map { p in
+            BookingTarget(
+                id: "\(prefix)-\(p.id.uuidString)",
+                title: "\(p.jobNumber) \(p.siteName)",
+                subtitle: p.client.name.isEmpty ? nil : p.client.name,
+                locationType: prefix == "project" ? .project : .smallWork,
+                locationId: p.id,
+                customLocationName: nil
+            )
+        }
+    }
+
+    private var filteredCompanyTargets: [BookingTarget] {
+        guard !normalizedSearch.isEmpty else { return companyTargets }
+        return companyTargets.filter { $0.title.lowercased().contains(normalizedSearch) }
+    }
+
+    private var filteredProjects: [BookingTarget] {
+        let all = projectTargets(projects, prefix: "project")
+        guard !normalizedSearch.isEmpty else { return all }
+        return all.filter { $0.title.lowercased().contains(normalizedSearch) }
+    }
+
+    private var filteredSmallWorks: [BookingTarget] {
+        let all = projectTargets(smallWorks, prefix: "small")
+        guard !normalizedSearch.isEmpty else { return all }
+        return all.filter { $0.title.lowercased().contains(normalizedSearch) }
+    }
+
+    private var managedTargets: [BookingTarget] {
+        projectTargets(myManagedProjects, prefix: "managed-project")
+            + projectTargets(myManagedSmallWorks, prefix: "managed-small")
+    }
+
+    private var filteredManagedTargets: [BookingTarget] {
+        guard !normalizedSearch.isEmpty else { return managedTargets }
+        return managedTargets.filter { $0.title.lowercased().contains(normalizedSearch) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Book yourself in")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                        Text(day.formatted(date: .abbreviated, time: .omitted))
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                    }
+
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                        TextField("Search office, project, small works...", text: $searchText)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+                    )
+
+                    sectionTitle("Company locations")
+                    cardList(filteredCompanyTargets)
+
+                    sectionTitle("My projects and small works")
+                    if filteredManagedTargets.isEmpty {
+                        staticInfoRow("No projects or small works assigned to you.")
+                    } else {
+                        cardList(filteredManagedTargets)
+                    }
+
+                    sectionTitle("Jobs")
+                    VStack(spacing: 8) {
+                        NavigationLink {
+                            ManagerSelfBookingJobListView(
+                                title: "Projects",
+                                day: day,
+                                policy: policy,
+                                targets: filteredProjects,
+                                onBook: onBook
+                            )
+                        } label: {
+                            navRow(title: "Projects", subtitle: "\(filteredProjects.count) active")
+                        }
+                        .buttonStyle(.plain)
+                        NavigationLink {
+                            ManagerSelfBookingJobListView(
+                                title: "Small works",
+                                day: day,
+                                policy: policy,
+                                targets: filteredSmallWorks,
+                                onBook: onBook
+                            )
+                        } label: {
+                            navRow(title: "Small works", subtitle: "\(filteredSmallWorks.count) active")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(16)
+            }
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(ProjectWorksRevampColors.muted)
+            .textCase(.uppercase)
+            .tracking(0.4)
+    }
+
+    private func cardList(_ targets: [BookingTarget]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(targets.enumerated()), id: \.element.id) { idx, target in
+                NavigationLink {
+                    ManagerSelfBookingEntryView(
+                        day: day,
+                        policy: policy,
+                        target: target,
+                        onSave: { slot, customStart, customEnd in
+                            onBook(target.locationType, target.locationId, target.customLocationName, slot, customStart, customEnd)
+                        }
+                    )
+                } label: {
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(target.title)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                            if let subtitle = target.subtitle, !subtitle.isEmpty {
+                                Text(subtitle)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                            }
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                    }
+                    .padding(.vertical, 11)
+                    .padding(.horizontal, 12)
+                }
+                .buttonStyle(.plain)
+                if idx < targets.count - 1 {
+                    Divider().padding(.leading, 12)
+                }
+            }
+        }
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    private func staticInfoRow(_ text: String) -> some View {
+        HStack(spacing: 10) {
+            Text(text)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+            Spacer()
+        }
+        .padding(.vertical, 11)
+        .padding(.horizontal, 12)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    private func navRow(title: String, subtitle: String) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+        }
+        .padding(.vertical, 11)
+        .padding(.horizontal, 12)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+}
+
+fileprivate struct ManagerSelfBookingEntryView: View {
+    let day: Date
+    let policy: OrgPayrollTimePolicy
+    let target: ManagerSelfBookingLocationPickerSheet.BookingTarget
+    let onSave: (ManagerTimeSlot, String?, String?) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var selectedSlot: ManagerTimeSlot = .fullDay
+    @State private var startTime: Date
+    @State private var endTime: Date
+    @State private var errorMessage: String?
+
+    init(
+        day: Date,
+        policy: OrgPayrollTimePolicy,
+        target: ManagerSelfBookingLocationPickerSheet.BookingTarget,
+        onSave: @escaping (ManagerTimeSlot, String?, String?) -> Void
+    ) {
+        self.day = day
+        self.policy = policy
+        self.target = target
+        self.onSave = onSave
+        let (start, end) = Self.defaultTimes(for: .fullDay, day: day, policy: policy)
+        _startTime = State(initialValue: start)
+        _endTime = State(initialValue: end)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(target.title)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                    Text("Standard day set: \(policy.standardDayStart)–\(policy.standardDayEnd)")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                }
+
+                timelineCard
+
+                HStack(spacing: 8) {
+                    presetButton("FULL DAY", slot: .fullDay)
+                    presetButton("AM", slot: .morning)
+                    presetButton("PM", slot: .afternoon)
+                }
+
+                VStack(spacing: 10) {
+                    DatePicker("Start time", selection: $startTime, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.compact)
+                    DatePicker("End time", selection: $endTime, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.compact)
+                }
+                .font(.system(size: 14, weight: .medium))
+                .padding(12)
+                .background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+                )
+                .onChange(of: startTime) { _, _ in selectedSlot = .customHours }
+                .onChange(of: endTime) { _, _ in selectedSlot = .customHours }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.red)
+                }
+
+                Button("Save booking") {
+                    validateAndSave()
+                }
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .background(ProjectWorksRevampColors.blue)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .padding(16)
+        }
+        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .navigationTitle("Book yourself in")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var timelineCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(selectedSlot == .customHours ? "Custom hours" : selectedSlot.displayName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
+            GeometryReader { geo in
+                let width = geo.size.width
+                let startM = minutesFromMidnight(startTime)
+                let endM = minutesFromMidnight(endTime)
+                let total = CGFloat(24 * 60)
+                let left = CGFloat(startM) / total
+                let seg = CGFloat(max(0, endM - startM)) / total
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: max(8, width * seg), height: 28)
+                        .offset(x: width * left)
+                }
+            }
+            .frame(height: 28)
+            HStack {
+                ForEach(["6:00", "9:00", "12:00", "15:00", "18:00"], id: \.self) { tick in
+                    Text(tick)
+                        .font(.system(size: 9))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    private func presetButton(_ label: String, slot: ManagerTimeSlot) -> some View {
+        Button(label) {
+            selectedSlot = slot
+            let times = Self.defaultTimes(for: slot, day: day, policy: policy)
+            startTime = times.start
+            endTime = times.end
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(selectedSlot == slot ? .white : ProjectWorksRevampColors.ink)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(selectedSlot == slot ? ProjectWorksRevampColors.blue : Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: selectedSlot == slot ? 0 : 0.5)
+        )
+    }
+
+    private func validateAndSave() {
+        errorMessage = nil
+        guard endTime > startTime else {
+            errorMessage = "End time must be after start time."
+            return
+        }
+        if selectedSlot == .customHours {
+            onSave(.customHours, hhmm(startTime), hhmm(endTime))
+        } else {
+            onSave(selectedSlot, nil, nil)
+        }
+        dismiss()
+    }
+
+    private func hhmm(_ date: Date) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        return fmt.string(from: date)
+    }
+
+    private func minutesFromMidnight(_ date: Date) -> Int {
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+    }
+
+    private static func defaultTimes(for slot: ManagerTimeSlot, day: Date, policy: OrgPayrollTimePolicy) -> (start: Date, end: Date) {
+        let calendar = Calendar.current
+        let base = calendar.startOfDay(for: day)
+        let dayStart = ManagerScheduleInterval.parseMinutes(policy.standardDayStart) ?? (7 * 60 + 30)
+        let dayEnd = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd) ?? (16 * 60)
+        let mid = dayStart + max(1, (dayEnd - dayStart) / 2)
+        let range: (Int, Int)
+        switch slot {
+        case .fullDay:
+            range = (dayStart, dayEnd)
+        case .morning:
+            range = (dayStart, mid)
+        case .afternoon:
+            range = (mid, dayEnd)
+        case .customHours:
+            range = (dayStart, dayEnd)
+        }
+        let start = calendar.date(byAdding: .minute, value: range.0, to: base) ?? base
+        let end = calendar.date(byAdding: .minute, value: range.1, to: base) ?? start.addingTimeInterval(3600)
+        return (start, end)
+    }
+}
+
+fileprivate struct ManagerSelfBookingJobListView: View {
+    let title: String
+    let day: Date
+    let policy: OrgPayrollTimePolicy
+    let targets: [ManagerSelfBookingLocationPickerSheet.BookingTarget]
+    let onBook: (ManagerLocationType, UUID?, String?, ManagerTimeSlot, String?, String?) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 8) {
+                ForEach(targets) { target in
+                    NavigationLink {
+                        ManagerSelfBookingEntryView(
+                            day: day,
+                            policy: policy,
+                            target: target,
+                            onSave: { slot, customStart, customEnd in
+                                onBook(target.locationType, target.locationId, target.customLocationName, slot, customStart, customEnd)
+                            }
+                        )
+                    } label: {
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(target.title)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                                if let subtitle = target.subtitle, !subtitle.isEmpty {
+                                    Text(subtitle)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                                }
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                        }
+                        .padding(.vertical, 11)
+                        .padding(.horizontal, 12)
+                        .background(Color.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(16)
+        }
+        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -1767,6 +2481,20 @@ struct OperativeScheduleContentView: View {
         }
     }
 
+    private func approvedHolidayLabel(on date: Date) -> String? {
+        let day = calendar.startOfDay(for: date)
+        guard let holiday = myApprovedHolidays.first(where: { booking in
+            let start = calendar.startOfDay(for: booking.startDate)
+            let end = calendar.startOfDay(for: booking.endDate)
+            return day >= start && day <= end
+        }) else { return nil }
+        switch holiday.timeSlot {
+        case .fullDay: return "Annual Leave - Full Day"
+        case .morning: return "Annual Leave - AM"
+        case .afternoon: return "Annual Leave - PM"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             weekNavigation
@@ -1779,9 +2507,6 @@ struct OperativeScheduleContentView: View {
             Button("OK") { addToCalendarMessage = nil }
         } message: {
             if let msg = addToCalendarMessage { Text(msg) }
-        }
-        .onAppear {
-            managerScheduleStore.loadData()
         }
     }
 
@@ -1844,6 +2569,7 @@ struct OperativeScheduleContentView: View {
         let dayBookings = myBookingsThisWeek.filter { calendar.isDate($0.date, inSameDayAs: date) }
         let dayManagerBookings = myManagerAttendanceThisWeek.filter { calendar.isDate($0.date, inSameDayAs: date) }
         let isOnHoliday = holidayCoversDay(date)
+        let annualLeaveLabel = approvedHolidayLabel(on: date)
         let f = DateFormatter()
         f.dateFormat = "EEEE, d MMM"
         return VStack(alignment: .leading, spacing: 8) {
@@ -1851,7 +2577,7 @@ struct OperativeScheduleContentView: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(ProjectWorksRevampColors.ink)
             if isOnHoliday {
-                Label("Holiday", systemImage: "sun.max.fill")
+                Label("Annual Leave", systemImage: "sun.max.fill")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.endDateFg)
             }
@@ -1863,8 +2589,19 @@ struct OperativeScheduleContentView: View {
                 if !dayBookings.isEmpty || !dayManagerBookings.isEmpty {
                     MyScheduleTodaysHoursCard(
                         policy: policy,
-                        segments: mergedDaySegments(manager: dayManagerBookings, operative: dayBookings, policy: policy)
+                        segments: mergedDaySegments(manager: dayManagerBookings, operative: dayBookings, policy: policy),
+                        annualLeaveLabel: annualLeaveLabel
                     )
+                    if policy.unpaidBreakMinutes > 0 {
+                        HStack(spacing: 6) {
+                            Image(systemName: "pause.circle")
+                                .font(.system(size: 11, weight: .medium))
+                            Text("\(policy.unpaidBreakMinutes)-minute unpaid break window (\(policy.breakWindowStart)–\(policy.breakWindowEnd))")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .padding(.horizontal, 2)
+                    }
                 }
                 if !dayManagerBookings.isEmpty {
                     Text("Your attendance")
@@ -1930,19 +2667,19 @@ struct OperativeScheduleContentView: View {
     private func addCurrentWeekToCalendar() {
         let eventStore = EKEventStore()
         let status = EKEventStore.authorizationStatus(for: .event)
-        if status == .denied {
-            addToCalendarMessage = "Calendar access was denied. You can enable it in Settings."
+        if status == .denied || status == .restricted {
+            addToCalendarMessage = "Calendar access is off for Project Planner on this iPhone. Turn it on in iOS Settings > Privacy & Security > Calendars."
             return
         }
         if status == .notDetermined {
             if #available(iOS 17.0, *) {
                 Task {
-                    let granted = (try? await eventStore.requestFullAccessToEvents()) ?? false
+                    let granted = (try? await eventStore.requestWriteOnlyAccessToEvents()) ?? false
                     await MainActor.run {
                         if granted {
                             performAddToCalendar(eventStore: eventStore)
                         } else {
-                            addToCalendarMessage = "Calendar access is needed to add events. Enable it in Settings."
+                            addToCalendarMessage = "Calendar access is required to add events. Please allow Calendar access when prompted."
                         }
                     }
                 }
@@ -1952,7 +2689,7 @@ struct OperativeScheduleContentView: View {
                         if granted {
                             performAddToCalendar(eventStore: eventStore)
                         } else {
-                            addToCalendarMessage = "Calendar access is needed to add events. Enable it in Settings."
+                            addToCalendarMessage = "Calendar access is required to add events. Please allow Calendar access when prompted."
                         }
                     }
                 }
