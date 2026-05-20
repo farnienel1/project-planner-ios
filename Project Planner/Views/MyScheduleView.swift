@@ -1423,6 +1423,7 @@ struct ManagerScheduleContentView: View {
     }
 
     private func dashedAddBookingButton() -> some View {
+    private func dashedAddBookingButton() -> some View {
         Button {
             showAddBookingSheet = true
         } label: {
