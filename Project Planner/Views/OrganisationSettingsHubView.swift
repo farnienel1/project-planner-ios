@@ -472,7 +472,6 @@ struct OrganisationSettingsHubView: View {
         await appSettings.updateNotifications(updated)
         await notificationService.refreshDailyMaterialCutOffReminder()
     }
-
     private func hubSectionTitle(_ t: String) -> some View {
         Text(t.uppercased())
             .font(.system(size: 11, weight: .medium))
