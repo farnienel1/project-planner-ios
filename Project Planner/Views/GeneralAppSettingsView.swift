@@ -59,7 +59,13 @@ struct MyScheduleGeneralOptionsView: View {
             if !appSettings.settings.myScheduleOptions.customItems.isEmpty {
                 Section("Custom Items") {
                     ForEach(appSettings.settings.myScheduleOptions.customItems, id: \.self) { item in
-                        Text(item)
+                        Toggle(item, isOn: Binding(
+                            get: { appSettings.settings.myScheduleOptions.customItemEnabled[item] ?? true },
+                            set: { newValue in
+                                appSettings.settings.myScheduleOptions.customItemEnabled[item] = newValue
+                                Task { await appSettings.updateMyScheduleOptions(appSettings.settings.myScheduleOptions) }
+                            }
+                        ))
                     }
                     .onDelete(perform: deleteCustomItems)
                 }
@@ -94,11 +100,16 @@ struct MyScheduleGeneralOptionsView: View {
         }) else { return }
         appSettings.settings.myScheduleOptions.customItems.append(trimmed)
         appSettings.settings.myScheduleOptions.customItems.sort()
+        appSettings.settings.myScheduleOptions.customItemEnabled[trimmed] = true
         Task { await appSettings.updateMyScheduleOptions(appSettings.settings.myScheduleOptions) }
     }
     
     private func deleteCustomItems(at offsets: IndexSet) {
+        let removed = offsets.map { appSettings.settings.myScheduleOptions.customItems[$0] }
         appSettings.settings.myScheduleOptions.customItems.remove(atOffsets: offsets)
+        for item in removed {
+            appSettings.settings.myScheduleOptions.customItemEnabled.removeValue(forKey: item)
+        }
         Task { await appSettings.updateMyScheduleOptions(appSettings.settings.myScheduleOptions) }
     }
 }

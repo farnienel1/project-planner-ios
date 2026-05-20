@@ -30,6 +30,7 @@ enum MainMenuSurfaceRoute: String, CaseIterable {
     case myQualifications
     case jobTypes
     case wholesalers
+    case materialCatalogue
     case addUser
     case manageUsers
     case tasksDetail
@@ -245,6 +246,17 @@ enum MainMenuCatalog {
                 action: .openSurface(.wholesalers)
             ),
             MainMenuRowSpec(
+                id: "material_catalogue",
+                section: .tools,
+                title: "Material catalogue",
+                detail: "Organisation materials library",
+                icon: "shippingbox.fill",
+                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
+                iconTint: MaterialsOrderingTheme.primary,
+                isEligible: { u, _, _ in u.canManageMaterialCatalogue() },
+                action: .openSurface(.materialCatalogue)
+            ),
+            MainMenuRowSpec(
                 id: "subcontractors",
                 section: .tools,
                 title: "Sub contractors",
@@ -299,17 +311,6 @@ enum MainMenuCatalog {
                 iconTint: ProjectWorksRevampColors.muted,
                 isEligible: { _, _, _ in true },
                 action: .selectTab(5)
-            ),
-            MainMenuRowSpec(
-                id: "general_app",
-                section: .account,
-                title: "General",
-                detail: nil,
-                icon: "slider.horizontal.3",
-                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
-                iconTint: ProjectWorksRevampColors.blue,
-                isEligible: { u, _, _ in u.hasAdminAccess() },
-                action: .openSurface(.generalAppSettings)
             ),
             MainMenuRowSpec(
                 id: "help",

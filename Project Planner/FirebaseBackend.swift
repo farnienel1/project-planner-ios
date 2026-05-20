@@ -95,6 +95,11 @@ class FirebaseBackend: ObservableObject {
     private var suppressOrganizationReadPermissionRecovery = false
     /// Prevents parallel org load/recovery storms from multiple stores/views.
     private var organizationLoadInProgress = false
+    /// Avoids repeatedly patching org access on every single booking save.
+    private var lastRepairAttemptAtByOrgId: [String: Date] = [:]
+    /// De-duplicates `organizationDidLoad` broadcasts for the same org within a short window.
+    private var lastOrganizationDidLoadBroadcastOrgId: String?
+    private var lastOrganizationDidLoadBroadcastAt: Date?
 
     /// Ensures org id is non-empty and org document is readable before subcollection reads.
     private func ensureReadableOrganization(_ organizationId: String) async throws -> String {
@@ -125,6 +130,21 @@ class FirebaseBackend: ObservableObject {
     private func isFirestorePermissionDenied(_ error: Error) -> Bool {
         let nsError = error as NSError
         return nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7
+    }
+
+    @MainActor
+    private func broadcastOrganizationDidLoadIfNeeded(force: Bool = false) {
+        guard let orgId = currentOrganization?.firestoreDocumentId else { return }
+        let now = Date()
+        if !force,
+           lastOrganizationDidLoadBroadcastOrgId == orgId,
+           let lastAt = lastOrganizationDidLoadBroadcastAt,
+           now.timeIntervalSince(lastAt) < 1.5 {
+            return
+        }
+        lastOrganizationDidLoadBroadcastOrgId = orgId
+        lastOrganizationDidLoadBroadcastAt = now
+        NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
     }
 
     @MainActor
@@ -219,7 +239,7 @@ class FirebaseBackend: ObservableObject {
 
                     if self.currentOrganization != nil {
                         print("🔥🔥🔥 DEBUG: Organization already set, skipping reload from auth listener")
-                        NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
+                        self.broadcastOrganizationDidLoadIfNeeded()
                     } else {
                         Task { [weak self] in
                             await self?.loadUserOrganizationWithRecovery(userId: user.uid)
@@ -683,6 +703,9 @@ class FirebaseBackend: ObservableObject {
             settings.workingHours.endTime = policy.standardDayEnd
             settings.workingHours.lunchBreak = policy.unpaidBreakMinutes
         }
+        if let warningDict = data["warningDetection"] as? [String: Any] {
+            settings.warningDetection = OrgWarningDetectionSettings.fromFirestore(warningDict)
+        }
         return settings
     }
 
@@ -1063,6 +1086,12 @@ class FirebaseBackend: ObservableObject {
     func repairCurrentUserOrganizationAccess(organizationId: String) async {
         guard let user = currentUser else { return }
         let orgIdStr = normalizedOrganizationId(organizationId)
+        let now = Date()
+        if let lastAttempt = lastRepairAttemptAtByOrgId[orgIdStr],
+           now.timeIntervalSince(lastAttempt) < 15 {
+            return
+        }
+        lastRepairAttemptAtByOrgId[orgIdStr] = now
         var shouldReloadOrganization = false
         // Store a plain string: Firestore security rules match `users/{uid}.organizationId` reliably as string;
         // DocumentReference often fails `userOrgIdMatchesPath` in rules (type not treated as path).
@@ -1089,7 +1118,10 @@ class FirebaseBackend: ObservableObject {
 
         // Avoid a permission-denied loop when both patches fail.
         if shouldReloadOrganization {
-            await loadUserOrganization(userId: user.uid)
+            let currentOrgId = currentOrganization?.firestoreDocumentId
+            if !organizationIdsMatch(currentOrgId, orgIdStr) || currentOrganization == nil {
+                await loadUserOrganization(userId: user.uid)
+            }
         }
     }
 
@@ -3099,6 +3131,29 @@ class FirebaseBackend: ObservableObject {
         try await db.collection("organizations").document(id).setData(payload, merge: true)
     }
 
+    /// Admin: update company-wide warning detection settings (`organizations/{orgId}.warningDetection`).
+    func updateOrganizationWarningDetectionSettings(_ settings: OrgWarningDetectionSettings) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
+            )
+        }
+        try await db.collection("organizations").document(orgId).setData(
+            [
+                "warningDetection": settings.asFirestoreDictionary(),
+                "updatedAt": Timestamp(date: Date()),
+            ],
+            merge: true
+        )
+        guard var org = currentOrganization else { return }
+        org.settings.warningDetection = settings
+        org.updatedAt = Date()
+        currentOrganization = org
+        storeOrganizationLocally(org)
+    }
+
     /// Admin: update organisation-wide payroll / working time defaults (`organizations/{orgId}.payrollTimePolicy`).
     func updateOrganizationPayrollTimePolicy(_ policy: OrgPayrollTimePolicy) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
@@ -5034,7 +5089,7 @@ class FirebaseBackend: ObservableObject {
             if recovered, currentOrganization != nil {
                 print("🔥🔥🔥 DEBUG: ✅ Recovery successful! Organization loaded: \(currentOrganization?.name ?? "N/A")")
                 // Post notification that organization was recovered so stores can reload
-                NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
+                broadcastOrganizationDidLoadIfNeeded()
             } else {
                 // Try one more time with a delay
                 print("🔥🔥🔥 DEBUG: ⚠️ First recovery attempt failed, retrying in 2 seconds...")
@@ -5042,7 +5097,7 @@ class FirebaseBackend: ObservableObject {
                 let retryRecovered = await recoverMissingOrganizationLink(userId: userId, userEmail: userEmail)
                 if retryRecovered, currentOrganization != nil {
                     print("🔥🔥🔥 DEBUG: ✅ Retry recovery successful!")
-                    NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
+                    broadcastOrganizationDidLoadIfNeeded()
                 } else {
                     errorMessage = "Organization not found. Tap 'Force Reload' in Settings to try again."
                 }
@@ -5050,7 +5105,7 @@ class FirebaseBackend: ObservableObject {
         } else if currentOrganization != nil {
             // Organization loaded successfully - notify stores to reload data
             print("🔥🔥🔥 DEBUG: ✅ Organization loaded successfully: \(currentOrganization?.name ?? "N/A")")
-            NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
+            broadcastOrganizationDidLoadIfNeeded()
         }
     }
     
@@ -5095,7 +5150,7 @@ class FirebaseBackend: ObservableObject {
         }
         
         // Post notification to reload all data
-        NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
+        broadcastOrganizationDidLoadIfNeeded(force: true)
         
         isLoading = false
         
@@ -5599,6 +5654,11 @@ extension FirebaseBackend {
               let date = (data["date"] as? Timestamp)?.dateValue() else {
             return nil
         }
+        let status = materialWorkflowStatusFromFirestore(data["status"])
+        let catalogueId = (data["catalogueItemId"] as? String).flatMap(UUID.init(uuidString:))
+        let lastSentTypeRaw = data["lastSentRequestType"] as? String
+        let lastSentType = lastSentTypeRaw.flatMap { MaterialOrderRequest.RequestType(rawValue: $0) }
+
         return MaterialItem(
             id: id,
             quantity: quantity,
@@ -5611,8 +5671,74 @@ extension FirebaseBackend {
             editedByUserId: data["editedByUserId"] as? String,
             editedAt: (data["editedAt"] as? Timestamp)?.dateValue(),
             projectId: projectId,
-            date: Calendar.current.startOfDay(for: date)
+            date: Calendar.current.startOfDay(for: date),
+            status: status,
+            catalogueItemId: catalogueId,
+            brand: data["brand"] as? String,
+            productCode: data["productCode"] as? String,
+            sizeOrLength: (data["sizeOrLength"] as? String) ?? (data["packSize"] as? Int).map(String.init),
+            category: data["category"] as? String,
+            websiteURL: data["websiteURL"] as? String,
+            notes: data["notes"] as? String,
+            lastSentAt: (data["lastSentAt"] as? Timestamp)?.dateValue(),
+            lastSentRequestType: lastSentType
         )
+    }
+
+    private func materialWorkflowStatusFromFirestore(_ value: Any?) -> MaterialWorkflowStatus {
+        guard let raw = value as? String,
+              let status = MaterialWorkflowStatus(rawValue: raw) else {
+            return .draft
+        }
+        return status
+    }
+
+    private func materialItemFirestorePayload(_ material: MaterialItem, addedByUserId: String?) -> [String: Any] {
+        let calendar = Calendar.current
+        let normalizedDate = calendar.startOfDay(for: material.date)
+        var data: [String: Any] = [
+            "id": material.id.uuidString,
+            "quantity": material.quantity,
+            "unit": material.unit.rawValue,
+            "material": material.material,
+            "addedBy": material.addedBy,
+            "addedByUserId": addedByUserId as Any,
+            "addedAt": Timestamp(date: material.addedAt),
+            "editedBy": material.editedBy as Any,
+            "editedByUserId": material.editedByUserId as Any,
+            "editedAt": material.editedAt.map { Timestamp(date: $0) } as Any,
+            "projectId": material.projectId.uuidString,
+            "date": Timestamp(date: normalizedDate),
+            "status": material.status.rawValue
+        ]
+        if let catalogueItemId = material.catalogueItemId {
+            data["catalogueItemId"] = catalogueItemId.uuidString
+        }
+        if let brand = material.brand?.trimmingCharacters(in: .whitespacesAndNewlines), !brand.isEmpty {
+            data["brand"] = brand
+        }
+        if let code = material.productCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
+            data["productCode"] = code
+        }
+        if let sizeOrLength = material.sizeOrLength?.trimmingCharacters(in: .whitespacesAndNewlines), !sizeOrLength.isEmpty {
+            data["sizeOrLength"] = sizeOrLength
+        }
+        if let category = material.category?.trimmingCharacters(in: .whitespacesAndNewlines), !category.isEmpty {
+            data["category"] = category
+        }
+        if let websiteURL = material.websiteURL?.trimmingCharacters(in: .whitespacesAndNewlines), !websiteURL.isEmpty {
+            data["websiteURL"] = websiteURL
+        }
+        if let notes = material.notes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
+            data["notes"] = notes
+        }
+        if let lastSentAt = material.lastSentAt {
+            data["lastSentAt"] = Timestamp(date: lastSentAt)
+        }
+        if let lastSentRequestType = material.lastSentRequestType {
+            data["lastSentRequestType"] = lastSentRequestType.rawValue
+        }
+        return data
     }
     
     private func truthyFirestoreBool(_ value: Any?) -> Bool {
@@ -5737,6 +5863,12 @@ extension FirebaseBackend {
         if effectiveAddedByUserId?.isEmpty == true {
             effectiveAddedByUserId = nil
         }
+        if effectiveAddedByUserId == nil {
+            let authUid = currentUser?.uid ?? Auth.auth().currentUser?.uid
+            if let authUid, !authUid.isEmpty {
+                effectiveAddedByUserId = authUid
+            }
+        }
         if effectiveAddedByUserId == nil,
            let uid = currentUser?.uid,
            await currentUserOwnsLegacyMaterial(material, organizationId: orgId) {
@@ -5750,20 +5882,7 @@ extension FirebaseBackend {
             effectiveAddedByUserId = uid
         }
         
-        let data: [String: Any] = [
-            "id": material.id.uuidString,
-            "quantity": material.quantity,
-            "unit": material.unit.rawValue,
-            "material": material.material,
-            "addedBy": material.addedBy,
-            "addedByUserId": effectiveAddedByUserId as Any,
-            "addedAt": Timestamp(date: material.addedAt),
-            "editedBy": material.editedBy as Any,
-            "editedByUserId": material.editedByUserId as Any,
-            "editedAt": material.editedAt.map { Timestamp(date: $0) } as Any,
-            "projectId": material.projectId.uuidString,
-            "date": Timestamp(date: normalizedDate)
-        ]
+        let data = materialItemFirestorePayload(material, addedByUserId: effectiveAddedByUserId)
         
         print("💾 [FirebaseBackend] Saving material:")
         print("   ID: \(material.id.uuidString)")
@@ -5773,8 +5892,79 @@ extension FirebaseBackend {
         print("   Organization ID: \(orgId)")
         
         try await docRef.setData(data)
+
+        if material.catalogueItemId == nil {
+            do {
+                try await upsertMaterialCatalogueFromMaterial(material, organizationId: orgId)
+            } catch {
+                print("⚠️ [FirebaseBackend] Catalogue upsert from material failed: \(error.localizedDescription)")
+            }
+        }
         
         print("✅ [FirebaseBackend] Material saved successfully to Firebase")
+    }
+
+    private func upsertMaterialCatalogueFromMaterial(_ material: MaterialItem, organizationId: String) async throws {
+        let trimmedName = material.material.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+
+        let catalogItems = (try? await loadMaterialCatalogue(organizationId: organizationId)) ?? []
+        let normalizedName = MaterialCatalogDuplicateDetection.normalizeName(trimmedName)
+        let normalizedCode = MaterialCatalogDuplicateDetection.normalizeCode(material.productCode)
+        let existing = catalogItems.first { item in
+            MaterialCatalogDuplicateDetection.normalizeName(item.name) == normalizedName
+                || (!normalizedCode.isEmpty && MaterialCatalogDuplicateDetection.normalizeCode(item.productCode) == normalizedCode)
+        }
+        guard existing == nil else { return }
+
+        let inferredBrand = material.brand?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let creatorName = currentUser?.displayName ?? currentUser?.email ?? material.addedBy
+        let catalogItem = MaterialCatalogItem(
+            name: trimmedName,
+            brand: (inferredBrand?.isEmpty == false) ? inferredBrand! : "Custom",
+            productCode: material.productCode,
+            defaultUnit: material.unit,
+            sizeOrLength: material.sizeOrLength,
+            category: normalizedMaterialCategory(material.category),
+            createdByUserId: currentUser?.uid ?? material.addedByUserId ?? "unknown",
+            createdByName: creatorName
+        )
+        try await saveMaterialCatalogueItem(catalogItem, organizationId: organizationId)
+    }
+
+    func backfillMaterialCatalogueFromExistingMaterials(organizationId: String) async throws {
+        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
+        let existingCatalogue = (try? await loadMaterialCatalogue(organizationId: orgId)) ?? []
+        // One-time historical bootstrap only.
+        // Ongoing additions should come from save-time upsert, so we do not recreate deleted catalogue rows.
+        guard existingCatalogue.isEmpty else { return }
+        var knownKeys = Set(existingCatalogue.map { materialCatalogueNameKey(name: $0.name) })
+
+        let materialsSnapshot = try await db.collection("organizations").document(orgId)
+            .collection("materials")
+            .getDocuments(source: .server)
+
+        for doc in materialsSnapshot.documents {
+            guard let material = materialItemFromFirestoreDocumentData(doc.data()) else { continue }
+            let normalizedName = material.material.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedName.isEmpty else { continue }
+            let key = materialCatalogueNameKey(name: normalizedName)
+            guard !knownKeys.contains(key) else { continue }
+            let creatorName = currentUser?.displayName ?? currentUser?.email ?? material.addedBy
+            let brand = material.brand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let entry = MaterialCatalogItem(
+                name: normalizedName,
+                brand: brand.isEmpty ? "Custom" : brand,
+                productCode: material.productCode,
+                defaultUnit: material.unit,
+                sizeOrLength: material.sizeOrLength,
+                category: normalizedMaterialCategory(material.category),
+                createdByUserId: currentUser?.uid ?? material.addedByUserId ?? "unknown",
+                createdByName: creatorName
+            )
+            try? await saveMaterialCatalogueItem(entry, organizationId: orgId)
+            knownKeys.insert(key)
+        }
     }
     
     func loadMaterialItems(organizationId: String, projectId: UUID) async throws -> [MaterialItem] {
@@ -5797,46 +5987,34 @@ extension FirebaseBackend {
         
         for doc in snapshot.documents {
             let data = doc.data()
-            
-            guard let idString = data["id"] as? String,
-                  let id = UUID(uuidString: idString),
-                  let quantity = materialQuantityFromFirestore(data["quantity"]),
-                  let unitString = data["unit"] as? String,
-                  let unit = MaterialUnit(rawValue: unitString),
-                  let material = data["material"] as? String,
-                  let addedBy = data["addedBy"] as? String,
-                  let addedAt = (data["addedAt"] as? Timestamp)?.dateValue(),
-                  let projectIdString = data["projectId"] as? String,
-                  let projectId = UUID(uuidString: projectIdString),
-                  let date = (data["date"] as? Timestamp)?.dateValue() else {
+            guard let materialItem = materialItemFromFirestoreDocumentData(data) else {
                 print("⚠️ [FirebaseBackend] Skipping material document - missing required fields")
                 continue
             }
-            
-            // Normalize date to start of day when loading
-            let calendar = Calendar.current
-            let normalizedDate = calendar.startOfDay(for: date)
-            
-            let materialItem = MaterialItem(
-                id: id,
-                quantity: quantity,
-                unit: unit,
-                material: material,
-                addedBy: addedBy,
-                addedByUserId: data["addedByUserId"] as? String,
-                addedAt: addedAt,
-                editedBy: data["editedBy"] as? String,
-                editedByUserId: data["editedByUserId"] as? String,
-                editedAt: (data["editedAt"] as? Timestamp)?.dateValue(),
-                projectId: projectId,
-                date: normalizedDate
-            )
-            
             materials.append(materialItem)
-            print("   ✅ Loaded: \(material) for date \(normalizedDate)")
+            print("   ✅ Loaded: \(materialItem.material) for date \(materialItem.date)")
         }
         
         print("✅ [FirebaseBackend] Returning \(materials.count) materials")
+        return materials
+    }
+
+    func loadAllMaterialItemsForOrganization(organizationId: String) async throws -> [MaterialItem] {
+        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
+        let materialsQuery = db.collection("organizations").document(orgId)
+            .collection("materials")
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await materialsQuery.getDocuments(source: .server)
+        } catch {
+            snapshot = try await materialsQuery.getDocuments()
+        }
+
+        var materials: [MaterialItem] = []
+        for doc in snapshot.documents {
+            guard let item = materialItemFromFirestoreDocumentData(doc.data()) else { continue }
+            materials.append(item)
+        }
         return materials
     }
 
@@ -5868,34 +6046,8 @@ extension FirebaseBackend {
 
                 for doc in docs {
                     let data = doc.data()
-                    guard let idString = data["id"] as? String,
-                          let id = UUID(uuidString: idString),
-                          let quantity = self.materialQuantityFromFirestore(data["quantity"]),
-                          let unitString = data["unit"] as? String,
-                          let unit = MaterialUnit(rawValue: unitString),
-                          let material = data["material"] as? String,
-                          let addedBy = data["addedBy"] as? String,
-                          let addedAt = (data["addedAt"] as? Timestamp)?.dateValue(),
-                          let projectIdString = data["projectId"] as? String,
-                          let parsedProjectId = UUID(uuidString: projectIdString),
-                          let date = (data["date"] as? Timestamp)?.dateValue() else {
-                        continue
-                    }
-
-                    loaded.append(MaterialItem(
-                        id: id,
-                        quantity: quantity,
-                        unit: unit,
-                        material: material,
-                        addedBy: addedBy,
-                        addedByUserId: data["addedByUserId"] as? String,
-                        addedAt: addedAt,
-                        editedBy: data["editedBy"] as? String,
-                        editedByUserId: data["editedByUserId"] as? String,
-                        editedAt: (data["editedAt"] as? Timestamp)?.dateValue(),
-                        projectId: parsedProjectId,
-                        date: calendar.startOfDay(for: date)
-                    ))
+                    guard let item = self.materialItemFromFirestoreDocumentData(data) else { continue }
+                    loaded.append(item)
                 }
 
                 Task { @MainActor in
@@ -6052,6 +6204,7 @@ extension FirebaseBackend {
             "projectJobNumber": audit.projectJobNumber,
             "projectName": audit.projectName,
             "type": audit.type.rawValue,
+            "customTitle": audit.customTitle,
             "authorName": audit.authorName,
             "date": Timestamp(date: audit.date),
             "createdAt": Timestamp(date: audit.createdAt),
@@ -6061,6 +6214,7 @@ extension FirebaseBackend {
                 var row: [String: Any] = [
                     "id": item.id.uuidString,
                     "title": item.title,
+                    "location": item.location,
                     "assignee": item.assignee,
                     "comments": item.comments,
                     "annotations": item.annotations,
@@ -6127,6 +6281,7 @@ extension FirebaseBackend {
                 return SiteAuditItem(
                     id: itemId,
                     title: title,
+                    location: row["location"] as? String ?? "",
                     assignee: assignee,
                     comments: comments,
                     annotations: row["annotations"] as? String ?? "",
@@ -6142,6 +6297,7 @@ extension FirebaseBackend {
                 projectJobNumber: projectJobNumber,
                 projectName: projectName,
                 type: type,
+                customTitle: data["customTitle"] as? String ?? "",
                 authorName: authorName,
                 date: date,
                 items: items,
@@ -6424,6 +6580,167 @@ extension FirebaseBackend {
         return loaded.sorted { $0.date < $1.date }
     }
     
+    // MARK: - Material catalogue
+
+    func loadMaterialCatalogue(organizationId: String) async throws -> [MaterialCatalogItem] {
+        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await db.collection("organizations").document(orgId)
+                .collection("materialCatalogue")
+                .getDocuments(source: .server)
+        } catch {
+            snapshot = try await db.collection("organizations").document(orgId)
+                .collection("materialCatalogue")
+                .getDocuments()
+        }
+        return snapshot.documents.compactMap { materialCatalogItemFromFirestore($0.data()) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    func saveMaterialCatalogueItem(_ item: MaterialCatalogItem, organizationId: String) async throws {
+        guard currentUser != nil else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "You must be signed in to update the material catalogue."]
+            )
+        }
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
+            )
+        }
+        let orgId = try await ensureReadableOrganization(resolved)
+        do {
+            try await ensureUserDocumentLinked(organizationId: orgId)
+        } catch {
+            print("🔥🔥🔥 DEBUG: [saveMaterialCatalogueItem] ensureUserDocumentLinked: \(error.localizedDescription)")
+        }
+        await repairCurrentUserOrganizationAccess(organizationId: orgId)
+        try await db.collection("organizations").document(orgId)
+            .collection("materialCatalogue")
+            .document(item.id.uuidString)
+            .setData(materialCatalogueFirestorePayload(item))
+    }
+
+    func deleteMaterialCatalogueItem(_ itemId: UUID, organizationId: String) async throws {
+        guard currentUser != nil else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "You must be signed in to update the material catalogue."]
+            )
+        }
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
+            )
+        }
+        let orgId = try await ensureReadableOrganization(resolved)
+        do {
+            try await ensureUserDocumentLinked(organizationId: orgId)
+        } catch {
+            print("🔥🔥🔥 DEBUG: [deleteMaterialCatalogueItem] ensureUserDocumentLinked: \(error.localizedDescription)")
+        }
+        await repairCurrentUserOrganizationAccess(organizationId: orgId)
+        try await db.collection("organizations").document(orgId)
+            .collection("materialCatalogue")
+            .document(itemId.uuidString)
+            .delete()
+    }
+
+    func updateMaterialWorkflowStatuses(
+        materialIds: [UUID],
+        status: MaterialWorkflowStatus,
+        requestType: MaterialOrderRequest.RequestType,
+        organizationId: String
+    ) async throws {
+        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
+        let now = Date()
+        for id in materialIds {
+            let docRef = db.collection("organizations").document(orgId)
+                .collection("materials")
+                .document(id.uuidString)
+            let snap = try await docRef.getDocument(source: .server)
+            guard var data = snap.data(),
+                  var item = materialItemFromFirestoreDocumentData(data) else { continue }
+            // Never downgrade an already ordered item back to quote-requested.
+            if item.status == .ordered && status == .sentForQuote {
+                item.status = .ordered
+            } else {
+                item.status = status
+            }
+            item.lastSentAt = now
+            item.lastSentRequestType = requestType
+            data = materialItemFirestorePayload(item, addedByUserId: item.addedByUserId)
+            try await docRef.setData(data)
+        }
+    }
+
+    private func materialCatalogueFirestorePayload(_ item: MaterialCatalogItem) -> [String: Any] {
+        var data: [String: Any] = [
+            "id": item.id.uuidString,
+            "name": item.name,
+            "brand": item.brand,
+            "defaultUnit": item.defaultUnit.rawValue,
+            "createdAt": Timestamp(date: item.createdAt),
+            "createdByUserId": item.createdByUserId,
+            "createdByName": item.createdByName
+        ]
+        if let code = item.productCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
+            data["productCode"] = code
+        }
+        if let sizeOrLength = item.sizeOrLength?.trimmingCharacters(in: .whitespacesAndNewlines), !sizeOrLength.isEmpty {
+            data["sizeOrLength"] = sizeOrLength
+        }
+        data["category"] = normalizedMaterialCategory(item.category)
+        return data
+    }
+
+    private func materialCatalogItemFromFirestore(_ data: [String: Any]) -> MaterialCatalogItem? {
+        guard let idString = data["id"] as? String,
+              let id = UUID(uuidString: idString),
+              let name = data["name"] as? String,
+              let brand = data["brand"] as? String,
+              let unitRaw = data["defaultUnit"] as? String,
+              let unit = MaterialUnit(rawValue: unitRaw),
+              let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
+              let createdByUserId = data["createdByUserId"] as? String,
+              let createdByName = data["createdByName"] as? String else {
+            return nil
+        }
+        return MaterialCatalogItem(
+            id: id,
+            name: name,
+            brand: brand,
+            productCode: data["productCode"] as? String,
+            defaultUnit: unit,
+            sizeOrLength: (data["sizeOrLength"] as? String) ?? (data["packSize"] as? Int).map(String.init),
+            category: normalizedMaterialCategory(data["category"] as? String),
+            createdAt: createdAt,
+            createdByUserId: createdByUserId,
+            createdByName: createdByName
+        )
+    }
+
+    private func normalizedMaterialCategory(_ value: String?) -> String {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Other" : trimmed
+    }
+
+    private func materialCatalogueNameKey(name: String) -> String {
+        MaterialCatalogDuplicateDetection.normalizeName(name)
+    }
+
     // MARK: - Email Service
     
     func sendMaterialRequest(_ request: MaterialOrderRequest, organizationId: String) async throws {
@@ -6465,6 +6782,14 @@ extension FirebaseBackend {
                 // Still continue with other contacts even if one fails
             }
         }
+
+        let requestedStatus: MaterialWorkflowStatus = request.requestType == .quote ? .sentForQuote : .ordered
+        try await updateMaterialWorkflowStatuses(
+            materialIds: request.materials.map(\.id),
+            status: requestedStatus,
+            requestType: request.requestType,
+            organizationId: organizationId
+        )
     }
     
     private func buildMaterialRequestEmail(
@@ -6507,7 +6832,22 @@ extension FirebaseBackend {
         """
         
         for material in materials {
-            emailHTML += "<li>\(material.material) - \(material.quantity) \(material.unit.rawValue)</li>\n"
+            var lineParts: [String] = []
+            lineParts.append("<strong>\(material.material)</strong>")
+            lineParts.append("\(material.quantity) \(material.unit.quantityLabel(for: material.quantity))")
+            if let brand = material.brand?.trimmingCharacters(in: .whitespacesAndNewlines), !brand.isEmpty {
+                lineParts.append("Manufacturer: \(brand)")
+            }
+            if let code = material.productCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
+                lineParts.append("Code: \(code)")
+            }
+            if let size = material.sizeOrLength?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty {
+                lineParts.append("Size/Length: \(size)")
+            }
+            if let website = material.websiteURL?.trimmingCharacters(in: .whitespacesAndNewlines), !website.isEmpty {
+                lineParts.append("Link: <a href=\"\(website)\">\(website)</a>")
+            }
+            emailHTML += "<li>\(lineParts.joined(separator: " · "))</li>\n"
         }
         
         let formattedSignature = sentBy.replacingOccurrences(of: "\n", with: "<br>")
