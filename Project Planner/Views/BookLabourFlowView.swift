@@ -30,10 +30,15 @@ struct BookLabourCandidate: Identifiable {
 
     /// Trade line for operative-linked users (matches book-labour HTML chip).
     var tradeDisplayString: String? {
+        let userTrade = StaffTradeType.displayLabel(presetRaw: user.tradeTypePreset, custom: user.tradeTypeCustom)
+        let normalizedUserTrade = userTrade.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalizedUserTrade != "—", !normalizedUserTrade.isEmpty {
+            return normalizedUserTrade
+        }
         guard let op = linkedOperative else { return nil }
-        let label = StaffTradeType.displayLabel(presetRaw: op.tradeTypePreset ?? "", custom: op.tradeTypeCustom ?? "")
+        let label = StaffTradeType.displayLabel(presetRaw: op.tradeTypePreset, custom: op.tradeTypeCustom)
         let t = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? nil : t
+        return t == "—" || t.isEmpty ? nil : t
     }
 
     var canBookOtherLocations: Bool {
@@ -53,6 +58,7 @@ struct BookLabourFlowView: View {
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var notificationService: NotificationService
 
     @State private var phase: Phase = .pickPerson
     @State private var errorBanner: String?
@@ -60,6 +66,7 @@ struct BookLabourFlowView: View {
     @State private var projectListSearchText = ""
     @State private var bookLabourOperativeClockEdit: BookLabourOperativeClockEdit?
     @State private var pendingOperativeOverlap: PendingOperativeBookLabourOverlap?
+    @State private var operativeDraftByProjectId: [UUID: OperativeRectifyDraft] = [:]
 
     private let calendar = Calendar.current
 
@@ -67,6 +74,12 @@ struct BookLabourFlowView: View {
         let message: String
         let detailLines: [String]
         let onConfirm: () -> Void
+    }
+
+    private struct OperativeRectifyDraft {
+        var startMinutes: Int
+        var endMinutes: Int
+        var breakRemoved: Bool
     }
 
     private var day: Date { calendar.startOfDay(for: bookDate) }
@@ -573,88 +586,155 @@ struct BookLabourFlowView: View {
     @ViewBuilder
     private func pickSlotOperativeView(person: BookLabourCandidate, project: Project) -> some View {
         if let op = person.linkedOperative {
+            let draft = operativeDraft(for: project.id, operativeId: op.id)
+            let existingIntervals = existingIntervalsForOperative(op.id)
+            let existingPaidHours = existingPaidHoursForOperative(op.id)
+            let newPaidHours = paidHours(startMinutes: draft.startMinutes, endMinutes: draft.endMinutes, breakRemoved: draft.breakRemoved)
+            let combinedPaidHours = existingPaidHours + newPaidHours
+            let remainingHours = max(0, max(payrollTimePolicy.standardPaidHours, 0) - combinedPaidHours)
             ZStack(alignment: .top) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    bookLabourPersonSummaryCard(person: person)
-                    HStack(spacing: 8) {
-                        Text(project.jobNumber)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
-                        Text(project.siteName)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                    }
-                    Text(bookFlowDayLine)
-                        .font(.system(size: 11))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                    bookLabourSectionLabel("Select slot")
-                    HStack(spacing: 10) {
-                        ForEach([TimeSlot.fullDay, .morning, .afternoon], id: \.self) { slot in
-                            Button {
-                                saveOperativeBooking(operative: op, project: project, slot: slot)
-                            } label: {
-                                Text(slot.displayName)
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.blue)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 12)
-                                    .background(Color(red: 0.902, green: 0.945, blue: 0.984))
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
-                                    )
-                            }
-                            .disabled(isSaving)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        bookLabourPersonSummaryCard(person: person)
+                        HStack(spacing: 8) {
+                            Text(project.jobNumber)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(ProjectWorksRevampColors.blue)
+                            Text(project.siteName)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(ProjectWorksRevampColors.ink)
                         }
-                    }
-                    HStack(spacing: 10) {
+                        Text(bookFlowDayLine)
+                            .font(.system(size: 11))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+
+                        bookLabourSectionLabel("0-24 timeline")
+                        BookLabourRectifyTimeline(
+                            policy: payrollTimePolicy,
+                            existingIntervals: existingIntervals,
+                            proposedStart: draft.startMinutes,
+                            proposedEnd: draft.endMinutes
+                        )
+
+                        bookLabourSectionLabel("Quick options")
+                        HStack(spacing: 10) {
+                            Button {
+                                applyQuickTimeSlot(.fullDay, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
+                            } label: {
+                                quickDraftButtonLabel("FULL DAY")
+                            }
+                            Button {
+                                applyQuickTimeSlot(.morning, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
+                            } label: {
+                                quickDraftButtonLabel("AM")
+                            }
+                            Button {
+                                applyQuickTimeSlot(.afternoon, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
+                            } label: {
+                                quickDraftButtonLabel("PM")
+                            }
+                        }
+
+                        HStack(spacing: 8) {
+                            draftTimePicker(
+                                title: "Start",
+                                value: draft.startMinutes,
+                                allowedRange: 0...(max(0, draft.endMinutes - 30))
+                            ) { value in
+                                setOperativeDraft(
+                                    for: project.id,
+                                    draft: .init(startMinutes: value, endMinutes: draft.endMinutes, breakRemoved: draft.breakRemoved)
+                                )
+                            }
+                            draftTimePicker(
+                                title: "End",
+                                value: draft.endMinutes,
+                                allowedRange: (draft.startMinutes + 30)...(24 * 60)
+                            ) { value in
+                                setOperativeDraft(
+                                    for: project.id,
+                                    draft: .init(startMinutes: draft.startMinutes, endMinutes: value, breakRemoved: draft.breakRemoved)
+                                )
+                            }
+                        }
+
+                        Toggle("No break on this booking", isOn: Binding(
+                            get: { draft.breakRemoved },
+                            set: { value in
+                                setOperativeDraft(
+                                    for: project.id,
+                                    draft: .init(startMinutes: draft.startMinutes, endMinutes: draft.endMinutes, breakRemoved: value)
+                                )
+                            }
+                        ))
+                        .font(.system(size: 12, weight: .medium))
+                        .tint(ProjectWorksRevampColors.blue)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Breakdown")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text("Existing booked: \(ScheduleCoverageFormat.hours(existingPaidHours))h")
+                                .font(.system(size: 11))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                            Text("New booking: \(ScheduleCoverageFormat.hours(newPaidHours))h")
+                                .font(.system(size: 11))
+                                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                            Text("Total booked: \(ScheduleCoverageFormat.hours(combinedPaidHours))h")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                            if remainingHours > 0.05 {
+                                Text("Missing to standard day: \(ScheduleCoverageFormat.hours(remainingHours))h")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+                            }
+                        }
+                        .padding(10)
+                        .background(Color.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+                        )
+
                         Button {
                             saveOperativeBooking(
                                 operative: op,
                                 project: project,
                                 slot: .customHours,
-                                workStart: payrollTimePolicy.standardDayStart,
-                                workEnd: payrollTimePolicy.standardDayEnd,
-                                breakRemoved: false
+                                workStart: timeText(from: draft.startMinutes),
+                                workEnd: timeText(from: draft.endMinutes),
+                                breakRemoved: draft.breakRemoved
                             )
                         } label: {
-                            Text("Standard day")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.blue)
+                            Text("Save booking")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
-                                .background(Color(red: 0.902, green: 0.961, blue: 0.933))
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
-                                )
+                                .background(ProjectWorksRevampColors.blue)
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
-                        .disabled(isSaving || !canBookStandardDayWindow)
+                        .disabled(isSaving || draft.endMinutes <= draft.startMinutes)
 
                         Button {
                             bookLabourOperativeClockEdit = BookLabourOperativeClockEdit(operative: op, project: project)
                         } label: {
-                            Text("Custom…")
-                                .font(.system(size: 13, weight: .medium))
+                            Text("Advanced editor")
+                                .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(ProjectWorksRevampColors.blue)
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(Color(red: 0.996, green: 0.949, blue: 0.878))
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .padding(.vertical, 10)
+                                .background(Color.white)
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                 .overlay(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                                         .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
                                 )
                         }
-                        .disabled(isSaving)
                     }
+                    .padding(18)
                 }
-                .padding(18)
-            }
-            .scrollIndicators(.hidden)
+                .scrollIndicators(.hidden)
 
                 if let pending = pendingOperativeOverlap {
                     ScheduleOverlapWarningPanel(
@@ -674,6 +754,134 @@ struct BookLabourFlowView: View {
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .padding()
         }
+    }
+
+    private func operativeDraft(for projectId: UUID, operativeId: UUID) -> OperativeRectifyDraft {
+        if let existing = operativeDraftByProjectId[projectId] {
+            return existing
+        }
+        return defaultOperativeDraft(operativeId: operativeId)
+    }
+
+    private func setOperativeDraft(for projectId: UUID, draft: OperativeRectifyDraft) {
+        var adjusted = draft
+        adjusted.startMinutes = max(0, min(adjusted.startMinutes, 24 * 60))
+        adjusted.endMinutes = max(adjusted.startMinutes + 30, min(adjusted.endMinutes, 24 * 60))
+        operativeDraftByProjectId[projectId] = adjusted
+    }
+
+    private func defaultOperativeDraft(operativeId: UUID) -> OperativeRectifyDraft {
+        let defaultStart = ManagerScheduleInterval.parseMinutes(payrollTimePolicy.standardDayStart) ?? 450
+        let defaultEnd = ManagerScheduleInterval.parseMinutes(payrollTimePolicy.standardDayEnd) ?? 960
+        let intervals = existingIntervalsForOperative(operativeId)
+        let latestEnd = intervals.map(\.1).max() ?? defaultStart
+        let start = max(defaultStart, latestEnd)
+        let end = start < defaultEnd ? defaultEnd : min(24 * 60, start + 60)
+        return .init(startMinutes: start, endMinutes: max(start + 30, end), breakRemoved: false)
+    }
+
+    private func existingIntervalsForOperative(_ operativeId: UUID) -> [(Int, Int)] {
+        bookingStore.bookings
+            .filter {
+                $0.operativeId == operativeId &&
+                calendar.isDate($0.date, inSameDayAs: day) &&
+                ($0.status == .confirmed || $0.status == .tentative)
+            }
+            .compactMap { OperativeBookingInterval.clashInterval(for: $0, policy: payrollTimePolicy) }
+            .sorted { $0.0 < $1.0 }
+    }
+
+    private func existingPaidHoursForOperative(_ operativeId: UUID) -> Double {
+        bookingStore.bookings
+            .filter {
+                $0.operativeId == operativeId &&
+                calendar.isDate($0.date, inSameDayAs: day) &&
+                ($0.status == .confirmed || $0.status == .tentative)
+            }
+            .reduce(0.0) { $0 + $1.paidBookedHours(policy: payrollTimePolicy) }
+    }
+
+    private func paidHours(startMinutes: Int, endMinutes: Int, breakRemoved: Bool) -> Double {
+        guard endMinutes > startMinutes else { return 0 }
+        var wall = Double(endMinutes - startMinutes) / 60.0
+        if !breakRemoved {
+            wall = max(0, wall - payrollTimePolicy.standardUnpaidBreakHours)
+        }
+        return wall
+    }
+
+    private func applyQuickTimeSlot(_ slot: TimeSlot, projectId: UUID, currentBreakRemoved: Bool) {
+        guard let ds = ManagerScheduleInterval.parseMinutes(payrollTimePolicy.standardDayStart),
+              let de = ManagerScheduleInterval.parseMinutes(payrollTimePolicy.standardDayEnd),
+              de > ds else { return }
+        let mid = ds + ((de - ds) / 2)
+        let next: OperativeRectifyDraft
+        switch slot {
+        case .fullDay:
+            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: currentBreakRemoved)
+        case .morning:
+            next = .init(startMinutes: ds, endMinutes: mid, breakRemoved: currentBreakRemoved)
+        case .afternoon:
+            next = .init(startMinutes: mid, endMinutes: de, breakRemoved: currentBreakRemoved)
+        default:
+            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: currentBreakRemoved)
+        }
+        setOperativeDraft(for: projectId, draft: next)
+    }
+
+    private func timeText(from minutes: Int) -> String {
+        if minutes >= 24 * 60 { return "24:00" }
+        let clamped = max(0, min(minutes, 24 * 60 - 1))
+        return String(format: "%02d:%02d", clamped / 60, clamped % 60)
+    }
+
+    private func quickDraftButtonLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(ProjectWorksRevampColors.blue)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(Color(red: 0.902, green: 0.945, blue: 0.984))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
+            )
+    }
+
+    private func draftTimePicker(
+        title: String,
+        value: Int,
+        allowedRange: ClosedRange<Int>,
+        onChange: @escaping (Int) -> Void
+    ) -> some View {
+        let safeValue = min(max(value, allowedRange.lowerBound), allowedRange.upperBound)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+            Picker(title, selection: Binding(
+                get: { safeValue },
+                set: { onChange($0) }
+            )) {
+                ForEach(Array(stride(from: 0, through: 24 * 60, by: 30)), id: \.self) { minute in
+                    if minute >= allowedRange.lowerBound && minute <= allowedRange.upperBound {
+                        Text(timeText(from: minute)).tag(minute)
+                    }
+                }
+            }
+            .pickerStyle(.wheel)
+            .frame(maxWidth: .infinity)
+            .frame(height: 92)
+            .clipped()
+        }
+        .padding(8)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
     }
 
     // MARK: - Revamp layout (HTML reference)
@@ -905,6 +1113,7 @@ struct BookLabourFlowView: View {
         isSaving = true
         Task {
             await managerScheduleStore.saveBooking(booking)
+            ScheduleChangeNotifier.postBookingStoreDidChange()
             await MainActor.run {
                 isSaving = false
                 dismiss()
@@ -976,6 +1185,12 @@ struct BookLabourFlowView: View {
                 workEndTime: workEnd,
                 isBreakRemoved: breakRemoved
             )
+            await notificationService.notifyBookedUsers(
+                projectName: project.siteName,
+                bookedBy: userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User",
+                recipients: [.init(operativeId: operative.id, dates: [day])]
+            )
+            ScheduleChangeNotifier.postBookingStoreDidChange()
             await MainActor.run {
                 isSaving = false
                 dismiss()
@@ -1133,7 +1348,11 @@ struct BookLabourFlowView: View {
         let hasAM = bookings.contains(where: { $0.timeSlot == .morning })
         let hasPM = bookings.contains(where: { $0.timeSlot == .afternoon })
         if hasAM && hasPM { return true }
-        return bookings.contains { OperativeBookingInterval.coversFullStandardDay($0, policy: policy) }
+        if bookings.contains(where: { OperativeBookingInterval.coversFullStandardDay($0, policy: policy) }) {
+            return true
+        }
+        let paidTotal = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
+        return paidTotal >= max(policy.standardPaidHours, 0)
     }
 
     private func managerHasFullDayProjectBooking(userId: String) -> Bool {
@@ -1148,7 +1367,11 @@ struct BookLabourFlowView: View {
         let hasAM = bookings.contains(where: { $0.timeSlot == .morning })
         let hasPM = bookings.contains(where: { $0.timeSlot == .afternoon })
         if hasAM && hasPM { return true }
-        return bookings.contains { ManagerScheduleInterval.coversFullStandardDay($0, policy: policy) }
+        if bookings.contains(where: { ManagerScheduleInterval.coversFullStandardDay($0, policy: policy) }) {
+            return true
+        }
+        let paidTotal = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
+        return paidTotal >= max(policy.standardPaidHours, 0)
     }
 }
 
@@ -1237,6 +1460,9 @@ private struct BookLabourRoleChipRow: View {
                 if person.user.permissions.adminAccess {
                     chip("Admin", bg: ProjectWorksRevampColors.jobTypePillBg, fg: ProjectWorksRevampColors.jobTypePillInk)
                 }
+                if let trade = person.tradeDisplayString {
+                    chip(trade, bg: ProjectWorksRevampColors.pinRoseBg, fg: ProjectWorksRevampColors.pinRoseFg)
+                }
                 if !person.user.permissions.manager && !person.user.permissions.adminAccess {
                     chip("User", bg: Color(red: 0.933, green: 0.937, blue: 0.941), fg: ProjectWorksRevampColors.muted)
                 }
@@ -1252,5 +1478,89 @@ private struct BookLabourRoleChipRow: View {
             .padding(.vertical, 1)
             .background(bg)
             .clipShape(Capsule())
+    }
+}
+
+private struct BookLabourRectifyTimeline: View {
+    let policy: OrgPayrollTimePolicy
+    let existingIntervals: [(Int, Int)]
+    let proposedStart: Int
+    let proposedEnd: Int
+
+    private var standardStart: Int {
+        ManagerScheduleInterval.parseMinutes(policy.standardDayStart) ?? 450
+    }
+
+    private var standardEnd: Int {
+        ManagerScheduleInterval.parseMinutes(policy.standardDayEnd) ?? 960
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            GeometryReader { geo in
+                let width = geo.size.width
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
+
+                    ForEach(Array(existingIntervals.enumerated()), id: \.offset) { _, iv in
+                        segment(
+                            color: ProjectWorksRevampColors.blue,
+                            start: iv.0,
+                            end: iv.1,
+                            totalWidth: width
+                        )
+                    }
+
+                    if proposedEnd > proposedStart {
+                        let standardCapEnd = min(proposedEnd, standardEnd)
+                        if standardCapEnd > proposedStart {
+                            segment(
+                                color: ProjectWorksRevampColors.activeGreen,
+                                start: proposedStart,
+                                end: standardCapEnd,
+                                totalWidth: width
+                            )
+                        }
+                        if proposedEnd > standardEnd {
+                            segment(
+                                color: ProjectWorksRevampColors.upcomingAmber,
+                                start: max(standardEnd, proposedStart),
+                                end: proposedEnd,
+                                totalWidth: width
+                            )
+                        }
+                    }
+                }
+            }
+            .frame(height: 24)
+            HStack {
+                ForEach([0, 6, 12, 18, 24], id: \.self) { hour in
+                    Text(hour == 24 ? "24" : String(format: "%02d", hour))
+                        .font(.system(size: 9))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                    if hour != 24 { Spacer(minLength: 0) }
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    @ViewBuilder
+    private func segment(color: Color, start: Int, end: Int, totalWidth: CGFloat) -> some View {
+        let clampedStart = CGFloat(max(0, min(start, 24 * 60)))
+        let clampedEnd = CGFloat(max(0, min(end, 24 * 60)))
+        let left = (clampedStart / CGFloat(24 * 60)) * totalWidth
+        let width = max(2, ((clampedEnd - clampedStart) / CGFloat(24 * 60)) * totalWidth)
+        RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .fill(color)
+            .frame(width: width, height: 24)
+            .offset(x: left)
     }
 }

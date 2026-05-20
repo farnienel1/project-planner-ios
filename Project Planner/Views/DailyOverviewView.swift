@@ -40,6 +40,7 @@ struct DailyOverviewView: View {
     @State private var showingPastBookings = false
     @State private var showingBookLabour = false
     @State private var bookingEditTarget: DailyOverviewEditTarget?
+    @State private var scheduleRefreshTick = UUID()
     /// When `displayDate` is nil, the user can change the day from the strip (today’s overview sheet).
     @State private var selectedCalendarDay: Date = Calendar.current.startOfDay(for: Date())
     
@@ -297,7 +298,11 @@ struct DailyOverviewView: View {
         let hasAM = bookings.contains(where: { $0.timeSlot == .morning })
         let hasPM = bookings.contains(where: { $0.timeSlot == .afternoon })
         if hasAM && hasPM { return true }
-        return bookings.contains { OperativeBookingInterval.coversFullStandardDay($0, policy: policy) }
+        if bookings.contains(where: { OperativeBookingInterval.coversFullStandardDay($0, policy: policy) }) {
+            return true
+        }
+        let paidTotal = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
+        return paidTotal >= max(policy.standardPaidHours, 0)
     }
 
     private func managerHasFullDayProjectBooking(_ userId: String) -> Bool {
@@ -312,7 +317,11 @@ struct DailyOverviewView: View {
         let hasAM = bookings.contains(where: { $0.timeSlot == ManagerTimeSlot.morning })
         let hasPM = bookings.contains(where: { $0.timeSlot == ManagerTimeSlot.afternoon })
         if hasAM && hasPM { return true }
-        return bookings.contains { ManagerScheduleInterval.coversFullStandardDay($0, policy: policy) }
+        if bookings.contains(where: { ManagerScheduleInterval.coversFullStandardDay($0, policy: policy) }) {
+            return true
+        }
+        let paidTotal = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
+        return paidTotal >= max(policy.standardPaidHours, 0)
     }
 
     private var unbookedOperativeNames: [String] {
@@ -1172,7 +1181,9 @@ struct DailyOverviewView: View {
                 .environmentObject(taskStore)
                 .environmentObject(notificationService)
         }
-        .fullScreenCover(isPresented: $showingBookLabour) {
+        .fullScreenCover(isPresented: $showingBookLabour, onDismiss: {
+            Task { await refreshScheduleAfterExternalBooking() }
+        }) {
             BookLabourFlowView(bookDate: overviewDate)
                 .environmentObject(appSettings)
                 .environmentObject(bookingStore)
@@ -1182,7 +1193,17 @@ struct DailyOverviewView: View {
                 .environmentObject(holidayStore)
                 .environmentObject(managerScheduleStore)
                 .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .bookingStoreDidChange)) { _ in
+            scheduleRefreshTick = UUID()
+            Task { await refreshScheduleAfterExternalBooking() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
+            scheduleRefreshTick = UUID()
+            Task { await refreshScheduleAfterExternalBooking() }
+        }
+        .id(scheduleRefreshTick)
         .sheet(item: $bookingEditTarget) { target in
             dailyOverviewEditSheet(for: target)
         }
@@ -1302,6 +1323,21 @@ private extension DailyOverviewView {
                 onCancel: { bookingEditTarget = nil }
             )
         }
+    }
+
+    private func refreshScheduleAfterExternalBooking() async {
+        managerScheduleStore.loadData()
+        scheduleRefreshTick = UUID()
+        await WarningsRefreshHelper.refreshSharedWarnings(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings
+        )
     }
 
     func saveOperativeBookingEdit(
