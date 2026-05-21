@@ -267,16 +267,20 @@ struct DailyOverviewView: View {
     }
 
     private var operativeUsers: [AppUser] {
-        userStore.organizationUsers.filter { $0.permissions.operativeMode && $0.isActive }
+        userStore.organizationUsers.filter {
+            $0.isActive &&
+            $0.permissions.operativeMode &&
+            !$0.permissions.manager &&
+            !$0.permissions.adminAccess &&
+            !$0.isSuperAdmin &&
+            $0.role != .admin
+        }
     }
 
     private var managerUsers: [AppUser] {
         userStore.organizationUsers.filter {
-            !$0.permissions.operativeMode &&
-            !$0.isSuperAdmin &&
-            !$0.permissions.adminAccess &&
-            $0.permissions.manager &&
-            $0.isActive
+            $0.isActive &&
+            ($0.permissions.manager || $0.permissions.adminAccess || $0.isSuperAdmin || $0.role == .admin)
         }
     }
 
@@ -289,23 +293,15 @@ struct DailyOverviewView: View {
         }
     }
 
-    private func operativeHasFullDayBooking(_ operativeId: UUID) -> Bool {
+    private func operativePaidHours(_ operativeId: UUID) -> Double {
         let policy = payrollTimePolicy
         let bookings = dayBookings.filter {
             $0.operativeId == operativeId && ($0.status == .confirmed || $0.status == .tentative)
         }
-        if bookings.contains(where: { $0.timeSlot == .fullDay }) { return true }
-        let hasAM = bookings.contains(where: { $0.timeSlot == .morning })
-        let hasPM = bookings.contains(where: { $0.timeSlot == .afternoon })
-        if hasAM && hasPM { return true }
-        if bookings.contains(where: { OperativeBookingInterval.coversFullStandardDay($0, policy: policy) }) {
-            return true
-        }
-        let paidTotal = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
-        return paidTotal >= max(policy.standardPaidHours, 0)
+        return bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
     }
 
-    private func managerHasFullDayProjectBooking(_ userId: String) -> Bool {
+    private func managerProjectPaidHours(_ userId: String) -> Double {
         let policy = payrollTimePolicy
         let bookings: [ManagerSiteBooking] = managerScheduleStore.managerSiteBookings.filter { booking in
             let sameDay = Calendar.current.isDate(booking.date, inSameDayAs: overviewDate)
@@ -313,15 +309,7 @@ struct DailyOverviewView: View {
             let isProjectLocation = booking.locationType == ManagerLocationType.project || booking.locationType == ManagerLocationType.smallWork
             return sameDay && sameUser && isProjectLocation
         }
-        if bookings.contains(where: { $0.timeSlot == ManagerTimeSlot.fullDay }) { return true }
-        let hasAM = bookings.contains(where: { $0.timeSlot == ManagerTimeSlot.morning })
-        let hasPM = bookings.contains(where: { $0.timeSlot == ManagerTimeSlot.afternoon })
-        if hasAM && hasPM { return true }
-        if bookings.contains(where: { ManagerScheduleInterval.coversFullStandardDay($0, policy: policy) }) {
-            return true
-        }
-        let paidTotal = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
-        return paidTotal >= max(policy.standardPaidHours, 0)
+        return bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
     }
 
     private var unbookedOperativeNames: [String] {
@@ -329,17 +317,33 @@ struct DailyOverviewView: View {
             let linkedOperative = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
             if hasApprovedHoliday(userId: user.id, operativeId: linkedOperative?.id) { return nil }
             guard let operativeId = linkedOperative?.id else {
-                return user.fullName.isEmpty ? user.email : user.fullName
+                let paid = managerProjectPaidHours(user.id)
+                let required = max(payrollTimePolicy.standardPaidHours, 0)
+                guard paid < required else { return nil }
+                let missing = max(0, required - paid)
+                let display = user.fullName.isEmpty ? user.email : user.fullName
+                return "\(display) (missing \(ScheduleCoverageFormat.hours(missing))h)"
             }
-            return operativeHasFullDayBooking(operativeId) ? nil : linkedOperative?.name
+            let paid = operativePaidHours(operativeId) + managerProjectPaidHours(user.id)
+            let required = max(payrollTimePolicy.standardPaidHours, 0)
+            guard paid < required else { return nil }
+            let missing = max(0, required - paid)
+            let display = linkedOperative?.name ?? (user.fullName.isEmpty ? user.email : user.fullName)
+            return "\(display) (missing \(ScheduleCoverageFormat.hours(missing))h)"
         }
         .sorted()
     }
 
     private var unbookedManagerNames: [String] {
         managerUsers.compactMap { user in
-            if hasApprovedHoliday(userId: user.id, operativeId: nil) { return nil }
-            return managerHasFullDayProjectBooking(user.id) ? nil : (user.fullName.isEmpty ? user.email : user.fullName)
+            let linkedOperative = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
+            if hasApprovedHoliday(userId: user.id, operativeId: linkedOperative?.id) { return nil }
+            let paid = managerProjectPaidHours(user.id) + (linkedOperative.map { operativePaidHours($0.id) } ?? 0)
+            let required = max(payrollTimePolicy.standardPaidHours, 0)
+            guard paid < required else { return nil }
+            let missing = max(0, required - paid)
+            let display = user.fullName.isEmpty ? user.email : user.fullName
+            return "\(display) (missing \(ScheduleCoverageFormat.hours(missing))h)"
         }
         .sorted()
     }

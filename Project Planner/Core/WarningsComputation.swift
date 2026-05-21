@@ -70,10 +70,11 @@ enum WarningsComputation {
             operativesByEmail[op.email.lowercased()] = op
         }
         let usersById = keyedByString(input.users, id: \.id)
-        let managerAdminUserIds = Set(input.users.filter { user in
-            !user.permissions.operativeMode &&
+        let managerOrAdminUsers = input.users.filter { user in
+            user.isActive &&
                 (user.permissions.manager || user.permissions.adminAccess || user.role == .admin || user.isSuperAdmin)
-        }.map(\.id))
+        }
+        let managerAdminUserIds = Set(managerOrAdminUsers.map(\.id))
 
         let scheduleIndex = WarningsScheduleIndex(
             calendar: cal,
@@ -84,11 +85,15 @@ enum WarningsComputation {
             approvedHolidays: input.holidayBookings.filter { $0.status == .approved }
         )
 
-        let operativeUsers = input.users.filter { $0.permissions.operativeMode && $0.isActive }
-        let managerUsers = input.users.filter {
-            !$0.permissions.operativeMode && !$0.isSuperAdmin && !$0.permissions.adminAccess
-                && $0.permissions.manager && $0.isActive
+        let operativeUsers = input.users.filter {
+            $0.isActive &&
+                $0.permissions.operativeMode &&
+                !$0.permissions.manager &&
+                !$0.permissions.adminAccess &&
+                !$0.isSuperAdmin &&
+                $0.role != .admin
         }
+        let managerUsers = managerOrAdminUsers
 
         func userDisplayName(userId: String) -> String {
             if let u = usersById[userId] {
@@ -269,7 +274,7 @@ enum WarningsComputation {
                         resolutionKey: "unbooked-\(day.timeIntervalSince1970)",
                         type: .unbookedLabour,
                         title: "Unbooked labour",
-                        message: "\(names.count) \(names.count == 1 ? "person" : "people") unbooked on \(dayFormatter.string(from: day)).",
+                        message: "\(names.count) \(names.count == 1 ? "person is" : "people are") below the standard paid day on \(dayFormatter.string(from: day)). Missing hours are shown per person below.",
                         severity: .high,
                         occurrenceDate: day,
                         unbookedLabour: Warning.UnbookedLabourWarningDetails(date: day, names: names)
@@ -480,38 +485,24 @@ private struct WarningsScheduleIndex {
             return false
         }
 
-        func operativeHasFullDay(_ operativeId: UUID) -> Bool {
+        let requiredPaidHours = max(policy.standardPaidHours, 0)
+
+        func operativePaidTotal(_ operativeId: UUID) -> Double {
             let key = "\(operativeId.uuidString)-\(dayKeySuffix)"
             let dayBookings = operativeBookingsByDayKey[key] ?? []
-            if dayBookings.contains(where: { $0.timeSlot == .fullDay }) { return true }
-            let hasAM = dayBookings.contains(where: { $0.timeSlot == .morning })
-            let hasPM = dayBookings.contains(where: { $0.timeSlot == .afternoon })
-            if hasAM && hasPM { return true }
-            if dayBookings.contains(where: { OperativeBookingInterval.coversFullStandardDay($0, policy: policy) }) {
-                return true
-            }
-            let paidTotal = dayBookings.reduce(0.0) { sum, booking in
+            return dayBookings.reduce(0.0) { sum, booking in
                 sum + booking.paidBookedHours(policy: policy)
             }
-            return paidTotal >= max(policy.standardPaidHours, 0)
         }
 
-        func managerHasFullDay(_ userId: String) -> Bool {
+        func managerPaidTotal(_ userId: String) -> Double {
             let key = "\(userId)-\(dayKeySuffix)"
             let dayMgr = (managerBookingsByDayKey[key] ?? []).filter {
                 $0.locationType == .project || $0.locationType == .smallWork
             }
-            if dayMgr.contains(where: { $0.timeSlot == .fullDay }) { return true }
-            let hasAM = dayMgr.contains(where: { $0.timeSlot == .morning })
-            let hasPM = dayMgr.contains(where: { $0.timeSlot == .afternoon })
-            if hasAM && hasPM { return true }
-            if dayMgr.contains(where: { ManagerScheduleInterval.coversFullStandardDay($0, policy: policy) }) {
-                return true
-            }
-            let paidTotal = dayMgr.reduce(0.0) { sum, booking in
+            return dayMgr.reduce(0.0) { sum, booking in
                 sum + booking.paidBookedHours(policy: policy)
             }
-            return paidTotal >= max(policy.standardPaidHours, 0)
         }
 
         let operativeUserEmails = Set(operativeUsers.map { $0.email.lowercased() })
@@ -523,10 +514,16 @@ private struct WarningsScheduleIndex {
             let linked = operativesByEmail[user.email.lowercased()]
             if hasHoliday(userId: user.id, operativeId: linked?.id) { continue }
             if let oid = linked?.id {
-                if operativeHasFullDay(oid) { continue }
-                names.append(linked!.name)
+                let paid = operativePaidTotal(oid) + managerPaidTotal(user.id)
+                if paid >= requiredPaidHours { continue }
+                let missing = max(0, requiredPaidHours - paid)
+                names.append("\(linked!.name) (missing \(ScheduleCoverageFormat.hours(missing))h)")
             } else {
-                names.append(user.fullName.isEmpty ? user.email : user.fullName)
+                let paid = managerPaidTotal(user.id)
+                if paid >= requiredPaidHours { continue }
+                let missing = max(0, requiredPaidHours - paid)
+                let display = user.fullName.isEmpty ? user.email : user.fullName
+                names.append("\(display) (missing \(ScheduleCoverageFormat.hours(missing))h)")
             }
         }
 
@@ -536,14 +533,20 @@ private struct WarningsScheduleIndex {
             guard !operativeUserEmails.contains(email) else { continue }
             let linkedUserId = usersById.values.first(where: { $0.email.lowercased() == email })?.id
             if hasHoliday(userId: linkedUserId, operativeId: op.id) { continue }
-            if operativeHasFullDay(op.id) { continue }
-            names.append(op.name)
+            let paid = operativePaidTotal(op.id)
+            if paid >= requiredPaidHours { continue }
+            let missing = max(0, requiredPaidHours - paid)
+            names.append("\(op.name) (missing \(ScheduleCoverageFormat.hours(missing))h)")
         }
 
         for user in managerUsers {
-            if hasHoliday(userId: user.id, operativeId: nil) { continue }
-            if managerHasFullDay(user.id) { continue }
-            names.append(user.fullName.isEmpty ? user.email : user.fullName)
+            let linked = operativesByEmail[user.email.lowercased()]
+            if hasHoliday(userId: user.id, operativeId: linked?.id) { continue }
+            let paid = managerPaidTotal(user.id) + (linked.map { operativePaidTotal($0.id) } ?? 0)
+            if paid >= requiredPaidHours { continue }
+            let missing = max(0, requiredPaidHours - paid)
+            let display = user.fullName.isEmpty ? user.email : user.fullName
+            names.append("\(display) (missing \(ScheduleCoverageFormat.hours(missing))h)")
         }
         return names.sorted()
     }
