@@ -1300,27 +1300,35 @@ struct BookLabourFlowView: View {
 
         let operativeUsers = userStore.organizationUsers.filter { $0.permissions.operativeMode && $0.isActive }
         let managerUsers = userStore.organizationUsers.filter {
-            !$0.permissions.operativeMode &&
-                !$0.isSuperAdmin &&
+            $0.isActive &&
+                ($0.permissions.manager || $0.permissions.adminAccess || $0.isSuperAdmin || $0.role == .admin)
+        }
+        let operativeOnlyUsers = operativeUsers.filter {
+            !$0.permissions.manager &&
                 !$0.permissions.adminAccess &&
-                $0.permissions.manager &&
-                $0.isActive
+                !$0.isSuperAdmin &&
+                $0.role != .admin
         }
 
         var out: [BookLabourCandidate] = []
+        var seenUserIds: Set<String> = []
 
-        for user in operativeUsers {
+        for user in operativeOnlyUsers {
             let linked = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
             if hasApprovedHoliday(userId: user.id, operativeId: linked?.id) { continue }
             guard let linked else { continue }
-            if operativeHasFullDayBooking(operativeId: linked.id) { continue }
+            let paid = operativePaidHours(operativeId: linked.id) + managerProjectPaidHours(userId: user.id)
+            if paid >= max(payrollTimePolicy.standardPaidHours, 0) { continue }
+            seenUserIds.insert(user.id)
             out.append(BookLabourCandidate(user: user, linkedOperative: linked, usesOperativeProjectBookings: true))
         }
 
         for user in managerUsers {
-            if hasApprovedHoliday(userId: user.id, operativeId: nil) { continue }
-            if managerHasFullDayProjectBooking(userId: user.id) { continue }
             let linked = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
+            if hasApprovedHoliday(userId: user.id, operativeId: linked?.id) { continue }
+            if seenUserIds.contains(user.id) { continue }
+            let paid = managerProjectPaidHours(userId: user.id) + (linked.map { operativePaidHours(operativeId: $0.id) } ?? 0)
+            if paid >= max(payrollTimePolicy.standardPaidHours, 0) { continue }
             out.append(BookLabourCandidate(user: user, linkedOperative: linked, usesOperativeProjectBookings: false))
         }
 
@@ -1337,25 +1345,17 @@ struct BookLabourFlowView: View {
         }
     }
 
-    private func operativeHasFullDayBooking(operativeId: UUID) -> Bool {
+    private func operativePaidHours(operativeId: UUID) -> Double {
         let policy = payrollTimePolicy
         let bookings = bookingStore.bookings.filter {
             $0.operativeId == operativeId &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
                 ($0.status == .confirmed || $0.status == .tentative)
         }
-        if bookings.contains(where: { $0.timeSlot == .fullDay }) { return true }
-        let hasAM = bookings.contains(where: { $0.timeSlot == .morning })
-        let hasPM = bookings.contains(where: { $0.timeSlot == .afternoon })
-        if hasAM && hasPM { return true }
-        if bookings.contains(where: { OperativeBookingInterval.coversFullStandardDay($0, policy: policy) }) {
-            return true
-        }
-        let paidTotal = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
-        return paidTotal >= max(policy.standardPaidHours, 0)
+        return bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
     }
 
-    private func managerHasFullDayProjectBooking(userId: String) -> Bool {
+    private func managerProjectPaidHours(userId: String) -> Double {
         let policy = payrollTimePolicy
         let bookings = managerScheduleStore.managerSiteBookings.filter { booking in
             let sameDay = calendar.isDate(booking.date, inSameDayAs: day)
@@ -1363,15 +1363,7 @@ struct BookLabourFlowView: View {
             let isProject = booking.locationType == .project || booking.locationType == .smallWork
             return sameDay && sameUser && isProject
         }
-        if bookings.contains(where: { $0.timeSlot == .fullDay }) { return true }
-        let hasAM = bookings.contains(where: { $0.timeSlot == .morning })
-        let hasPM = bookings.contains(where: { $0.timeSlot == .afternoon })
-        if hasAM && hasPM { return true }
-        if bookings.contains(where: { ManagerScheduleInterval.coversFullStandardDay($0, policy: policy) }) {
-            return true
-        }
-        let paidTotal = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
-        return paidTotal >= max(policy.standardPaidHours, 0)
+        return bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
     }
 }
 
