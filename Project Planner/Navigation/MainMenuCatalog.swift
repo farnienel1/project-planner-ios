@@ -37,6 +37,7 @@ enum MainMenuSurfaceRoute: String, CaseIterable {
     case generalAppSettings
     case orgSitesMap
     case siteAudit
+    case invoicing
 }
 
 enum MainMenuShellSection: String, CaseIterable, Identifiable {
@@ -188,6 +189,17 @@ enum MainMenuCatalog {
                 iconTint: Color(red: 0.6, green: 0.24, blue: 0.11),
                 isEligible: { u, _, _ in u.canViewSiteAudit() || u.isHomeProfileLoading },
                 action: .openSurface(.siteAudit)
+            ),
+            MainMenuRowSpec(
+                id: "invoicing",
+                section: .navigate,
+                title: "Invoicing",
+                detail: "Payment runs and invoices",
+                icon: "doc.text.fill",
+                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
+                iconTint: ProjectWorksRevampColors.blue,
+                isEligible: { u, _, _ in u.canAccessInvoicing() },
+                action: .openSurface(.invoicing)
             ),
 
             MainMenuRowSpec(

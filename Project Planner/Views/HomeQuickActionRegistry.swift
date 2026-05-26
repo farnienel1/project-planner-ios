@@ -46,6 +46,7 @@ enum HomeQuickActionID: String, CaseIterable {
     case staffHoliday = "staff-holiday"
     case staffGeneralAppSettings = "staff-general-app"
     case staffTasks = "staff-tasks"
+    case staffInvoicing = "staff-invoicing"
 
     /// Never offer these on the home screen (picker / persistence strip).
     static let barredFromHome: Set<String> = [
@@ -144,6 +145,8 @@ enum HomeQuickActionRegistry {
             return HomeQuickActionMeta(id: id, symbol: "slider.horizontal.3", title: "General\napp", tint: purple)
         case HomeQuickActionID.staffTasks.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "plus.rectangle.on.rectangle", title: "Tasks", tint: blue)
+        case HomeQuickActionID.staffInvoicing.rawValue:
+            return HomeQuickActionMeta(id: id, symbol: "doc.text.fill", title: "Invoicing", tint: blue)
         default:
             return nil
         }
@@ -218,6 +221,8 @@ enum HomeQuickActionRegistry {
             return !userStore.isOperativeMode() && userStore.hasAdminAccess()
         case HomeQuickActionID.staffTasks.rawValue:
             return !userStore.isOperativeMode()
+        case HomeQuickActionID.staffInvoicing.rawValue:
+            return userStore.canAccessInvoicing()
         default:
             return false
         }
@@ -233,6 +238,9 @@ enum HomeQuickActionRegistry {
             ]
             if isEligible(id: HomeQuickActionID.opSiteAudit.rawValue, userStore: userStore) {
                 a.append(HomeQuickActionID.opSiteAudit.rawValue)
+            }
+            if isEligible(id: HomeQuickActionID.staffInvoicing.rawValue, userStore: userStore) {
+                a.append(HomeQuickActionID.staffInvoicing.rawValue)
             }
             a.append(contentsOf: [
                 HomeQuickActionID.opSchedule.rawValue,
@@ -280,6 +288,9 @@ enum HomeQuickActionRegistry {
         }
         if isEligible(id: HomeQuickActionID.staffSettings.rawValue, userStore: userStore) {
             items.append(HomeQuickActionID.staffSettings.rawValue)
+        }
+        if isEligible(id: HomeQuickActionID.staffInvoicing.rawValue, userStore: userStore) {
+            items.append(HomeQuickActionID.staffInvoicing.rawValue)
         }
         return items
     }

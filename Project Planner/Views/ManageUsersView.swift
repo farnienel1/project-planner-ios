@@ -743,6 +743,9 @@ struct EditUserView: View {
     @State private var annualLeaveEndMonth: Int
     @State private var annualLeaveCarriesOver: Bool
     @State private var annualLeaveEnabledDraft: Bool
+    @State private var employmentTypeDraft: EmploymentType
+    @State private var showingEmploymentTypeConfirmation = false
+    @State private var employmentTypeConfirmationAccepted = false
 
     init(user: AppUser, suppressAdminAccessToggle: Bool = false) {
         self.user = user
@@ -762,6 +765,7 @@ struct EditUserView: View {
         self._annualLeaveEndMonth = State(initialValue: user.annualLeaveYearEndMonth)
         self._annualLeaveCarriesOver = State(initialValue: user.annualLeaveCarriesOver)
         self._annualLeaveEnabledDraft = State(initialValue: user.annualLeaveEnabled)
+        self._employmentTypeDraft = State(initialValue: user.employmentType)
     }
 
     private static func formatAnnualLeaveDaysText(_ days: Double) -> String {
@@ -1005,6 +1009,17 @@ struct EditUserView: View {
         if permissions.operativeMode { return UserRole.operative.displayName }
         return user.role.displayName
     }
+
+    private var employmentTypeChanged: Bool {
+        employmentTypeDraft != displayedUser.employmentType
+    }
+
+    private var shouldConfirmEmploymentTypeChange: Bool {
+        guard employmentTypeChanged else { return false }
+        guard let actingUser = userStore.currentUser else { return false }
+        if actingUser.permissions.operativeMode { return false }
+        return actingUser.isSuperAdmin || actingUser.permissions.adminAccess || actingUser.permissions.manager
+    }
     
     // Check if any changes have been made
     private var hasChanges: Bool {
@@ -1030,10 +1045,11 @@ struct EditUserView: View {
                 operativeProfileChanged ||
                 staffDayRateChanged ||
                 tradeChanged ||
+                employmentTypeChanged ||
                 annualLeaveAccessDirty ||
                 annualLeaveEntitlementDirty
         }
-        if canEditPermissionsMatrix && (identityDirty || operativeProfileChanged || tradeChanged || staffDayRateChanged || annualLeaveAccessDirty || annualLeaveEntitlementDirty) {
+        if canEditPermissionsMatrix && (identityDirty || operativeProfileChanged || tradeChanged || staffDayRateChanged || employmentTypeChanged || annualLeaveAccessDirty || annualLeaveEntitlementDirty) {
             return true
         }
         if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative) {
@@ -1041,6 +1057,7 @@ struct EditUserView: View {
                 permissions.materials != user.permissions.materials ||
                 permissions.siteAudit != user.permissions.siteAudit ||
                 tradeChanged ||
+                employmentTypeChanged ||
                 annualLeaveAccessDirty ||
                 annualLeaveEntitlementDirty
         }
@@ -1098,6 +1115,7 @@ struct EditUserView: View {
                 annualLeaveEndMonth = u.annualLeaveYearEndMonth
                 annualLeaveCarriesOver = u.annualLeaveCarriesOver
                 annualLeaveEnabledDraft = u.annualLeaveEnabled
+                employmentTypeDraft = u.employmentType
             }
             .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
             .navigationTitle(editNavigationTitle)
@@ -1162,6 +1180,17 @@ struct EditUserView: View {
                 if let msg = saveErrorMessage {
                     Text(msg)
                 }
+            }
+            .alert("Change Employment Type?", isPresented: $showingEmploymentTypeConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    employmentTypeConfirmationAccepted = false
+                }
+                Button("Confirm Change") {
+                    employmentTypeConfirmationAccepted = true
+                    saveChanges()
+                }
+            } message: {
+                Text("You are changing employment type to \(employmentTypeDraft.title). This affects invoicing access for this user.")
             }
             .confirmationDialog(
                 "Day rate change",
@@ -1671,6 +1700,34 @@ struct EditUserView: View {
                         label: "Last active",
                         value: lastSeenDisplay(for: displayedUser)
                     )
+                    ManageUserCardDivider()
+                    if canEditPermissionsMatrix {
+                        Menu {
+                            ForEach(EmploymentType.allCases) { type in
+                                Button(type.title) {
+                                    employmentTypeDraft = type
+                                    employmentTypeConfirmationAccepted = false
+                                }
+                            }
+                        } label: {
+                            ManageUserChevronRow(
+                                iconName: "briefcase.fill",
+                                iconBackground: ManageUserProfilePalette.chipBlueBg,
+                                iconForeground: ManageUserProfilePalette.chipBlueFg,
+                                label: "Employment type",
+                                value: employmentTypeDraft.title
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        ManageUserDetailStaticRow(
+                            iconName: "briefcase.fill",
+                            iconBackground: ManageUserProfilePalette.chipBlueBg,
+                            iconForeground: ManageUserProfilePalette.chipBlueFg,
+                            label: "Employment type",
+                            value: employmentTypeDraft.title
+                        )
+                    }
                 }
             }
         }
@@ -2289,6 +2346,13 @@ struct EditUserView: View {
     private func saveChanges() {
         isUpdating = true
         Task {
+            if shouldConfirmEmploymentTypeChange && !employmentTypeConfirmationAccepted {
+                await MainActor.run {
+                    isUpdating = false
+                    showingEmploymentTypeConfirmation = true
+                }
+                return
+            }
             if canEditIdentityDetails && identityDirty {
                 guard isValidEmail(editEmail) else {
                     await MainActor.run {
@@ -2425,6 +2489,14 @@ struct EditUserView: View {
             )
         }
 
+        var employmentTypeSuccess = true
+        if canEditPermissionsMatrix && employmentTypeChanged {
+            employmentTypeSuccess = await userStore.updateUserEmploymentType(
+                userId: user.id,
+                employmentType: employmentTypeDraft
+            )
+        }
+
         var annualLeaveEnabledSuccess = true
         if canEditPermissionsMatrix && annualLeaveAccessDirty {
             annualLeaveEnabledSuccess = await userStore.updateUserAnnualLeaveEnabled(userId: user.id, enabled: annualLeaveEnabledDraft)
@@ -2455,7 +2527,8 @@ struct EditUserView: View {
         await MainActor.run {
             isUpdating = false
             showingDayRateEffectiveChoice = false
-            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess {
+            employmentTypeConfirmationAccepted = false
+            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && employmentTypeSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess {
                 dismiss()
             } else {
                 saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."

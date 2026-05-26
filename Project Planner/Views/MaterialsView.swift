@@ -9,44 +9,6 @@ import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
 
-private func materialCanBeManagedByCurrentUser(
-    _ material: MaterialItem,
-    userStore: UserStore,
-    firebaseBackend: FirebaseBackend
-) -> Bool {
-    guard let authUser = firebaseBackend.currentUser else { return false }
-    if !userStore.isOperativeMode() {
-        return true
-    }
-    if let ownerUserId = material.addedByUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
-       !ownerUserId.isEmpty {
-        return ownerUserId == authUser.uid
-    }
-
-    let normalizedAddedBy = material.addedBy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    if normalizedAddedBy.isEmpty {
-        return false
-    }
-
-    let fullName = (userStore.currentUser?.fullName ?? "")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-    let appEmail = (userStore.currentUser?.email ?? "")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-    let authDisplayName = (authUser.displayName ?? "")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-    let authEmail = (authUser.email ?? "")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-
-    return normalizedAddedBy == fullName ||
-        normalizedAddedBy == appEmail ||
-        normalizedAddedBy == authDisplayName ||
-        normalizedAddedBy == authEmail
-}
-
 struct MaterialsView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend

@@ -177,10 +177,12 @@ class WarningsService: ObservableObject {
                 managerSiteBookings: managerSiteBookings,
                 holidayBookings: holidayBookings,
                 payrollTimePolicy: payrollTimePolicy,
+                warningDetection: .default,
                 coverageStart: coverageStart,
                 coverageEnd: coverageEnd,
                 materialOrderCutOffEnabled: materialOrderCutOffEnabled,
-                projectsWithTomorrowBookings: projectsWithTomorrowBookings
+                projectsWithTomorrowBookings: projectsWithTomorrowBookings,
+                materialItemsForTomorrow: []
             )
             return WarningsComputation.generate(input)
         }.value

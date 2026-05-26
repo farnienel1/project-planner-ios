@@ -40,6 +40,7 @@ struct AddUserView: View {
     @State private var surname = ""
     @State private var email = ""
     @State private var mobileNumber = ""
+    @State private var employmentType: EmploymentType = .selfEmployed
     @State private var permissions = UserPermissions()
     @State private var assignedManagerUserId: String?
     @State private var operativeDayRateText = ""
@@ -299,6 +300,17 @@ struct AddUserView: View {
                     TextField("Enter mobile number", text: $mobileNumber)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.phonePad)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Employment Type")
+                        .font(.headline)
+                    Picker("Employment Type", selection: $employmentType) {
+                        ForEach(EmploymentType.allCases) { type in
+                            Text(type.title).tag(type)
+                        }
+                    }
+                    .pickerStyle(.segmented)
                 }
                 
                 if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
@@ -656,6 +668,13 @@ struct AddUserView: View {
                         Text(email)
                             .fontWeight(.medium)
                     }
+                HStack {
+                    Text("Employment type:")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(employmentType.title)
+                        .fontWeight(.medium)
+                }
                     
                     if !mobileNumber.isEmpty {
                         HStack {
@@ -909,6 +928,7 @@ struct AddUserView: View {
                 email: email,
                 mobileNumber: mobileNumber.isEmpty ? nil : mobileNumber,
                 permissions: permissions,
+                employmentType: employmentType,
                 assignedManagerUserId: permissions.operativeMode ? assignedManagerUserId : nil,
                 invitedOperativeDayRate: permissions.operativeMode ? parsedDayRate : nil,
                 invitedManagerDayRate: permissions.manager ? parsedDayRate : nil,

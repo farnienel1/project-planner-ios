@@ -10,8 +10,8 @@ import SwiftUI
 enum WarningsFilterChip: String, CaseIterable, Identifiable {
     case all = "All"
     case clashes = "Clashes"
+    case unbooked = "Unbooked"
     case materials = "Materials"
-    case expiring = "Expiring"
 
     var id: String { rawValue }
 }
@@ -366,6 +366,7 @@ struct OperativeClashWarningCard: View {
     let onRemoveA: () -> Void
     let onRemoveB: () -> Void
     let onOpenDay: () -> Void
+    let onRemoveWarning: () -> Void
 
     var body: some View {
         if let clash = warning.operativeClash {
@@ -386,7 +387,8 @@ struct OperativeClashWarningCard: View {
                 onRemoveA: onRemoveA,
                 onRemoveB: onRemoveB,
                 onApprove: {},
-                onOpenDay: onOpenDay
+                onOpenDay: onOpenDay,
+                onRemoveWarning: onRemoveWarning
             )
         }
     }
@@ -403,6 +405,7 @@ struct ManagerClashWarningCard: View {
     let onRemoveB: () -> Void
     let onApprove: () -> Void
     let onOpenDay: () -> Void
+    let onRemoveWarning: () -> Void
 
     var body: some View {
         if let clash = warning.managerClash {
@@ -423,7 +426,8 @@ struct ManagerClashWarningCard: View {
                 onRemoveA: onRemoveA,
                 onRemoveB: onRemoveB,
                 onApprove: onApprove,
-                onOpenDay: onOpenDay
+                onOpenDay: onOpenDay,
+                onRemoveWarning: onRemoveWarning
             )
         }
     }
@@ -447,6 +451,7 @@ private struct BookingClashWarningCard: View {
     let onRemoveB: () -> Void
     let onApprove: () -> Void
     let onOpenDay: () -> Void
+    let onRemoveWarning: () -> Void
 
     var body: some View {
         clashCard
@@ -536,6 +541,7 @@ private struct BookingClashWarningCard: View {
                 approveButton(title: "Approve for weekly report", action: onApprove)
             }
             secondaryButton(title: "Open day to edit manually", icon: "square.and.pencil", action: onOpenDay)
+            WarningRemoveButton(action: onRemoveWarning)
         }
         .padding(16)
         .background(Color.white)
@@ -640,6 +646,31 @@ private struct BookingClashWarningCard: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct WarningRemoveButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "xmark.circle")
+                    .font(.system(size: 13))
+                Text("Remove warning")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(Color(red: 0.639, green: 0.176, blue: 0.176))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background(Color(red: 0.988, green: 0.922, blue: 0.922))
+            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .stroke(Color(red: 0.639, green: 0.176, blue: 0.176).opacity(0.35), lineWidth: 0.5)
             )
         }
         .buttonStyle(.plain)
