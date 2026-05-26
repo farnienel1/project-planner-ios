@@ -40,8 +40,10 @@ struct HomeView: View {
     @State private var showingWarningsDetail = false
     @State private var showingTasksDetail = false
     @State private var showingWholesalers = false
+    @State private var showingMaterialCatalogue = false
     @State private var showingOperativeQualifications = false
     @State private var showingSiteAudit = false
+    @State private var showingInvoicing = false
     
     // Navigation states for menu items
     @State private var showingClientsView = false
@@ -171,6 +173,11 @@ struct HomeView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         }
+        .sheet(isPresented: $showingMaterialCatalogue) {
+            MaterialCatalogueRootView()
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("dismissManageUsersAndSelectTab"))) { notification in
             showingManageUsers = false
         }
@@ -244,6 +251,11 @@ struct HomeView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         }
+        .sheet(isPresented: $showingInvoicing) {
+            InvoicingView()
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openOrgSitesMapFromMore"))) { _ in
             showingOrgSitesMap = true
         }
@@ -262,12 +274,14 @@ struct HomeView: View {
             case .myQualifications: showingOperativeQualifications = true
             case .jobTypes: showingJobTypesManagement = true
             case .wholesalers: showingWholesalers = true
+            case .materialCatalogue: showingMaterialCatalogue = true
             case .addUser: showingAddUser = true
             case .manageUsers: showingManageUsers = true
             case .tasksDetail: showingTasksDetail = true
             case .generalAppSettings: showingGeneralAppSettings = true
             case .orgSitesMap: showingOrgSitesMap = true
             case .siteAudit: showingSiteAudit = true
+            case .invoicing: showingInvoicing = true
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .mainMenuResetPassword)) { _ in
@@ -966,6 +980,8 @@ struct HomeView: View {
             showingGeneralAppSettings = true
         case HomeQuickActionID.staffTasks.rawValue:
             showingTasksDetail = true
+        case HomeQuickActionID.staffInvoicing.rawValue:
+            showingInvoicing = true
         default:
             break
         }

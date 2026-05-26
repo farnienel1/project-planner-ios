@@ -51,6 +51,10 @@ struct Warning: Identifiable, Hashable {
         type == .managerLocationClash
     }
 
+    var removalNotificationDetail: String {
+        message
+    }
+
     struct ClashTimelineEntry: Hashable, Codable {
         var bookingId: UUID
         var managerBookingId: UUID?

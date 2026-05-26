@@ -706,7 +706,45 @@ class FirebaseBackend: ObservableObject {
         if let warningDict = data["warningDetection"] as? [String: Any] {
             settings.warningDetection = OrgWarningDetectionSettings.fromFirestore(warningDict)
         }
+        if let invoicingDict = data["invoicing"] as? [String: Any] {
+            settings.invoicing = organizationInvoicingFromFirestore(invoicingDict)
+        }
         return settings
+    }
+
+    private static func organizationInvoicingFromFirestore(_ data: [String: Any]) -> OrganizationInvoicingSettings {
+        let paymentRunMode = PaymentRunConfigurationMode(rawValue: (data["paymentRunMode"] as? String) ?? "")
+            ?? .dateRanges
+        let paymentDateMode = PaymentDateConfigurationMode(rawValue: (data["paymentDateMode"] as? String) ?? "")
+            ?? .specificDates
+        let recurringPaymentRunSummary = (data["recurringPaymentRunSummary"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let recurringPaymentDay = RecurringPaymentDay(rawValue: (data["recurringPaymentDay"] as? String) ?? "")
+            ?? .friday
+        let paymentDates = ((data["paymentDates"] as? [NSNumber])?.map(\.intValue))
+            ?? (data["paymentDates"] as? [Int])
+            ?? OrganizationInvoicingSettings.default.paymentDates
+
+        let ranges = ((data["paymentRunDateRanges"] as? [[String: Any]]) ?? [])
+            .compactMap { row -> PaymentRunDateRange? in
+                let start = (row["startDay"] as? NSNumber)?.intValue ?? (row["startDay"] as? Int)
+                guard let start else { return nil }
+                let end = (row["endDay"] as? NSNumber)?.intValue
+                    ?? (row["endDay"] as? Int)
+                    ?? PaymentRunDateRange.defaultEndDay(for: start)
+                return PaymentRunDateRange(startDay: start, endDay: end)
+            }
+
+        return OrganizationInvoicingSettings(
+            paymentRunMode: paymentRunMode,
+            paymentDateMode: paymentDateMode,
+            paymentRunDateRanges: ranges.isEmpty ? OrganizationInvoicingSettings.default.paymentRunDateRanges : ranges,
+            paymentDates: paymentDates,
+            recurringPaymentRunSummary: recurringPaymentRunSummary?.isEmpty == false
+                ? recurringPaymentRunSummary!
+                : OrganizationInvoicingSettings.default.recurringPaymentRunSummary,
+            recurringPaymentDay: recurringPaymentDay
+        )
     }
 
     // Async version for better control
@@ -2986,6 +3024,8 @@ class FirebaseBackend: ObservableObject {
         let utc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let profilePhotoRaw = (data["profilePhotoURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let lastSeenAt = (data["lastSeenAt"] as? Timestamp)?.dateValue()
+        let employmentTypeRaw = (data["employmentType"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let employmentType = EmploymentType(rawValue: employmentTypeRaw ?? "") ?? .selfEmployed
         let alDays = (data["annualLeaveDaysPerYear"] as? NSNumber)?.doubleValue
             ?? (data["annualLeaveDaysPerYear"] as? Double)
             ?? AnnualLeavePolicy.defaultDaysPerYear
@@ -3020,6 +3060,7 @@ class FirebaseBackend: ObservableObject {
             tradeTypeCustom: (utc?.isEmpty == false) ? utc : nil,
             profilePhotoURL: (profilePhotoRaw?.isEmpty == false) ? profilePhotoRaw : nil,
             lastSeenAt: lastSeenAt,
+            employmentType: employmentType,
             annualLeaveEnabled: alEnabled,
             annualLeaveDaysPerYear: alDays,
             annualLeaveYearStartMonth: alStart,
@@ -3128,6 +3169,19 @@ class FirebaseBackend: ObservableObject {
             payload["defaultLongitude"] = defaultLongitude
         }
         payload["payrollTimePolicy"] = OrgPayrollTimePolicy.default.asFirestoreDictionary()
+        payload["invoicing"] = [
+            "paymentRunMode": OrganizationInvoicingSettings.default.paymentRunMode.rawValue,
+            "paymentDateMode": OrganizationInvoicingSettings.default.paymentDateMode.rawValue,
+            "paymentRunDateRanges": OrganizationInvoicingSettings.default.paymentRunDateRanges.map { r in
+                [
+                    "startDay": r.startDay,
+                    "endDay": r.endDay,
+                ]
+            },
+            "paymentDates": OrganizationInvoicingSettings.default.paymentDates,
+            "recurringPaymentRunSummary": OrganizationInvoicingSettings.default.recurringPaymentRunSummary,
+            "recurringPaymentDay": OrganizationInvoicingSettings.default.recurringPaymentDay.rawValue,
+        ]
         try await db.collection("organizations").document(id).setData(payload, merge: true)
     }
 
@@ -3175,6 +3229,42 @@ class FirebaseBackend: ObservableObject {
         org.settings.workingHours.startTime = policy.standardDayStart
         org.settings.workingHours.endTime = policy.standardDayEnd
         org.settings.workingHours.lunchBreak = policy.unpaidBreakMinutes
+        org.updatedAt = Date()
+        currentOrganization = org
+        storeOrganizationLocally(org)
+    }
+
+    /// Admin: update organisation invoicing settings (`organizations/{orgId}.invoicing`).
+    func updateOrganizationInvoicingSettings(_ settings: OrganizationInvoicingSettings) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
+            )
+        }
+        let payload: [String: Any] = [
+            "paymentRunMode": settings.paymentRunMode.rawValue,
+            "paymentDateMode": settings.paymentDateMode.rawValue,
+            "paymentRunDateRanges": settings.normalizedRanges.map { r in
+                [
+                    "startDay": r.startDay,
+                    "endDay": r.endDay,
+                ]
+            },
+            "paymentDates": settings.normalizedPaymentDates,
+            "recurringPaymentRunSummary": settings.recurringPaymentRunSummary,
+            "recurringPaymentDay": settings.recurringPaymentDay.rawValue,
+        ]
+        try await db.collection("organizations").document(orgId).setData(
+            [
+                "invoicing": payload,
+                "updatedAt": Timestamp(date: Date()),
+            ],
+            merge: true
+        )
+        guard var org = currentOrganization else { return }
+        org.settings.invoicing = settings
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
@@ -3283,6 +3373,7 @@ class FirebaseBackend: ObservableObject {
             "siteAudit": user.permissions.siteAudit,
             "isSuperAdmin": isSuperAdminToSave,
             "policyAccepted": user.policyAccepted,
+            "employmentType": user.employmentType.rawValue,
             "updatedAt": Timestamp(date: Date())
         ]
         
@@ -3384,6 +3475,14 @@ class FirebaseBackend: ObservableObject {
     func updateAnnualLeaveEnabled(userId: String, enabled: Bool) async throws {
         let payload: [String: Any] = [
             "annualLeaveEnabled": enabled,
+            "updatedAt": Timestamp(date: Date()),
+        ]
+        try await db.collection("users").document(userId).updateData(payload)
+    }
+
+    func updateUserEmploymentType(userId: String, employmentType: EmploymentType) async throws {
+        let payload: [String: Any] = [
+            "employmentType": employmentType.rawValue,
             "updatedAt": Timestamp(date: Date()),
         ]
         try await db.collection("users").document(userId).updateData(payload)
@@ -3815,7 +3914,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         
         let emailLower = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3856,6 +3955,7 @@ class FirebaseBackend: ObservableObject {
             "invitedBy": invitedBy,
             "firstName": firstName,
             "surname": surname,
+            "employmentType": employmentType.rawValue,
             "permissions": [
                 "adminAccess": permissions.adminAccess,
                 "manager": permissions.manager,
@@ -3957,6 +4057,7 @@ class FirebaseBackend: ObservableObject {
                 dayRate: permissions.operativeMode ? invitedOperativeDayRate : (permissions.manager ? invitedManagerDayRate : nil),
                 tradeTypePreset: (permissions.operativeMode || permissions.manager) && inviteTp?.isEmpty == false ? inviteTp : nil,
                 tradeTypeCustom: (permissions.operativeMode || permissions.manager) && inviteTc?.isEmpty == false ? inviteTc : nil,
+                employmentType: employmentType,
                 annualLeaveEnabled: (permissions.operativeMode || permissions.manager) ? resolvedAnnualLeaveEnabled : true,
                 annualLeaveDaysPerYear: resolvedAnnualLeaveDays,
                 annualLeaveYearStartMonth: resolvedAnnualLeaveStart,
@@ -4132,6 +4233,7 @@ class FirebaseBackend: ObservableObject {
                 var updateData: [String: Any] = [
                     "firstName": firstName,
                     "surname": surname,
+                    "employmentType": employmentType.rawValue,
                     "adminAccess": permissions.adminAccess,
                     "manager": permissions.manager,
                     "operatives": permissions.operatives,
@@ -6204,7 +6306,6 @@ extension FirebaseBackend {
             "projectJobNumber": audit.projectJobNumber,
             "projectName": audit.projectName,
             "type": audit.type.rawValue,
-            "customTitle": audit.customTitle,
             "authorName": audit.authorName,
             "date": Timestamp(date: audit.date),
             "createdAt": Timestamp(date: audit.createdAt),
@@ -6214,7 +6315,6 @@ extension FirebaseBackend {
                 var row: [String: Any] = [
                     "id": item.id.uuidString,
                     "title": item.title,
-                    "location": item.location,
                     "assignee": item.assignee,
                     "comments": item.comments,
                     "annotations": item.annotations,
@@ -6281,7 +6381,6 @@ extension FirebaseBackend {
                 return SiteAuditItem(
                     id: itemId,
                     title: title,
-                    location: row["location"] as? String ?? "",
                     assignee: assignee,
                     comments: comments,
                     annotations: row["annotations"] as? String ?? "",
@@ -6297,7 +6396,6 @@ extension FirebaseBackend {
                 projectJobNumber: projectJobNumber,
                 projectName: projectName,
                 type: type,
-                customTitle: data["customTitle"] as? String ?? "",
                 authorName: authorName,
                 date: date,
                 items: items,

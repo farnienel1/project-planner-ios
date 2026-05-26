@@ -236,6 +236,23 @@ struct OrganisationSettingsHubView: View {
                     .padding(.vertical, 11)
                 }
 
+                hubSectionTitle("Invoicing")
+                hubCard {
+                    NavigationLink {
+                        OrganisationInvoicingSettingsView()
+                            .environmentObject(firebaseBackend)
+                    } label: {
+                        hubRowLabel(
+                            icon: "doc.text.fill",
+                            iconBg: ProjectWorksRevampColors.blue.opacity(0.12),
+                            iconFg: ProjectWorksRevampColors.blue,
+                            title: "Payment runs",
+                            subtitle: invoicingSubtitle
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 hubSectionTitle("Team")
                 hubCard {
                     NavigationLink {
@@ -471,6 +488,18 @@ struct OrganisationSettingsHubView: View {
         updated.materialCutOffOnSunday = includeSunday
         await appSettings.updateNotifications(updated)
         await notificationService.refreshDailyMaterialCutOffReminder()
+    }
+
+    private var invoicingSubtitle: String {
+        let invoicing = org?.settings.invoicing ?? .default
+        switch invoicing.paymentRunMode {
+        case .dateRanges:
+            return invoicing.normalizedRanges
+                .map { "\($0.startDay)-\($0.endDay)" }
+                .joined(separator: " · ")
+        case .recurringTimeframe:
+            return "Recurring: Every \(invoicing.recurringPaymentDay.title)"
+        }
     }
     private func hubSectionTitle(_ t: String) -> some View {
         Text(t.uppercased())

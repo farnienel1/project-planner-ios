@@ -233,6 +233,7 @@ service cloud.firestore {
              'annualLeaveYearStartMonth',
              'annualLeaveYearEndMonth',
              'annualLeaveCarriesOver',
+             'employmentType',
              'updatedAt'
            ]);
   }
@@ -243,6 +244,7 @@ service cloud.firestore {
            request.resource.data.diff(resource.data).changedKeys().hasOnly([
              'assignedManagerUserId',
              'dayRate',
+             'employmentType',
              'updatedAt'
            ]);
   }

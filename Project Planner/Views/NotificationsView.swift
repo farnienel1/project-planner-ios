@@ -204,6 +204,11 @@ struct NotificationsView: View {
                         name: NSNotification.Name("openTasksDetail"),
                         object: nil
                     )
+                case .warningRemoved:
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("navigateToWarnings"),
+                        object: nil
+                    )
                 }
                 
                 dismiss()
@@ -265,6 +270,7 @@ struct NotificationRowView: View {
         case .holidayRequestSubmitted: return "sun.max"
         case .holidayRequestApproved: return "sun.max.fill"
         case .holidayRequestDeclined: return "xmark.circle.fill"
+        case .warningRemoved: return "checkmark.shield"
         }
     }
 
@@ -282,6 +288,7 @@ struct NotificationRowView: View {
         case .holidayRequestSubmitted: return .orange
         case .holidayRequestApproved: return .green
         case .holidayRequestDeclined: return .red
+        case .warningRemoved: return .green
         }
     }
 }

@@ -86,6 +86,22 @@ enum UserRole: String, CaseIterable, Codable {
     }
 }
 
+enum EmploymentType: String, CaseIterable, Codable, Identifiable {
+    case paye = "paye"
+    case selfEmployed = "self_employed"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .paye:
+            return "PAYE"
+        case .selfEmployed:
+            return "Self-Employed"
+        }
+    }
+}
+
 enum Permission: String, CaseIterable {
     case viewProjects = "view_projects"
     case editProjects = "edit_projects"
@@ -295,6 +311,8 @@ struct AppUser: Identifiable, Codable, Hashable {
     var profilePhotoURL: String?
     /// Last time this account had app activity (foreground); updated with merge on `users/{id}`.
     var lastSeenAt: Date?
+    /// Employment type controls invoicing visibility.
+    var employmentType: EmploymentType
     /// When false, annual leave is hidden in the app (e.g. self-employed). Only managers/admins with user-management access can turn it back on.
     var annualLeaveEnabled: Bool
     /// Paid annual leave allowance for the configured leave year (days; supports half-days via bookings).
@@ -328,6 +346,7 @@ struct AppUser: Identifiable, Codable, Hashable {
         tradeTypeCustom: String? = nil,
         profilePhotoURL: String? = nil,
         lastSeenAt: Date? = nil,
+        employmentType: EmploymentType = .selfEmployed,
         annualLeaveEnabled: Bool = true,
         annualLeaveDaysPerYear: Double = AnnualLeavePolicy.defaultDaysPerYear,
         annualLeaveYearStartMonth: Int = AnnualLeavePolicy.defaultStartMonth,
@@ -355,6 +374,7 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.tradeTypeCustom = tradeTypeCustom
         self.profilePhotoURL = profilePhotoURL
         self.lastSeenAt = lastSeenAt
+        self.employmentType = employmentType
         self.annualLeaveEnabled = annualLeaveEnabled
         self.annualLeaveDaysPerYear = AnnualLeavePolicy.clampDaysPerYear(annualLeaveDaysPerYear)
         self.annualLeaveYearStartMonth = AnnualLeavePolicy.clampMonth(annualLeaveYearStartMonth)
@@ -491,6 +511,8 @@ struct OrganizationSettings: Codable, Hashable {
     var payrollTimePolicy: OrgPayrollTimePolicy
     /// Warning detection horizon and unbooked-labour rules.
     var warningDetection: OrgWarningDetectionSettings
+    /// Invoicing setup (payment runs + payment dates).
+    var invoicing: OrganizationInvoicingSettings
     
     init(
         allowSelfRegistration: Bool = true,
@@ -499,7 +521,8 @@ struct OrganizationSettings: Codable, Hashable {
         workingHours: WorkingHours = WorkingHours(),
         holidayCalendar: HolidayCalendar = HolidayCalendar(),
         payrollTimePolicy: OrgPayrollTimePolicy = .default,
-        warningDetection: OrgWarningDetectionSettings = .default
+        warningDetection: OrgWarningDetectionSettings = .default,
+        invoicing: OrganizationInvoicingSettings = .default
     ) {
         self.allowSelfRegistration = allowSelfRegistration
         self.requireEmailVerification = requireEmailVerification
@@ -508,12 +531,14 @@ struct OrganizationSettings: Codable, Hashable {
         self.holidayCalendar = holidayCalendar
         self.payrollTimePolicy = payrollTimePolicy
         self.warningDetection = warningDetection
+        self.invoicing = invoicing
     }
 
     enum CodingKeys: String, CodingKey {
         case allowSelfRegistration, requireEmailVerification, defaultUserRole, workingHours, holidayCalendar
         case payrollTimePolicy
         case warningDetection
+        case invoicing
     }
 
     init(from decoder: Decoder) throws {
@@ -525,6 +550,7 @@ struct OrganizationSettings: Codable, Hashable {
         holidayCalendar = try c.decodeIfPresent(HolidayCalendar.self, forKey: .holidayCalendar) ?? HolidayCalendar()
         payrollTimePolicy = try c.decodeIfPresent(OrgPayrollTimePolicy.self, forKey: .payrollTimePolicy) ?? .default
         warningDetection = try c.decodeIfPresent(OrgWarningDetectionSettings.self, forKey: .warningDetection) ?? .default
+        invoicing = try c.decodeIfPresent(OrganizationInvoicingSettings.self, forKey: .invoicing) ?? .default
     }
 
     func encode(to encoder: Encoder) throws {
@@ -536,6 +562,109 @@ struct OrganizationSettings: Codable, Hashable {
         try c.encode(holidayCalendar, forKey: .holidayCalendar)
         try c.encode(payrollTimePolicy, forKey: .payrollTimePolicy)
         try c.encode(warningDetection, forKey: .warningDetection)
+        try c.encode(invoicing, forKey: .invoicing)
+    }
+}
+
+enum PaymentRunConfigurationMode: String, CaseIterable, Codable, Identifiable {
+    case dateRanges = "date_ranges"
+    case recurringTimeframe = "recurring_timeframe"
+
+    var id: String { rawValue }
+}
+
+enum PaymentDateConfigurationMode: String, CaseIterable, Codable, Identifiable {
+    case specificDates = "specific_dates"
+    case recurringDate = "recurring_date"
+
+    var id: String { rawValue }
+}
+
+enum RecurringPaymentDay: String, CaseIterable, Codable, Identifiable {
+    case monday
+    case tuesday
+    case wednesday
+    case thursday
+    case friday
+    case saturday
+    case sunday
+
+    var id: String { rawValue }
+
+    var title: String {
+        rawValue.prefix(1).uppercased() + rawValue.dropFirst()
+    }
+}
+
+struct PaymentRunDateRange: Identifiable, Codable, Hashable {
+    var id: UUID
+    var startDay: Int
+    var endDay: Int
+
+    init(id: UUID = UUID(), startDay: Int, endDay: Int) {
+        self.id = id
+        self.startDay = Self.clampDay(startDay)
+        self.endDay = Self.clampDay(endDay)
+    }
+
+    static func clampDay(_ day: Int) -> Int {
+        min(max(day, 1), 31)
+    }
+
+    static func defaultEndDay(for startDay: Int) -> Int {
+        let start = clampDay(startDay)
+        return start == 31 ? 1 : start + 1
+    }
+
+    func contains(day: Int) -> Bool {
+        let d = Self.clampDay(day)
+        if startDay <= endDay {
+            return (startDay...endDay).contains(d)
+        }
+        return (startDay...31).contains(d) || (1...endDay).contains(d)
+    }
+}
+
+struct OrganizationInvoicingSettings: Codable, Hashable {
+    var paymentRunMode: PaymentRunConfigurationMode
+    var paymentDateMode: PaymentDateConfigurationMode
+    var paymentRunDateRanges: [PaymentRunDateRange]
+    var paymentDates: [Int]
+    var recurringPaymentRunSummary: String
+    var recurringPaymentDay: RecurringPaymentDay
+
+    static let `default` = OrganizationInvoicingSettings(
+        paymentRunMode: .dateRanges,
+        paymentDateMode: .specificDates,
+        paymentRunDateRanges: [PaymentRunDateRange(startDay: 1, endDay: 2)],
+        paymentDates: [18],
+        recurringPaymentRunSummary: "In arrears: Monday to Sunday (previous week)",
+        recurringPaymentDay: .friday
+    )
+
+    var normalizedRanges: [PaymentRunDateRange] {
+        let trimmed = Array(paymentRunDateRanges.prefix(2))
+        return trimmed.isEmpty ? [PaymentRunDateRange(startDay: 1, endDay: 2)] : trimmed
+    }
+
+    var normalizedPaymentDates: [Int] {
+        let deduped = paymentDates
+            .map { PaymentRunDateRange.clampDay($0) }
+            .reduce(into: [Int]()) { partial, day in
+                if !partial.contains(day) { partial.append(day) }
+            }
+        return Array(deduped.prefix(2))
+    }
+
+    func fullMonthCoverageWarning() -> String? {
+        guard paymentRunMode == .dateRanges else { return nil }
+        let ranges = normalizedRanges
+        for day in 1...31 {
+            if ranges.contains(where: { $0.contains(day: day) }) == false {
+                return "Payment run date ranges must cover the full month (days 1 to 31)."
+            }
+        }
+        return nil
     }
 }
 

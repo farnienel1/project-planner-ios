@@ -432,6 +432,17 @@ class UserStore: ObservableObject {
         }
         return true
     }
+
+    func canManageMaterialCatalogue() -> Bool {
+        guard let user = displayUser else { return false }
+        if user.permissions.operativeMode { return false }
+        return hasAdminAccess() || user.permissions.manager
+    }
+
+    func canAccessInvoicing() -> Bool {
+        guard let user = displayUser else { return false }
+        return user.employmentType == .selfEmployed
+    }
     
     func canEditProjects() -> Bool {
         guard let currentUser = displayUser else { return false }
@@ -621,7 +632,7 @@ class UserStore: ObservableObject {
              // MARK: - User Invitation
              
     /// For operative invitations, pass the line manager's Firebase Auth UID (`users` document id).
-    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil) async -> Bool {
+    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .paye, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil) async -> Bool {
         print("🔥🔥🔥 DEBUG: inviteUser called with firstName: \(firstName), surname: \(surname), email: \(email)")
         
         errorMessage = nil
@@ -764,6 +775,7 @@ class UserStore: ObservableObject {
                 surname: surname,
                 mobileNumber: mobileNumber,
                 permissions: permissions,
+                employmentType: employmentType,
                 assignedManagerUserId: assignedManagerUserId,
                 invitedOperativeDayRate: invitedOperativeDayRate,
                 invitedManagerDayRate: invitedManagerDayRate,
@@ -1374,6 +1386,38 @@ class UserStore: ObservableObject {
         } catch {
             print("🔥🔥🔥 DEBUG: updateUserAnnualLeaveEnabled error: \(error)")
             errorMessage = "Could not save annual leave access: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func updateUserEmploymentType(userId: String, employmentType: EmploymentType) async -> Bool {
+        guard let firebaseBackend = firebaseBackend else { return false }
+        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+        if isOrganizationCreator(userId: userId) { return false }
+        var updated = organizationUsers[index]
+        if updated.isSuperAdmin && isOrganizationCreator(userId: updated.id) {
+            return false
+        }
+        updated.employmentType = employmentType
+
+        do {
+            if hasAdminAccess() {
+                try await firebaseBackend.saveUser(updated)
+            } else if isActingManagerOperativeManagementOnly(),
+                      updated.permissions.operativeMode || updated.role == .operative {
+                try await firebaseBackend.updateUserEmploymentType(userId: userId, employmentType: employmentType)
+            } else {
+                return false
+            }
+            organizationUsers[index] = updated
+            if var cu = currentUser, cu.id == userId {
+                cu.employmentType = employmentType
+                currentUser = cu
+            }
+            return true
+        } catch {
+            print("🔥🔥🔥 DEBUG: updateUserEmploymentType error: \(error)")
+            errorMessage = "Could not save employment type: \(error.localizedDescription)"
             return false
         }
     }
