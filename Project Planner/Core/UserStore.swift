@@ -1510,8 +1510,20 @@ class UserStore: ObservableObject {
                 guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
                 var updatedUser = organizationUsers[index]
                 guard updatedUser.permissions.operativeMode || updatedUser.role == .operative || updatedUser.permissions.manager || updatedUser.role == .manager else { return false }
+                let trimmedAssignedManagerUserId = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
 
-                updatedUser.assignedManagerUserId = assignedManagerUserId
+                if updatedUser.permissions.manager || updatedUser.role == .manager {
+                    guard let managerId = trimmedAssignedManagerUserId, !managerId.isEmpty else {
+                        errorMessage = "Every manager must be assigned a line manager."
+                        return false
+                    }
+                    if managerId == updatedUser.id {
+                        errorMessage = "A manager cannot be their own line manager."
+                        return false
+                    }
+                }
+
+                updatedUser.assignedManagerUserId = trimmedAssignedManagerUserId
                 updatedUser.dayRate = dayRate
 
                 do {
@@ -1519,7 +1531,7 @@ class UserStore: ObservableObject {
                     let dayRateChanged = previousDayRate != dayRate
                     try await firebaseBackend.updateOperativeProfileMetadata(
                         userId: updatedUser.id,
-                        assignedManagerUserId: assignedManagerUserId,
+                        assignedManagerUserId: trimmedAssignedManagerUserId,
                         dayRate: dayRate
                     )
                     if dayRateChanged,
@@ -1564,7 +1576,7 @@ class UserStore: ObservableObject {
                             try await firebaseBackend.saveOperativeProfileMetadataFallback(
                                 organizationId: updatedUser.organizationId,
                                 userId: updatedUser.id,
-                                assignedManagerUserId: assignedManagerUserId,
+                                assignedManagerUserId: trimmedAssignedManagerUserId,
                                 dayRate: dayRate
                             )
                             clearOperativeProfileOverride(for: updatedUser.id)
@@ -1579,7 +1591,7 @@ class UserStore: ObservableObject {
                             // Last fallback: keep operations unblocked by persisting an on-device override.
                             saveOperativeProfileOverride(
                                 for: updatedUser.id,
-                                assignedManagerUserId: assignedManagerUserId,
+                                assignedManagerUserId: trimmedAssignedManagerUserId,
                                 dayRate: dayRate
                             )
                             organizationUsers[index] = updatedUser

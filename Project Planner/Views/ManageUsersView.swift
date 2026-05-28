@@ -1047,10 +1047,10 @@ struct EditUserView: View {
         let origTradeP = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let origTradeC = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let tradeChanged = dayRateEligible && (trimmedTradeP != origTradeP || trimmedTradeC != origTradeC)
-        let operativeProfileChanged = permissions.operativeMode && (
-            (selectedAssignedManagerUserId ?? "") != (user.assignedManagerUserId ?? "") ||
-            parseDayRate(dayRateText) != user.dayRate
-        )
+        let managerAssignmentChanged = (selectedAssignedManagerUserId ?? "") != (user.assignedManagerUserId ?? "")
+        let operativeProfileChanged =
+            (permissions.operativeMode && (managerAssignmentChanged || parseDayRate(dayRateText) != user.dayRate))
+            || (permissions.manager && managerAssignmentChanged)
         let staffDayRateChanged = !permissions.operativeMode && (permissions.manager || permissions.adminAccess)
             && parseDayRate(dayRateText) != user.dayRate
         if canUseAdminAccountTools {
@@ -1085,7 +1085,9 @@ struct EditUserView: View {
                 !candidate.permissions.operativeMode &&
                 (candidate.isSuperAdmin || candidate.permissions.adminAccess || candidate.permissions.manager) &&
                 candidate.isActive &&
-                candidate.passwordSet
+                candidate.passwordSet &&
+                // Managers cannot report to themselves.
+                candidate.id != displayedUser.id
             }
             .sorted { ($0.fullName.isEmpty ? $0.email : $0.fullName) < ($1.fullName.isEmpty ? $1.email : $1.fullName) }
     }
@@ -2553,6 +2555,13 @@ struct EditUserView: View {
                 await MainActor.run {
                     isUpdating = false
                     saveErrorMessage = "Line manager is required for managers and operatives."
+                }
+                return
+            }
+            if permissions.manager && lineManagerId == subjectUser.id {
+                await MainActor.run {
+                    isUpdating = false
+                    saveErrorMessage = "A manager cannot be their own line manager."
                 }
                 return
             }
