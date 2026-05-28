@@ -22,6 +22,7 @@ enum SiteAuditProjectFilter: String, CaseIterable, Identifiable {
 struct SiteAuditItem: Identifiable, Codable, Hashable {
     let id: UUID
     var title: String
+    var location: String
     var assignee: String
     var comments: String
     var annotations: String
@@ -36,6 +37,8 @@ struct SiteAudit: Identifiable, Codable, Hashable {
     var projectJobNumber: String
     var projectName: String
     var type: SiteAuditType
+    /// Optional headline shown on cards and PDF (e.g. "Plant room snags").
+    var customTitle: String
     var authorName: String
     var date: Date
     var items: [SiteAuditItem]
@@ -48,6 +51,7 @@ struct SiteAudit: Identifiable, Codable, Hashable {
 struct SiteAuditDraftItem: Identifiable {
     let id: UUID
     var title: String
+    var location: String
     var assignee: String
     var comments: String
     var annotations: String
@@ -58,6 +62,7 @@ struct SiteAuditDraftItem: Identifiable {
     init(
         id: UUID = UUID(),
         title: String = "",
+        location: String = "",
         assignee: String = "",
         comments: String = "",
         annotations: String = "",
@@ -67,6 +72,7 @@ struct SiteAuditDraftItem: Identifiable {
     ) {
         self.id = id
         self.title = title
+        self.location = location
         self.assignee = assignee
         self.comments = comments
         self.annotations = annotations
@@ -76,14 +82,48 @@ struct SiteAuditDraftItem: Identifiable {
     }
 }
 
+enum SiteAuditWorksBrowserKind: String, Identifiable {
+    case projects
+    case smallWorks
+
+    var id: String { rawValue }
+
+    var navigationTitle: String {
+        switch self {
+        case .projects: return "Projects"
+        case .smallWorks: return "Small works"
+        }
+    }
+
+    func includes(_ project: Project) -> Bool {
+        switch self {
+        case .projects: return project.jobType != .smallWorks
+        case .smallWorks: return project.jobType == .smallWorks
+        }
+    }
+}
+
 private struct SiteAuditProjectAccess {
-    static func visibleProjects(
+    /// `ProjectStore.smallWorks` is a subset of `projects` — never concatenate the two.
+    static func uniqueById(_ projects: [Project]) -> [Project] {
+        var seen = Set<UUID>()
+        var result: [Project] = []
+        result.reserveCapacity(projects.count)
+        for project in projects {
+            if seen.insert(project.id).inserted {
+                result.append(project)
+            }
+        }
+        return result
+    }
+
+    static func visibleWorks(
         userStore: UserStore,
         projectStore: ProjectStore,
         bookingStore: BookingStore,
         operativeStore: OperativeStore
     ) -> [Project] {
-        let all = projectStore.projects + projectStore.smallWorks
+        let all = uniqueById(projectStore.projects)
         if !userStore.canViewSiteAudit() {
             return []
         }
@@ -107,6 +147,34 @@ private struct SiteAuditProjectAccess {
         }.map(\.projectId))
         return all.filter { assigned.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId) }
     }
+
+    static func visibleProjects(
+        userStore: UserStore,
+        projectStore: ProjectStore,
+        bookingStore: BookingStore,
+        operativeStore: OperativeStore
+    ) -> [Project] {
+        visibleWorks(
+            userStore: userStore,
+            projectStore: projectStore,
+            bookingStore: bookingStore,
+            operativeStore: operativeStore
+        ).filter { $0.jobType != .smallWorks }
+    }
+
+    static func visibleSmallWorks(
+        userStore: UserStore,
+        projectStore: ProjectStore,
+        bookingStore: BookingStore,
+        operativeStore: OperativeStore
+    ) -> [Project] {
+        visibleWorks(
+            userStore: userStore,
+            projectStore: projectStore,
+            bookingStore: bookingStore,
+            operativeStore: operativeStore
+        ).filter { $0.jobType == .smallWorks }
+    }
 }
 
 fileprivate func siteAuditsForCurrentUser(_ audits: [SiteAudit], userStore: UserStore) -> [SiteAudit] {
@@ -115,6 +183,16 @@ fileprivate func siteAuditsForCurrentUser(_ audits: [SiteAudit], userStore: User
         return audits.filter(\.visibleToOperatives)
     }
     return audits.filter { $0.visibleToOperatives || $0.createdByUserId == uid }
+}
+
+fileprivate func canEditSiteAudit(_ audit: SiteAudit, userStore: UserStore, firebaseBackend: FirebaseBackend) -> Bool {
+    if userStore.hasAdminAccess() { return true }
+    if userStore.displayUser?.permissions.manager == true { return true }
+    let firebaseUid = firebaseBackend.currentUser?.uid
+    let appUserId = userStore.currentUser?.id
+    if let firebaseUid, audit.createdByUserId == firebaseUid { return true }
+    if let appUserId, audit.createdByUserId == appUserId { return true }
+    return false
 }
 
 struct SiteAuditHubView: View {
@@ -126,31 +204,37 @@ struct SiteAuditHubView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
 
     @State private var showingCreate = false
-    @State private var showingProjects = false
+    @State private var worksBrowserKind: SiteAuditWorksBrowserKind?
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 18) {
+            VStack(spacing: 14) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Site Audit")
-                        .font(.largeTitle.bold())
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundStyle(SiteAuditColors.text)
                     Text("Capture site evidence, notes, and produce a polished shareable PDF.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 14))
+                        .foregroundStyle(SiteAuditColors.textSecondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 Button { showingCreate = true } label: {
-                    tile(icon: "plus.square.fill", title: "Create Site Audit", tint: .indigo)
+                    hubTile(icon: "plus", title: "New site audit", subtitle: "Start a new walkthrough", tint: SiteAuditColors.primary)
                 }
 
-                Button { showingProjects = true } label: {
-                    tile(icon: "folder.fill", title: "Projects", tint: .blue)
+                Button { worksBrowserKind = .projects } label: {
+                    hubTile(icon: "folder.fill", title: "Projects", subtitle: "Browse audits by project", tint: SiteAuditColors.success)
+                }
+
+                Button { worksBrowserKind = .smallWorks } label: {
+                    hubTile(icon: "wrench.and.screwdriver.fill", title: "Small works", subtitle: "Browse audits by small works job", tint: SiteAuditColors.purple)
                 }
 
                 Spacer()
             }
             .padding(20)
+            .siteAuditScreenBackground()
             .navigationTitle("Site Audit")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
@@ -162,8 +246,8 @@ struct SiteAuditHubView: View {
                     .environmentObject(userStore)
                     .environmentObject(firebaseBackend)
             }
-            .sheet(isPresented: $showingProjects) {
-                SiteAuditProjectsBrowserView()
+            .sheet(item: $worksBrowserKind) { kind in
+                SiteAuditProjectsBrowserView(kind: kind)
                     .environmentObject(projectStore)
                     .environmentObject(bookingStore)
                     .environmentObject(operativeStore)
@@ -173,21 +257,31 @@ struct SiteAuditHubView: View {
         }
     }
 
-    private func tile(icon: String, title: String, tint: Color) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon).font(.title2).foregroundStyle(tint)
-            Text(title).font(.headline).foregroundStyle(.primary)
-            Spacer()
-            Image(systemName: "chevron.right").foregroundStyle(.secondary)
+    private func hubTile(icon: String, title: String, subtitle: String, tint: Color) -> some View {
+        SiteAuditCard {
+            HStack(spacing: 12) {
+                SiteAuditRowIconChip(systemName: icon, tint: tint, background: tint.opacity(0.12), size: 36)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(SiteAuditColors.text)
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(SiteAuditColors.textSecondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(SiteAuditColors.textDisabled)
+            }
+            .padding(14)
         }
-        .padding(14)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 1)
     }
 }
 
 struct SiteAuditProjectsBrowserView: View {
+    let kind: SiteAuditWorksBrowserKind
+
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var bookingStore: BookingStore
@@ -198,27 +292,45 @@ struct SiteAuditProjectsBrowserView: View {
     @State private var selectedProject: Project?
     @State private var authoredAuditProjectIds: Set<UUID> = []
 
-    private var mergedProjectsForSiteAudit: [Project] {
-        let visible = SiteAuditProjectAccess.visibleProjects(
-            userStore: userStore,
-            projectStore: projectStore,
-            bookingStore: bookingStore,
-            operativeStore: operativeStore
-        )
-        let fromAuthored = (projectStore.projects + projectStore.smallWorks).filter { authoredAuditProjectIds.contains($0.id) }
+    private var mergedWorksForSiteAudit: [Project] {
+        let visible: [Project] = {
+            switch kind {
+            case .projects:
+                return SiteAuditProjectAccess.visibleProjects(
+                    userStore: userStore,
+                    projectStore: projectStore,
+                    bookingStore: bookingStore,
+                    operativeStore: operativeStore
+                )
+            case .smallWorks:
+                return SiteAuditProjectAccess.visibleSmallWorks(
+                    userStore: userStore,
+                    projectStore: projectStore,
+                    bookingStore: bookingStore,
+                    operativeStore: operativeStore
+                )
+            }
+        }()
+        let fromAuthored = SiteAuditProjectAccess.uniqueById(projectStore.projects)
+            .filter { kind.includes($0) && authoredAuditProjectIds.contains($0.id) }
         var byId: [UUID: Project] = [:]
-        for p in visible { byId[p.id] = p }
-        for p in fromAuthored { byId[p.id] = p }
+        for project in visible { byId[project.id] = project }
+        for project in fromAuthored { byId[project.id] = project }
         return Array(byId.values)
     }
 
     private var filteredProjects: [Project] {
+        let scoped = mergedWorksForSiteAudit.filter { kind.includes($0) }
         switch selectedFilter {
-        case .all: return mergedProjectsForSiteAudit.sorted { $0.jobNumber < $1.jobNumber }
-        case .active: return mergedProjectsForSiteAudit.filter { $0.status == .active }.sorted { $0.jobNumber < $1.jobNumber }
-        case .upcoming: return mergedProjectsForSiteAudit.filter { $0.status == .upcoming }.sorted { $0.jobNumber < $1.jobNumber }
-        case .completed: return mergedProjectsForSiteAudit.filter { $0.status == .completed }.sorted { $0.jobNumber < $1.jobNumber }
+        case .all: return scoped.sorted { $0.jobNumber.localizedStandardCompare($1.jobNumber) == .orderedAscending }
+        case .active: return scoped.filter { $0.status == .active }.sorted { $0.jobNumber.localizedStandardCompare($1.jobNumber) == .orderedAscending }
+        case .upcoming: return scoped.filter { $0.status == .upcoming }.sorted { $0.jobNumber.localizedStandardCompare($1.jobNumber) == .orderedAscending }
+        case .completed: return scoped.filter { $0.status == .completed }.sorted { $0.jobNumber.localizedStandardCompare($1.jobNumber) == .orderedAscending }
         }
+    }
+
+    private var emptyTitle: String {
+        kind == .projects ? "No Projects" : "No Small Works"
     }
 
     var body: some View {
@@ -234,11 +346,11 @@ struct SiteAuditProjectsBrowserView: View {
 
                 if filteredProjects.isEmpty {
                     ContentUnavailableView(
-                        "No Projects",
-                        systemImage: "folder",
+                        emptyTitle,
+                        systemImage: kind == .projects ? "folder" : "wrench.and.screwdriver",
                         description: Text(
                             userStore.isOperativeMode()
-                            ? "Shows jobs you are booked onto, plus any job where you previously submitted a site audit."
+                            ? "Shows \(kind == .projects ? "projects" : "small works") you are booked onto, plus any job where you previously submitted a site audit."
                             : "Try switching the filter to All."
                         )
                     )
@@ -257,11 +369,14 @@ struct SiteAuditProjectsBrowserView: View {
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle("Projects")
+            .navigationTitle(kind.navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .sheet(item: $selectedProject) { project in
                 SiteAuditProjectAuditsView(project: project)
+                    .environmentObject(projectStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(operativeStore)
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
             }
@@ -292,71 +407,53 @@ struct SiteAuditProjectAuditsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var operativeStore: OperativeStore
 
     @State private var audits: [SiteAudit] = []
     @State private var selectedTypeTab = "All"
     @State private var isLoading = false
     @State private var selectedAudit: SiteAudit?
+    @State private var showingCreate = false
 
-    private var filteredAudits: [SiteAudit] {
-        let base = selectedTypeTab == "All" ? audits : audits.filter { $0.type.rawValue == selectedTypeTab }
-        return siteAuditsForCurrentUser(base, userStore: userStore)
+    private var visibleAudits: [SiteAudit] {
+        siteAuditsForCurrentUser(audits, userStore: userStore)
     }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                Picker("Type", selection: $selectedTypeTab) {
-                    Text("All").tag("All")
-                    ForEach(SiteAuditType.allCases) { type in Text(type.rawValue).tag(type.rawValue) }
-                }
-                .pickerStyle(.segmented)
-                .padding()
-
-                if isLoading {
-                    ProgressView("Loading site audits...").frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if filteredAudits.isEmpty {
-                    ContentUnavailableView("No Site Audits", systemImage: "doc.text.magnifyingglass")
-                } else {
-                    ScrollView {
-                        VStack(spacing: 12) {
-                            ForEach(filteredAudits) { audit in
-                                Button { selectedAudit = audit } label: {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        HStack {
-                                            Text(audit.type.rawValue).font(.headline)
-                                            Spacer()
-                                            Text(audit.date.formatted(date: .abbreviated, time: .omitted))
-                                                .font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        Text("\(audit.projectJobNumber) \(audit.projectName)")
-                                            .font(.subheadline)
-                                        HStack {
-                                            Label(audit.authorName, systemImage: "person.fill")
-                                                .font(.caption).foregroundStyle(.secondary)
-                                            Spacer()
-                                            Label("\(audit.items.count) items", systemImage: "list.bullet")
-                                                .font(.caption).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    .padding(14)
-                                    .background(Color(.systemBackground))
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                    .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 1)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding()
-                    }
+            SiteAuditProjectListView(
+                project: project,
+                audits: .constant(visibleAudits),
+                selectedTypeTab: $selectedTypeTab,
+                isLoading: isLoading,
+                onSelect: { selectedAudit = $0 },
+                onCreate: { showingCreate = true },
+                showsCreateButton: true
+            )
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
                 }
             }
-            .navigationTitle("\(project.jobNumber) \(project.siteName)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .task { await loadAudits() }
-            .sheet(item: $selectedAudit) { audit in
-                SiteAuditDetailView(audit: audit)
+            .sheet(isPresented: $showingCreate, onDismiss: {
+                Task { await loadAudits() }
+            }) {
+                SiteAuditCreateFlowView(initialProject: project, lockProjectSelection: true)
+                    .environmentObject(projectStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(userStore)
+                    .environmentObject(firebaseBackend)
+            }
+            .sheet(item: $selectedAudit, onDismiss: {
+                Task { await loadAudits() }
+            }) { audit in
+                SiteAuditDetailView(audit: audit, project: project, onAuditUpdated: {
+                    Task { await loadAudits() }
+                })
             }
         }
     }
@@ -388,70 +485,19 @@ struct SiteAuditProjectHubView: View {
     @State private var selectedAudit: SiteAudit?
     @State private var showingCreate = false
 
-    private var filteredAudits: [SiteAudit] {
-        let base = selectedTypeTab == "All" ? audits : audits.filter { $0.type.rawValue == selectedTypeTab }
-        return siteAuditsForCurrentUser(base, userStore: userStore)
+    private var visibleAudits: [SiteAudit] {
+        siteAuditsForCurrentUser(audits, userStore: userStore)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Type", selection: $selectedTypeTab) {
-                Text("All").tag("All")
-                ForEach(SiteAuditType.allCases) { type in Text(type.rawValue).tag(type.rawValue) }
-            }
-            .pickerStyle(.segmented)
-            .padding()
-
-            if isLoading {
-                ProgressView("Loading site audits...").frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if filteredAudits.isEmpty {
-                ContentUnavailableView("No Site Audits", systemImage: "doc.text.magnifyingglass")
-            } else {
-                ScrollView {
-                    VStack(spacing: 12) {
-                        ForEach(filteredAudits) { audit in
-                            Button { selectedAudit = audit } label: {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack {
-                                        Text(audit.type.rawValue).font(.headline)
-                                        Spacer()
-                                        Text(audit.date.formatted(date: .abbreviated, time: .omitted))
-                                            .font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Text("\(audit.projectJobNumber) \(audit.projectName)")
-                                        .font(.subheadline)
-                                    HStack {
-                                        Label(audit.authorName, systemImage: "person.fill")
-                                            .font(.caption).foregroundStyle(.secondary)
-                                        Spacer()
-                                        Label("\(audit.items.count) items", systemImage: "list.bullet")
-                                            .font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                                .padding(14)
-                                .background(Color(.systemBackground))
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 1)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding()
-                }
-            }
-        }
-        .navigationTitle("Site Audits")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showingCreate = true
-                } label: {
-                    Image(systemName: "plus.circle.fill")
-                }
-                .accessibilityLabel("Create site audit")
-            }
-        }
+        SiteAuditProjectListView(
+            project: project,
+            audits: .constant(visibleAudits),
+            selectedTypeTab: $selectedTypeTab,
+            isLoading: isLoading,
+            onSelect: { selectedAudit = $0 },
+            onCreate: { showingCreate = true }
+        )
         .task { await loadAudits() }
         .sheet(isPresented: $showingCreate, onDismiss: {
             Task { await loadAudits() }
@@ -463,8 +509,12 @@ struct SiteAuditProjectHubView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         }
-        .sheet(item: $selectedAudit) { audit in
-            SiteAuditDetailView(audit: audit)
+        .sheet(item: $selectedAudit, onDismiss: {
+            Task { await loadAudits() }
+        }) { audit in
+            SiteAuditDetailView(audit: audit, project: project, onAuditUpdated: {
+                Task { await loadAudits() }
+            })
         }
     }
 
@@ -491,11 +541,15 @@ struct SiteAuditCreateFlowView: View {
     /// When set, the flow starts on this project and optionally locks the picker.
     var initialProject: Project? = nil
     var lockProjectSelection: Bool = false
+    /// When set, preloads fields and updates the existing audit on submit.
+    var existingAudit: SiteAudit? = nil
+    var onFinished: (() -> Void)? = nil
 
     @State private var step = 1
     @State private var selectedType: SiteAuditType = .general
     @State private var selectedProject: Project?
     @State private var selectedProjectFilter: SiteAuditProjectFilter = .all
+    @State private var customTitle = ""
     @State private var authorName = ""
     @State private var selectedDate = Date()
     @State private var showingProjectPicker = false
@@ -510,13 +564,16 @@ struct SiteAuditCreateFlowView: View {
     @State private var submitSuccessPDFURL: URL?
     /// When true, operatives can see this audit in the app; when false, only admins/managers (not in operative mode).
     @State private var operativeAccessVisibleToOperatives = true
+    @State private var didBootstrapExisting = false
+
+    private var isEditing: Bool { existingAudit != nil }
 
     private var canGoNext: Bool {
         selectedProject != nil && !authorName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var visibleProjectsForPicker: [Project] {
-        SiteAuditProjectAccess.visibleProjects(
+        SiteAuditProjectAccess.visibleWorks(
             userStore: userStore,
             projectStore: projectStore,
             bookingStore: bookingStore,
@@ -525,35 +582,57 @@ struct SiteAuditCreateFlowView: View {
     }
 
     private var flowNavigationTitle: String {
-        step == 1 ? "Create Site Audit" : "Items"
+        switch step {
+        case 1: return isEditing ? "Edit audit" : "New audit"
+        case 2: return "Items"
+        default: return isEditing ? "Update preview" : "Audit preview"
+        }
     }
 
     var body: some View {
         NavigationStack {
-            Group { step == 1 ? AnyView(detailsStep) : AnyView(itemsStep) }
-                .navigationTitle(flowNavigationTitle)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button(step == 1 ? "Cancel" : "Back") {
-                            step == 1 ? dismiss() : (step = 1)
-                        }
+            Group {
+                switch step {
+                case 1: detailsStep
+                case 2: itemsStep
+                default: previewStep
+                }
+            }
+            .navigationTitle(flowNavigationTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    SiteAuditToolbarPill(title: "Back", filled: false) {
+                        if step == 1 { dismiss() }
+                        else if step == 2 { step = 1 }
+                        else { step = 2 }
                     }
-                    // Trailing items: on step 2, Submit is outermost (right); Edit sits to its left.
-                    ToolbarItem(placement: .topBarTrailing) {
-                        if step == 1 {
-                            Button("Next") { step = 2 }.disabled(!canGoNext)
-                        } else {
-                            Button(isSubmitting ? "Submitting..." : "Submit") { submitAudit() }
-                                .disabled(items.isEmpty || isSubmitting)
-                        }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        if step == 2 {
-                            EditButton()
+                }
+                ToolbarItem(placement: .principal) {
+                    if step == 2 {
+                        VStack(spacing: 0) {
+                            Text("\(selectedType.rawValue) ›")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(SiteAuditColors.textSecondary)
+                            Text("Items · \(items.count)")
+                                .font(.system(size: 14, weight: .medium))
                         }
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if step == 1 {
+                        SiteAuditToolbarPill(title: "Next", filled: true, disabled: !canGoNext) { step = 2 }
+                    } else if step == 2 {
+                        if isEditing {
+                            SiteAuditToolbarPill(title: isSubmitting ? "Saving…" : "Save", filled: true, disabled: items.isEmpty || isSubmitting) {
+                                submitAudit()
+                            }
+                        } else {
+                            SiteAuditToolbarPill(title: "Preview", filled: true, disabled: items.isEmpty) { step = 3 }
+                        }
+                    }
+                }
+            }
                 .sheet(item: $editingItem) { item in
                     SiteAuditAddItemView(item: item) { updated in
                         if let idx = items.firstIndex(where: { $0.id == updated.id }) {
@@ -575,9 +654,12 @@ struct SiteAuditCreateFlowView: View {
                 }) {
                     SiteAuditSubmitSuccessView(
                         pdfURL: submitSuccessPDFURL,
+                        itemCount: items.count,
+                        isUpdate: isEditing,
                         onDone: {
                             showingSubmitSuccess = false
                             submitSuccessPDFURL = nil
+                            onFinished?()
                             dismiss()
                         }
                     )
@@ -586,13 +668,19 @@ struct SiteAuditCreateFlowView: View {
                     if !newValue.isEmpty { Task { await addMultiPhotos(from: newValue) } }
                 }
                 .onAppear {
+                    if let existing = existingAudit, !didBootstrapExisting {
+                        bootstrapFromExisting(existing)
+                        didBootstrapExisting = true
+                    }
                     if authorName.isEmpty {
                         authorName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
                     }
                     if let p = initialProject {
                         selectedProject = p
                     }
-                    operativeAccessVisibleToOperatives = true
+                    if existingAudit == nil {
+                        operativeAccessVisibleToOperatives = true
+                    }
                 }
                 .alert("Site Audit", isPresented: Binding(
                     get: { errorMessage != nil },
@@ -606,109 +694,98 @@ struct SiteAuditCreateFlowView: View {
     }
 
     private var detailsStep: some View {
-        Form {
-            Section("Site Audit Type") {
-                Picker("Type", selection: $selectedType) {
-                    ForEach(SiteAuditType.allCases) { type in Text(type.rawValue).tag(type) }
-                }
-            }
-            Section("Job Number and Name") {
-                if lockProjectSelection, let p = selectedProject ?? initialProject {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(p.jobNumber).font(.headline)
-                            Text(p.siteName).font(.subheadline).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                } else {
-                    Button {
-                        showingProjectPicker = true
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(selectedProject?.jobNumber ?? "Select Project").font(.headline)
-                                Text(selectedProject?.siteName ?? "Tap to choose from projects")
-                                    .font(.subheadline).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right").foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-            if userStore.canManageSiteAuditOperativeVisibility() {
-                Section {
-                    Picker("Operative access", selection: $operativeAccessVisibleToOperatives) {
-                        Text("Visible to operatives").tag(true)
-                        Text("Hidden from operatives").tag(false)
-                    }
-                } footer: {
-                    Text("Choose whether users in operative mode can see this audit for this job.")
-                }
-            }
-            Section("Author Name") { TextField("Author", text: $authorName) }
-            Section("Date") { DatePicker("Date", selection: $selectedDate, displayedComponents: .date) }
+        SiteAuditDetailsStepView(
+            selectedType: $selectedType,
+            selectedProject: $selectedProject,
+            customTitle: $customTitle,
+            authorName: $authorName,
+            selectedDate: $selectedDate,
+            operativeAccessVisibleToOperatives: $operativeAccessVisibleToOperatives,
+            lockProjectSelection: lockProjectSelection,
+            initialProject: initialProject,
+            canManageVisibility: userStore.canManageSiteAuditOperativeVisibility(),
+            onPickProject: { showingProjectPicker = true }
+        )
+    }
+
+    @ViewBuilder
+    private var itemsStep: some View {
+        if let project = selectedProject ?? initialProject {
+            SiteAuditItemsStepView(
+                auditType: selectedType,
+                project: project,
+                authorName: authorName,
+                items: $items,
+                multiSelection: $multiSelection,
+                onAddItem: { editingItem = SiteAuditDraftItem(assignee: authorName) },
+                onEditItem: { editingItem = $0 },
+                onDelete: { items.remove(atOffsets: $0) }
+            )
+        } else {
+            ContentUnavailableView("Select a project", systemImage: "folder")
         }
     }
 
-    private var itemsStep: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 10) {
-                Button {
-                    editingItem = SiteAuditDraftItem()
-                } label: {
-                    Label("Add Item", systemImage: "plus.circle.fill").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-
-                PhotosPicker(selection: $multiSelection, maxSelectionCount: 20, matching: .images) {
-                    Label("Multi Add", systemImage: "photo.on.rectangle.angled").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
-            .padding(.horizontal)
-
-            if items.isEmpty {
-                ContentUnavailableView("No Items Yet", systemImage: "list.bullet.rectangle")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List {
-                    ForEach(items) { item in
-                        Button {
-                            editingItem = item
-                        } label: {
-                            HStack(spacing: 12) {
-                                if let image = item.image {
-                                    Image(uiImage: image)
-                                        .resizable().scaledToFill().frame(width: 60, height: 60)
-                                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                                } else {
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(Color(.systemGray5)).frame(width: 60, height: 60)
-                                        .overlay(Image(systemName: "doc.text"))
-                                }
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.title.isEmpty ? "Untitled Item" : item.title).font(.headline)
-                                    if !item.assignee.isEmpty {
-                                        Text("Assignee: \(item.assignee)").font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    if !item.comments.isEmpty {
-                                        Text(item.comments).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                    }
-                                }
-                                Spacer()
-                                Image(systemName: "line.3.horizontal").foregroundStyle(.tertiary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .onDelete { idx in items.remove(atOffsets: idx) }
-                    .onMove { from, to in items.move(fromOffsets: from, toOffset: to) }
-                }
-                .listStyle(.plain)
-            }
+    @ViewBuilder
+    private var previewStep: some View {
+        if let project = selectedProject ?? initialProject {
+            SiteAuditPreviewStepView(
+                auditType: selectedType,
+                project: project,
+                customTitle: customTitle,
+                authorName: authorName,
+                date: selectedDate,
+                clientName: project.client.name,
+                items: items,
+                organizationName: firebaseBackend.currentOrganization?.name,
+                onEdit: { step = 2 },
+                onSubmit: { submitAudit() },
+                isSubmitting: isSubmitting,
+                submitButtonTitle: isEditing ? "Update & generate PDF" : "Submit & generate PDF"
+            )
         }
+    }
+
+    private func resolveProject(id: UUID) -> Project? {
+        projectStore.projects.first { $0.id == id }
+    }
+
+    private func bootstrapFromExisting(_ existing: SiteAudit) {
+        selectedType = existing.type
+        customTitle = existing.customTitle
+        authorName = existing.authorName
+        selectedDate = existing.date
+        operativeAccessVisibleToOperatives = existing.visibleToOperatives
+        if selectedProject == nil {
+            selectedProject = initialProject ?? resolveProject(id: existing.projectId)
+        }
+        items = existing.items.map { item in
+            SiteAuditDraftItem(
+                id: item.id,
+                title: item.title,
+                location: item.location,
+                assignee: item.assignee,
+                comments: item.comments,
+                annotations: item.annotations,
+                image: nil,
+                capturedAt: item.imageCapturedAt,
+                createdAt: item.createdAt
+            )
+        }
+        Task { await hydrateItemImages(from: existing.items) }
+    }
+
+    private func hydrateItemImages(from saved: [SiteAuditItem]) async {
+        var updated = items
+        for item in saved {
+            guard let urlString = item.imageURL,
+                  let url = URL(string: urlString),
+                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let image = UIImage(data: data),
+                  let idx = updated.firstIndex(where: { $0.id == item.id }) else { continue }
+            updated[idx].image = SiteAuditMediaProcessor.normalizedForDisplay(image)
+        }
+        await MainActor.run { items = updated }
     }
 
     private func addMultiPhotos(from selection: [PhotosPickerItem]) async {
@@ -716,7 +793,8 @@ struct SiteAuditCreateFlowView: View {
             if let data = try? await entry.loadTransferable(type: Data.self),
                let image = UIImage(data: data) {
                 let captured = Date()
-                let stamped = SiteAuditMediaProcessor.addTimestampWatermark(to: image, at: captured)
+                let normalized = SiteAuditMediaProcessor.normalizedForDisplay(image)
+                let stamped = SiteAuditMediaProcessor.addTimestampWatermark(to: normalized, at: captured)
                 await MainActor.run {
                     items.append(SiteAuditDraftItem(
                         title: "Photo item",
@@ -736,13 +814,17 @@ struct SiteAuditCreateFlowView: View {
         }
 
         isSubmitting = true
-        let auditId = UUID()
+        let auditId = existingAudit?.id ?? UUID()
+        let createdAt = existingAudit?.createdAt ?? Date()
+        let createdByUserId = existingAudit?.createdByUserId ?? firebaseBackend.currentUser?.uid ?? "unknown"
         let project = selectedProject
         let drafts = items
         let type = selectedType
         let author = authorName
         let date = selectedDate
+        let title = customTitle
         let visibilityChoice = operativeAccessVisibleToOperatives
+        let existingItemsById = Dictionary(uniqueKeysWithValues: (existingAudit?.items ?? []).map { ($0.id, $0) })
 
         Task { @MainActor in
             let orgId = await firebaseBackend.resolveOrganizationIdForFirebaseWrites(
@@ -759,23 +841,33 @@ struct SiteAuditCreateFlowView: View {
             for draft in drafts {
                 var remoteURL: String?
                 if let image = draft.image {
-                    do {
-                        remoteURL = try await firebaseBackend.uploadSiteAuditImage(
-                            image,
-                            auditId: auditId,
-                            organizationId: orgId,
-                            imageName: "site_audit_item_\(UUID().uuidString)"
-                        )
-                    } catch {
-                        // Do not block submit/PDF generation when cloud photo upload is denied.
-                        // Keep local image for PDF output and save the audit item without remote URL.
-                        uploadFailures += 1
-                        remoteURL = nil
+                    let priorURL = existingItemsById[draft.id]?.imageURL
+                    let priorCapturedAt = existingItemsById[draft.id]?.imageCapturedAt
+                    let imageUnchanged = isEditing
+                        && priorURL != nil
+                        && draft.capturedAt == priorCapturedAt
+                    if imageUnchanged {
+                        remoteURL = priorURL
+                    } else {
+                        do {
+                            remoteURL = try await firebaseBackend.uploadSiteAuditImage(
+                                image,
+                                auditId: auditId,
+                                organizationId: orgId,
+                                imageName: "site_audit_item_\(UUID().uuidString)"
+                            )
+                        } catch {
+                            uploadFailures += 1
+                            remoteURL = priorURL
+                        }
                     }
+                } else {
+                    remoteURL = existingItemsById[draft.id]?.imageURL
                 }
                 savedItems.append(SiteAuditItem(
                     id: draft.id,
                     title: draft.title,
+                    location: draft.location,
                     assignee: draft.assignee,
                     comments: draft.comments,
                     annotations: draft.annotations,
@@ -796,18 +888,26 @@ struct SiteAuditCreateFlowView: View {
                 projectJobNumber: project.jobNumber,
                 projectName: project.siteName,
                 type: type,
+                customTitle: title.trimmingCharacters(in: .whitespacesAndNewlines),
                 authorName: author,
                 date: date,
                 items: savedItems,
-                createdAt: Date(),
-                createdByUserId: firebaseBackend.currentUser?.uid ?? "unknown",
+                createdAt: createdAt,
+                createdByUserId: createdByUserId,
                 visibleToOperatives: visibilityToOperatives
             )
 
             do {
                 try await firebaseBackend.saveSiteAudit(audit, organizationId: orgId)
                 let logoImage = await loadOrganizationLogoImage()
-                let pdfURL = SiteAuditPDFBuilder.makePDF(audit: audit, localItems: drafts, organizationName: firebaseBackend.currentOrganization?.name, logoImage: logoImage)
+                let pdfURL = SiteAuditPDFBuilder.makePDF(
+                    audit: audit,
+                    localItems: drafts,
+                    organizationName: firebaseBackend.currentOrganization?.name,
+                    logoImage: logoImage,
+                    clientName: project.client.name,
+                    siteAddress: project.siteAddress
+                )
                 submitSuccessPDFURL = pdfURL
                 isSubmitting = false
                 showingSubmitSuccess = true
@@ -818,7 +918,9 @@ struct SiteAuditCreateFlowView: View {
                 }
             } catch {
                 isSubmitting = false
-                errorMessage = "Submit failed: \(error.localizedDescription)"
+                errorMessage = isEditing
+                    ? "Update failed: \(error.localizedDescription)"
+                    : "Submit failed: \(error.localizedDescription)"
             }
         }
     }
@@ -842,69 +944,144 @@ struct SiteAuditCreateFlowView: View {
 
 private struct SiteAuditSubmitSuccessView: View {
     let pdfURL: URL?
+    let itemCount: Int
+    var isUpdate = false
     let onDone: () -> Void
 
     @State private var showShareSheet = false
 
+    private var headline: String { isUpdate ? "Audit updated" : "Audit submitted" }
+    private var subtitle: String { isUpdate ? "Changes saved · PDF ready" : "Saved to cloud · PDF ready" }
+    private var navigationTitle: String { isUpdate ? "Audit updated" : "Audit submitted" }
+
     private var shareActivityItems: [Any] {
-        if let pdfURL {
-            return [pdfURL]
-        }
+        if let pdfURL { return [pdfURL] }
         return ["Site audit saved."]
+    }
+
+    private var fileName: String {
+        pdfURL?.lastPathComponent ?? "Site audit.pdf"
+    }
+
+    private var fileSizeLabel: String {
+        guard let pdfURL,
+              let attrs = try? FileManager.default.attributesOfItem(atPath: pdfURL.path),
+              let size = attrs[.size] as? Int64 else { return "" }
+        let kb = Double(size) / 1024.0
+        if kb < 1024 { return String(format: "%.0fKB", kb) }
+        return String(format: "%.1fMB", kb / 1024.0)
     }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                Spacer(minLength: 32)
+            ScrollView {
+                VStack(spacing: 0) {
+                    VStack(spacing: 14) {
+                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [SiteAuditColors.success, Color(red: 0.176, green: 0.639, blue: 0.490)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(width: 78, height: 78)
+                            .overlay {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 36, weight: .semibold))
+                                    .foregroundStyle(.white)
+                            }
+                            .shadow(color: SiteAuditColors.success.opacity(0.25), radius: 16, y: 8)
 
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 96))
-                    .foregroundStyle(.green)
-                    .symbolRenderingMode(.hierarchical)
-                    .accessibilityHidden(true)
+                        Text(headline)
+                            .font(.system(size: 19, weight: .medium))
+                        Text(subtitle)
+                            .font(.system(size: 12))
+                            .foregroundStyle(SiteAuditColors.textSecondary)
+                    }
+                    .padding(.vertical, 22)
 
-                Text("Saved")
-                    .font(.title.bold())
-                    .padding(.top, 20)
+                    SiteAuditCard {
+                        HStack(spacing: 11) {
+                            pdfThumbnail
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(fileName)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .lineLimit(1)
+                                Text("\(itemCount) item\(itemCount == 1 ? "" : "s")\(fileSizeLabel.isEmpty ? "" : " · \(fileSizeLabel)") · just now")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(SiteAuditColors.textSecondary)
+                            }
+                        }
+                        .padding(12)
+                    }
+                    .padding(.bottom, 14)
 
-                Text("Your site audit was saved to the cloud.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 28)
-                    .padding(.top, 8)
+                    SiteAuditPrimaryButton(title: "Share PDF", systemImage: "square.and.arrow.up", style: .success) {
+                        showShareSheet = true
+                    }
+                    .padding(.bottom, 7)
 
-                Spacer()
+                    if let pdfURL {
+                        ShareLink(item: pdfURL) {
+                            Text("Download")
+                                .font(.system(size: 13, weight: .medium))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .foregroundStyle(SiteAuditColors.primary)
+                                .background(Color.white)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .strokeBorder(SiteAuditColors.primary, lineWidth: 1)
+                                )
+                        }
+                        .padding(.bottom, 7)
+                    }
 
-                Button {
-                    showShareSheet = true
-                } label: {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
+                    SiteAuditPrimaryButton(title: "Done", style: .secondary, action: onDone)
+                        .padding(.bottom, 22)
+
+                    Text("Tap Done to return to audits list")
+                        .font(.system(size: 10))
+                        .foregroundStyle(SiteAuditColors.textDisabled)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                .labelStyle(.titleAndIcon)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 12)
-                .accessibilityHint("Opens the share sheet to send the PDF or a message.")
+                .padding(.horizontal, 16)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle("")
+            .siteAuditScreenBackground()
+            .navigationTitle(navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done", action: onDone)
+                    SiteAuditIconCircleButton(systemName: "xmark", action: onDone)
                 }
             }
             .sheet(isPresented: $showShareSheet) {
                 ShareSheet(activityItems: shareActivityItems)
             }
         }
+    }
+
+    private var pdfThumbnail: some View {
+        ZStack(alignment: .bottom) {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(Color.white)
+                .frame(width: 44, height: 52)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .strokeBorder(SiteAuditColors.borderStrong, lineWidth: 1)
+                )
+            Text("PDF")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 2)
+                .background(SiteAuditColors.danger)
+                .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+                .padding(.horizontal, 4)
+                .padding(.bottom, 6)
+        }
+        .frame(width: 44, height: 52)
     }
 }
 
@@ -956,6 +1133,7 @@ struct SiteAuditAddItemView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: SiteAuditDraftItem
     @State private var showingCamera = false
+    @State private var showingLibrary = false
     let onSubmit: (SiteAuditDraftItem) -> Void
 
     init(item: SiteAuditDraftItem = SiteAuditDraftItem(), onSubmit: @escaping (SiteAuditDraftItem) -> Void) {
@@ -963,91 +1141,298 @@ struct SiteAuditAddItemView: View {
         self.onSubmit = onSubmit
     }
 
+    private var canSave: Bool {
+        draft.image != nil && !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Photo") {
-                    Button { showingCamera = true } label: { Label("Open Camera", systemImage: "camera.fill") }
-                    if let image = draft.image {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: .infinity)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    SiteAuditSectionLabel(title: "Photo")
+                    photoBlock
+                    HStack(spacing: 6) {
+                        secondaryPhotoButton("Retake", icon: "camera.fill") { showingCamera = true }
+                        secondaryPhotoButton("Library", icon: "photo.on.rectangle.angled") { showingLibrary = true }
+                    }
+
+                    SiteAuditSectionLabel(title: "Details")
+                    SiteAuditCard {
+                        VStack(spacing: 0) {
+                            fieldBlock("Title", required: true) {
+                                TextField("Front courtyard", text: $draft.title)
+                                    .font(.system(size: 13, weight: .medium))
+                            }
+                            divider
+                            fieldBlock("Comments", required: false) {
+                                TextField("Notes…", text: $draft.comments, axis: .vertical)
+                                    .lineLimit(3...6)
+                                    .font(.system(size: 12))
+                            }
+                            divider
+                            assigneeRow
+                            divider
+                            fieldBlock("Location tag", required: false) {
+                                TextField("e.g. Front entrance courtyard", text: $draft.location)
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            divider
+                            annotationsRow
+                        }
+                        .padding(.horizontal, 14)
                     }
                 }
-                Section("Details") {
-                    TextField("Item Title", text: $draft.title)
-                    TextField("Assignee", text: $draft.assignee)
-                    TextField("Comments", text: $draft.comments, axis: .vertical).lineLimit(3...6)
-                    TextField("Annotations", text: $draft.annotations, axis: .vertical).lineLimit(2...4)
-                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
-            .navigationTitle("Site Audit Item")
+            .siteAuditScreenBackground()
+            .navigationTitle("New item")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .topBarLeading) {
+                    SiteAuditToolbarPill(title: "Cancel", filled: false) { dismiss() }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Submit") {
+                    SiteAuditToolbarPill(title: "Save", filled: true, disabled: !canSave) {
                         onSubmit(draft)
                         dismiss()
                     }
                 }
             }
             .sheet(isPresented: $showingCamera) {
-                SiteAuditCameraPicker { captured in
-                    let now = Date()
-                    draft.image = SiteAuditMediaProcessor.addTimestampWatermark(to: captured, at: now)
-                    draft.capturedAt = now
-                }
+                SiteAuditCameraPicker { applyPhoto($0) }
+            }
+            .sheet(isPresented: $showingLibrary) {
+                SiteAuditPhotoLibraryPicker { applyPhoto($0) }
             }
         }
+    }
+
+    @ViewBuilder
+    private var photoBlock: some View {
+        if let image = draft.image {
+            SiteAuditBoundedImage(image: image)
+        } else {
+            ZStack {
+                LinearGradient(
+                    colors: [SiteAuditColors.primaryTint, SiteAuditColors.primary.opacity(0.35)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                Button { showingCamera = true } label: {
+                    VStack(spacing: 8) {
+                        Image(systemName: "camera.fill")
+                            .font(.title2)
+                        Text("Add photo")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(SiteAuditColors.primary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .aspectRatio(4 / 3, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+    }
+
+    private var assigneeRow: some View {
+        HStack(spacing: 10) {
+            SiteAuditRowIconChip(systemName: "person.fill", tint: SiteAuditColors.pink, background: SiteAuditColors.pinkTint, size: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Assignee")
+                    .font(.system(size: 10))
+                    .foregroundStyle(SiteAuditColors.textSecondary)
+                TextField("Name", text: $draft.assignee)
+                    .font(.system(size: 12, weight: .medium))
+            }
+        }
+        .padding(.vertical, 11)
+    }
+
+    private var annotationsRow: some View {
+        HStack(spacing: 10) {
+            SiteAuditRowIconChip(systemName: "pencil.tip", tint: SiteAuditColors.warn, background: SiteAuditColors.warnTint, size: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Annotations")
+                    .font(.system(size: 10))
+                    .foregroundStyle(SiteAuditColors.textSecondary)
+                TextField("Notes on photo", text: $draft.annotations)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(SiteAuditColors.primary)
+            }
+        }
+        .padding(.vertical, 11)
+    }
+
+    private var divider: some View {
+        Rectangle().fill(SiteAuditColors.border).frame(height: 0.5)
+    }
+
+    private func fieldBlock<Content: View>(_ label: String, required: Bool, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 2) {
+                Text(label)
+                if required { Text("*").foregroundStyle(SiteAuditColors.danger) }
+            }
+            .font(.system(size: 10))
+            .foregroundStyle(SiteAuditColors.textSecondary)
+            content()
+        }
+        .padding(.vertical, 11)
+    }
+
+    private func secondaryPhotoButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                Text(title)
+            }
+            .font(.system(size: 11))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(SiteAuditColors.card)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(SiteAuditColors.borderStrong, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func applyPhoto(_ image: UIImage) {
+        let now = Date()
+        let normalized = SiteAuditMediaProcessor.normalizedForDisplay(image)
+        draft.image = SiteAuditMediaProcessor.addTimestampWatermark(to: normalized, at: now)
+        draft.capturedAt = now
     }
 }
 
 struct SiteAuditDetailView: View {
     let audit: SiteAudit
+    var project: Project?
+    var onAuditUpdated: (() -> Void)? = nil
+
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var operativeStore: OperativeStore
+
+    @State private var displayAudit: SiteAudit
+    @State private var resolvedProject: Project?
     @State private var selectedImageURL: String?
+    @State private var pdfURL: URL?
+    @State private var showShare = false
+    @State private var showingEdit = false
+
+    init(audit: SiteAudit, project: Project? = nil, onAuditUpdated: (() -> Void)? = nil) {
+        self.audit = audit
+        self.project = project
+        self.onAuditUpdated = onAuditUpdated
+        _displayAudit = State(initialValue: audit)
+        _resolvedProject = State(initialValue: project)
+    }
+
+    private var canEdit: Bool {
+        canEditSiteAudit(displayAudit, userStore: userStore, firebaseBackend: firebaseBackend)
+    }
+
+    private var clientProject: Project? {
+        resolvedProject ?? project
+    }
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("Summary") {
-                    detailRow("Type", audit.type.rawValue)
-                    detailRow("Project", "\(audit.projectJobNumber) \(audit.projectName)")
-                    detailRow("Author", audit.authorName)
-                    detailRow("Date", audit.date.formatted(date: .abbreviated, time: .omitted))
-                }
-                Section("Items") {
-                    ForEach(audit.items) { item in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(item.title).font(.headline)
-                            if !item.assignee.isEmpty { Text("Assignee: \(item.assignee)").font(.subheadline).foregroundStyle(.secondary) }
-                            if !item.comments.isEmpty { Text(item.comments).font(.subheadline) }
-                            if !item.annotations.isEmpty { Text("Annotations: \(item.annotations)").font(.caption).foregroundStyle(.secondary) }
-                            if let url = item.imageURL {
-                                Button {
-                                    selectedImageURL = url
-                                } label: {
-                                    AsyncImage(url: URL(string: url)) { image in
-                                        image.resizable().scaledToFill()
-                                    } placeholder: {
-                                        Rectangle().fill(Color(.systemGray5))
-                                    }
-                                    .frame(height: 140)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if canEdit {
+                        SiteAuditAuditListCard(audit: displayAudit, onTap: { showingEdit = true })
+                            .accessibilityLabel("Edit audit details")
+                            .accessibilityHint("Opens the edit flow for this site audit")
+                    } else {
+                        SiteAuditAuditListCard(audit: displayAudit, showsChevron: false)
+                    }
+                    HStack(spacing: 8) {
+                        SiteAuditPrimaryButton(title: "Share", systemImage: "square.and.arrow.up", style: .primary) {
+                            Task {
+                                if pdfURL == nil {
+                                    await buildPDFPreview()
                                 }
-                                .buttonStyle(.plain)
+                                if pdfURL != nil {
+                                    showShare = true
+                                }
                             }
                         }
-                        .padding(.vertical, 4)
+                        if canEdit {
+                            SiteAuditPrimaryButton(title: "Edit Site Audit", systemImage: "square.and.pencil", style: .greyFilled) {
+                                showingEdit = true
+                            }
+                        }
+                    }
+                    SiteAuditSectionLabel(title: "Summary")
+                    SiteAuditCard {
+                        VStack(spacing: 0) {
+                            summaryLine("Author", displayAudit.authorName)
+                            if !displayAudit.customTitle.isEmpty {
+                                divider
+                                summaryLine("Title", displayAudit.customTitle)
+                            }
+                            divider
+                            summaryLine("Date", displayAudit.date.formatted(date: .abbreviated, time: .omitted))
+                            if let clientProject {
+                                divider
+                                summaryLine("Client", clientProject.client.name)
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                    }
+                    SiteAuditSectionLabel(title: "Items", suffix: "· \(displayAudit.items.count)")
+                    ForEach(Array(displayAudit.items.enumerated()), id: \.element.id) { index, item in
+                        itemCard(index: index + 1, item: item)
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
-            .navigationTitle("Audit Detail")
+            .siteAuditScreenBackground()
+            .navigationTitle("Audit detail")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .task {
+                if resolvedProject == nil {
+                    resolvedProject = projectStore.projects.first { $0.id == displayAudit.projectId }
+                }
+                await buildPDFPreview()
+            }
+            .sheet(isPresented: $showShare) {
+                if let pdfURL {
+                    ShareSheet(activityItems: [pdfURL])
+                }
+            }
+            .sheet(isPresented: $showingEdit) {
+                SiteAuditCreateFlowView(
+                    initialProject: clientProject,
+                    lockProjectSelection: true,
+                    existingAudit: displayAudit,
+                    onFinished: {
+                        Task {
+                            await reloadAudit()
+                            onAuditUpdated?()
+                        }
+                    }
+                )
+                .environmentObject(projectStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+            }
             .sheet(isPresented: Binding(
                 get: { selectedImageURL != nil },
                 set: { if !$0 { selectedImageURL = nil } }
@@ -1055,9 +1440,7 @@ struct SiteAuditDetailView: View {
                 NavigationStack {
                     AsyncImage(url: URL(string: selectedImageURL ?? "")) { image in
                         image.resizable().scaledToFit()
-                    } placeholder: {
-                        ProgressView()
-                    }
+                    } placeholder: { ProgressView() }
                     .padding()
                     .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { selectedImageURL = nil } } }
                 }
@@ -1065,16 +1448,127 @@ struct SiteAuditDetailView: View {
         }
     }
 
-    private func detailRow(_ key: String, _ value: String) -> some View {
+    private var divider: some View {
+        Rectangle().fill(SiteAuditColors.border).frame(height: 0.5)
+    }
+
+    private func summaryLine(_ label: String, _ value: String) -> some View {
         HStack {
-            Text(key).foregroundStyle(.secondary)
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(SiteAuditColors.textSecondary)
             Spacer()
             Text(value)
+                .font(.system(size: 13, weight: .medium))
         }
+        .padding(.vertical, 11)
+    }
+
+    private func itemCard(index: Int, item: SiteAuditItem) -> some View {
+        SiteAuditCard {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("\(index). \(item.title.isEmpty ? "Untitled" : item.title)")
+                    .font(.system(size: 12, weight: .medium))
+                if !item.location.isEmpty {
+                    Text(item.location).font(.system(size: 10)).foregroundStyle(SiteAuditColors.textSecondary)
+                }
+                if !item.comments.isEmpty {
+                    Text(item.comments).font(.system(size: 11))
+                }
+                if let url = item.imageURL, let imageURL = URL(string: url) {
+                    Button { selectedImageURL = url } label: {
+                        AsyncImage(url: imageURL) { phase in
+                            switch phase {
+                            case .success(let image): image.resizable().scaledToFill()
+                            default: SiteAuditColors.primaryTint
+                            }
+                        }
+                        .frame(height: 140)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private func reloadAudit() async {
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        do {
+            let audits = try await firebaseBackend.loadSiteAudits(
+                organizationId: orgId,
+                projectId: displayAudit.projectId
+            )
+            guard let fresh = audits.first(where: { $0.id == displayAudit.id }) else { return }
+            await MainActor.run { displayAudit = fresh }
+            if resolvedProject == nil {
+                await MainActor.run {
+                    resolvedProject = projectStore.projects.first { $0.id == fresh.projectId }
+                }
+            }
+            await buildPDFPreview()
+        } catch {
+            print("Site audit reload error: \(error.localizedDescription)")
+        }
+    }
+
+    private func buildPDFPreview() async {
+        let logo = await loadLogo()
+        var drafts: [SiteAuditDraftItem] = []
+        for item in displayAudit.items {
+            var image: UIImage?
+            if let urlString = item.imageURL, let url = URL(string: urlString),
+               let (data, _) = try? await URLSession.shared.data(from: url) {
+                image = UIImage(data: data)
+            }
+            drafts.append(SiteAuditDraftItem(
+                id: item.id,
+                title: item.title,
+                location: item.location,
+                assignee: item.assignee,
+                comments: item.comments,
+                annotations: item.annotations,
+                image: image,
+                capturedAt: item.imageCapturedAt,
+                createdAt: item.createdAt
+            ))
+        }
+        pdfURL = SiteAuditPDFBuilder.makePDF(
+            audit: displayAudit,
+            localItems: drafts,
+            organizationName: firebaseBackend.currentOrganization?.name,
+            logoImage: logo,
+            clientName: clientProject?.client.name,
+            siteAddress: clientProject?.siteAddress
+        )
+    }
+
+    private func loadLogo() async -> UIImage? {
+        guard let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
+              let url = URL(string: logoURL),
+              url.scheme?.hasPrefix("http") == true,
+              let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+        return UIImage(data: data)
     }
 }
 
 private enum SiteAuditMediaProcessor {
+    /// Downscales very large library photos so layouts and PDF generation stay predictable.
+    static func normalizedForDisplay(_ image: UIImage, maxPixelDimension: CGFloat = 1600) -> UIImage {
+        let width = image.size.width
+        let height = image.size.height
+        let longest = max(width, height)
+        guard longest > maxPixelDimension else { return image }
+        let scale = maxPixelDimension / longest
+        let newSize = CGSize(width: width * scale, height: height * scale)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: newSize, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
+    }
+
     static func addTimestampWatermark(to image: UIImage, at date: Date) -> UIImage {
         let renderer = UIGraphicsImageRenderer(size: image.size)
         let formatter = DateFormatter()
@@ -1095,83 +1589,35 @@ private enum SiteAuditMediaProcessor {
     }
 }
 
-private enum SiteAuditPDFBuilder {
-    static func makePDF(audit: SiteAudit, localItems: [SiteAuditDraftItem], organizationName: String?, logoImage: UIImage?) -> URL? {
-        let name = "SiteAudit-\(audit.projectJobNumber)-\(Int(Date().timeIntervalSince1970)).pdf"
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-        let bounds = CGRect(x: 0, y: 0, width: 595, height: 842)
-        let renderer = UIGraphicsPDFRenderer(bounds: bounds)
-        do {
-            try renderer.writePDF(to: url) { ctx in
-                ctx.beginPage()
-                var y: CGFloat = 28
-                let titleAttrs: [NSAttributedString.Key: Any] = [.font: UIFont.boldSystemFont(ofSize: 22)]
-                let textAttrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 12)]
-                let subtitleAttrs: [NSAttributedString.Key: Any] = [.font: UIFont.boldSystemFont(ofSize: 13)]
-                "SITE AUDIT REPORT".draw(at: CGPoint(x: 24, y: y), withAttributes: titleAttrs)
-                if let logoImage {
-                    let logoBox = CGRect(x: 455, y: 20, width: 115, height: 48)
-                    if let prepared = compressedImageForPDF(logoImage, maxWidth: 460) {
-                        prepared.draw(in: aspectFitRect(for: prepared.size, in: logoBox))
-                    }
-                }
-                y += 30
-                if let organizationName, !organizationName.isEmpty {
-                    "Organisation: \(organizationName)".draw(at: CGPoint(x: 24, y: y), withAttributes: textAttrs)
-                    y += 16
-                }
-                "Type: \(audit.type.rawValue)".draw(at: CGPoint(x: 24, y: y), withAttributes: textAttrs); y += 16
-                "Project: \(audit.projectJobNumber) \(audit.projectName)".draw(at: CGPoint(x: 24, y: y), withAttributes: textAttrs); y += 16
-                "Author: \(audit.authorName)".draw(at: CGPoint(x: 24, y: y), withAttributes: textAttrs); y += 16
-                "Date: \(audit.date.formatted(date: .abbreviated, time: .omitted))".draw(at: CGPoint(x: 24, y: y), withAttributes: textAttrs); y += 22
+private struct SiteAuditPhotoLibraryPicker: UIViewControllerRepresentable {
+    let onCapture: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
 
-                for (idx, item) in audit.items.enumerated() {
-                    if y > 760 { ctx.beginPage(); y = 24 }
-                    "\(idx + 1). \(item.title.isEmpty ? "Untitled Item" : item.title)"
-                        .draw(at: CGPoint(x: 24, y: y), withAttributes: subtitleAttrs); y += 16
-                    "Assignee: \(item.assignee.isEmpty ? "-" : item.assignee)".draw(at: CGPoint(x: 30, y: y), withAttributes: textAttrs); y += 14
-                    "Comments: \(item.comments.isEmpty ? "-" : item.comments)".draw(at: CGPoint(x: 30, y: y), withAttributes: textAttrs); y += 14
-                    "Annotations: \(item.annotations.isEmpty ? "-" : item.annotations)".draw(at: CGPoint(x: 30, y: y), withAttributes: textAttrs); y += 14
-                    if let image = localItems[safe: idx]?.image {
-                        compressedImageForPDF(image, maxWidth: 900)?.draw(in: CGRect(x: 30, y: y + 6, width: 180, height: 120))
-                        y += 132
-                    }
-                    y += 10
-                }
-            }
-            return url
-        } catch {
-            print("PDF generation error: \(error.localizedDescription)")
-            return nil
-        }
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .photoLibrary
+        picker.delegate = context.coordinator
+        return picker
     }
 
-    private static func compressedImageForPDF(_ image: UIImage, maxWidth: CGFloat) -> UIImage? {
-        let source = image
-        let resized: UIImage
-        if source.size.width > maxWidth {
-            let scale = maxWidth / source.size.width
-            let newSize = CGSize(width: maxWidth, height: source.size.height * scale)
-            let renderer = UIGraphicsImageRenderer(size: newSize)
-            resized = renderer.image { _ in
-                source.draw(in: CGRect(origin: .zero, size: newSize))
-            }
-        } else {
-            resized = source
-        }
-        guard let data = resized.jpegData(compressionQuality: 0.55) else { return resized }
-        return UIImage(data: data) ?? resized
-    }
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
 
-    private static func aspectFitRect(for imageSize: CGSize, in box: CGRect) -> CGRect {
-        guard imageSize.width > 0, imageSize.height > 0 else { return box }
-        let widthScale = box.width / imageSize.width
-        let heightScale = box.height / imageSize.height
-        let scale = min(widthScale, heightScale)
-        let fittedSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
-        let x = box.minX + (box.width - fittedSize.width) / 2
-        let y = box.minY + (box.height - fittedSize.height) / 2
-        return CGRect(origin: CGPoint(x: x, y: y), size: fittedSize)
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let parent: SiteAuditPhotoLibraryPicker
+        init(_ parent: SiteAuditPhotoLibraryPicker) { self.parent = parent }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage {
+                parent.onCapture(image)
+            }
+            parent.dismiss()
+        }
     }
 }
 
@@ -1238,8 +1684,3 @@ private struct ShareSheet: UIViewControllerRepresentable {
     }
 }
 
-private extension Collection {
-    subscript(safe index: Index) -> Element? {
-        indices.contains(index) ? self[index] : nil
-    }
-}

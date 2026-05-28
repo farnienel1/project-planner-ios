@@ -541,6 +541,7 @@ class FirebaseBackend: ObservableObject {
             operativeMode: permissionsMap["operativeMode"] as? Bool ?? false,
             annualLeaveSelfBook: permissionsMap["annualLeaveSelfBook"] as? Bool ?? false,
             weeklyReports: permissionsMap["weeklyReports"] as? Bool ?? false,
+            dailyOverview: permissionsMap["dailyOverview"] as? Bool ?? true,
             subContractors: permissionsMap["subContractors"] as? Bool ?? false,
             siteAudit: permissionsMap["siteAudit"] as? Bool ?? true
         )
@@ -564,6 +565,7 @@ class FirebaseBackend: ObservableObject {
                 "operativeMode": permissions.operativeMode,
                 "annualLeaveSelfBook": permissions.annualLeaveSelfBook,
                 "weeklyReports": permissions.weeklyReports,
+                "dailyOverview": permissions.dailyOverview,
                 "subContractors": permissions.subContractors,
                 "siteAudit": permissions.siteAudit
             ],
@@ -696,6 +698,23 @@ class FirebaseBackend: ObservableObject {
     /// Builds `OrganizationSettings` from a Firestore `organizations/{id}` document, including `payrollTimePolicy`.
     private static func organizationSettingsFromOrgDocument(_ data: [String: Any]) -> OrganizationSettings {
         var settings = OrganizationSettings()
+        if let settingsDict = data["settings"] as? [String: Any],
+           let uiLabelsDict = settingsDict["uiLabels"] as? [String: Any],
+           let navLabels = uiLabelsDict["navigationLabels"] as? [String: Any] {
+            let parsed = navLabels.reduce(into: [String: String]()) { out, pair in
+                if let value = pair.value as? String {
+                    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        out[pair.key] = trimmed
+                    }
+                }
+            }
+            if !parsed.isEmpty {
+                var merged = OrganizationUILabels.defaultNavigationLabels
+                for (k, v) in parsed { merged[k] = v }
+                settings.uiLabels = OrganizationUILabels(navigationLabels: merged)
+            }
+        }
         if let policyDict = data["payrollTimePolicy"] as? [String: Any] {
             let policy = OrgPayrollTimePolicy.fromFirestore(policyDict)
             settings.payrollTimePolicy = policy
@@ -706,7 +725,116 @@ class FirebaseBackend: ObservableObject {
         if let warningDict = data["warningDetection"] as? [String: Any] {
             settings.warningDetection = OrgWarningDetectionSettings.fromFirestore(warningDict)
         }
+        if let invoicingDict = data["invoicing"] as? [String: Any] {
+            settings.invoicing = organizationInvoicingFromFirestore(invoicingDict)
+        }
+        if let annualLeaveDefaultsDict = data["annualLeaveDefaults"] as? [String: Any] {
+            settings.annualLeaveDefaults = organizationAnnualLeaveDefaultsFromFirestore(annualLeaveDefaultsDict)
+        }
         return settings
+    }
+
+    private static func organizationAnnualLeaveDefaultsFromFirestore(_ data: [String: Any]) -> OrganizationAnnualLeaveDefaults {
+        let daysPerYear = (data["daysPerYear"] as? NSNumber)?.doubleValue
+            ?? (data["daysPerYear"] as? Double)
+            ?? OrganizationAnnualLeaveDefaults.default.daysPerYear
+        let startMonth = (data["startMonth"] as? NSNumber)?.intValue
+            ?? (data["startMonth"] as? Int)
+            ?? OrganizationAnnualLeaveDefaults.default.startMonth
+        let endMonth = (data["endMonth"] as? NSNumber)?.intValue
+            ?? (data["endMonth"] as? Int)
+            ?? OrganizationAnnualLeaveDefaults.default.endMonth
+        let carriesOver = data["carriesOver"] as? Bool ?? OrganizationAnnualLeaveDefaults.default.carriesOver
+        return OrganizationAnnualLeaveDefaults(
+            daysPerYear: daysPerYear,
+            startMonth: startMonth,
+            endMonth: endMonth,
+            carriesOver: carriesOver
+        )
+    }
+
+    private static func organizationInvoicingFromFirestore(_ data: [String: Any]) -> OrganizationInvoicingSettings {
+        let paymentRunMode = PaymentRunConfigurationMode(rawValue: (data["paymentRunMode"] as? String) ?? "")
+            ?? .dateRanges
+        let paymentDateMode = PaymentDateConfigurationMode(rawValue: (data["paymentDateMode"] as? String) ?? "")
+            ?? .specificDates
+        let recurringPaymentRunSummary = (data["recurringPaymentRunSummary"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let recurringRunStartDay = RecurringPaymentDay(rawValue: (data["recurringRunStartDay"] as? String) ?? "")
+            ?? .monday
+        let recurringRunEndDay = RecurringPaymentDay(rawValue: (data["recurringRunEndDay"] as? String) ?? "")
+            ?? .sunday
+        let recurringPaymentDay = RecurringPaymentDay(rawValue: (data["recurringPaymentDay"] as? String) ?? "")
+            ?? .friday
+        let noteToUsers = (data["noteToUsers"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let paymentDates = ((data["paymentDates"] as? [NSNumber])?.map(\.intValue))
+            ?? (data["paymentDates"] as? [Int])
+            ?? OrganizationInvoicingSettings.default.paymentDates
+
+        let ranges = ((data["paymentRunDateRanges"] as? [[String: Any]]) ?? [])
+            .compactMap { row -> PaymentRunDateRange? in
+                let start = (row["startDay"] as? NSNumber)?.intValue ?? (row["startDay"] as? Int)
+                guard let start else { return nil }
+                let end = (row["endDay"] as? NSNumber)?.intValue
+                    ?? (row["endDay"] as? Int)
+                    ?? PaymentRunDateRange.defaultEndDay(for: start)
+                return PaymentRunDateRange(startDay: start, endDay: end)
+            }
+
+        return OrganizationInvoicingSettings(
+            paymentRunMode: paymentRunMode,
+            paymentDateMode: paymentDateMode,
+            paymentRunDateRanges: ranges.isEmpty ? OrganizationInvoicingSettings.default.paymentRunDateRanges : ranges,
+            paymentDates: paymentDates,
+            noteToUsers: noteToUsers,
+            recurringPaymentRunSummary: recurringPaymentRunSummary?.isEmpty == false
+                ? recurringPaymentRunSummary!
+                : "In arrears: \(recurringRunStartDay.title) to \(recurringRunEndDay.title) (of the previous week)",
+            recurringRunStartDay: recurringRunStartDay,
+            recurringRunEndDay: recurringRunEndDay,
+            recurringPaymentDay: recurringPaymentDay
+        )
+    }
+
+    /// Ensures `settings.uiLabels.navigationLabels` has a full default key set. Existing labels are preserved.
+    private func seedOrganizationUILabelsIfNeeded(
+        organizationId: String,
+        orgData: [String: Any]
+    ) async {
+        let settings = orgData["settings"] as? [String: Any] ?? [:]
+        let uiLabels = settings["uiLabels"] as? [String: Any] ?? [:]
+        let existingRaw = uiLabels["navigationLabels"] as? [String: Any] ?? [:]
+
+        var merged = OrganizationUILabels.defaultNavigationLabels
+        for (key, value) in existingRaw {
+            guard let stringValue = value as? String else { continue }
+            let trimmed = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                merged[key] = trimmed
+            }
+        }
+
+        let defaultsMissing = OrganizationUILabels.defaultNavigationLabels.keys.contains { key in
+            let existing = (existingRaw[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return existing.isEmpty
+        }
+
+        guard defaultsMissing else { return }
+
+        do {
+            try await db.collection("organizations").document(organizationId).updateData([
+                "settings.uiLabels.navigationLabels": merged,
+                "updatedAt": Timestamp(date: Date())
+            ])
+            if var org = currentOrganization {
+                org.settings.uiLabels = OrganizationUILabels(navigationLabels: merged)
+                currentOrganization = org
+            }
+        } catch {
+            // Non-blocking: label seeding should never interrupt auth/org loading.
+            print("🔥🔥🔥 DEBUG: UI label seed skipped: \(error.localizedDescription)")
+        }
     }
 
     // Async version for better control
@@ -900,6 +1028,7 @@ class FirebaseBackend: ObservableObject {
             self.currentOrganization = organization
             self.userRole = UserRole(rawValue: userData["role"] as? String ?? UserRole.basic.rawValue) ?? .basic
             self.errorMessage = nil // Clear any previous errors
+            await seedOrganizationUILabelsIfNeeded(organizationId: organizationId, orgData: data)
             
             // Store organization locally for offline access
             storeOrganizationLocally(organization)
@@ -1181,9 +1310,13 @@ class FirebaseBackend: ObservableObject {
         if let lat = project.latitude { data["latitude"] = lat }
         if let lon = project.longitude { data["longitude"] = lon }
         
-        // Save managerId if available
-        if let managerId = project.managerId {
+        // Save primary managerId if available
+        if let managerId = project.managerId ?? project.allAssignedManagerIds.first {
             data["managerId"] = managerId.uuidString
+        }
+        let managerIdsToSave = project.allAssignedManagerIds.map(\.uuidString)
+        if !managerIdsToSave.isEmpty {
+            data["managerIds"] = managerIdsToSave
         }
         
         // Save customJobType if available
@@ -1299,6 +1432,13 @@ class FirebaseBackend: ObservableObject {
                 }
                 return nil
             }()
+            let managerIds: [UUID] = {
+                let raw = data["managerIds"] as? [String] ?? []
+                let parsed = raw.compactMap(UUID.init(uuidString:))
+                if !parsed.isEmpty { return parsed }
+                if let managerId { return [managerId] }
+                return []
+            }()
             
             // Load customJobType if available
             let customJobType: String? = data["customJobType"] as? String
@@ -1333,6 +1473,7 @@ class FirebaseBackend: ObservableObject {
                     customJobType: customJobType,
                     manager: manager,
                     managerId: managerId,
+                    managerIds: managerIds,
                     isLive: data["isLive"] as? Bool ?? true,
                     description: data["description"] as? String,
                     hiddenManagerUserIds: hiddenManagerUserIds,
@@ -1359,6 +1500,7 @@ class FirebaseBackend: ObservableObject {
                 )
                 // Set managerId and customJobType after initialization since legacy initializer doesn't accept them
                 legacyProject.managerId = managerId
+                legacyProject.managerIds = managerIds
                 legacyProject.customJobType = customJobType
                 var legacyVar = legacyProject
                 Self.applyMapPinFields(from: data, to: &legacyVar)
@@ -1538,9 +1680,13 @@ class FirebaseBackend: ObservableObject {
         if let lat = smallWork.latitude { data["latitude"] = lat }
         if let lon = smallWork.longitude { data["longitude"] = lon }
         
-        // Save managerId if available
-        if let managerId = smallWork.managerId {
+        // Save primary managerId if available
+        if let managerId = smallWork.managerId ?? smallWork.allAssignedManagerIds.first {
             data["managerId"] = managerId.uuidString
+        }
+        let managerIdsToSave = smallWork.allAssignedManagerIds.map(\.uuidString)
+        if !managerIdsToSave.isEmpty {
+            data["managerIds"] = managerIdsToSave
         }
         
         // Save customJobType if available
@@ -1637,6 +1783,13 @@ class FirebaseBackend: ObservableObject {
                 }
                 return nil
             }()
+            let managerIds: [UUID] = {
+                let raw = data["managerIds"] as? [String] ?? []
+                let parsed = raw.compactMap(UUID.init(uuidString:))
+                if !parsed.isEmpty { return parsed }
+                if let managerId { return [managerId] }
+                return []
+            }()
             
             // Load customJobType if available
             let customJobType: String? = data["customJobType"] as? String
@@ -1671,6 +1824,7 @@ class FirebaseBackend: ObservableObject {
                     customJobType: customJobType,
                     manager: manager,
                     managerId: managerId,
+                    managerIds: managerIds,
                     isLive: data["isLive"] as? Bool ?? true,
                     description: data["description"] as? String,
                     hiddenManagerUserIds: hiddenManagerUserIds,
@@ -1697,6 +1851,7 @@ class FirebaseBackend: ObservableObject {
                 )
                 // Set managerId and customJobType after initialization since legacy initializer doesn't accept them
                 legacySmallWork.managerId = managerId
+                legacySmallWork.managerIds = managerIds
                 legacySmallWork.customJobType = customJobType
                 var legacySmallVar = legacySmallWork
                 Self.applyMapPinFields(from: data, to: &legacySmallVar)
@@ -2966,6 +3121,7 @@ class FirebaseBackend: ObservableObject {
             operativeMode: operativeMode,
             annualLeaveSelfBook: data["annualLeaveSelfBook"] as? Bool ?? false,
             weeklyReports: data["weeklyReports"] as? Bool ?? false,
+            dailyOverview: data["dailyOverview"] as? Bool ?? true,
             subContractors: data["subContractors"] as? Bool ?? false,
             siteAudit: data["siteAudit"] as? Bool ?? true
         )
@@ -2986,6 +3142,11 @@ class FirebaseBackend: ObservableObject {
         let utc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let profilePhotoRaw = (data["profilePhotoURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let lastSeenAt = (data["lastSeenAt"] as? Timestamp)?.dateValue()
+        let employmentTypeRaw = (data["employmentType"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let employmentType = EmploymentType(rawValue: employmentTypeRaw ?? "") ?? .selfEmployed
+        let transitionFromRaw = (data["employmentTypeTransitionFrom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let employmentTypeTransitionFrom = EmploymentType(rawValue: transitionFromRaw ?? "")
+        let employmentTypeEffectiveAt = (data["employmentTypeEffectiveAt"] as? Timestamp)?.dateValue()
         let alDays = (data["annualLeaveDaysPerYear"] as? NSNumber)?.doubleValue
             ?? (data["annualLeaveDaysPerYear"] as? Double)
             ?? AnnualLeavePolicy.defaultDaysPerYear
@@ -3020,6 +3181,9 @@ class FirebaseBackend: ObservableObject {
             tradeTypeCustom: (utc?.isEmpty == false) ? utc : nil,
             profilePhotoURL: (profilePhotoRaw?.isEmpty == false) ? profilePhotoRaw : nil,
             lastSeenAt: lastSeenAt,
+            employmentType: employmentType,
+            employmentTypeTransitionFrom: employmentTypeTransitionFrom,
+            employmentTypeEffectiveAt: employmentTypeEffectiveAt,
             annualLeaveEnabled: alEnabled,
             annualLeaveDaysPerYear: alDays,
             annualLeaveYearStartMonth: alStart,
@@ -3128,6 +3292,28 @@ class FirebaseBackend: ObservableObject {
             payload["defaultLongitude"] = defaultLongitude
         }
         payload["payrollTimePolicy"] = OrgPayrollTimePolicy.default.asFirestoreDictionary()
+        payload["invoicing"] = [
+            "paymentRunMode": OrganizationInvoicingSettings.default.paymentRunMode.rawValue,
+            "paymentDateMode": OrganizationInvoicingSettings.default.paymentDateMode.rawValue,
+            "paymentRunDateRanges": OrganizationInvoicingSettings.default.paymentRunDateRanges.map { r in
+                [
+                    "startDay": r.startDay,
+                    "endDay": r.endDay,
+                ]
+            },
+            "paymentDates": OrganizationInvoicingSettings.default.paymentDates,
+            "noteToUsers": OrganizationInvoicingSettings.default.noteToUsers,
+            "recurringPaymentRunSummary": OrganizationInvoicingSettings.default.recurringPaymentRunSummary,
+            "recurringRunStartDay": OrganizationInvoicingSettings.default.recurringRunStartDay.rawValue,
+            "recurringRunEndDay": OrganizationInvoicingSettings.default.recurringRunEndDay.rawValue,
+            "recurringPaymentDay": OrganizationInvoicingSettings.default.recurringPaymentDay.rawValue,
+        ]
+        payload["annualLeaveDefaults"] = [
+            "daysPerYear": OrganizationAnnualLeaveDefaults.default.daysPerYear,
+            "startMonth": OrganizationAnnualLeaveDefaults.default.startMonth,
+            "endMonth": OrganizationAnnualLeaveDefaults.default.endMonth,
+            "carriesOver": OrganizationAnnualLeaveDefaults.default.carriesOver,
+        ]
         try await db.collection("organizations").document(id).setData(payload, merge: true)
     }
 
@@ -3175,6 +3361,74 @@ class FirebaseBackend: ObservableObject {
         org.settings.workingHours.startTime = policy.standardDayStart
         org.settings.workingHours.endTime = policy.standardDayEnd
         org.settings.workingHours.lunchBreak = policy.unpaidBreakMinutes
+        org.updatedAt = Date()
+        currentOrganization = org
+        storeOrganizationLocally(org)
+    }
+
+    /// Admin: update organisation invoicing settings (`organizations/{orgId}.invoicing`).
+    func updateOrganizationInvoicingSettings(_ settings: OrganizationInvoicingSettings) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
+            )
+        }
+        let payload: [String: Any] = [
+            "paymentRunMode": settings.paymentRunMode.rawValue,
+            "paymentDateMode": settings.paymentDateMode.rawValue,
+            "paymentRunDateRanges": settings.normalizedRanges.map { r in
+                [
+                    "startDay": r.startDay,
+                    "endDay": r.endDay,
+                ]
+            },
+            "paymentDates": settings.normalizedPaymentDates,
+            "noteToUsers": settings.normalizedUserNote,
+            "recurringPaymentRunSummary": settings.recurringPaymentRunSummary,
+            "recurringRunStartDay": settings.recurringRunStartDay.rawValue,
+            "recurringRunEndDay": settings.recurringRunEndDay.rawValue,
+            "recurringPaymentDay": settings.recurringPaymentDay.rawValue,
+        ]
+        try await db.collection("organizations").document(orgId).setData(
+            [
+                "invoicing": payload,
+                "updatedAt": Timestamp(date: Date()),
+            ],
+            merge: true
+        )
+        guard var org = currentOrganization else { return }
+        org.settings.invoicing = settings
+        org.updatedAt = Date()
+        currentOrganization = org
+        storeOrganizationLocally(org)
+    }
+
+    /// Admin: update organisation annual-leave defaults used only for newly invited manager/operative users.
+    func updateOrganizationAnnualLeaveDefaults(_ defaults: OrganizationAnnualLeaveDefaults) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
+            )
+        }
+        let payload: [String: Any] = [
+            "daysPerYear": defaults.daysPerYear,
+            "startMonth": defaults.startMonth,
+            "endMonth": defaults.endMonth,
+            "carriesOver": defaults.carriesOver,
+        ]
+        try await db.collection("organizations").document(orgId).setData(
+            [
+                "annualLeaveDefaults": payload,
+                "updatedAt": Timestamp(date: Date()),
+            ],
+            merge: true
+        )
+        guard var org = currentOrganization else { return }
+        org.settings.annualLeaveDefaults = defaults
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
@@ -3279,12 +3533,25 @@ class FirebaseBackend: ObservableObject {
             "operativeMode": user.permissions.operativeMode,
             "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
             "weeklyReports": user.permissions.weeklyReports,
+            "dailyOverview": user.permissions.dailyOverview,
             "subContractors": user.permissions.subContractors,
             "siteAudit": user.permissions.siteAudit,
             "isSuperAdmin": isSuperAdminToSave,
             "policyAccepted": user.policyAccepted,
+            "employmentType": user.employmentType.rawValue,
             "updatedAt": Timestamp(date: Date())
         ]
+
+        if let transitionFrom = user.employmentTypeTransitionFrom {
+            userData["employmentTypeTransitionFrom"] = transitionFrom.rawValue
+        } else {
+            userData["employmentTypeTransitionFrom"] = FieldValue.delete()
+        }
+        if let effectiveAt = user.employmentTypeEffectiveAt {
+            userData["employmentTypeEffectiveAt"] = Timestamp(date: effectiveAt)
+        } else {
+            userData["employmentTypeEffectiveAt"] = FieldValue.delete()
+        }
         
         let trimmedMobile = user.mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedMobile.isEmpty {
@@ -3386,6 +3653,29 @@ class FirebaseBackend: ObservableObject {
             "annualLeaveEnabled": enabled,
             "updatedAt": Timestamp(date: Date()),
         ]
+        try await db.collection("users").document(userId).updateData(payload)
+    }
+
+    func updateUserEmploymentType(
+        userId: String,
+        employmentType: EmploymentType,
+        transitionFrom: EmploymentType? = nil,
+        effectiveAt: Date? = nil
+    ) async throws {
+        var payload: [String: Any] = [
+            "employmentType": employmentType.rawValue,
+            "updatedAt": Timestamp(date: Date()),
+        ]
+        if let transitionFrom {
+            payload["employmentTypeTransitionFrom"] = transitionFrom.rawValue
+        } else {
+            payload["employmentTypeTransitionFrom"] = FieldValue.delete()
+        }
+        if let effectiveAt {
+            payload["employmentTypeEffectiveAt"] = Timestamp(date: effectiveAt)
+        } else {
+            payload["employmentTypeEffectiveAt"] = FieldValue.delete()
+        }
         try await db.collection("users").document(userId).updateData(payload)
     }
 
@@ -3752,7 +4042,9 @@ class FirebaseBackend: ObservableObject {
             "relatedId": notification.relatedId?.uuidString ?? NSNull(),
             "isRead": notification.isRead,
             "createdAt": Timestamp(date: notification.createdAt),
-            "requiresPermission": notification.requiresPermission ?? NSNull()
+            "requiresPermission": notification.requiresPermission ?? NSNull(),
+            "deepLinkUserId": notification.deepLinkUserId ?? NSNull(),
+            "deepLinkWeekStart": notification.deepLinkWeekStart.map(Timestamp.init(date:)) ?? NSNull()
         ]
         
         try await db.collection("organizations").document(organizationId).collection("notifications").document(notification.id.uuidString).setData(data)
@@ -3793,6 +4085,8 @@ class FirebaseBackend: ObservableObject {
             let relatedIdString = data["relatedId"] as? String
             let relatedId = relatedIdString != nil ? UUID(uuidString: relatedIdString!) : nil
             let requiresPermission = data["requiresPermission"] as? String
+            let deepLinkUserId = data["deepLinkUserId"] as? String
+            let deepLinkWeekStart = (data["deepLinkWeekStart"] as? Timestamp)?.dateValue()
             
             let notification = AppNotification(
                 id: id,
@@ -3804,7 +4098,9 @@ class FirebaseBackend: ObservableObject {
                 relatedId: relatedId,
                 isRead: isRead,
                 createdAt: createdAt,
-                requiresPermission: requiresPermission
+                requiresPermission: requiresPermission,
+                deepLinkUserId: deepLinkUserId,
+                deepLinkWeekStart: deepLinkWeekStart
             )
             
             notifications.append(notification)
@@ -3815,7 +4111,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         
         let emailLower = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3856,6 +4152,7 @@ class FirebaseBackend: ObservableObject {
             "invitedBy": invitedBy,
             "firstName": firstName,
             "surname": surname,
+            "employmentType": employmentType.rawValue,
             "permissions": [
                 "adminAccess": permissions.adminAccess,
                 "manager": permissions.manager,
@@ -3868,6 +4165,7 @@ class FirebaseBackend: ObservableObject {
                 "operativeMode": permissions.operativeMode,
                 "annualLeaveSelfBook": permissions.annualLeaveSelfBook,
                 "weeklyReports": permissions.weeklyReports,
+                "dailyOverview": permissions.dailyOverview,
                 "subContractors": permissions.subContractors,
                 "siteAudit": permissions.siteAudit
             ],
@@ -3875,7 +4173,7 @@ class FirebaseBackend: ObservableObject {
             "isUsed": false
         ]
         
-        if permissions.operativeMode, let mid = assignedManagerUserId, !mid.isEmpty {
+        if (permissions.operativeMode || permissions.manager), let mid = assignedManagerUserId, !mid.isEmpty {
             invitationData["assignedManagerUserId"] = mid
         }
         if permissions.operativeMode, let dr = invitedOperativeDayRate {
@@ -3899,10 +4197,11 @@ class FirebaseBackend: ObservableObject {
             invitationData["mobileNumber"] = mobileNumber
         }
         
-        let resolvedAnnualLeaveDays = annualLeaveDaysPerYear.map { AnnualLeavePolicy.clampDaysPerYear($0) } ?? AnnualLeavePolicy.defaultDaysPerYear
-        let resolvedAnnualLeaveStart = annualLeaveYearStartMonth.map { AnnualLeavePolicy.clampMonth($0) } ?? AnnualLeavePolicy.defaultStartMonth
-        let resolvedAnnualLeaveEnd = annualLeaveYearEndMonth.map { AnnualLeavePolicy.clampMonth($0) } ?? AnnualLeavePolicy.defaultEndMonth
-        let resolvedAnnualLeaveCarry = annualLeaveCarriesOver ?? AnnualLeavePolicy.defaultCarriesOver
+        let orgDefaults = currentOrganization?.settings.annualLeaveDefaults ?? .default
+        let resolvedAnnualLeaveDays = annualLeaveDaysPerYear.map { AnnualLeavePolicy.clampDaysPerYear($0) } ?? orgDefaults.daysPerYear
+        let resolvedAnnualLeaveStart = annualLeaveYearStartMonth.map { AnnualLeavePolicy.clampMonth($0) } ?? orgDefaults.startMonth
+        let resolvedAnnualLeaveEnd = annualLeaveYearEndMonth.map { AnnualLeavePolicy.clampMonth($0) } ?? orgDefaults.endMonth
+        let resolvedAnnualLeaveCarry = annualLeaveCarriesOver ?? orgDefaults.carriesOver
         let resolvedAnnualLeaveEnabled = annualLeaveEnabled ?? true
         if permissions.operativeMode || permissions.manager {
             invitationData["annualLeaveDaysPerYear"] = resolvedAnnualLeaveDays
@@ -3934,7 +4233,7 @@ class FirebaseBackend: ObservableObject {
             }
             
             let operativeManagerId: String? = {
-                guard permissions.operativeMode, let m = assignedManagerUserId, !m.isEmpty else { return nil }
+                guard (permissions.operativeMode || permissions.manager), let m = assignedManagerUserId, !m.isEmpty else { return nil }
                 return m
             }()
             
@@ -3957,6 +4256,7 @@ class FirebaseBackend: ObservableObject {
                 dayRate: permissions.operativeMode ? invitedOperativeDayRate : (permissions.manager ? invitedManagerDayRate : nil),
                 tradeTypePreset: (permissions.operativeMode || permissions.manager) && inviteTp?.isEmpty == false ? inviteTp : nil,
                 tradeTypeCustom: (permissions.operativeMode || permissions.manager) && inviteTc?.isEmpty == false ? inviteTc : nil,
+                employmentType: employmentType,
                 annualLeaveEnabled: (permissions.operativeMode || permissions.manager) ? resolvedAnnualLeaveEnabled : true,
                 annualLeaveDaysPerYear: resolvedAnnualLeaveDays,
                 annualLeaveYearStartMonth: resolvedAnnualLeaveStart,
@@ -4074,6 +4374,7 @@ class FirebaseBackend: ObservableObject {
                     "operativeMode": newUser.permissions.operativeMode,
                     "annualLeaveSelfBook": newUser.permissions.annualLeaveSelfBook,
                     "weeklyReports": newUser.permissions.weeklyReports,
+                    "dailyOverview": newUser.permissions.dailyOverview,
                     "subContractors": newUser.permissions.subContractors,
                     "siteAudit": newUser.permissions.siteAudit,
                     "isSuperAdmin": newUser.isSuperAdmin
@@ -4132,6 +4433,7 @@ class FirebaseBackend: ObservableObject {
                 var updateData: [String: Any] = [
                     "firstName": firstName,
                     "surname": surname,
+                    "employmentType": employmentType.rawValue,
                     "adminAccess": permissions.adminAccess,
                     "manager": permissions.manager,
                     "operatives": permissions.operatives,
@@ -4143,6 +4445,7 @@ class FirebaseBackend: ObservableObject {
                     "operativeMode": permissions.operativeMode,
                     "annualLeaveSelfBook": permissions.annualLeaveSelfBook,
                     "weeklyReports": permissions.weeklyReports,
+                    "dailyOverview": permissions.dailyOverview,
                     "subContractors": permissions.subContractors,
                     "siteAudit": permissions.siteAudit
                 ]
@@ -4768,6 +5071,7 @@ class FirebaseBackend: ObservableObject {
             "operativeMode": data["operativeMode"] as? Bool ?? false,
             "annualLeaveSelfBook": data["annualLeaveSelfBook"] as? Bool ?? false,
             "weeklyReports": data["weeklyReports"] as? Bool ?? false,
+            "dailyOverview": data["dailyOverview"] as? Bool ?? true,
             "subContractors": data["subContractors"] as? Bool ?? false,
             "siteAudit": data["siteAudit"] as? Bool ?? true,
             "projects": data["projects"] as? Bool ?? true,
@@ -4873,6 +5177,7 @@ class FirebaseBackend: ObservableObject {
                                 newUserData["operativeMode"] = existing["operativeMode"] ?? false
                                 newUserData["annualLeaveSelfBook"] = existing["annualLeaveSelfBook"] ?? false
                                 newUserData["weeklyReports"] = existing["weeklyReports"] ?? false
+                                newUserData["dailyOverview"] = existing["dailyOverview"] ?? true
                                 newUserData["subContractors"] = existing["subContractors"] ?? false
                                 newUserData["projects"] = existing["projects"] ?? true
                                 newUserData["smallWorks"] = existing["smallWorks"] ?? false
@@ -4948,6 +5253,7 @@ class FirebaseBackend: ObservableObject {
                         "operativeMode": data["operativeMode"] as? Bool ?? false,
                         "annualLeaveSelfBook": data["annualLeaveSelfBook"] as? Bool ?? false,
                         "weeklyReports": data["weeklyReports"] as? Bool ?? false,
+                        "dailyOverview": data["dailyOverview"] as? Bool ?? true,
                         "subContractors": data["subContractors"] as? Bool ?? false,
                         "siteAudit": data["siteAudit"] as? Bool ?? true,
                         "projects": data["projects"] as? Bool ?? true,
@@ -5024,6 +5330,7 @@ class FirebaseBackend: ObservableObject {
                             newUserData["operativeMode"] = existing["operativeMode"] ?? false
                             newUserData["annualLeaveSelfBook"] = existing["annualLeaveSelfBook"] ?? false
                             newUserData["weeklyReports"] = existing["weeklyReports"] ?? false
+                            newUserData["dailyOverview"] = existing["dailyOverview"] ?? true
                             newUserData["subContractors"] = existing["subContractors"] ?? false
                             newUserData["projects"] = existing["projects"] ?? true
                             newUserData["smallWorks"] = existing["smallWorks"] ?? false
@@ -5676,7 +5983,10 @@ extension FirebaseBackend {
             catalogueItemId: catalogueId,
             brand: data["brand"] as? String,
             productCode: data["productCode"] as? String,
-            sizeOrLength: (data["sizeOrLength"] as? String) ?? (data["packSize"] as? Int).map(String.init),
+            size: data["size"] as? String,
+            length: (data["length"] as? String)
+                ?? (data["sizeOrLength"] as? String)
+                ?? (data["packSize"] as? Int).map(String.init),
             category: data["category"] as? String,
             websiteURL: data["websiteURL"] as? String,
             notes: data["notes"] as? String,
@@ -5691,6 +6001,22 @@ extension FirebaseBackend {
             return .draft
         }
         return status
+    }
+
+    private func legacyLengthMigrationPayload(_ data: [String: Any]) -> [String: Any]? {
+        let hasLength = (data["length"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty == false
+        guard !hasLength else { return nil }
+        let legacyValue = (data["sizeOrLength"] as? String)
+            ?? (data["packSize"] as? Int).map(String.init)
+        let trimmed = legacyValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        return [
+            "length": trimmed,
+            // Keep legacy field in sync while older app builds still read it.
+            "sizeOrLength": trimmed
+        ]
     }
 
     private func materialItemFirestorePayload(_ material: MaterialItem, addedByUserId: String?) -> [String: Any] {
@@ -5720,8 +6046,13 @@ extension FirebaseBackend {
         if let code = material.productCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
             data["productCode"] = code
         }
-        if let sizeOrLength = material.sizeOrLength?.trimmingCharacters(in: .whitespacesAndNewlines), !sizeOrLength.isEmpty {
-            data["sizeOrLength"] = sizeOrLength
+        if let size = material.size?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty {
+            data["size"] = size
+        }
+        if let length = material.length?.trimmingCharacters(in: .whitespacesAndNewlines), !length.isEmpty {
+            data["length"] = length
+            // Backward compatibility for older app versions.
+            data["sizeOrLength"] = length
         }
         if let category = material.category?.trimmingCharacters(in: .whitespacesAndNewlines), !category.isEmpty {
             data["category"] = category
@@ -5924,7 +6255,8 @@ extension FirebaseBackend {
             brand: (inferredBrand?.isEmpty == false) ? inferredBrand! : "Custom",
             productCode: material.productCode,
             defaultUnit: material.unit,
-            sizeOrLength: material.sizeOrLength,
+            size: material.size,
+            length: material.length,
             category: normalizedMaterialCategory(material.category),
             createdByUserId: currentUser?.uid ?? material.addedByUserId ?? "unknown",
             createdByName: creatorName
@@ -5957,7 +6289,8 @@ extension FirebaseBackend {
                 brand: brand.isEmpty ? "Custom" : brand,
                 productCode: material.productCode,
                 defaultUnit: material.unit,
-                sizeOrLength: material.sizeOrLength,
+                size: material.size,
+                length: material.length,
                 category: normalizedMaterialCategory(material.category),
                 createdByUserId: currentUser?.uid ?? material.addedByUserId ?? "unknown",
                 createdByName: creatorName
@@ -5987,6 +6320,9 @@ extension FirebaseBackend {
         
         for doc in snapshot.documents {
             let data = doc.data()
+            if let migration = legacyLengthMigrationPayload(data) {
+                try? await doc.reference.setData(migration, merge: true)
+            }
             guard let materialItem = materialItemFromFirestoreDocumentData(data) else {
                 print("⚠️ [FirebaseBackend] Skipping material document - missing required fields")
                 continue
@@ -6012,7 +6348,11 @@ extension FirebaseBackend {
 
         var materials: [MaterialItem] = []
         for doc in snapshot.documents {
-            guard let item = materialItemFromFirestoreDocumentData(doc.data()) else { continue }
+            let data = doc.data()
+            if let migration = legacyLengthMigrationPayload(data) {
+                try? await doc.reference.setData(migration, merge: true)
+            }
+            guard let item = materialItemFromFirestoreDocumentData(data) else { continue }
             materials.append(item)
         }
         return materials
@@ -6046,6 +6386,11 @@ extension FirebaseBackend {
 
                 for doc in docs {
                     let data = doc.data()
+                    if let migration = self.legacyLengthMigrationPayload(data) {
+                        Task {
+                            try? await doc.reference.setData(migration, merge: true)
+                        }
+                    }
                     guard let item = self.materialItemFromFirestoreDocumentData(data) else { continue }
                     loaded.append(item)
                 }
@@ -6266,6 +6611,8 @@ extension FirebaseBackend {
                   let createdByUserId = data["createdByUserId"] as? String else {
                 continue
             }
+            let customTitle = (data["customTitle"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let visibleToOperatives = data["visibleToOperatives"] as? Bool ?? true
 
             let itemRows = data["items"] as? [[String: Any]] ?? []
@@ -6273,6 +6620,7 @@ extension FirebaseBackend {
                 guard let itemIdString = row["id"] as? String,
                       let itemId = UUID(uuidString: itemIdString),
                       let title = row["title"] as? String,
+                      let location = row["location"] as? String,
                       let assignee = row["assignee"] as? String,
                       let comments = row["comments"] as? String,
                       let createdAt = (row["createdAt"] as? Timestamp)?.dateValue() else {
@@ -6281,7 +6629,7 @@ extension FirebaseBackend {
                 return SiteAuditItem(
                     id: itemId,
                     title: title,
-                    location: row["location"] as? String ?? "",
+                    location: location,
                     assignee: assignee,
                     comments: comments,
                     annotations: row["annotations"] as? String ?? "",
@@ -6297,7 +6645,7 @@ extension FirebaseBackend {
                 projectJobNumber: projectJobNumber,
                 projectName: projectName,
                 type: type,
-                customTitle: data["customTitle"] as? String ?? "",
+                customTitle: customTitle,
                 authorName: authorName,
                 date: date,
                 items: items,
@@ -6522,17 +6870,24 @@ extension FirebaseBackend {
     }
     
     func saveSubcontractorBooking(_ booking: SubcontractorBooking, organizationId: String) async throws {
-        let data: [String: Any] = [
+        var data: [String: Any] = [
             "id": booking.id.uuidString,
             "subcontractorId": booking.subcontractorId.uuidString,
             "projectId": booking.projectId.uuidString,
             "date": Timestamp(date: booking.date),
             "timeSlot": booking.timeSlot.rawValue,
+            "isBreakRemoved": booking.isBreakRemoved,
             "bookedBy": booking.bookedBy,
             "status": booking.status.rawValue,
             "createdAt": Timestamp(date: booking.createdAt),
             "updatedAt": Timestamp(date: booking.updatedAt)
         ]
+        if let workStartTime = booking.workStartTime, !workStartTime.isEmpty {
+            data["workStartTime"] = workStartTime
+        }
+        if let workEndTime = booking.workEndTime, !workEndTime.isEmpty {
+            data["workEndTime"] = workEndTime
+        }
         
         try await db.collection("organizations").document(organizationId)
             .collection("subcontractorBookings")
@@ -6562,6 +6917,9 @@ extension FirebaseBackend {
                   let status = BookingStatus(rawValue: statusRaw),
                   let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
                   let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() else { continue }
+            let workStartTime = data["workStartTime"] as? String
+            let workEndTime = data["workEndTime"] as? String
+            let isBreakRemoved = data["isBreakRemoved"] as? Bool ?? false
             
             loaded.append(
                 SubcontractorBooking(
@@ -6570,6 +6928,9 @@ extension FirebaseBackend {
                     projectId: projectId,
                     date: date,
                     timeSlot: timeSlot,
+                    workStartTime: workStartTime,
+                    workEndTime: workEndTime,
+                    isBreakRemoved: isBreakRemoved,
                     bookedBy: bookedBy,
                     status: status,
                     createdAt: createdAt,
@@ -6594,8 +6955,17 @@ extension FirebaseBackend {
                 .collection("materialCatalogue")
                 .getDocuments()
         }
-        return snapshot.documents.compactMap { materialCatalogItemFromFirestore($0.data()) }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        var loaded: [MaterialCatalogItem] = []
+        for doc in snapshot.documents {
+            let data = doc.data()
+            if let migration = legacyLengthMigrationPayload(data) {
+                try? await doc.reference.setData(migration, merge: true)
+            }
+            if let item = materialCatalogItemFromFirestore(data) {
+                loaded.append(item)
+            }
+        }
+        return loaded.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     func saveMaterialCatalogueItem(_ item: MaterialCatalogItem, organizationId: String) async throws {
@@ -6699,8 +7069,13 @@ extension FirebaseBackend {
         if let code = item.productCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
             data["productCode"] = code
         }
-        if let sizeOrLength = item.sizeOrLength?.trimmingCharacters(in: .whitespacesAndNewlines), !sizeOrLength.isEmpty {
-            data["sizeOrLength"] = sizeOrLength
+        if let size = item.size?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty {
+            data["size"] = size
+        }
+        if let length = item.length?.trimmingCharacters(in: .whitespacesAndNewlines), !length.isEmpty {
+            data["length"] = length
+            // Backward compatibility for older app versions.
+            data["sizeOrLength"] = length
         }
         data["category"] = normalizedMaterialCategory(item.category)
         return data
@@ -6724,7 +7099,10 @@ extension FirebaseBackend {
             brand: brand,
             productCode: data["productCode"] as? String,
             defaultUnit: unit,
-            sizeOrLength: (data["sizeOrLength"] as? String) ?? (data["packSize"] as? Int).map(String.init),
+            size: data["size"] as? String,
+            length: (data["length"] as? String)
+                ?? (data["sizeOrLength"] as? String)
+                ?? (data["packSize"] as? Int).map(String.init),
             category: normalizedMaterialCategory(data["category"] as? String),
             createdAt: createdAt,
             createdByUserId: createdByUserId,
@@ -6841,8 +7219,11 @@ extension FirebaseBackend {
             if let code = material.productCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
                 lineParts.append("Code: \(code)")
             }
-            if let size = material.sizeOrLength?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty {
-                lineParts.append("Size/Length: \(size)")
+            if let size = material.size?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty {
+                lineParts.append("Size: \(size)")
+            }
+            if let length = material.length?.trimmingCharacters(in: .whitespacesAndNewlines), !length.isEmpty {
+                lineParts.append("Length: \(length)")
             }
             if let website = material.websiteURL?.trimmingCharacters(in: .whitespacesAndNewlines), !website.isEmpty {
                 lineParts.append("Link: <a href=\"\(website)\">\(website)</a>")
@@ -6863,6 +7244,312 @@ extension FirebaseBackend {
         """
         
         return emailHTML
+    }
+
+    // MARK: - Health & Safety (Project / Small Works)
+
+    // MARK: - Timesheets (Operative + Manager sign-off state)
+
+    private func timesheetStateDocumentRef(
+        organizationId: String,
+        userId: String,
+        weekStart: Date
+    ) -> DocumentReference {
+        let weekStamp = Int(Calendar.current.startOfDay(for: weekStart).timeIntervalSince1970)
+        let docId = "timesheet_\(userId)_\(weekStamp)"
+        return db.collection("organizations")
+            .document(organizationId)
+            .collection("settings")
+            .document(docId)
+    }
+
+    func loadTimesheetState(
+        organizationId: String,
+        userId: String,
+        weekStart: Date
+    ) async throws -> [String: Any]? {
+        let snapshot = try await timesheetStateDocumentRef(
+            organizationId: organizationId,
+            userId: userId,
+            weekStart: weekStart
+        ).getDocument()
+        return snapshot.data()
+    }
+
+    func saveTimesheetState(
+        organizationId: String,
+        userId: String,
+        weekStart: Date,
+        payload: [String: Any]
+    ) async throws {
+        var data = payload
+        data["userId"] = userId
+        data["weekStart"] = Timestamp(date: Calendar.current.startOfDay(for: weekStart))
+        data["updatedAt"] = Timestamp(date: Date())
+        try await timesheetStateDocumentRef(
+            organizationId: organizationId,
+            userId: userId,
+            weekStart: weekStart
+        ).setData(data, merge: true)
+    }
+
+    func listTimesheetStates(
+        organizationId: String,
+        userId: String,
+        limit: Int = 52
+    ) async throws -> [[String: Any]] {
+        let snapshot = try await db.collection("organizations")
+            .document(organizationId)
+            .collection("settings")
+            .whereField("userId", isEqualTo: userId)
+            .order(by: "weekStart", descending: true)
+            .limit(to: limit)
+            .getDocuments()
+        return snapshot.documents.map { doc in
+            var row = doc.data()
+            row["__documentId"] = doc.documentID
+            return row
+        }
+    }
+
+    private func hsCollectionName(for project: Project) -> String {
+        project.jobType == .smallWorks ? "smallWorks" : "projects"
+    }
+
+    private func hsStateDocumentRef(organizationId: String, project: Project) -> DocumentReference {
+        // Use org settings document path so H&S works even before dedicated rules are deployed.
+        // Key includes work type + project id to keep project/small works data isolated.
+        let docId = "healthSafety_\(hsCollectionName(for: project))_\(project.id.uuidString)"
+        return db.collection("organizations")
+            .document(organizationId)
+            .collection("settings")
+            .document(docId)
+    }
+
+    private func hsTalkMap(_ talk: HSToolboxTalk) -> [String: Any] {
+        [
+            "id": talk.id,
+            "title": talk.title,
+            "category": talk.category.rawValue,
+            "isGeneral": talk.isGeneral,
+            "trades": talk.trades,
+            "purpose": talk.purpose,
+            "keyPoints": talk.keyPoints,
+            "source": talk.source.rawValue,
+            "ownerOrganizationId": talk.ownerOrganizationId ?? "",
+            "status": talk.status.rawValue,
+            "version": talk.version,
+            "updatedAt": Timestamp(date: talk.updatedAt),
+            "fileURL": talk.fileURL ?? ""
+        ]
+    }
+
+    private func hsIssueMap(_ issue: HSToolboxIssue) -> [String: Any] {
+        [
+            "id": issue.id,
+            "projectId": issue.projectId.uuidString,
+            "talkId": issue.talkId,
+            "weekCommencing": Timestamp(date: issue.weekCommencing),
+            "issuedByUserId": issue.issuedByUserId,
+            "issuedAt": Timestamp(date: issue.issuedAt),
+            "recipientUserIds": issue.recipientUserIds,
+            "status": issue.status.rawValue
+        ]
+    }
+
+    private func hsSignatureMap(_ signature: HSToolboxSignature) -> [String: Any] {
+        [
+            "id": signature.id,
+            "issueId": signature.issueId,
+            "userId": signature.userId,
+            "status": signature.status.rawValue,
+            "readConfirmed": signature.readConfirmed,
+            "signatureImageBase64": signature.signatureImageBase64 ?? "",
+            "signedAt": signature.signedAt.map(Timestamp.init(date:)) as Any,
+            "reminderSentAt": signature.reminderSentAt.map(Timestamp.init(date:)) as Any
+        ]
+    }
+
+    private func hsRamsMap(_ doc: HSRamsDocument) -> [String: Any] {
+        [
+            "id": doc.id,
+            "title": doc.title,
+            "trade": doc.trade,
+            "version": doc.version,
+            "status": doc.status,
+            "uploadedAt": Timestamp(date: doc.uploadedAt)
+        ]
+    }
+
+    private func hsOtherDocMap(_ doc: HSOtherDocument) -> [String: Any] {
+        [
+            "id": doc.id,
+            "title": doc.title,
+            "trade": doc.trade ?? "",
+            "category": doc.category,
+            "uploadedAt": Timestamp(date: doc.uploadedAt)
+        ]
+    }
+
+    private func parseHSTalk(_ map: [String: Any]) -> HSToolboxTalk? {
+        guard let id = map["id"] as? String, !id.isEmpty else { return nil }
+        let categoryRaw = (map["category"] as? String) ?? HSToolboxTalkCategory.general.rawValue
+        let sourceRaw = (map["source"] as? String) ?? HSToolboxTalkSource.library.rawValue
+        let statusRaw = (map["status"] as? String) ?? HSToolboxTalkStatus.approved.rawValue
+        let updatedAt = (map["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
+        let ownerId = (map["ownerOrganizationId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileURL = (map["fileURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return HSToolboxTalk(
+            id: id,
+            title: (map["title"] as? String) ?? "Untitled talk",
+            category: HSToolboxTalkCategory(rawValue: categoryRaw) ?? .general,
+            isGeneral: map["isGeneral"] as? Bool ?? false,
+            trades: map["trades"] as? [String] ?? [],
+            purpose: (map["purpose"] as? String) ?? "",
+            keyPoints: map["keyPoints"] as? [String] ?? [],
+            source: HSToolboxTalkSource(rawValue: sourceRaw) ?? .library,
+            ownerOrganizationId: ownerId?.isEmpty == false ? ownerId : nil,
+            status: HSToolboxTalkStatus(rawValue: statusRaw) ?? .approved,
+            version: map["version"] as? Int ?? 1,
+            updatedAt: updatedAt,
+            fileURL: fileURL?.isEmpty == false ? fileURL : nil
+        )
+    }
+
+    private func parseHSIssue(_ map: [String: Any], fallbackProjectId: UUID) -> HSToolboxIssue? {
+        guard let id = map["id"] as? String, !id.isEmpty else { return nil }
+        let projectId = ((map["projectId"] as? String).flatMap(UUID.init(uuidString:))) ?? fallbackProjectId
+        let statusRaw = (map["status"] as? String) ?? HSToolboxIssueStatus.awaiting.rawValue
+        return HSToolboxIssue(
+            id: id,
+            projectId: projectId,
+            talkId: (map["talkId"] as? String) ?? "",
+            weekCommencing: (map["weekCommencing"] as? Timestamp)?.dateValue() ?? Date(),
+            issuedByUserId: (map["issuedByUserId"] as? String) ?? "",
+            issuedAt: (map["issuedAt"] as? Timestamp)?.dateValue() ?? Date(),
+            recipientUserIds: map["recipientUserIds"] as? [String] ?? [],
+            status: HSToolboxIssueStatus(rawValue: statusRaw) ?? .awaiting
+        )
+    }
+
+    private func parseHSSignature(_ map: [String: Any]) -> HSToolboxSignature? {
+        guard let id = map["id"] as? String, !id.isEmpty else { return nil }
+        let statusRaw = (map["status"] as? String) ?? HSToolboxSignatureStatus.pending.rawValue
+        let signatureBase64 = (map["signatureImageBase64"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return HSToolboxSignature(
+            id: id,
+            issueId: (map["issueId"] as? String) ?? "",
+            userId: (map["userId"] as? String) ?? "",
+            status: HSToolboxSignatureStatus(rawValue: statusRaw) ?? .pending,
+            readConfirmed: map["readConfirmed"] as? Bool ?? false,
+            signatureImageBase64: signatureBase64?.isEmpty == false ? signatureBase64 : nil,
+            signedAt: (map["signedAt"] as? Timestamp)?.dateValue(),
+            reminderSentAt: (map["reminderSentAt"] as? Timestamp)?.dateValue()
+        )
+    }
+
+    private func parseHSRams(_ map: [String: Any]) -> HSRamsDocument? {
+        guard let id = map["id"] as? String, !id.isEmpty else { return nil }
+        return HSRamsDocument(
+            id: id,
+            title: (map["title"] as? String) ?? "Untitled RAMS",
+            trade: (map["trade"] as? String) ?? "General",
+            version: map["version"] as? Int ?? 1,
+            status: (map["status"] as? String) ?? "live",
+            uploadedAt: (map["uploadedAt"] as? Timestamp)?.dateValue() ?? Date()
+        )
+    }
+
+    private func parseHSOtherDoc(_ map: [String: Any]) -> HSOtherDocument? {
+        guard let id = map["id"] as? String, !id.isEmpty else { return nil }
+        let trade = (map["trade"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return HSOtherDocument(
+            id: id,
+            title: (map["title"] as? String) ?? "Untitled H&S doc",
+            trade: trade?.isEmpty == false ? trade : nil,
+            category: (map["category"] as? String) ?? "trade",
+            uploadedAt: (map["uploadedAt"] as? Timestamp)?.dateValue() ?? Date()
+        )
+    }
+
+    func loadHealthSafetyData(project: Project, organizationId: String) async throws -> HSProjectSafetyData {
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else { return .empty }
+        let orgId = try await ensureReadableOrganization(resolved)
+
+        let ref = hsStateDocumentRef(organizationId: orgId, project: project)
+        let doc: DocumentSnapshot
+        do {
+            doc = try await ref.getDocument(source: .server)
+        } catch {
+            if isFirestorePermissionDenied(error) {
+                doc = try await ref.getDocument(source: .cache)
+            } else {
+                throw error
+            }
+        }
+
+        guard let data = doc.data() else { return .empty }
+
+        let talksRaw = data["talks"] as? [[String: Any]] ?? []
+        let issuesRaw = data["issues"] as? [[String: Any]] ?? []
+        let signaturesRaw = data["signatures"] as? [[String: Any]] ?? []
+        let ramsRaw = data["ramsDocuments"] as? [[String: Any]] ?? []
+        let otherRaw = data["otherDocuments"] as? [[String: Any]] ?? []
+        let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
+
+        var output = HSProjectSafetyData(
+            talks: talksRaw.compactMap(parseHSTalk),
+            issues: issuesRaw.compactMap { parseHSIssue($0, fallbackProjectId: project.id) },
+            signatures: signaturesRaw.compactMap(parseHSSignature),
+            ramsDocuments: ramsRaw.compactMap(parseHSRams),
+            otherDocuments: otherRaw.compactMap(parseHSOtherDoc),
+            updatedAt: updatedAt
+        )
+        output.issues.sort { $0.issuedAt > $1.issuedAt }
+        output.signatures.sort { ($0.signedAt ?? .distantPast) > ($1.signedAt ?? .distantPast) }
+        output.ramsDocuments.sort { $0.uploadedAt > $1.uploadedAt }
+        output.otherDocuments.sort { $0.uploadedAt > $1.uploadedAt }
+        return output
+    }
+
+    func saveHealthSafetyData(_ safetyData: HSProjectSafetyData, project: Project, organizationId: String) async throws {
+        guard currentUser != nil else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "You must be signed in to save health and safety data."]
+            )
+        }
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings -> Force Reload Data, then retry."]
+            )
+        }
+        let orgId = try await ensureReadableOrganization(resolved)
+        do {
+            try await ensureUserDocumentLinked(organizationId: orgId)
+        } catch {
+            print("🔥🔥🔥 DEBUG: [saveHealthSafetyData] ensureUserDocumentLinked: \(error.localizedDescription)")
+        }
+        await repairCurrentUserOrganizationAccess(organizationId: orgId)
+        try await validateDataIntegrity(organizationId: orgId)
+
+        let payload: [String: Any] = [
+            "talks": safetyData.talks.map(hsTalkMap),
+            "issues": safetyData.issues.map(hsIssueMap),
+            "signatures": safetyData.signatures.map(hsSignatureMap),
+            "ramsDocuments": safetyData.ramsDocuments.map(hsRamsMap),
+            "otherDocuments": safetyData.otherDocuments.map(hsOtherDocMap),
+            "updatedAt": Timestamp(date: Date())
+        ]
+        let ref = hsStateDocumentRef(organizationId: orgId, project: project)
+        try await ref.setData(payload, merge: true)
     }
 }
 

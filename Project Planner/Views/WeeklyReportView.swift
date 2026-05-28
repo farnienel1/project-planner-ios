@@ -180,33 +180,55 @@ struct WeeklyReportView: View {
     }
 
     private func refreshReportWarnings() {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
-        let tomorrowProjectIds = Set(
-            bookingStore.bookings
-                .filter {
-                    cal.isDate($0.date, inSameDayAs: tomorrow) &&
-                        ($0.status == .confirmed || $0.status == .tentative)
+        Task {
+            let cal = Calendar.current
+            let today = cal.startOfDay(for: Date())
+            let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
+            let tomorrowProjectIds = Set(
+                bookingStore.bookings
+                    .filter {
+                        cal.isDate($0.date, inSameDayAs: tomorrow) &&
+                            ($0.status == .confirmed || $0.status == .tentative)
+                    }
+                    .map(\.projectId)
+            )
+            let allProjects = projectStore.projects
+            let projectsTomorrow = allProjects.filter { tomorrowProjectIds.contains($0.id) }
+            let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
+            let activeOperatives = operativeStore.activeOperatives.isEmpty
+                ? operativeStore.allOperatives.filter(\.isActive)
+                : operativeStore.activeOperatives
+            var materialItemsForTomorrow: [MaterialItem] = []
+            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                for project in projectsTomorrow {
+                    if let items = try? await firebaseBackend.loadMaterialItems(
+                        organizationId: orgId,
+                        projectId: project.id
+                    ) {
+                        materialItemsForTomorrow.append(
+                            contentsOf: items.filter { cal.isDate($0.date, inSameDayAs: tomorrow) }
+                        )
+                    }
                 }
-                .map(\.projectId)
-        )
-        let allProjects = projectStore.projects
-        let projectsTomorrow = allProjects.filter { tomorrowProjectIds.contains($0.id) }
-        warningsService.updateWarnings(
-            operatives: operativeStore.allOperatives,
-            bookings: bookingStore.bookings,
-            projects: allProjects,
-            managers: operativeStore.allManagers,
-            users: userStore.organizationUsers,
-            managerSiteBookings: managerScheduleStore.managerSiteBookings,
-            holidayBookings: holidayStore.bookings,
-            payrollTimePolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
-            labourCoverageStart: cal.date(byAdding: .day, value: -14, to: today),
-            labourCoverageEnd: cal.date(byAdding: .day, value: 28, to: today),
-            materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
-            projectsWithTomorrowBookings: projectsTomorrow
-        )
+            }
+            await warningsService.updateWarningsAsync(
+                operatives: activeOperatives,
+                bookings: bookingStore.bookings,
+                projects: allProjects,
+                users: userStore.organizationUsers,
+                managerSiteBookings: managerScheduleStore.managerSiteBookings,
+                holidayBookings: holidayStore.bookings,
+                payrollTimePolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
+                warningDetection: warningDetection,
+                labourCoverageStart: startDate,
+                labourCoverageEnd: endDate,
+                materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
+                materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
+                materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
+                projectsWithTomorrowBookings: projectsTomorrow,
+                materialItemsForTomorrow: materialItemsForTomorrow
+            )
+        }
     }
 
     private func setThisWeekRange() {
@@ -305,7 +327,7 @@ struct WeeklyReportView: View {
 
         let operativeRows = operativeProjectRows()
         let managerRows = managerProjectRows()
-        let allProjectRows = operativeRows + managerRows
+        let allProjectRows = consolidateProjectRows(operativeRows + managerRows)
         let grouped = Dictionary(grouping: allProjectRows) { "\($0.projectName)|\($0.jobNumber)" }
 
         var projectGrandTotal = 0.0
@@ -352,37 +374,40 @@ struct WeeklyReportView: View {
         rows.append([])
         
         rows.append(["MANAGER/ADMIN ADDITIONAL SCHEDULE"])
-        rows.append(["Person", "Location", "Time", "Days"])
+        rows.append(["Person", "Role", "Location", "Time", "Days"])
         var additionalScheduleTotal = 0.0
         for row in managerAdditionalScheduleRows() {
-            rows.append([row.personName, row.location, row.timeSlotLabel, formatDays(row.days)])
+            rows.append([row.personName, row.role, row.location, row.timeSlotLabel, formatDays(row.days)])
             additionalScheduleTotal += row.days
         }
-        rows.append(["", "Total", "", formatDays(additionalScheduleTotal)])
+        rows.append(["", "", "Total", "", formatDays(additionalScheduleTotal)])
         rows.append([])
 
-        rows.append(["DAY RATE SUMMARY"])
-        rows.append(["Person", "Role", "Days", "Day Rate", "Amount"])
+        rows.append(["PAY SUMMARY"])
+        rows.append(["Person", "Role", "Rate Type", "Days", "Rate", "Pay"])
         var totalAmount = 0.0
-        for summary in labourRateSummaries().sorted(by: {
-            if $0.name == $1.name {
-                let leftRate = $0.rate ?? -1
-                let rightRate = $1.rate ?? -1
-                return leftRate < rightRate
+        for person in payrollPersonSummaries() {
+            for line in person.lines {
+                rows.append([
+                    person.name,
+                    person.role,
+                    line.rateTypeLabel,
+                    formatDays(line.days),
+                    formatCurrency(line.rate),
+                    formatCurrency(line.pay)
+                ])
+                totalAmount += line.pay ?? 0
             }
-            return $0.name < $1.name
-        }) {
-            let amount = (summary.rate ?? 0) * summary.days
             rows.append([
-                summary.name,
-                summary.role,
-                formatDays(summary.days),
-                formatCurrency(summary.rate),
-                formatCurrency(summary.rate == nil ? nil : amount)
+                "",
+                "",
+                "\(person.name) total",
+                "",
+                "",
+                formatCurrency(person.totalPay)
             ])
-            totalAmount += amount
         }
-        rows.append(["", "", "", "Total", formatCurrency(totalAmount)])
+        rows.append(["", "", "Grand Total", "", "", formatCurrency(totalAmount)])
 
         return rows.map { $0.map(csvEscape).joined(separator: ",") }.joined(separator: "\n")
     }
@@ -406,12 +431,14 @@ struct WeeklyReportView: View {
         var rowsMap: [String: ProjectWorkRow] = [:]
         for booking in filtered {
             guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else { continue }
+            let linkedUser = linkedAppUser(for: operative)
             let project = projectStore.projects.first(where: { $0.id == booking.projectId })
                 ?? projectStore.smallWorks.first(where: { $0.id == booking.projectId })
             let projectName = project?.siteName ?? "Unknown"
             let jobNumber = project?.jobNumber ?? "N/A"
-            let personName = operative.name
-            let key = "\(projectName)|\(jobNumber)|\(personName)|Operative"
+            let personName = linkedUser?.fullName.isEmpty == false ? (linkedUser?.fullName ?? operative.name) : operative.name
+            let roleLabel = reportRoleLabel(for: linkedUser, fallback: "Operative")
+            let key = "\(projectName)|\(jobNumber)|\(personName)|\(roleLabel)"
             let dayValue = bookingDayValue(from: booking)
             totals[key, default: 0] += dayValue
             rowsMap[key] = ProjectWorkRow(
@@ -420,7 +447,7 @@ struct WeeklyReportView: View {
                 personName: personName,
                 tradeDisplay: operative.displayTradeType,
                 tradeSortKey: StaffTradeType.sortKey(presetRaw: operative.tradeTypePreset, custom: operative.tradeTypeCustom),
-                role: "Operative",
+                role: roleLabel,
                 days: totals[key] ?? 0
             )
         }
@@ -444,7 +471,8 @@ struct WeeklyReportView: View {
             let projectName = project?.siteName ?? "Unknown"
             let jobNumber = project?.jobNumber ?? "N/A"
             let personName = user.fullName
-            let key = "\(projectName)|\(jobNumber)|\(personName)|Manager"
+            let roleLabel = reportRoleLabel(for: user, fallback: "Manager")
+            let key = "\(projectName)|\(jobNumber)|\(personName)|\(roleLabel)"
             let dayValue = managerDayValue(from: booking)
             totals[key, default: 0] += dayValue
             rowsMap[key] = ProjectWorkRow(
@@ -453,7 +481,7 @@ struct WeeklyReportView: View {
                 personName: personName,
                 tradeDisplay: user.displayTradeType,
                 tradeSortKey: StaffTradeType.sortKey(presetRaw: user.tradeTypePreset, custom: user.tradeTypeCustom),
-                role: "Manager",
+                role: roleLabel,
                 days: totals[key] ?? 0
             )
         }
@@ -543,6 +571,7 @@ struct WeeklyReportView: View {
         return filtered.compactMap { booking in
             guard let person = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { return nil }
             let personName = person.fullName.isEmpty ? person.email : person.fullName
+            let roleLabel = reportRoleLabel(for: person, fallback: "Manager")
             let locationName: String
             if booking.locationType == .custom {
                 let custom = booking.customLocationName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -552,6 +581,7 @@ struct WeeklyReportView: View {
             }
             return ManagerAdditionalScheduleRow(
                 personName: personName,
+                role: roleLabel,
                 location: locationName,
                 timeSlotLabel: booking.scheduleLabel(policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default),
                 days: managerDayValue(from: booking)
@@ -649,15 +679,158 @@ struct WeeklyReportView: View {
         booking.reportDayValue(policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default)
     }
 
+    private func linkedAppUser(for operative: Operative) -> AppUser? {
+        let email = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !email.isEmpty else { return nil }
+        return userStore.organizationUsers.first {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+        }
+    }
+
+    private func reportRoleLabel(for user: AppUser?, fallback: String) -> String {
+        guard let user else { return fallback }
+        let adminLike = user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin || user.role == .manager || user.permissions.manager
+        return adminLike ? "Admin User" : fallback
+    }
+
+    private func consolidateProjectRows(_ rows: [ProjectWorkRow]) -> [ProjectWorkRow] {
+        var map: [String: ProjectWorkRow] = [:]
+        for row in rows {
+            let key = "\(row.projectName)|\(row.jobNumber)|\(row.personName)|\(row.role)"
+            if var existing = map[key] {
+                existing.days += row.days
+                if existing.tradeDisplay == "—", row.tradeDisplay != "—" {
+                    existing = ProjectWorkRow(
+                        projectName: existing.projectName,
+                        jobNumber: existing.jobNumber,
+                        personName: existing.personName,
+                        tradeDisplay: row.tradeDisplay,
+                        tradeSortKey: row.tradeSortKey,
+                        role: existing.role,
+                        days: existing.days
+                    )
+                }
+                map[key] = existing
+            } else {
+                map[key] = row
+            }
+        }
+        return Array(map.values)
+    }
+
+    private func payrollPersonSummaries() -> [PayrollPersonSummary] {
+        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let standard = max(policy.standardPaidHours, 0.01)
+        struct Acc {
+            var name: String
+            var role: String
+            var rate: Double?
+            var normalDays: Double = 0
+            var otDays: Double = 0
+            var otMultiplier: Double
+        }
+        var byKey: [String: Acc] = [:]
+        let cal = Calendar.current
+
+        let operativeBookings = bookingStore.bookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= cal.startOfDay(for: startDate)
+                && day <= cal.startOfDay(for: endDate)
+                && $0.status != .cancelled
+        }
+        for booking in operativeBookings {
+            guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else { continue }
+            let linkedUser = linkedAppUser(for: operative)
+            let role = reportRoleLabel(for: linkedUser, fallback: "Operative")
+            let name = (linkedUser?.fullName.isEmpty == false) ? (linkedUser?.fullName ?? operative.name) : operative.name
+            let rate = dayRateForOperativeBooking(user: linkedUser, operative: operative, on: booking.date)
+            let paid = booking.paidBookedHours(policy: policy)
+            let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
+            let normalDays = max(0, paid - otHours) / standard
+            let otDays = max(0, otHours) / standard
+            let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
+            let rateKey = rate.map { String(format: "%.4f", $0) } ?? "no-rate"
+            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))"
+            var acc = byKey[key] ?? Acc(name: name, role: role, rate: rate, otMultiplier: otMultiplier)
+            acc.normalDays += normalDays
+            acc.otDays += otDays
+            byKey[key] = acc
+        }
+
+        let managerBookings = managerScheduleStore.managerSiteBookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= cal.startOfDay(for: startDate)
+                && day <= cal.startOfDay(for: endDate)
+                && appSettings.settings.myScheduleOptions.includesManagerScheduleLocation($0)
+        }
+        for booking in managerBookings {
+            guard let manager = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { continue }
+            let role = reportRoleLabel(for: manager, fallback: "Manager")
+            let name = manager.fullName.isEmpty ? manager.email : manager.fullName
+            let rate = dayRateForUserOnDay(userId: manager.id, fallback: manager.dayRate, date: booking.date)
+            let paid = booking.paidBookedHours(policy: policy)
+            let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
+            let normalDays = max(0, paid - otHours) / standard
+            let otDays = max(0, otHours) / standard
+            let otMultiplier = policy.weekdayOutsideStandardMultiplier
+            let rateKey = rate.map { String(format: "%.4f", $0) } ?? "no-rate"
+            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))"
+            var acc = byKey[key] ?? Acc(name: name, role: role, rate: rate, otMultiplier: otMultiplier)
+            acc.normalDays += normalDays
+            acc.otDays += otDays
+            byKey[key] = acc
+        }
+
+        let groupedByPerson = Dictionary(grouping: byKey.values) { "\($0.name)|\($0.role)" }
+        var summaries: [PayrollPersonSummary] = []
+        for (_, entries) in groupedByPerson {
+            guard let first = entries.first else { continue }
+            var lines: [PayrollRateLine] = []
+            var total = 0.0
+            for entry in entries.sorted(by: { ($0.rate ?? -1) < ($1.rate ?? -1) }) {
+                if entry.normalDays > 0.0001 {
+                    let pay = entry.rate.map { $0 * entry.normalDays }
+                    lines.append(
+                        PayrollRateLine(
+                            rateTypeLabel: "Normal",
+                            days: entry.normalDays,
+                            rate: entry.rate,
+                            pay: pay
+                        )
+                    )
+                    total += pay ?? 0
+                }
+                if entry.otDays > 0.0001 {
+                    let otRate = entry.rate.map { $0 * entry.otMultiplier }
+                    let otPay = entry.rate.map { $0 * entry.otMultiplier * entry.otDays }
+                    let label = abs(entry.otMultiplier - entry.otMultiplier.rounded()) < 0.001
+                        ? "OT x\(Int(entry.otMultiplier.rounded()))"
+                        : String(format: "OT x%.1f", entry.otMultiplier)
+                    lines.append(
+                        PayrollRateLine(
+                            rateTypeLabel: label,
+                            days: entry.otDays,
+                            rate: otRate,
+                            pay: otPay
+                        )
+                    )
+                    total += otPay ?? 0
+                }
+            }
+            summaries.append(PayrollPersonSummary(name: first.name, role: first.role, lines: lines, totalPay: total))
+        }
+        return summaries.sorted {
+            if $0.name == $1.name { return $0.role < $1.role }
+            return $0.name < $1.name
+        }
+    }
+
     private func formatDate(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .omitted)
     }
 
     private func formatDays(_ value: Double) -> String {
-        if value.truncatingRemainder(dividingBy: 1) == 0 {
-            return String(format: "%.0f", value)
-        }
-        return String(format: "%.1f", value)
+        String(format: "%.2f", value)
     }
 
     private func formatCurrency(_ value: Double?) -> String {
@@ -728,9 +901,24 @@ private struct SubcontractorWorkRow {
 
 private struct ManagerAdditionalScheduleRow {
     let personName: String
+    let role: String
     let location: String
     let timeSlotLabel: String
     let days: Double
+}
+
+private struct PayrollRateLine {
+    let rateTypeLabel: String
+    let days: Double
+    let rate: Double?
+    let pay: Double?
+}
+
+private struct PayrollPersonSummary {
+    let name: String
+    let role: String
+    let lines: [PayrollRateLine]
+    let totalPay: Double
 }
 
 private struct WeeklyReportShareSheet: UIViewControllerRepresentable {

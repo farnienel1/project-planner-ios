@@ -19,6 +19,7 @@ class BookingStore: ObservableObject {
     private var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
     private var cancellables = Set<AnyCancellable>()
+    private var pendingReloadAfterCurrentLoad = false
     
     init(persistenceService: PersistenceService? = nil) {
         self.persistenceService = persistenceService ?? PersistenceService()
@@ -32,11 +33,8 @@ class BookingStore: ObservableObject {
             Task { @MainActor [weak self] in
                 print("🔥🔥🔥 DEBUG: BookingStore received organizationDidLoad notification - reloading data")
                 self?.loadData()
-                // After loading, sync any local bookings to Firebase
-                if let self = self, !self.bookings.isEmpty {
-                    print("🔥🔥🔥 DEBUG: Syncing \(self.bookings.count) local bookings to Firebase after organization load")
-                    await self.saveData()
-                }
+                // Avoid auto-syncing every booking on org load; this creates large startup write storms.
+                // Booking saves still happen on user actions and offline sync notifications.
             }
         }
         
@@ -77,10 +75,22 @@ class BookingStore: ObservableObject {
     // MARK: - Data Loading
     
     func loadData() {
+        if isLoading {
+            pendingReloadAfterCurrentLoad = true
+            print("🔥🔥🔥 DEBUG: BookingStore loadData ignored (already loading); queued one follow-up reload")
+            return
+        }
         isLoading = true
         errorMessage = nil
         
         Task { @MainActor in
+            defer {
+                self.isLoading = false
+                if self.pendingReloadAfterCurrentLoad {
+                    self.pendingReloadAfterCurrentLoad = false
+                    self.loadData()
+                }
+            }
             do {
                 // Try to load from Firebase first if authenticated
                 if let firebaseBackend = firebaseBackend, 
@@ -106,10 +116,8 @@ class BookingStore: ObservableObject {
                     print("🔥🔥🔥 DEBUG: Loaded \(bookings.count) bookings from local storage")
                 }
                 
-                self.isLoading = false
             } catch {
                 self.errorMessage = error.localizedDescription
-                self.isLoading = false
                 print("🔥🔥🔥 DEBUG: Error loading bookings: \(error.localizedDescription)")
                 // Fallback to local cache when Firebase denies/ fails so operative visibility does not fully disappear.
                 do {
@@ -424,6 +432,7 @@ class BookingStore: ObservableObject {
         } catch {
             errorMessage = "Failed to save data: \(error.localizedDescription)"
         }
+        ScheduleChangeNotifier.postBookingStoreDidChange()
     }
     
     func clearAllData() async {

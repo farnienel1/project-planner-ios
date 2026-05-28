@@ -281,6 +281,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
     let policy: OrgPayrollTimePolicy
     let segments: DayHoursSegmentTotals
     var annualLeaveLabel: String? = nil
+    var annualLeaveTimeSlot: HolidayTimeSlot? = nil
 
     @ViewBuilder
     var body: some View {
@@ -288,7 +289,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Today's hours")
+                        Text("Total hours")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.ink)
                         Text("Standard \(policy.standardDayStart)–\(policy.standardDayEnd)")
@@ -304,20 +305,52 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                         .background(Color(red: 0.98, green: 0.933, blue: 0.855))
                         .clipShape(Capsule())
                 }
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color(red: 0.60, green: 0.24, blue: 0.11), Color(red: 0.78, green: 0.40, blue: 0.27)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .frame(height: 28)
+                GeometryReader { geo in
+                    let w = geo.size.width
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
+                        switch annualLeaveTimeSlot ?? .fullDay {
+                        case .fullDay:
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [Color(red: 0.60, green: 0.24, blue: 0.11), Color(red: 0.78, green: 0.40, blue: 0.27)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                                .frame(width: w)
+                        case .morning:
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [Color(red: 0.60, green: 0.24, blue: 0.11), Color(red: 0.78, green: 0.40, blue: 0.27)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                                .frame(width: w * 0.5)
+                        case .afternoon:
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [Color(red: 0.60, green: 0.24, blue: 0.11), Color(red: 0.78, green: 0.40, blue: 0.27)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                                .frame(width: w * 0.5)
+                                .offset(x: w * 0.5)
+                        }
+                    }
                     .overlay(alignment: .center) {
                         Text(annualLeaveLabel)
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.white)
                     }
+                }
+                .frame(height: 28)
                 HStack {
                     ForEach(["6:00", "9:00", "12:00", "15:00", "18:00"], id: \.self) { t in
                         Text(t)
@@ -345,7 +378,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Today's hours")
+                        Text("Total hours")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.ink)
                         Text("Standard \(policy.standardDayStart)–\(policy.standardDayEnd) · \(ScheduleCoverageFormat.hours(paidStd)) hrs")
@@ -777,6 +810,9 @@ struct ManagerScheduleContentView: View {
         }
     }
 
+    private func annualLeaveTimeSlot(on day: Date) -> HolidayTimeSlot? {
+        myHolidayBookings(on: day).first?.timeSlot
+    }
     var body: some View {
         ZStack(alignment: .top) {
             VStack(spacing: 0) {
@@ -1448,6 +1484,7 @@ struct ManagerScheduleContentView: View {
         let operativeBookings = myOperativeBookings(on: day)
         let holidayBookings = myHolidayBookings(on: day)
         let annualLeaveLabel = annualLeaveDisplayLabel(on: day)
+        let annualLeaveSlotForDay = annualLeaveTimeSlot(on: day)
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                     MyScheduleDayNavigatorCard(
@@ -1458,7 +1495,8 @@ struct ManagerScheduleContentView: View {
                     MyScheduleTodaysHoursCard(
                         policy: policy,
                         segments: mergedDaySegments(manager: bookings, operative: operativeBookings, policy: policy),
-                        annualLeaveLabel: annualLeaveLabel
+                        annualLeaveLabel: annualLeaveLabel,
+                        annualLeaveTimeSlot: annualLeaveSlotForDay
                     )
 
                 if !holidayBookings.isEmpty {
@@ -2494,6 +2532,14 @@ struct OperativeScheduleContentView: View {
         }
     }
 
+    private func approvedHolidayTimeSlot(on date: Date) -> HolidayTimeSlot? {
+        let day = calendar.startOfDay(for: date)
+        return myApprovedHolidays.first(where: { booking in
+            let start = calendar.startOfDay(for: booking.startDate)
+            let end = calendar.startOfDay(for: booking.endDate)
+            return day >= start && day <= end
+        })?.timeSlot
+    }
     var body: some View {
         VStack(spacing: 0) {
             weekNavigation
@@ -2569,6 +2615,7 @@ struct OperativeScheduleContentView: View {
         let dayManagerBookings = myManagerAttendanceThisWeek.filter { calendar.isDate($0.date, inSameDayAs: date) }
         let isOnHoliday = holidayCoversDay(date)
         let annualLeaveLabel = approvedHolidayLabel(on: date)
+        let annualLeaveSlotForDay = approvedHolidayTimeSlot(on: date)
         let f = DateFormatter()
         f.dateFormat = "EEEE, d MMM"
         return VStack(alignment: .leading, spacing: 8) {
@@ -2589,7 +2636,8 @@ struct OperativeScheduleContentView: View {
                     MyScheduleTodaysHoursCard(
                         policy: policy,
                         segments: mergedDaySegments(manager: dayManagerBookings, operative: dayBookings, policy: policy),
-                        annualLeaveLabel: annualLeaveLabel
+                        annualLeaveLabel: annualLeaveLabel,
+                        annualLeaveTimeSlot: annualLeaveSlotForDay
                     )
                     if policy.unpaidBreakMinutes > 0 {
                         HStack(spacing: 6) {

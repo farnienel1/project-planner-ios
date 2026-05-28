@@ -20,6 +20,7 @@ struct SettingsView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @Environment(\.dismiss) private var dismiss
     
     @State private var showingDiagnosticReport = false
@@ -235,21 +236,23 @@ struct SettingsView: View {
                 )
             }
             .buttonStyle(.plain)
-            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
-            NavigationLink {
-                SettingsNotificationsHubView(canConfigureMaterialCutOff: canConfigureMaterialCutOffNotifications)
-                    .environmentObject(appSettings)
-                    .environmentObject(notificationService)
-            } label: {
-                settingsHubRow(
-                    icon: "bell.fill",
-                    iconBg: ProjectWorksRevampColors.pinRoseBg,
-                    iconFg: ProjectWorksRevampColors.pinRoseFg,
-                    title: "My notifications",
-                    subtitle: "What you get pinged about"
-                )
+            if !(userStore.currentUser?.permissions.operativeMode ?? false) {
+                Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+                NavigationLink {
+                    SettingsNotificationsHubView(canConfigureMaterialCutOff: canConfigureMaterialCutOffNotifications)
+                        .environmentObject(appSettings)
+                        .environmentObject(notificationService)
+                } label: {
+                    settingsHubRow(
+                        icon: "bell.fill",
+                        iconBg: ProjectWorksRevampColors.pinRoseBg,
+                        iconFg: ProjectWorksRevampColors.pinRoseFg,
+                        title: "My notifications",
+                        subtitle: "What you get pinged about"
+                    )
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
@@ -298,6 +301,8 @@ struct SettingsView: View {
                 .environmentObject(holidayStore)
                 .environmentObject(operativeStore)
                 .environmentObject(bookingStore)
+                .environmentObject(projectStore)
+                .environmentObject(managerScheduleStore)
         } label: {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top, spacing: 14) {

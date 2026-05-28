@@ -193,8 +193,7 @@ struct NotificationsView: View {
                         object: nil,
                         userInfo: ["tab": 2]
                     )
-                case .bookingClash:
-                    // Navigate to warnings or bookings
+                case .bookingClash, .warningRemoved:
                     NotificationCenter.default.post(
                         name: NSNotification.Name("navigateToWarnings"),
                         object: nil
@@ -203,6 +202,25 @@ struct NotificationsView: View {
                     NotificationCenter.default.post(
                         name: NSNotification.Name("openTasksDetail"),
                         object: nil
+                    )
+                case .timesheetPendingManagerSignoff:
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("navigateToTimesheetReview"),
+                        object: nil,
+                        userInfo: [
+                            "targetUserId": notification.deepLinkUserId ?? "",
+                            "weekStart": notification.deepLinkWeekStart ?? Date()
+                        ]
+                    )
+                case .timesheetSignedByManager:
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("mainMenuOpenSurface"),
+                        object: nil,
+                        userInfo: [
+                            "route": MainMenuSurfaceRoute.invoicing.rawValue,
+                            "targetUserId": notification.deepLinkUserId ?? "",
+                            "weekStart": notification.deepLinkWeekStart ?? Date()
+                        ]
                     )
                 }
                 
@@ -215,32 +233,52 @@ struct NotificationsView: View {
 struct NotificationRowView: View {
     let notification: AppNotification
     @EnvironmentObject var notificationService: NotificationService
-    
+
+    @State private var isMessageExpanded = false
+
+    /// Rough threshold for two lines of subheadline text in the list row.
+    private var messageExceedsPreview: Bool {
+        let message = notification.message
+        return message.count > 96 || message.contains("\n")
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            // Icon based on type
             Image(systemName: iconForType(notification.type))
                 .font(.title3)
                 .foregroundColor(colorForType(notification.type))
                 .frame(width: 30)
-            
+
             VStack(alignment: .leading, spacing: 4) {
                 Text(notification.title)
                     .font(.headline)
                     .foregroundColor(.primary)
-                
+
                 Text(notification.message)
                     .font(.subheadline)
                     .foregroundColor(.secondary)
-                    .lineLimit(2)
-                
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(isMessageExpanded ? nil : 2)
+                    .fixedSize(horizontal: false, vertical: isMessageExpanded)
+
+                if messageExceedsPreview {
+                    Button(isMessageExpanded ? "Show less" : "Show more") {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isMessageExpanded.toggle()
+                        }
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.blue)
+                    .buttonStyle(.plain)
+                }
+
                 Text(notification.createdAt, style: .relative)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-            
+
             Spacer()
-            
+
             if !notification.isRead {
                 Circle()
                     .fill(Color.blue)
@@ -260,11 +298,14 @@ struct NotificationRowView: View {
         case .projectCreated: return "folder.badge.plus"
         case .smallWorksCreated: return "hammer.fill"
         case .bookingClash: return "exclamationmark.triangle"
+        case .warningRemoved: return "xmark.octagon"
         case .taskCompleted: return "checkmark.circle"
         case .taskCreated: return "list.bullet.rectangle"
         case .holidayRequestSubmitted: return "sun.max"
         case .holidayRequestApproved: return "sun.max.fill"
         case .holidayRequestDeclined: return "xmark.circle.fill"
+        case .timesheetPendingManagerSignoff: return "signature"
+        case .timesheetSignedByManager: return "checkmark.seal.fill"
         }
     }
 
@@ -277,11 +318,14 @@ struct NotificationRowView: View {
         case .projectCreated: return .indigo
         case .smallWorksCreated: return .orange
         case .bookingClash: return .red
+        case .warningRemoved: return .orange
         case .taskCompleted: return .green
         case .taskCreated: return .blue
         case .holidayRequestSubmitted: return .orange
         case .holidayRequestApproved: return .green
         case .holidayRequestDeclined: return .red
+        case .timesheetPendingManagerSignoff: return .orange
+        case .timesheetSignedByManager: return .green
         }
     }
 }

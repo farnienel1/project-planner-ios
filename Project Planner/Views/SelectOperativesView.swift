@@ -12,6 +12,8 @@ struct SelectOperativesView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     
     @Binding var selectedOperatives: Set<UUID>
+    /// Operatives in clash review or approved overlap still count as selected for the tick UI.
+    var visiblySelectedOperativeIds: Set<UUID> = []
     let unavailableOperativeIds: Set<UUID>
     @State private var searchText = ""
     @State private var selectedFilter: AvailabilityFilter = .all
@@ -83,7 +85,7 @@ struct SelectOperativesView: View {
                         let isOnAnnualLeave = unavailableOperativeIds.contains(operative.id)
                         OperativeSelectionRow(
                             operative: operative,
-                            isSelected: selectedOperatives.contains(operative.id),
+                            isSelected: visiblySelectedOperativeIds.contains(operative.id),
                             isDisabled: isOnAnnualLeave,
                             onToggle: {
                                 if isOnAnnualLeave { return }

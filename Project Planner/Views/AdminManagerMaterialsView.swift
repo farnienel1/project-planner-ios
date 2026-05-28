@@ -90,17 +90,23 @@ struct AdminManagerMaterialsView: View {
         return materials.filter { calendar.isDate(calendar.startOfDay(for: $0.date), inSameDayAs: day) }
     }
 
+    private var canViewQuoteOrderHistory: Bool {
+        !userStore.isOperativeMode()
+    }
+
     private var dayHeader: some View {
         HStack {
             Text(dayTitle)
                 .font(.system(size: 12, weight: .medium))
             Spacer()
-            Button("Quote/Order History") {
-                showingHistory = true
+            if canViewQuoteOrderHistory {
+                Button("Quote/Order History") {
+                    showingHistory = true
+                }
+                .font(.system(size: 11, weight: .medium))
+                .buttonStyle(.bordered)
+                .tint(MaterialsOrderingTheme.muted)
             }
-            .font(.system(size: 11, weight: .medium))
-            .buttonStyle(.bordered)
-            .tint(MaterialsOrderingTheme.muted)
             Button { showingAddMaterial = true } label: {
                 Label("Add", systemImage: "plus")
                     .font(.system(size: 11, weight: .medium))

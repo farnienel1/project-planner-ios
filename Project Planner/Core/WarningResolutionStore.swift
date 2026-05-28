@@ -47,6 +47,23 @@ final class WarningResolutionStore: ObservableObject {
         persistDismissed()
     }
 
+    /// Drops stale `unbooked-*` dismissals outside the active scan window so extended horizons can surface new days.
+    func pruneDismissedUnbookedKeys(from startDay: Date, through endDay: Date, calendar: Calendar = .current) {
+        let prefix = "unbooked-"
+        let start = calendar.startOfDay(for: startDay)
+        let end = calendar.startOfDay(for: endDay)
+        let before = dismissedResolutionKeys.count
+        dismissedResolutionKeys = dismissedResolutionKeys.filter { key in
+            guard key.hasPrefix(prefix) else { return true }
+            guard let ts = Double(key.dropFirst(prefix.count)) else { return true }
+            let day = calendar.startOfDay(for: Date(timeIntervalSince1970: ts))
+            return day >= start && day <= end
+        }
+        if dismissedResolutionKeys.count != before {
+            persistDismissed()
+        }
+    }
+
     func unapprove(_ resolutionKey: String) {
         approvedResolutionKeys.remove(resolutionKey)
         persistApproved()

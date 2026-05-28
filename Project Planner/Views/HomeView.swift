@@ -40,8 +40,12 @@ struct HomeView: View {
     @State private var showingWarningsDetail = false
     @State private var showingTasksDetail = false
     @State private var showingWholesalers = false
+    @State private var showingMaterialCatalogue = false
     @State private var showingOperativeQualifications = false
     @State private var showingSiteAudit = false
+    @State private var showingInvoicing = false
+    @State private var timesheetReviewDeepLinkUserId: String?
+    @State private var timesheetReviewDeepLinkWeekStart: Date?
     
     // Navigation states for menu items
     @State private var showingClientsView = false
@@ -51,11 +55,12 @@ struct HomeView: View {
     @State private var showingQuickActionCustomizeHint = false
     @State private var persistedQuickActionIds: [String] = []
     @State private var showingGeneralAppSettings = false
-    @State private var hasLoadedQuickActionLayout = false
+    @State private var hasLoadedQuickActionLayoutForUserKey: String?
     @State private var showingAdminOverviewCustomize = false
     @State private var draftAdminOverviewMetricIds: [HomeOverviewMetricID] = []
     @State private var persistedAdminOverviewMetricIds: [HomeOverviewMetricID] = []
     @State private var hasLoadedAdminOverviewMetrics = false
+    @State private var showingHomeProfileCard = false
     
     var body: some View {
         ScrollView {
@@ -99,9 +104,8 @@ struct HomeView: View {
                 .environmentObject(taskStore)
         }
         .task {
-            // Defer slightly so Home can render before notification work; ContentView also refreshes periodically.
+            // Defer slightly so Home can render before task work.
             try? await Task.sleep(nanoseconds: 800_000_000)
-            await notificationService.loadNotifications()
             await taskStore.loadData()
         }
         .sheet(isPresented: $showingCreateClient) {
@@ -166,8 +170,18 @@ struct HomeView: View {
                 .environmentObject(holidayStore)
                 .environmentObject(firebaseBackend)
         }
+        .sheet(isPresented: $showingMaterialCatalogue) {
+            MaterialCatalogueRootView()
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+        }
         .sheet(isPresented: $showingWholesalers) {
             WholesalersView()
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+        }
+        .sheet(isPresented: $showingMaterialCatalogue) {
+            MaterialCatalogueRootView()
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         }
@@ -176,6 +190,9 @@ struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openTasksDetail"))) { _ in
             showingTasksDetail = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToWarnings"))) { _ in
+            Task { await openWarningsDetail() }
         }
         .fullScreenCover(isPresented: $showingClientsView) {
             ClientsView()
@@ -244,6 +261,25 @@ struct HomeView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         }
+        .sheet(isPresented: $showingInvoicing) {
+            InvoicingView(
+                initialReviewUserId: timesheetReviewDeepLinkUserId,
+                initialReviewWeekStart: timesheetReviewDeepLinkWeekStart
+            )
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(projectStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(notificationService)
+        }
+        .sheet(isPresented: $showingHomeProfileCard) {
+            HomeProfileCardSheet()
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+                .environmentObject(operativeStore)
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openOrgSitesMapFromMore"))) { _ in
             showingOrgSitesMap = true
         }
@@ -262,12 +298,20 @@ struct HomeView: View {
             case .myQualifications: showingOperativeQualifications = true
             case .jobTypes: showingJobTypesManagement = true
             case .wholesalers: showingWholesalers = true
+            case .materialCatalogue:
+                if userStore.canManageMaterialCatalogue() {
+                    showingMaterialCatalogue = true
+                }
             case .addUser: showingAddUser = true
             case .manageUsers: showingManageUsers = true
             case .tasksDetail: showingTasksDetail = true
             case .generalAppSettings: showingGeneralAppSettings = true
             case .orgSitesMap: showingOrgSitesMap = true
             case .siteAudit: showingSiteAudit = true
+            case .invoicing:
+                timesheetReviewDeepLinkUserId = note.userInfo?["targetUserId"] as? String
+                timesheetReviewDeepLinkWeekStart = note.userInfo?["weekStart"] as? Date
+                showingInvoicing = true
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .mainMenuResetPassword)) { _ in
@@ -292,8 +336,13 @@ struct HomeView: View {
             loadPersistedQuickActionsIfNeeded()
         }
         .onChange(of: userStore.currentUser?.id) { _, _ in
-            hasLoadedQuickActionLayout = false
+            hasLoadedQuickActionLayoutForUserKey = nil
             loadPersistedQuickActionsIfNeeded()
+        }
+        .onChange(of: userStore.isHomeProfileLoading) { _, isLoading in
+            if !isLoading {
+                loadPersistedQuickActionsIfNeeded()
+            }
         }
         .sheet(isPresented: $showingAddQuickActionPicker) {
             HomeQuickActionAddSheet(
@@ -444,6 +493,11 @@ struct HomeView: View {
         ).count
     }
 
+    /// Combined daily on-site headcount across operative bookings and manager site bookings.
+    private var peopleOnSiteTodayCount: Int {
+        operativesOnSiteTodayCount + managersOnSiteTodayCount
+    }
+
     private var operativesOnALTodayCount: Int {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
@@ -518,7 +572,7 @@ struct HomeView: View {
         case .tasksDueTodayPersonal: return "\(tasksDueTodayCount)"
         case .tasksDueWeekPersonal: return "\(tasksDueThisWeekCount)"
         case .warnings: return "\(homeWarningCount)"
-        case .operativesOnSite: return "\(operativesOnSiteTodayCount)"
+        case .operativesOnSite: return "\(peopleOnSiteTodayCount)"
         case .managersOnSite: return "\(managersOnSiteTodayCount)"
         case .operativesOnAL: return "\(operativesOnALTodayCount)"
         case .managersOnAL: return "\(managersOnALTodayCount)"
@@ -567,6 +621,13 @@ struct HomeView: View {
         .task(id: homeDataRefreshTrigger) {
             await refreshHomeDerivedData()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .warningsDidRecompute)) { notification in
+            if let count = notification.userInfo?["count"] as? Int {
+                homeWarningCount = count
+            } else {
+                homeWarningCount = WarningsService.shared.warningCount
+            }
+        }
         .onChange(of: showingAdminOverviewCustomize) { _, isOpen in
             if isOpen {
                 let base = persistedAdminOverviewMetricIds.isEmpty
@@ -614,13 +675,18 @@ struct HomeView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                Text(profileInitials)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white)
-                    .frame(width: 38, height: 38)
-                    .background(homeBlue)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
+                Button {
+                    showingHomeProfileCard = true
+                } label: {
+                    Text(profileInitials)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 38, height: 38)
+                        .background(homeBlue)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.bottom, 18)
@@ -686,8 +752,8 @@ struct HomeView: View {
         if userStore.isOperativeMode() {
             HStack(spacing: 10) {
                 overviewStatPill(value: "\(tasksDueTodayCount)", label: "Tasks Due Today")
-                overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "Tasks due this week")
-                overviewStatPill(value: "\(tasksOverdueCount)", label: "Tasks Overdue")
+                overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "Tasks Due This Week")
+                overviewStatPill(value: "\(tasksOverdueCount)", label: "My Tasks Overdue")
             }
         } else if userStore.hasAdminAccess() {
             HStack(spacing: 10) {
@@ -700,9 +766,9 @@ struct HomeView: View {
             }
         } else {
             HStack(spacing: 10) {
-                overviewStatPill(value: "\(tasksDueTodayCount)", label: "Due today")
-                overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "This week")
-                overviewStatPill(value: "\(assignedTasksCount)", label: "Tasks")
+                overviewStatPill(value: "\(tasksDueTodayCount)", label: "Tasks Due Today")
+                overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "Tasks Due This Week")
+                overviewStatPill(value: "\(assignedTasksCount)", label: "Open Tasks (My Tasks)")
             }
         }
     }
@@ -791,18 +857,20 @@ struct HomeView: View {
     }
 
     private var quickActionStorageKey: String {
-        let uid = firebaseBackend.currentUser?.uid ?? "anonymous"
+        let uid = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "anonymous"
         return "homeQuickActionOrder.\(uid)"
     }
 
     private var quickActionCustomizeHintKey: String {
-        let uid = firebaseBackend.currentUser?.uid ?? "anonymous"
+        let uid = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "anonymous"
         return "homeQuickActionCustomizeHint.\(uid)"
     }
 
     private func loadPersistedQuickActionsIfNeeded() {
-        guard !hasLoadedQuickActionLayout else { return }
-        hasLoadedQuickActionLayout = true
+        let userKey = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "anonymous"
+        guard hasLoadedQuickActionLayoutForUserKey != userKey else { return }
+        guard userStore.currentUser != nil || !userStore.isHomeProfileLoading else { return }
+        hasLoadedQuickActionLayoutForUserKey = userKey
         if let saved = UserDefaults.standard.array(forKey: quickActionStorageKey) as? [String], !saved.isEmpty {
             let allowed = Set(HomeQuickActionRegistry.allEligibleIds(userStore: userStore))
             var seen = Set<String>()
@@ -820,6 +888,8 @@ struct HomeView: View {
     }
 
     private func sanitizePersistedQuickActionsIfNeeded() {
+        guard userStore.currentUser != nil || !userStore.isHomeProfileLoading else { return }
+        if userStore.organizationUsers.isEmpty { return }
         let allowed = Set(HomeQuickActionRegistry.allEligibleIds(userStore: userStore))
         let next = persistedQuickActionIds.filter { allowed.contains($0) }
         if next.count != persistedQuickActionIds.count {
@@ -882,7 +952,7 @@ struct HomeView: View {
         } else if id == HomeQuickActionID.staffManageUsersSheet.rawValue, !userStore.canManageUsers() {
             raw = "Manage\noperatives"
         } else {
-            raw = HomeQuickActionRegistry.meta(for: id)?.title ?? ""
+            raw = HomeQuickActionRegistry.meta(for: id, userStore: userStore)?.title ?? ""
         }
         return capitalizeSecondWordsInQuickActionTitle(raw)
     }
@@ -954,6 +1024,8 @@ struct HomeView: View {
             showingJobTypesManagement = true
         case HomeQuickActionID.staffWholesalers.rawValue:
             showingWholesalers = true
+        case HomeQuickActionID.staffMaterialCatalogue.rawValue:
+            showingMaterialCatalogue = true
         case HomeQuickActionID.staffAddUser.rawValue:
             showingAddUser = true
         case HomeQuickActionID.staffManageUsersSheet.rawValue:
@@ -966,6 +1038,8 @@ struct HomeView: View {
             showingGeneralAppSettings = true
         case HomeQuickActionID.staffTasks.rawValue:
             showingTasksDetail = true
+        case HomeQuickActionID.staffInvoicing.rawValue:
+            showingInvoicing = true
         default:
             break
         }
@@ -1053,7 +1127,7 @@ struct HomeView: View {
     private var quickActionsIconGrid: some View {
         LazyVGrid(columns: quickGrid, spacing: 10) {
             ForEach(persistedQuickActionIds, id: \.self) { id in
-                if let meta = HomeQuickActionRegistry.meta(for: id),
+                if let meta = HomeQuickActionRegistry.meta(for: id, userStore: userStore),
                    HomeQuickActionRegistry.isEligible(id: id, userStore: userStore) {
                     if isCustomisingQuickActions {
                         quickActionCustomizeTile(id: id, meta: meta)
@@ -1267,30 +1341,15 @@ struct HomeView: View {
         }.value
 
         if userStore.hasAdminAccess() {
-            let cal = Calendar.current
-            let today = cal.startOfDay(for: Date())
-            let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
-            let tomorrowProjectIds = Set(
-                bookings
-                    .filter {
-                        cal.isDate($0.date, inSameDayAs: tomorrow) &&
-                            ($0.status == .confirmed || $0.status == .tentative)
-                    }
-                    .map(\.projectId)
-            )
-            let projectsTomorrow = projects.filter { tomorrowProjectIds.contains($0.id) }
-            await WarningsService.shared.updateWarningsAsync(
-                operatives: operatives,
-                bookings: bookings,
-                projects: projects,
-                users: users,
-                managerSiteBookings: managerBookings,
-                holidayBookings: holidayStore.bookings,
-                payrollTimePolicy: policy,
-                labourCoverageStart: cal.date(byAdding: .day, value: -14, to: today),
-                labourCoverageEnd: cal.date(byAdding: .day, value: 28, to: today),
-                materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
-                projectsWithTomorrowBookings: projectsTomorrow
+            await WarningsRefreshHelper.refreshSharedWarnings(
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                projectStore: projectStore,
+                userStore: userStore,
+                managerScheduleStore: managerScheduleStore,
+                holidayStore: holidayStore,
+                firebaseBackend: firebaseBackend,
+                appSettings: appSettings
             )
             guard !Task.isCancelled else { return }
             homeWarningCount = WarningsService.shared.warningCount
@@ -1756,6 +1815,114 @@ struct OperativeQualificationsReadOnlyView: View {
         )
         await operativeStore.addOperative(newOperative)
         repairMessage = "Created and linked operative profile."
+    }
+}
+
+private struct HomeProfileCardSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var operativeStore: OperativeStore
+
+    private var user: AppUser? { userStore.displayUser }
+
+    private var operative: Operative? {
+        guard let email = user?.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        return operativeStore.allOperatives.first {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+        }
+    }
+
+    private var displayName: String {
+        guard let user else { return "Profile" }
+        let full = "\(user.firstName) \(user.surname)".trimmingCharacters(in: .whitespacesAndNewlines)
+        return full.isEmpty ? user.email : full
+    }
+
+    private var initials: String { PlannerUIInitials.from(displayName) }
+
+    private var skillsText: String {
+        guard let operative, !operative.skills.isEmpty else { return "None added" }
+        return operative.skills.joined(separator: ", ")
+    }
+
+    private var qualificationsText: String {
+        guard let operative, !operative.qualifications.isEmpty else { return "None added" }
+        return operative.qualifications.map(\.name).joined(separator: ", ")
+    }
+
+    private var dayRateText: String {
+        guard let user else { return "£0.00" }
+        let rate = user.dayRate ?? operative?.dayRate ?? 0
+        return String(format: "£%.2f", rate)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 12) {
+                        if let url = URL(string: user?.profilePhotoURL ?? "") {
+                            AsyncImage(url: url) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image.resizable().scaledToFill()
+                                default:
+                                    Circle().fill(Color.blue.opacity(0.2))
+                                        .overlay(Text(initials).font(.headline).foregroundStyle(.blue))
+                                }
+                            }
+                            .frame(width: 62, height: 62)
+                            .clipShape(Circle())
+                        } else {
+                            Circle()
+                                .fill(Color.blue.opacity(0.2))
+                                .frame(width: 62, height: 62)
+                                .overlay(Text(initials).font(.headline).foregroundStyle(.blue))
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(displayName).font(.headline)
+                            Text(user?.email ?? "—").font(.subheadline).foregroundStyle(.secondary)
+                            Text(firebaseBackend.currentOrganization?.name ?? "No organisation")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(14)
+                    .background(Color(.systemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                    profileRow("Day rate", dayRateText)
+                    profileRow("Employment type", user?.employmentType(on: Date()).title ?? "—")
+                    profileRow("Skills", skillsText)
+                    profileRow("Qualifications", qualificationsText)
+                }
+                .padding(16)
+            }
+            .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+            .navigationTitle("My Profile")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func profileRow(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label.uppercased())
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

@@ -27,6 +27,9 @@ class UserStore: ObservableObject {
     private let operativeProfileOverridesKey = "operative_profile_overrides_v1"
     /// Throttle `lastSeenAt` writes (foreground heartbeats).
     private var lastSeenAtWriteTime: Date?
+    /// Single-flight + short cooldown to prevent duplicate org user roster fetches.
+    private var organizationUsersLoadInProgress = false
+    private var lastOrganizationUsersLoadAt: Date?
 
     private struct OperativeProfileOverride: Codable {
         var assignedManagerUserId: String?
@@ -319,6 +322,19 @@ class UserStore: ObservableObject {
             print("🔥🔥🔥 DEBUG: Cannot load users - missing firebaseBackend or currentUser")
             return
         }
+        if organizationUsersLoadInProgress {
+            return
+        }
+        let now = Date()
+        if let last = lastOrganizationUsersLoadAt,
+           now.timeIntervalSince(last) < 3 {
+            return
+        }
+        organizationUsersLoadInProgress = true
+        defer {
+            organizationUsersLoadInProgress = false
+            lastOrganizationUsersLoadAt = Date()
+        }
         
         print("🔥🔥🔥 DEBUG: loadOrganizationUsers called for organizationId: \(currentUser.organizationId)")
         
@@ -398,6 +414,13 @@ class UserStore: ObservableObject {
     func isAnnualLeaveFeatureEnabled() -> Bool {
         displayUser?.annualLeaveEnabled ?? true
     }
+
+    /// Shared cross-platform nav label from `organizations/{orgId}.settings.uiLabels.navigationLabels`.
+    /// Returns `fallback` when the key is not configured.
+    func navigationLabel(_ key: String, fallback: String) -> String {
+        guard let org = firebaseBackend?.currentOrganization else { return fallback }
+        return org.settings.uiLabels.navigationLabel(for: key, fallback: fallback)
+    }
     
     // Simplified permission checks using user.permissions. Operatives get restricted access.
     func canManageUsers() -> Bool {
@@ -412,6 +435,13 @@ class UserStore: ObservableObject {
         return u.permissions.manager && u.permissions.operatives
     }
     
+    /// Organisation material catalogue (batch upload, CRUD). Admins and managers only — not operatives with project materials access.
+    func canManageMaterialCatalogue() -> Bool {
+        if isOperativeMode() { return false }
+        guard let u = displayUser else { return false }
+        return hasAdminAccess() || u.permissions.manager
+    }
+
     func canManageSkills() -> Bool {
         if isOperativeMode() { return false }
         return hasAdminAccess() || hasPermission { $0.permissions.skills }
@@ -426,11 +456,50 @@ class UserStore: ObservableObject {
         return true
     }
 
+    func organizationAnnualLeaveDefaults() -> OrganizationAnnualLeaveDefaults {
+        firebaseBackend?.currentOrganization?.settings.annualLeaveDefaults ?? .default
+    }
+
     func canViewMaterials() -> Bool {
         if isOperativeMode() {
             return displayUser?.permissions.materials == true
         }
         return true
+    }
+
+    func canAccessInvoicing() -> Bool {
+        canAccessTimesheetsSurface()
+    }
+
+    /// Self-employed users can submit their own timesheets.
+    func canAccessMyTimesheets() -> Bool {
+        guard let user = displayUser else { return false }
+        return user.employmentType(on: Date()) == .selfEmployed
+    }
+
+    /// Operative timesheets visibility:
+    /// - Admin/super-admin accounts can always access when operative users exist in the organization.
+    /// - Manager accounts can access when at least one active operative is directly assigned to them.
+    func canAccessOperativeTimesheets() -> Bool {
+        guard let user = displayUser else { return false }
+        guard user.permissions.manager || user.permissions.adminAccess || user.role == .admin || user.isSuperAdmin else {
+            return false
+        }
+        let hasAnyActiveOperative = organizationUsers.contains { orgUser in
+            orgUser.permissions.operativeMode && orgUser.isActive
+        }
+        if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
+            return hasAnyActiveOperative || isHomeProfileLoading
+        }
+        return organizationUsers.contains { orgUser in
+            guard orgUser.permissions.operativeMode else { return false }
+            guard orgUser.isActive else { return false }
+            return (orgUser.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == user.id
+        } || isHomeProfileLoading
+    }
+
+    func canAccessTimesheetsSurface() -> Bool {
+        canAccessMyTimesheets() || canAccessOperativeTimesheets()
     }
     
     func canEditProjects() -> Bool {
@@ -489,11 +558,12 @@ class UserStore: ObservableObject {
     
     func canManageSubcontractors() -> Bool {
         if isOperativeMode() { return false }
+        if isHomeProfileLoading { return true }
         guard let currentUser = displayUser else { return false }
         if currentUser.isSuperAdmin || currentUser.permissions.adminAccess || currentUser.role == .admin {
             return true
         }
-        return currentUser.permissions.manager && currentUser.permissions.subContractors
+        return currentUser.permissions.manager
     }
     
     /// Super admins, admins, and managers may set whether a site audit is visible to operative-mode users.
@@ -621,13 +691,15 @@ class UserStore: ObservableObject {
              // MARK: - User Invitation
              
     /// For operative invitations, pass the line manager's Firebase Auth UID (`users` document id).
-    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil) async -> Bool {
+    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .paye, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil) async -> Bool {
         print("🔥🔥🔥 DEBUG: inviteUser called with firstName: \(firstName), surname: \(surname), email: \(email)")
         
         errorMessage = nil
         
-        if permissions.operativeMode && (assignedManagerUserId == nil || assignedManagerUserId?.isEmpty == true) {
-            errorMessage = "Every operative must be assigned a line manager."
+        if (permissions.operativeMode || permissions.manager) && (assignedManagerUserId == nil || assignedManagerUserId?.isEmpty == true) {
+            errorMessage = permissions.manager
+                ? "Every manager must be assigned a line manager."
+                : "Every operative must be assigned a line manager."
             return false
         }
         
@@ -764,6 +836,7 @@ class UserStore: ObservableObject {
                 surname: surname,
                 mobileNumber: mobileNumber,
                 permissions: permissions,
+                employmentType: employmentType,
                 assignedManagerUserId: assignedManagerUserId,
                 invitedOperativeDayRate: invitedOperativeDayRate,
                 invitedManagerDayRate: invitedManagerDayRate,
@@ -1378,6 +1451,53 @@ class UserStore: ObservableObject {
         }
     }
 
+    func updateUserEmploymentType(userId: String, employmentType: EmploymentType, effectiveAt: Date? = nil) async -> Bool {
+        guard let firebaseBackend = firebaseBackend else { return false }
+        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+        if isOrganizationCreator(userId: userId) { return false }
+        var updated = organizationUsers[index]
+        if updated.isSuperAdmin && isOrganizationCreator(userId: updated.id) {
+            return false
+        }
+        let calendar = Calendar.current
+        let effectiveStart = effectiveAt.map { calendar.startOfDay(for: $0) } ?? calendar.startOfDay(for: Date())
+        let transitionFrom: EmploymentType? = (employmentType != updated.employmentType) ? updated.employmentType : nil
+        updated.employmentType = employmentType
+        if transitionFrom != nil {
+            updated.employmentTypeTransitionFrom = transitionFrom
+            updated.employmentTypeEffectiveAt = effectiveStart
+        } else {
+            updated.employmentTypeTransitionFrom = nil
+            updated.employmentTypeEffectiveAt = nil
+        }
+
+        do {
+            if hasAdminAccess() {
+                try await firebaseBackend.saveUser(updated)
+            } else if isActingManagerOperativeManagementOnly(),
+                      updated.permissions.operativeMode || updated.role == .operative {
+                try await firebaseBackend.updateUserEmploymentType(
+                    userId: userId,
+                    employmentType: employmentType,
+                    transitionFrom: updated.employmentTypeTransitionFrom,
+                    effectiveAt: updated.employmentTypeEffectiveAt
+                )
+            } else {
+                return false
+            }
+            organizationUsers[index] = updated
+            if var cu = currentUser, cu.id == userId {
+                cu.employmentType = employmentType
+                currentUser = cu
+            }
+            return true
+        } catch {
+            print("🔥🔥🔥 DEBUG: updateUserEmploymentType error: \(error)")
+            errorMessage = "Could not save employment type: \(error.localizedDescription)"
+            return false
+        }
+    }
+
              /// Updates operative-specific profile fields on the user account and synchronizes linked operative day rate.
              func updateOperativeProfileFields(
                 for user: AppUser,
@@ -1389,7 +1509,7 @@ class UserStore: ObservableObject {
                 guard let firebaseBackend = firebaseBackend else { return false }
                 guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
                 var updatedUser = organizationUsers[index]
-                guard updatedUser.permissions.operativeMode || updatedUser.role == .operative else { return false }
+                guard updatedUser.permissions.operativeMode || updatedUser.role == .operative || updatedUser.permissions.manager || updatedUser.role == .manager else { return false }
 
                 updatedUser.assignedManagerUserId = assignedManagerUserId
                 updatedUser.dayRate = dayRate
@@ -1505,7 +1625,13 @@ class UserStore: ObservableObject {
     func updateUserStaffTrade(for user: AppUser, tradeTypePreset: String?, tradeTypeCustom: String?, operativeStore: OperativeStore) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
-        guard user.permissions.operativeMode || user.role == .operative || user.permissions.manager || user.role == .manager else {
+        guard user.permissions.operativeMode
+            || user.role == .operative
+            || user.permissions.manager
+            || user.role == .manager
+            || user.permissions.adminAccess
+            || user.role == .admin
+            || user.isSuperAdmin else {
             return false
         }
         var updated = organizationUsers[index]

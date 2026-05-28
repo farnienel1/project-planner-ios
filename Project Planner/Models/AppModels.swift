@@ -86,6 +86,22 @@ enum UserRole: String, CaseIterable, Codable {
     }
 }
 
+enum EmploymentType: String, CaseIterable, Codable, Identifiable {
+    case paye = "paye"
+    case selfEmployed = "self_employed"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .paye:
+            return "PAYE"
+        case .selfEmployed:
+            return "Self-Employed"
+        }
+    }
+}
+
 enum Permission: String, CaseIterable {
     case viewProjects = "view_projects"
     case editProjects = "edit_projects"
@@ -132,6 +148,7 @@ struct UserPermissions: Codable, Hashable {
     var operativeMode: Bool // Operative mode - limited view of app
     var annualLeaveSelfBook: Bool // Managers can self-book annual leave without approval
     var weeklyReports: Bool // Managers can access weekly reports
+    var dailyOverview: Bool // Managers can access Daily Overview
     var subContractors: Bool // Managers can add/manage sub contractors
     var siteAudit: Bool // Operative can access site audits
     
@@ -147,6 +164,7 @@ struct UserPermissions: Codable, Hashable {
         operativeMode: Bool = false,
         annualLeaveSelfBook: Bool = false,
         weeklyReports: Bool = false,
+        dailyOverview: Bool = true,
         subContractors: Bool = false,
         siteAudit: Bool = true
     ) {
@@ -161,8 +179,62 @@ struct UserPermissions: Codable, Hashable {
         self.operativeMode = operativeMode
         self.annualLeaveSelfBook = annualLeaveSelfBook
         self.weeklyReports = weeklyReports
+        self.dailyOverview = dailyOverview
         self.subContractors = subContractors
         self.siteAudit = siteAudit
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case adminAccess
+        case manager
+        case operatives
+        case skills
+        case qualifications
+        case materials
+        case projects
+        case smallWorks
+        case operativeMode
+        case annualLeaveSelfBook
+        case weeklyReports
+        case dailyOverview
+        case subContractors
+        case siteAudit
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        adminAccess = try c.decodeIfPresent(Bool.self, forKey: .adminAccess) ?? false
+        manager = try c.decodeIfPresent(Bool.self, forKey: .manager) ?? false
+        operatives = try c.decodeIfPresent(Bool.self, forKey: .operatives) ?? false
+        skills = try c.decodeIfPresent(Bool.self, forKey: .skills) ?? false
+        qualifications = try c.decodeIfPresent(Bool.self, forKey: .qualifications) ?? false
+        materials = try c.decodeIfPresent(Bool.self, forKey: .materials) ?? false
+        projects = try c.decodeIfPresent(Bool.self, forKey: .projects) ?? false
+        smallWorks = try c.decodeIfPresent(Bool.self, forKey: .smallWorks) ?? false
+        operativeMode = try c.decodeIfPresent(Bool.self, forKey: .operativeMode) ?? false
+        annualLeaveSelfBook = try c.decodeIfPresent(Bool.self, forKey: .annualLeaveSelfBook) ?? false
+        weeklyReports = try c.decodeIfPresent(Bool.self, forKey: .weeklyReports) ?? false
+        dailyOverview = try c.decodeIfPresent(Bool.self, forKey: .dailyOverview) ?? true
+        subContractors = try c.decodeIfPresent(Bool.self, forKey: .subContractors) ?? false
+        siteAudit = try c.decodeIfPresent(Bool.self, forKey: .siteAudit) ?? true
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(adminAccess, forKey: .adminAccess)
+        try c.encode(manager, forKey: .manager)
+        try c.encode(operatives, forKey: .operatives)
+        try c.encode(skills, forKey: .skills)
+        try c.encode(qualifications, forKey: .qualifications)
+        try c.encode(materials, forKey: .materials)
+        try c.encode(projects, forKey: .projects)
+        try c.encode(smallWorks, forKey: .smallWorks)
+        try c.encode(operativeMode, forKey: .operativeMode)
+        try c.encode(annualLeaveSelfBook, forKey: .annualLeaveSelfBook)
+        try c.encode(weeklyReports, forKey: .weeklyReports)
+        try c.encode(dailyOverview, forKey: .dailyOverview)
+        try c.encode(subContractors, forKey: .subContractors)
+        try c.encode(siteAudit, forKey: .siteAudit)
     }
 }
 
@@ -295,6 +367,12 @@ struct AppUser: Identifiable, Codable, Hashable {
     var profilePhotoURL: String?
     /// Last time this account had app activity (foreground); updated with merge on `users/{id}`.
     var lastSeenAt: Date?
+    /// Employment type controls invoicing visibility.
+    var employmentType: EmploymentType
+    /// Previous employment type before a scheduled switch (nil when no pending switch).
+    var employmentTypeTransitionFrom: EmploymentType?
+    /// Calendar day the employment type switch becomes active.
+    var employmentTypeEffectiveAt: Date?
     /// When false, annual leave is hidden in the app (e.g. self-employed). Only managers/admins with user-management access can turn it back on.
     var annualLeaveEnabled: Bool
     /// Paid annual leave allowance for the configured leave year (days; supports half-days via bookings).
@@ -328,6 +406,9 @@ struct AppUser: Identifiable, Codable, Hashable {
         tradeTypeCustom: String? = nil,
         profilePhotoURL: String? = nil,
         lastSeenAt: Date? = nil,
+        employmentType: EmploymentType = .selfEmployed,
+        employmentTypeTransitionFrom: EmploymentType? = nil,
+        employmentTypeEffectiveAt: Date? = nil,
         annualLeaveEnabled: Bool = true,
         annualLeaveDaysPerYear: Double = AnnualLeavePolicy.defaultDaysPerYear,
         annualLeaveYearStartMonth: Int = AnnualLeavePolicy.defaultStartMonth,
@@ -355,6 +436,9 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.tradeTypeCustom = tradeTypeCustom
         self.profilePhotoURL = profilePhotoURL
         self.lastSeenAt = lastSeenAt
+        self.employmentType = employmentType
+        self.employmentTypeTransitionFrom = employmentTypeTransitionFrom
+        self.employmentTypeEffectiveAt = employmentTypeEffectiveAt
         self.annualLeaveEnabled = annualLeaveEnabled
         self.annualLeaveDaysPerYear = AnnualLeavePolicy.clampDaysPerYear(annualLeaveDaysPerYear)
         self.annualLeaveYearStartMonth = AnnualLeavePolicy.clampMonth(annualLeaveYearStartMonth)
@@ -382,6 +466,19 @@ extension AppUser {
         if let hr = hourlyRate, hr > 0 { return hr }
         if let dr = dayRate, dr > 0 { return dr / 8.0 }
         return nil
+    }
+
+    /// Returns employment type active on a specific day, respecting scheduled transitions.
+    func employmentType(on date: Date) -> EmploymentType {
+        guard let from = employmentTypeTransitionFrom,
+              let effectiveAt = employmentTypeEffectiveAt else {
+            return employmentType
+        }
+        let cal = Calendar.current
+        if cal.startOfDay(for: date) < cal.startOfDay(for: effectiveAt) {
+            return from
+        }
+        return employmentType
     }
 }
 
@@ -487,10 +584,16 @@ struct OrganizationSettings: Codable, Hashable {
     var defaultUserRole: UserRole
     var workingHours: WorkingHours
     var holidayCalendar: HolidayCalendar
+    /// Shared cross-platform labels (app + web) from `organizations/{orgId}.settings.uiLabels`.
+    var uiLabels: OrganizationUILabels
     /// Company-wide defaults for standard day, breaks, and overtime (editable in Organisation settings).
     var payrollTimePolicy: OrgPayrollTimePolicy
     /// Warning detection horizon and unbooked-labour rules.
     var warningDetection: OrgWarningDetectionSettings
+    /// Invoicing setup (payment runs + payment dates).
+    var invoicing: OrganizationInvoicingSettings
+    /// Defaults used only for newly invited manager/operative users.
+    var annualLeaveDefaults: OrganizationAnnualLeaveDefaults
     
     init(
         allowSelfRegistration: Bool = true,
@@ -498,22 +601,31 @@ struct OrganizationSettings: Codable, Hashable {
         defaultUserRole: UserRole = .basic,
         workingHours: WorkingHours = WorkingHours(),
         holidayCalendar: HolidayCalendar = HolidayCalendar(),
+        uiLabels: OrganizationUILabels = OrganizationUILabels(),
         payrollTimePolicy: OrgPayrollTimePolicy = .default,
-        warningDetection: OrgWarningDetectionSettings = .default
+        warningDetection: OrgWarningDetectionSettings = .default,
+        invoicing: OrganizationInvoicingSettings = .default,
+        annualLeaveDefaults: OrganizationAnnualLeaveDefaults = .default
     ) {
         self.allowSelfRegistration = allowSelfRegistration
         self.requireEmailVerification = requireEmailVerification
         self.defaultUserRole = defaultUserRole
         self.workingHours = workingHours
         self.holidayCalendar = holidayCalendar
+        self.uiLabels = uiLabels
         self.payrollTimePolicy = payrollTimePolicy
         self.warningDetection = warningDetection
+        self.invoicing = invoicing
+        self.annualLeaveDefaults = annualLeaveDefaults
     }
 
     enum CodingKeys: String, CodingKey {
         case allowSelfRegistration, requireEmailVerification, defaultUserRole, workingHours, holidayCalendar
+        case uiLabels
         case payrollTimePolicy
         case warningDetection
+        case invoicing
+        case annualLeaveDefaults
     }
 
     init(from decoder: Decoder) throws {
@@ -523,8 +635,11 @@ struct OrganizationSettings: Codable, Hashable {
         defaultUserRole = try c.decodeIfPresent(UserRole.self, forKey: .defaultUserRole) ?? .basic
         workingHours = try c.decodeIfPresent(WorkingHours.self, forKey: .workingHours) ?? WorkingHours()
         holidayCalendar = try c.decodeIfPresent(HolidayCalendar.self, forKey: .holidayCalendar) ?? HolidayCalendar()
+        uiLabels = try c.decodeIfPresent(OrganizationUILabels.self, forKey: .uiLabels) ?? OrganizationUILabels()
         payrollTimePolicy = try c.decodeIfPresent(OrgPayrollTimePolicy.self, forKey: .payrollTimePolicy) ?? .default
         warningDetection = try c.decodeIfPresent(OrgWarningDetectionSettings.self, forKey: .warningDetection) ?? .default
+        invoicing = try c.decodeIfPresent(OrganizationInvoicingSettings.self, forKey: .invoicing) ?? .default
+        annualLeaveDefaults = try c.decodeIfPresent(OrganizationAnnualLeaveDefaults.self, forKey: .annualLeaveDefaults) ?? .default
     }
 
     func encode(to encoder: Encoder) throws {
@@ -534,9 +649,182 @@ struct OrganizationSettings: Codable, Hashable {
         try c.encode(defaultUserRole, forKey: .defaultUserRole)
         try c.encode(workingHours, forKey: .workingHours)
         try c.encode(holidayCalendar, forKey: .holidayCalendar)
+        try c.encode(uiLabels, forKey: .uiLabels)
         try c.encode(payrollTimePolicy, forKey: .payrollTimePolicy)
         try c.encode(warningDetection, forKey: .warningDetection)
+        try c.encode(invoicing, forKey: .invoicing)
+        try c.encode(annualLeaveDefaults, forKey: .annualLeaveDefaults)
     }
+}
+
+struct OrganizationAnnualLeaveDefaults: Codable, Hashable {
+    var daysPerYear: Double
+    var startMonth: Int
+    var endMonth: Int
+    var carriesOver: Bool
+
+    static let `default` = OrganizationAnnualLeaveDefaults(
+        daysPerYear: AnnualLeavePolicy.defaultDaysPerYear,
+        startMonth: AnnualLeavePolicy.defaultStartMonth,
+        endMonth: AnnualLeavePolicy.defaultEndMonth,
+        carriesOver: AnnualLeavePolicy.defaultCarriesOver
+    )
+
+    init(daysPerYear: Double, startMonth: Int, endMonth: Int, carriesOver: Bool) {
+        self.daysPerYear = AnnualLeavePolicy.clampDaysPerYear(daysPerYear)
+        self.startMonth = AnnualLeavePolicy.clampMonth(startMonth)
+        self.endMonth = AnnualLeavePolicy.clampMonth(endMonth)
+        self.carriesOver = carriesOver
+    }
+}
+
+enum PaymentRunConfigurationMode: String, CaseIterable, Codable, Identifiable {
+    case dateRanges = "date_ranges"
+    case recurringTimeframe = "recurring_timeframe"
+
+    var id: String { rawValue }
+}
+
+enum PaymentDateConfigurationMode: String, CaseIterable, Codable, Identifiable {
+    case specificDates = "specific_dates"
+    case recurringDate = "recurring_date"
+
+    var id: String { rawValue }
+}
+
+enum RecurringPaymentDay: String, CaseIterable, Codable, Identifiable {
+    case monday
+    case tuesday
+    case wednesday
+    case thursday
+    case friday
+    case saturday
+    case sunday
+
+    var id: String { rawValue }
+
+    var title: String {
+        rawValue.prefix(1).uppercased() + rawValue.dropFirst()
+    }
+}
+
+struct PaymentRunDateRange: Identifiable, Codable, Hashable {
+    var id: UUID
+    var startDay: Int
+    var endDay: Int
+
+    init(id: UUID = UUID(), startDay: Int, endDay: Int) {
+        self.id = id
+        self.startDay = Self.clampDay(startDay)
+        self.endDay = Self.clampDay(endDay)
+    }
+
+    static func clampDay(_ day: Int) -> Int {
+        min(max(day, 1), 31)
+    }
+
+    static func defaultEndDay(for startDay: Int) -> Int {
+        let start = clampDay(startDay)
+        return start == 31 ? 1 : start + 1
+    }
+
+    func contains(day: Int) -> Bool {
+        let d = Self.clampDay(day)
+        if startDay <= endDay {
+            return (startDay...endDay).contains(d)
+        }
+        return (startDay...31).contains(d) || (1...endDay).contains(d)
+    }
+}
+
+struct OrganizationInvoicingSettings: Codable, Hashable {
+    var paymentRunMode: PaymentRunConfigurationMode
+    var paymentDateMode: PaymentDateConfigurationMode
+    var paymentRunDateRanges: [PaymentRunDateRange]
+    var paymentDates: [Int]
+    /// Optional admin note shown to users on the invoicing page.
+    var noteToUsers: String
+    var recurringPaymentRunSummary: String
+    var recurringRunStartDay: RecurringPaymentDay
+    var recurringRunEndDay: RecurringPaymentDay
+    var recurringPaymentDay: RecurringPaymentDay
+
+    static let `default` = OrganizationInvoicingSettings(
+        paymentRunMode: .dateRanges,
+        paymentDateMode: .specificDates,
+        paymentRunDateRanges: [PaymentRunDateRange(startDay: 1, endDay: 2)],
+        paymentDates: [18],
+        noteToUsers: "",
+        recurringPaymentRunSummary: "In arrears: Monday to Sunday (previous week)",
+        recurringRunStartDay: .monday,
+        recurringRunEndDay: .sunday,
+        recurringPaymentDay: .friday
+    )
+
+    var normalizedRanges: [PaymentRunDateRange] {
+        let trimmed = Array(paymentRunDateRanges.prefix(2))
+        return trimmed.isEmpty ? [PaymentRunDateRange(startDay: 1, endDay: 2)] : trimmed
+    }
+
+    var normalizedPaymentDates: [Int] {
+        let deduped = paymentDates
+            .map { PaymentRunDateRange.clampDay($0) }
+            .reduce(into: [Int]()) { partial, day in
+                if !partial.contains(day) { partial.append(day) }
+            }
+        return Array(deduped.prefix(2))
+    }
+
+    var normalizedUserNote: String {
+        noteToUsers.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func fullMonthCoverageWarning() -> String? {
+        guard paymentRunMode == .dateRanges else { return nil }
+        let ranges = normalizedRanges
+        for day in 1...31 {
+            if ranges.contains(where: { $0.contains(day: day) }) == false {
+                return "Payment run date ranges must cover the full month (days 1 to 31)."
+            }
+        }
+        return nil
+    }
+
+    var recurringRunDisplaySummary: String {
+        "In arrears: \(recurringRunStartDay.title) to \(recurringRunEndDay.title) (of the previous week)"
+    }
+
+    mutating func refreshRecurringSummaryFromDays() {
+        recurringPaymentRunSummary = recurringRunDisplaySummary
+    }
+}
+
+struct OrganizationUILabels: Codable, Hashable {
+    /// Key/value map shared with web for navigation labels.
+    var navigationLabels: [String: String]
+
+    init(navigationLabels: [String: String] = OrganizationUILabels.defaultNavigationLabels) {
+        self.navigationLabels = navigationLabels
+    }
+
+    func navigationLabel(for key: String, fallback: String) -> String {
+        guard let value = navigationLabels[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return fallback
+        }
+        return value
+    }
+
+    static let defaultNavigationLabels: [String: String] = [
+        "dashboard_home": "Home",
+        "dashboard_projects": "Projects",
+        "dashboard_small_works": "Small works",
+        "dashboard_operatives": "Operatives",
+        "dashboard_managers": "Managers",
+        "dashboard_schedule": "Schedule",
+        "dashboard_settings": "Settings",
+        "site_audit": "Site audit",
+    ]
 }
 
 // MARK: - Organisation payroll / working time (hours & OT)

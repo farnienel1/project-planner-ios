@@ -47,7 +47,8 @@ struct MaterialItem: Identifiable, Codable, Hashable {
     var catalogueItemId: UUID?
     var brand: String?
     var productCode: String?
-    var sizeOrLength: String?
+    var size: String?
+    var length: String?
     var category: String?
     var websiteURL: String?
     var notes: String?
@@ -71,6 +72,8 @@ struct MaterialItem: Identifiable, Codable, Hashable {
         catalogueItemId: UUID? = nil,
         brand: String? = nil,
         productCode: String? = nil,
+        size: String? = nil,
+        length: String? = nil,
         sizeOrLength: String? = nil,
         category: String? = nil,
         websiteURL: String? = nil,
@@ -94,7 +97,8 @@ struct MaterialItem: Identifiable, Codable, Hashable {
         self.catalogueItemId = catalogueItemId
         self.brand = brand
         self.productCode = productCode
-        self.sizeOrLength = sizeOrLength
+        self.size = size
+        self.length = length ?? sizeOrLength
         self.category = category
         self.websiteURL = websiteURL
         self.notes = notes
@@ -105,12 +109,14 @@ struct MaterialItem: Identifiable, Codable, Hashable {
     var subtitleLine: String {
         let brandPart = brand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let codePart = productCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let sizePart = sizeOrLength?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sizePart = size?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let lengthPart = length?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let categoryPart = category?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var parts: [String] = []
         if !brandPart.isEmpty { parts.append(brandPart) }
         if !codePart.isEmpty { parts.append(codePart) }
-        if !sizePart.isEmpty { parts.append(sizePart) }
+        if !sizePart.isEmpty { parts.append("Size: \(sizePart)") }
+        if !lengthPart.isEmpty { parts.append("Length: \(lengthPart)") }
         if !categoryPart.isEmpty { parts.append(categoryPart) }
         if !parts.isEmpty {
             return parts.joined(separator: " · ")
@@ -125,6 +131,22 @@ struct MaterialItem: Identifiable, Codable, Hashable {
     }
 }
 
+extension MaterialItem {
+    /// Backward compatibility for older call sites and persisted data migrations.
+    var sizeOrLength: String? {
+        get {
+            let trimmedLength = length?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmedLength.isEmpty { return trimmedLength }
+            let trimmedSize = size?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmedSize.isEmpty ? nil : trimmedSize
+        }
+        set {
+            let trimmed = newValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            length = trimmed.isEmpty ? nil : trimmed
+        }
+    }
+}
+
 // MARK: - Organisation material catalogue
 
 struct MaterialCatalogItem: Identifiable, Codable, Hashable {
@@ -133,7 +155,8 @@ struct MaterialCatalogItem: Identifiable, Codable, Hashable {
     var brand: String
     var productCode: String?
     var defaultUnit: MaterialUnit
-    var sizeOrLength: String?
+    var size: String?
+    var length: String?
     var category: String?
     var createdAt: Date
     var createdByUserId: String
@@ -145,6 +168,8 @@ struct MaterialCatalogItem: Identifiable, Codable, Hashable {
         brand: String,
         productCode: String? = nil,
         defaultUnit: MaterialUnit,
+        size: String? = nil,
+        length: String? = nil,
         sizeOrLength: String? = nil,
         category: String? = nil,
         createdAt: Date = Date(),
@@ -156,7 +181,8 @@ struct MaterialCatalogItem: Identifiable, Codable, Hashable {
         self.brand = brand
         self.productCode = productCode
         self.defaultUnit = defaultUnit
-        self.sizeOrLength = sizeOrLength
+        self.size = size
+        self.length = length ?? sizeOrLength
         self.category = category
         self.createdAt = createdAt
         self.createdByUserId = createdByUserId
@@ -164,8 +190,30 @@ struct MaterialCatalogItem: Identifiable, Codable, Hashable {
     }
 
     var sizeOrLengthLabel: String? {
-        let trimmed = sizeOrLength?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+        let sizeTrimmed = size?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let lengthTrimmed = length?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !sizeTrimmed.isEmpty && !lengthTrimmed.isEmpty {
+            return "Size: \(sizeTrimmed) · Length: \(lengthTrimmed)"
+        }
+        if !sizeTrimmed.isEmpty { return "Size: \(sizeTrimmed)" }
+        if !lengthTrimmed.isEmpty { return "Length: \(lengthTrimmed)" }
+        return nil
+    }
+}
+
+extension MaterialCatalogItem {
+    /// Backward compatibility for older call sites and persisted data migrations.
+    var sizeOrLength: String? {
+        get {
+            let trimmedLength = length?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmedLength.isEmpty { return trimmedLength }
+            let trimmedSize = size?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmedSize.isEmpty ? nil : trimmedSize
+        }
+        set {
+            let trimmed = newValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            length = trimmed.isEmpty ? nil : trimmed
+        }
     }
 }
 

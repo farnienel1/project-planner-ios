@@ -21,28 +21,28 @@ enum HomeOverviewMetricID: String, CaseIterable, Codable, Identifiable {
     /// Row title in the customize sheet (admin-facing, full wording).
     var catalogTitle: String {
         switch self {
-        case .tasksDueTodayPersonal: return "Tasks Today (Personal tasks)"
-        case .tasksDueWeekPersonal: return "Tasks due this week (Personal Tasks)"
+        case .tasksDueTodayPersonal: return "Tasks Due Today (My Tasks)"
+        case .tasksDueWeekPersonal: return "Tasks Due This Week (My Tasks)"
         case .warnings: return "Warnings"
-        case .operativesOnSite: return "Operatives on site"
+        case .operativesOnSite: return "People on Site (Operatives + Managers)"
         case .managersOnSite: return "Managers on Site"
         case .operativesOnAL: return "Operatives on AL"
         case .managersOnAL: return "Managers on AL"
-        case .outstandingTasksAllUsers: return "Outstanding Tasks (All Users)"
+        case .outstandingTasksAllUsers: return "Open Tasks (All Users)"
         }
     }
 
     /// Short label on the home overview card.
     var compactPillTitle: String {
         switch self {
-        case .tasksDueTodayPersonal: return "Due today"
-        case .tasksDueWeekPersonal: return "This week"
+        case .tasksDueTodayPersonal: return "Tasks Due Today"
+        case .tasksDueWeekPersonal: return "Tasks Due This Week"
         case .warnings: return "Warnings"
-        case .operativesOnSite: return "Ops on site"
-        case .managersOnSite: return "Mgrs on site"
-        case .operativesOnAL: return "Ops on AL"
-        case .managersOnAL: return "Mgrs on AL"
-        case .outstandingTasksAllUsers: return "Open tasks"
+        case .operativesOnSite: return "People on Site"
+        case .managersOnSite: return "Managers on Site"
+        case .operativesOnAL: return "Operatives on AL"
+        case .managersOnAL: return "Managers on AL"
+        case .outstandingTasksAllUsers: return "Open Tasks (All Users)"
         }
     }
 }

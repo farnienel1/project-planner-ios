@@ -37,6 +37,7 @@ enum MainMenuSurfaceRoute: String, CaseIterable {
     case generalAppSettings
     case orgSitesMap
     case siteAudit
+    case invoicing
 }
 
 enum MainMenuShellSection: String, CaseIterable, Identifiable {
@@ -188,6 +189,17 @@ enum MainMenuCatalog {
                 iconTint: Color(red: 0.6, green: 0.24, blue: 0.11),
                 isEligible: { u, _, _ in u.canViewSiteAudit() || u.isHomeProfileLoading },
                 action: .openSurface(.siteAudit)
+            ),
+            MainMenuRowSpec(
+                id: "invoicing",
+                section: .navigate,
+                title: "Timesheets",
+                detail: "My timesheets and operative sign-off",
+                icon: "doc.text.fill",
+                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
+                iconTint: ProjectWorksRevampColors.blue,
+                isEligible: { u, _, _ in u.canAccessTimesheetsSurface() },
+                action: .openSurface(.invoicing)
             ),
 
             MainMenuRowSpec(
@@ -376,13 +388,31 @@ enum MainMenuCatalog {
     }
 
     static func displayTitle(for spec: MainMenuRowSpec, userStore: UserStore) -> String {
+        let baseTitle: String
         switch spec.id {
         case "add_user":
-            return userStore.canManageUsers() ? "Add user" : "Add operative"
+            baseTitle = userStore.canManageUsers() ? "Add user" : "Add operative"
         case "manage_users":
-            return userStore.canManageUsers() ? "Manage users" : "Manage operatives"
+            baseTitle = userStore.canManageUsers() ? "Manage users" : "Manage operatives"
         default:
-            return spec.title
+            baseTitle = spec.title
+        }
+
+        switch spec.id {
+        case "projects":
+            return userStore.navigationLabel("dashboard_projects", fallback: baseTitle)
+        case "small_works":
+            return userStore.navigationLabel("dashboard_small_works", fallback: baseTitle)
+        case "operatives":
+            return userStore.navigationLabel("dashboard_operatives", fallback: baseTitle)
+        case "managers":
+            return userStore.navigationLabel("dashboard_managers", fallback: baseTitle)
+        case "site_audit":
+            return userStore.navigationLabel("site_audit", fallback: baseTitle)
+        case "settings":
+            return userStore.navigationLabel("dashboard_settings", fallback: baseTitle)
+        default:
+            return baseTitle
         }
     }
 

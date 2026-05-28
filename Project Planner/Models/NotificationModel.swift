@@ -16,11 +16,14 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case projectCreated = "project_created"
         case smallWorksCreated = "small_works_created"
         case bookingClash = "booking_clash"
+        case warningRemoved = "warning_removed"
         case taskCompleted = "task_completed"
         case taskCreated = "task_created"
         case holidayRequestSubmitted = "holiday_request_submitted"
         case holidayRequestApproved = "holiday_request_approved"
         case holidayRequestDeclined = "holiday_request_declined"
+        case timesheetPendingManagerSignoff = "timesheet_pending_manager_signoff"
+        case timesheetSignedByManager = "timesheet_signed_by_manager"
     }
     
     let id: UUID
@@ -33,6 +36,9 @@ struct AppNotification: Identifiable, Codable, Hashable {
     var isRead: Bool
     var createdAt: Date
     var requiresPermission: String? // Permission required to see this notification (e.g., "canViewOperatives")
+    /// Optional deep-link payload used by notifications that open a specific timesheet review.
+    var deepLinkUserId: String?
+    var deepLinkWeekStart: Date?
     
     init(
         id: UUID = UUID(),
@@ -44,7 +50,9 @@ struct AppNotification: Identifiable, Codable, Hashable {
         relatedId: UUID? = nil,
         isRead: Bool = false,
         createdAt: Date = Date(),
-        requiresPermission: String? = nil
+        requiresPermission: String? = nil,
+        deepLinkUserId: String? = nil,
+        deepLinkWeekStart: Date? = nil
     ) {
         self.id = id
         self.organizationId = organizationId
@@ -56,6 +64,8 @@ struct AppNotification: Identifiable, Codable, Hashable {
         self.isRead = isRead
         self.createdAt = createdAt
         self.requiresPermission = requiresPermission
+        self.deepLinkUserId = deepLinkUserId
+        self.deepLinkWeekStart = deepLinkWeekStart
     }
 }
 

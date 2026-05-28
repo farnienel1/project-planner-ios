@@ -40,6 +40,7 @@ struct AddUserView: View {
     @State private var surname = ""
     @State private var email = ""
     @State private var mobileNumber = ""
+    @State private var employmentType: EmploymentType = .selfEmployed
     @State private var permissions = UserPermissions()
     @State private var assignedManagerUserId: String?
     @State private var operativeDayRateText = ""
@@ -91,10 +92,10 @@ struct AddUserView: View {
                 }
             }
             .onAppear {
+                resetAnnualLeaveInviteDefaults()
                 if mode == .managerAddingOperative {
                     invitedAccountType = .operative
                     applyPermissionsForInvitedType()
-                    resetAnnualLeaveInviteDefaults()
                     assignedManagerUserId = userStore.currentUser?.id
                 }
             }
@@ -230,7 +231,7 @@ struct AddUserView: View {
             .onChange(of: invitedAccountType) { _, _ in
                 applyPermissionsForInvitedType()
                 resetAnnualLeaveInviteDefaults()
-                if invitedAccountType != .operative {
+                if invitedAccountType == .admin {
                     assignedManagerUserId = nil
                 }
             }
@@ -250,6 +251,20 @@ struct AddUserView: View {
                     Text("Line manager")
                         .font(.headline)
                     Text("Holiday requests from this operative will go to this manager (and organisation admins).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Picker("Manager", selection: $assignedManagerUserId) {
+                        Text("Select manager…").tag(nil as String?)
+                        ForEach(lineManagerCandidates, id: \.id) { u in
+                            Text(u.fullName.isEmpty ? u.email : u.fullName).tag(Optional(u.id))
+                        }
+                    }
+                }
+            } else if invitedAccountType == .manager {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Line manager")
+                        .font(.headline)
+                    Text("Mandatory for managers. Annual leave requests (when self-book is off) and self-employed timesheet sign-off route to this line manager.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Picker("Manager", selection: $assignedManagerUserId) {
@@ -299,6 +314,17 @@ struct AddUserView: View {
                     TextField("Enter mobile number", text: $mobileNumber)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.phonePad)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Employment Type")
+                        .font(.headline)
+                    Picker("Employment Type", selection: $employmentType) {
+                        ForEach(EmploymentType.allCases) { type in
+                            Text(type.title).tag(type)
+                        }
+                    }
+                    .pickerStyle(.segmented)
                 }
                 
                 if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
@@ -406,15 +432,18 @@ struct AddUserView: View {
     }
 
     private func resetAnnualLeaveInviteDefaults() {
-        annualLeaveDaysText = String(Int(AnnualLeavePolicy.defaultDaysPerYear))
-        annualLeaveStartMonth = AnnualLeavePolicy.defaultStartMonth
-        annualLeaveEndMonth = AnnualLeavePolicy.defaultEndMonth
-        annualLeaveCarriesOver = AnnualLeavePolicy.defaultCarriesOver
+        let defaults = userStore.organizationAnnualLeaveDefaults()
+        annualLeaveDaysText = defaults.daysPerYear.truncatingRemainder(dividingBy: 1) == 0
+            ? String(Int(defaults.daysPerYear))
+            : String(format: "%.1f", defaults.daysPerYear)
+        annualLeaveStartMonth = defaults.startMonth
+        annualLeaveEndMonth = defaults.endMonth
+        annualLeaveCarriesOver = defaults.carriesOver
     }
 
     private func parseAnnualLeaveDaysForInvite() -> Double {
         let t = annualLeaveDaysText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let d = Double(t), d > 0 else { return AnnualLeavePolicy.defaultDaysPerYear }
+        guard let d = Double(t), d > 0 else { return userStore.organizationAnnualLeaveDefaults().daysPerYear }
         return AnnualLeavePolicy.clampDaysPerYear(d)
     }
 
@@ -522,6 +551,14 @@ struct AddUserView: View {
                                 title: "Weekly Report",
                                 description: "Can open and pull weekly reports.",
                                 isOn: $permissions.weeklyReports,
+                                isDisabled: false,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Daily Overview",
+                                description: "Can open daily overview from the home screen and menus.",
+                                isOn: $permissions.dailyOverview,
                                 isDisabled: false,
                                 style: .plainInset
                             )
@@ -656,6 +693,13 @@ struct AddUserView: View {
                         Text(email)
                             .fontWeight(.medium)
                     }
+                HStack {
+                    Text("Employment type:")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(employmentType.title)
+                        .fontWeight(.medium)
+                }
                     
                     if !mobileNumber.isEmpty {
                         HStack {
@@ -808,6 +852,7 @@ struct AddUserView: View {
                 operativeMode: false,
                 annualLeaveSelfBook: false,
                 weeklyReports: false,
+                dailyOverview: true,
                 subContractors: false,
                 siteAudit: true
             )
@@ -855,6 +900,9 @@ struct AddUserView: View {
             if invitedAccountType == .operative {
                 return base && assignedManagerUserId != nil && !(assignedManagerUserId?.isEmpty ?? true)
             }
+            if invitedAccountType == .manager {
+                return base && assignedManagerUserId != nil && !(assignedManagerUserId?.isEmpty ?? true)
+            }
             return base
         case 3:
             return true
@@ -878,6 +926,7 @@ struct AddUserView: View {
             ("Operative Mode", permissions.operativeMode),
             ("Annual Leave Self-Book", permissions.annualLeaveSelfBook),
             ("Weekly Reports", permissions.weeklyReports),
+            ("Daily Overview", permissions.dailyOverview),
             ("Sub Contractors", permissions.subContractors),
             ("Site Audit", permissions.siteAudit)
         ]
@@ -909,7 +958,8 @@ struct AddUserView: View {
                 email: email,
                 mobileNumber: mobileNumber.isEmpty ? nil : mobileNumber,
                 permissions: permissions,
-                assignedManagerUserId: permissions.operativeMode ? assignedManagerUserId : nil,
+                employmentType: employmentType,
+                assignedManagerUserId: (permissions.operativeMode || permissions.manager) ? assignedManagerUserId : nil,
                 invitedOperativeDayRate: permissions.operativeMode ? parsedDayRate : nil,
                 invitedManagerDayRate: permissions.manager ? parsedDayRate : nil,
                 invitedTradeTypePreset: needsTrade ? tradePresetRaw : nil,

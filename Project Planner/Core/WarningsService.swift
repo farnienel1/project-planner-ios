@@ -96,10 +96,14 @@ class WarningsService: ObservableObject {
         managerSiteBookings: [ManagerSiteBooking] = [],
         holidayBookings: [HolidayBooking] = [],
         payrollTimePolicy: OrgPayrollTimePolicy = .default,
+        warningDetection: OrgWarningDetectionSettings = .default,
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
         materialOrderCutOffEnabled: Bool = true,
-        projectsWithTomorrowBookings: [Project] = []
+        materialCutOffOnSaturday: Bool = false,
+        materialCutOffOnSunday: Bool = false,
+        projectsWithTomorrowBookings: [Project] = [],
+        materialItemsForTomorrow: [MaterialItem] = []
     ) {
         updateTask?.cancel()
         updateTask = Task { @MainActor in
@@ -111,10 +115,14 @@ class WarningsService: ObservableObject {
                 managerSiteBookings: managerSiteBookings,
                 holidayBookings: holidayBookings,
                 payrollTimePolicy: payrollTimePolicy,
+                warningDetection: warningDetection,
                 labourCoverageStart: labourCoverageStart,
                 labourCoverageEnd: labourCoverageEnd,
                 materialOrderCutOffEnabled: materialOrderCutOffEnabled,
-                projectsWithTomorrowBookings: projectsWithTomorrowBookings
+                materialCutOffOnSaturday: materialCutOffOnSaturday,
+                materialCutOffOnSunday: materialCutOffOnSunday,
+                projectsWithTomorrowBookings: projectsWithTomorrowBookings,
+                materialItemsForTomorrow: materialItemsForTomorrow
             )
         }
     }
@@ -128,10 +136,14 @@ class WarningsService: ObservableObject {
         managerSiteBookings: [ManagerSiteBooking] = [],
         holidayBookings: [HolidayBooking] = [],
         payrollTimePolicy: OrgPayrollTimePolicy = .default,
+        warningDetection: OrgWarningDetectionSettings = .default,
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
         materialOrderCutOffEnabled: Bool = true,
-        projectsWithTomorrowBookings: [Project] = []
+        materialCutOffOnSaturday: Bool = false,
+        materialCutOffOnSunday: Bool = false,
+        projectsWithTomorrowBookings: [Project] = [],
+        materialItemsForTomorrow: [MaterialItem] = []
     ) async {
         updateTask?.cancel()
         await performUpdate(
@@ -142,10 +154,14 @@ class WarningsService: ObservableObject {
             managerSiteBookings: managerSiteBookings,
             holidayBookings: holidayBookings,
             payrollTimePolicy: payrollTimePolicy,
+            warningDetection: warningDetection,
             labourCoverageStart: labourCoverageStart,
             labourCoverageEnd: labourCoverageEnd,
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
-            projectsWithTomorrowBookings: projectsWithTomorrowBookings
+            materialCutOffOnSaturday: materialCutOffOnSaturday,
+            materialCutOffOnSunday: materialCutOffOnSunday,
+            projectsWithTomorrowBookings: projectsWithTomorrowBookings,
+            materialItemsForTomorrow: materialItemsForTomorrow
         )
     }
 
@@ -157,18 +173,22 @@ class WarningsService: ObservableObject {
         managerSiteBookings: [ManagerSiteBooking],
         holidayBookings: [HolidayBooking],
         payrollTimePolicy: OrgPayrollTimePolicy,
+        warningDetection: OrgWarningDetectionSettings,
         labourCoverageStart: Date?,
         labourCoverageEnd: Date?,
         materialOrderCutOffEnabled: Bool,
-        projectsWithTomorrowBookings: [Project]
+        materialCutOffOnSaturday: Bool,
+        materialCutOffOnSunday: Bool,
+        projectsWithTomorrowBookings: [Project],
+        materialItemsForTomorrow: [MaterialItem]
     ) async {
         updateGeneration += 1
         let generation = updateGeneration
         let generated = await Task.detached(priority: .utility) {
             let cal = Calendar.current
             let today = cal.startOfDay(for: Date())
-            let coverageStart = cal.startOfDay(for: labourCoverageStart ?? cal.date(byAdding: .day, value: -14, to: today) ?? today)
-            let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? cal.date(byAdding: .day, value: 28, to: today) ?? today)
+            let coverageStart = cal.startOfDay(for: labourCoverageStart ?? warningDetection.coverageStart(from: today, calendar: cal))
+            let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? warningDetection.coverageEnd(from: today, calendar: cal))
             let input = WarningsComputationInput(
                 operatives: operatives,
                 bookings: bookings,
@@ -177,14 +197,27 @@ class WarningsService: ObservableObject {
                 managerSiteBookings: managerSiteBookings,
                 holidayBookings: holidayBookings,
                 payrollTimePolicy: payrollTimePolicy,
+                warningDetection: warningDetection,
                 coverageStart: coverageStart,
                 coverageEnd: coverageEnd,
                 materialOrderCutOffEnabled: materialOrderCutOffEnabled,
-                projectsWithTomorrowBookings: projectsWithTomorrowBookings
+                materialCutOffOnSaturday: materialCutOffOnSaturday,
+                materialCutOffOnSunday: materialCutOffOnSunday,
+                projectsWithTomorrowBookings: projectsWithTomorrowBookings,
+                materialItemsForTomorrow: materialItemsForTomorrow
             )
             return WarningsComputation.generate(input)
         }.value
         guard generation == updateGeneration else { return }
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let coverageStart = cal.startOfDay(for: labourCoverageStart ?? warningDetection.coverageStart(from: today, calendar: cal))
+        let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? warningDetection.coverageEnd(from: today, calendar: cal))
+        resolutionStore.pruneDismissedUnbookedKeys(
+            from: max(coverageStart, today),
+            through: coverageEnd,
+            calendar: cal
+        )
         allGeneratedWarnings = generated
         activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
     }

@@ -6,7 +6,9 @@ struct ScheduleSubcontractorView: View {
     
     let project: Project
     
-    @State private var selectedSubcontractorIds: Set<UUID> = []
+    @State private var selectedSubcontractorId: UUID?
+    @State private var selectedContactIds: Set<UUID> = []
+    @State private var useGeneralAttendance = true
     @State private var selectedDates: Set<Date> = []
     @State private var dateTimeSlots: [String: TimeSlot] = [:]
     @State private var currentMonth: Date = Date()
@@ -19,17 +21,20 @@ struct ScheduleSubcontractorView: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
+                    projectHeaderCard
                     subbiesSection
+                    if selectedSubcontractor != nil {
+                        attendanceSection
+                    }
                     calendarSection
                     quickSelectSection
                     if !selectedDates.isEmpty {
                         selectedDatesSection
                     }
-                    bookingSummarySection
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
-                .padding(.bottom, 24)
+                .padding(.bottom, 84)
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Schedule Sub Contractor")
@@ -44,12 +49,9 @@ struct ScheduleSubcontractorView: View {
                         .foregroundColor(Color.theme.primary)
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(isSaving ? "Booking..." : "Confirm Booking") {
-                        save()
-                    }
-                    .disabled(isSaving || selectedSubcontractorIds.isEmpty || selectedDates.isEmpty)
-                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                bookingFooter
             }
             .task {
                 await subcontractorStore.loadData()
@@ -57,11 +59,14 @@ struct ScheduleSubcontractorView: View {
         }
     }
     
+    private var selectedSubcontractor: Subcontractor? {
+        guard let selectedSubcontractorId else { return nil }
+        return subcontractorStore.subcontractors.first(where: { $0.id == selectedSubcontractorId })
+    }
+
     private var selectedSubcontractorNames: [String] {
-        subcontractorStore.subcontractors
-            .filter { selectedSubcontractorIds.contains($0.id) }
-            .map(\.name)
-            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        guard let selectedSubcontractor else { return [] }
+        return [selectedSubcontractor.name]
     }
     
     private var typeFilters: [String] {
@@ -84,7 +89,7 @@ struct ScheduleSubcontractorView: View {
     
     private var subbiesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Select Sub Contractors")
+            Text("Choose sub contractor")
                 .font(.title3)
                 .fontWeight(.bold)
             HStack {
@@ -95,16 +100,36 @@ struct ScheduleSubcontractorView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(Color(.systemGray6))
-            .cornerRadius(8)
-            
-            Picker("Type", selection: $selectedTypeFilter) {
-                ForEach(typeFilters, id: \.self) { type in
-                    Text(type).tag(type)
+            .background(Color.white)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color(.systemGray5), lineWidth: 0.8)
+            )
+            .cornerRadius(10)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(typeFilters, id: \.self) { type in
+                        Button {
+                            selectedTypeFilter = type
+                        } label: {
+                            Text(type == "All Types" ? "All trades" : type)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(selectedTypeFilter == type ? .white : .secondary)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 6)
+                                .background(selectedTypeFilter == type ? Color.purple : Color.white)
+                                .clipShape(Capsule())
+                                .overlay(
+                                    Capsule().stroke(Color(.systemGray5), lineWidth: selectedTypeFilter == type ? 0 : 0.8)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
             if subcontractorStore.subcontractors.isEmpty {
-                Text("No sub-contractors available. Add one first.")
+                Text("No sub contractors available. Add one first.")
                     .foregroundColor(.secondary)
             } else if filteredSubcontractors.isEmpty {
                 Text("No sub contractors match this search/filter.")
@@ -112,25 +137,101 @@ struct ScheduleSubcontractorView: View {
             } else {
                 ForEach(filteredSubcontractors) { subcontractor in
                     Button {
-                        toggle(subcontractor.id)
+                        selectSubcontractor(subcontractor.id)
                     } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 10) {
+                            Text(initials(for: subcontractor.name))
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 32, height: 32)
+                                .background(Color.purple.opacity(0.85))
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            VStack(alignment: .leading, spacing: 3) {
                                 Text(subcontractor.name)
                                     .foregroundColor(.primary)
+                                    .fontWeight(.semibold)
                                 Text(subcontractor.subcontractorType)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
                             Spacer()
-                            Image(systemName: selectedSubcontractorIds.contains(subcontractor.id) ? "checkmark.circle.fill" : "circle")
-                                .foregroundColor(selectedSubcontractorIds.contains(subcontractor.id) ? Color.theme.primary : .secondary)
+                            Text("\(subcontractor.contacts.count) op\(subcontractor.contacts.count == 1 ? "" : "s")")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Image(systemName: selectedSubcontractorId == subcontractor.id ? "checkmark.circle.fill" : "circle")
+                                .foregroundColor(selectedSubcontractorId == subcontractor.id ? .purple : .secondary)
                         }
                         .padding(10)
-                        .background(Color(.systemGray6))
+                        .background(selectedSubcontractorId == subcontractor.id ? Color.purple.opacity(0.08) : Color(.systemGray6))
                         .cornerRadius(10)
                     }
                     .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(16)
+        .background(Color.white)
+        .cornerRadius(14)
+    }
+
+    private var projectHeaderCard: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("\(project.jobNumber) \(project.siteName)")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.theme.primary)
+            Text("\(project.client.name) · \(project.siteAddress)")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.white)
+        .cornerRadius(12)
+    }
+
+    private var attendanceSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let selectedSubcontractor {
+                Text("Who's attending")
+                    .font(.headline)
+                Toggle(isOn: $useGeneralAttendance) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(selectedSubcontractor.name) (General)")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Use if named operatives are not confirmed yet.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .tint(.purple)
+                if !useGeneralAttendance, !selectedSubcontractor.contacts.isEmpty {
+                    ForEach(selectedSubcontractor.contacts) { contact in
+                        Button {
+                            if selectedContactIds.contains(contact.id) {
+                                selectedContactIds.remove(contact.id)
+                            } else {
+                                selectedContactIds.insert(contact.id)
+                            }
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(contact.name)
+                                        .foregroundStyle(.primary)
+                                    Text(contact.position.rawValue)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: selectedContactIds.contains(contact.id) ? "checkmark.square.fill" : "square")
+                                    .foregroundStyle(selectedContactIds.contains(contact.id) ? Color.purple : Color.secondary)
+                            }
+                            .padding(10)
+                            .background(Color(.systemGray6))
+                            .cornerRadius(10)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
         }
@@ -194,12 +295,12 @@ struct ScheduleSubcontractorView: View {
         }) {
             Text(label)
                 .font(.subheadline.weight(.semibold))
-                .foregroundColor(quickSelectDays == days ? .white : Color.theme.primary)
+                .foregroundColor(quickSelectDays == days ? .white : .purple)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(
                     RoundedRectangle(cornerRadius: 10)
-                        .fill(quickSelectDays == days ? Color.theme.primary : Color.theme.primary.opacity(0.1))
+                        .fill(quickSelectDays == days ? Color.purple : Color.purple.opacity(0.1))
                 )
         }
     }
@@ -258,7 +359,7 @@ struct ScheduleSubcontractorView: View {
                     Label("Total Bookings", systemImage: "calendar.badge.plus")
                         .foregroundColor(.secondary)
                     Spacer()
-                    Text("\(selectedSubcontractorIds.count * selectedDates.count)")
+                    Text("\((selectedSubcontractorId == nil ? 0 : 1) * selectedDates.count)")
                         .fontWeight(.bold)
                         .foregroundColor(Color.theme.primary)
                 }
@@ -283,13 +384,74 @@ struct ScheduleSubcontractorView: View {
         .background(Color.white)
         .cornerRadius(14)
     }
-    
-    private func toggle(_ id: UUID) {
-        if selectedSubcontractorIds.contains(id) {
-            selectedSubcontractorIds.remove(id)
-        } else {
-            selectedSubcontractorIds.insert(id)
+
+    private var bookingFooter: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text(summaryLine)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(selectedDates.count) day\(selectedDates.count == 1 ? "" : "s")")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.purple)
+            }
+            Button {
+                save()
+            } label: {
+                Text(isSaving ? "Booking..." : "Confirm booking")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.purple)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .disabled(isSaving || selectedSubcontractorId == nil || selectedDates.isEmpty)
+            .opacity((isSaving || selectedSubcontractorId == nil || selectedDates.isEmpty) ? 0.55 : 1)
         }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+        .background(Color.white)
+    }
+
+    private var summaryLine: String {
+        let who = selectedSubcontractor?.name ?? "No sub contractor selected"
+        if selectedDates.isEmpty { return who }
+        let slots = Set(selectedDates.map { dateTimeSlots[slotKey(for: $0)] ?? .fullDay })
+        let slotLabel: String
+        if slots.count == 1, let only = slots.first {
+            switch only {
+            case .morning: slotLabel = "AM"
+            case .afternoon: slotLabel = "PM"
+            case .fullDay: slotLabel = "Full day"
+            case .evening: slotLabel = "Evening"
+            case .overtime: slotLabel = "Overtime"
+            case .customHours: slotLabel = "Custom hours"
+            }
+        } else {
+            slotLabel = "Mixed slots"
+        }
+        return "\(who) · \(slotLabel)"
+    }
+    
+    private func selectSubcontractor(_ id: UUID) {
+        if selectedSubcontractorId == id {
+            selectedSubcontractorId = nil
+            useGeneralAttendance = true
+            selectedContactIds.removeAll()
+        } else {
+            selectedSubcontractorId = id
+            useGeneralAttendance = true
+            selectedContactIds.removeAll()
+        }
+    }
+
+    private func initials(for name: String) -> String {
+        let parts = name.split(separator: " ").prefix(2)
+        let value = parts.compactMap(\.first).map(String.init).joined()
+        return value.isEmpty ? "SC" : value
     }
     
     private func slotKey(for date: Date) -> String {
@@ -378,21 +540,20 @@ struct ScheduleSubcontractorView: View {
     }
     
     private func save() {
+        guard let selectedSubcontractorId else { return }
         isSaving = true
         Task {
-            for subcontractorId in selectedSubcontractorIds {
-                for date in selectedDates {
-                    let key = slotKey(for: date)
-                    let slot = dateTimeSlots[key] ?? .fullDay
-                    let booking = SubcontractorBooking(
-                        subcontractorId: subcontractorId,
-                        projectId: project.id,
-                        date: date,
-                        timeSlot: slot,
-                        bookedBy: "Project Planner"
-                    )
-                    await subcontractorStore.saveBooking(booking)
-                }
+            for date in selectedDates {
+                let key = slotKey(for: date)
+                let slot = dateTimeSlots[key] ?? .fullDay
+                let booking = SubcontractorBooking(
+                    subcontractorId: selectedSubcontractorId,
+                    projectId: project.id,
+                    date: date,
+                    timeSlot: slot,
+                    bookedBy: "Project Planner"
+                )
+                await subcontractorStore.saveBooking(booking)
             }
             await MainActor.run {
                 isSaving = false

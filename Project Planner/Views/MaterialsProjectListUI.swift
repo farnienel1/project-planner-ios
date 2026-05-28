@@ -209,6 +209,10 @@ struct OperativeMaterialsPanel: View {
             .sorted { $0.addedAt > $1.addedAt }
     }
 
+    private var canViewQuoteOrderHistory: Bool {
+        !userStore.isOperativeMode()
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             MaterialsWeekNavigator(
@@ -227,12 +231,14 @@ struct OperativeMaterialsPanel: View {
                 Text(dayTitle)
                     .font(.system(size: 12, weight: .medium))
                 Spacer()
-                Button("Quote/Order History") {
-                    showingHistory = true
+                if canViewQuoteOrderHistory {
+                    Button("Quote/Order History") {
+                        showingHistory = true
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .buttonStyle(.bordered)
+                    .tint(MaterialsOrderingTheme.muted)
                 }
-                .font(.system(size: 11, weight: .medium))
-                .buttonStyle(.bordered)
-                .tint(MaterialsOrderingTheme.muted)
                 Button { showingAddMaterial = true } label: {
                     Label("Add", systemImage: "plus")
                         .font(.system(size: 11, weight: .medium))

@@ -18,6 +18,8 @@ class ManagerScheduleStore: ObservableObject {
     private var firebaseBackend: FirebaseBackend?
     private var pendingSemanticKeys: Set<String> = []
     private let didChangeNotificationName = Notification.Name("managerScheduleDidChange")
+    private var lastLoadAt: Date?
+    private let minReloadInterval: TimeInterval = 8
 
     var currentUserId: String? { firebaseBackend?.currentUser?.uid }
 
@@ -25,7 +27,10 @@ class ManagerScheduleStore: ObservableObject {
         firebaseBackend = backend
     }
 
-    func loadData() {
+    func loadData(force: Bool = false) {
+        if !force, let lastLoadAt, Date().timeIntervalSince(lastLoadAt) < minReloadInterval {
+            return
+        }
         guard let fb = firebaseBackend,
               fb.isAuthenticated,
               let orgId = fb.currentOrganization?.firestoreDocumentId else {
@@ -39,6 +44,7 @@ class ManagerScheduleStore: ObservableObject {
                 let list = try await fb.loadManagerSiteBookings(organizationId: orgId)
                 let duplicates = duplicatesToDelete(from: list)
                 managerSiteBookings = deduplicated(list)
+                lastLoadAt = Date()
                 if !duplicates.isEmpty {
                     for duplicate in duplicates {
                         try? await fb.deleteManagerSiteBooking(duplicate, organizationId: orgId)
@@ -82,7 +88,7 @@ class ManagerScheduleStore: ObservableObject {
             }
             managerSiteBookings = deduplicated(managerSiteBookings)
             NotificationCenter.default.post(name: didChangeNotificationName, object: nil)
-            loadData()
+            loadData(force: true)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -95,7 +101,7 @@ class ManagerScheduleStore: ObservableObject {
             try await fb.deleteManagerSiteBooking(booking, organizationId: orgId)
             managerSiteBookings.removeAll { $0.id == booking.id }
             NotificationCenter.default.post(name: didChangeNotificationName, object: nil)
-            loadData()
+            loadData(force: true)
         } catch {
             errorMessage = error.localizedDescription
         }

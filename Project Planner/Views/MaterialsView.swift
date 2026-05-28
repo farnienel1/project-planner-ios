@@ -9,44 +9,6 @@ import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
 
-private func materialCanBeManagedByCurrentUser(
-    _ material: MaterialItem,
-    userStore: UserStore,
-    firebaseBackend: FirebaseBackend
-) -> Bool {
-    guard let authUser = firebaseBackend.currentUser else { return false }
-    if !userStore.isOperativeMode() {
-        return true
-    }
-    if let ownerUserId = material.addedByUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
-       !ownerUserId.isEmpty {
-        return ownerUserId == authUser.uid
-    }
-
-    let normalizedAddedBy = material.addedBy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    if normalizedAddedBy.isEmpty {
-        return false
-    }
-
-    let fullName = (userStore.currentUser?.fullName ?? "")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-    let appEmail = (userStore.currentUser?.email ?? "")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-    let authDisplayName = (authUser.displayName ?? "")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-    let authEmail = (authUser.email ?? "")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-
-    return normalizedAddedBy == fullName ||
-        normalizedAddedBy == appEmail ||
-        normalizedAddedBy == authDisplayName ||
-        normalizedAddedBy == authEmail
-}
-
 struct MaterialsView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
@@ -66,7 +28,7 @@ struct MaterialsView: View {
                 ProgressView("Loading materials...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if userStore.isOperativeMode() {
-                OperativeMaterialsView(
+                OperativeMaterialsPanel(
                     project: project,
                     selectedDate: $selectedDate,
                     currentWeek: $currentWeek,
@@ -492,9 +454,19 @@ struct MaterialItemRow: View {
                 Text(material.material)
                     .font(.body)
                     .fontWeight(.medium)
-                Text("\(material.quantity) \(material.unit.rawValue)")
+                Text("\(material.quantity) \(material.unit.quantityLabel(for: material.quantity))")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                if let size = material.size?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty {
+                    Text("Size: \(size)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                if let length = material.length?.trimmingCharacters(in: .whitespacesAndNewlines), !length.isEmpty {
+                    Text("Length: \(length)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
                 
                 // Show editedBy if material was edited, otherwise show addedBy
                 if let editedBy = material.editedBy {
@@ -573,6 +545,8 @@ struct AddMaterialView: View {
         var quantity: Int = 1
         var unit: MaterialUnit = .number
         var materialDescription: String = ""
+        var size: String = ""
+        var length: String = ""
         
         init(selectedDate: Date) {
             self.selectedDate = selectedDate
@@ -685,7 +659,13 @@ struct AddMaterialView: View {
                     addedBy: addedBy,
                     addedByUserId: firebaseBackend.currentUser?.uid,
                     projectId: project.id,
-                    date: normalizedDate
+                    date: normalizedDate,
+                    size: entry.size.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? nil
+                        : entry.size.trimmingCharacters(in: .whitespacesAndNewlines),
+                    length: entry.length.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? nil
+                        : entry.length.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
                 
                 do {
@@ -797,6 +777,23 @@ private struct MaterialEntrySection: View {
                 }
             ), axis: .vertical)
             .lineLimit(3...6)
+
+            TextField("Size (optional)", text: Binding(
+                get: { entry.size },
+                set: { newValue in
+                    if let index = entries.firstIndex(where: { $0.id == entry.id }) {
+                        entries[index].size = newValue
+                    }
+                }
+            ))
+            TextField("Length (optional)", text: Binding(
+                get: { entry.length },
+                set: { newValue in
+                    if let index = entries.firstIndex(where: { $0.id == entry.id }) {
+                        entries[index].length = newValue
+                    }
+                }
+            ))
         }
         .padding(.vertical, 8)
     }

@@ -26,16 +26,16 @@ final class MaterialCatalogStore: ObservableObject {
         errorMessage = nil
         defer { isLoading = false }
         do {
-            try? await firebaseBackend.backfillMaterialCatalogueFromExistingMaterials(organizationId: organizationId)
-        }
-        do {
             let catalog = try await firebaseBackend.loadMaterialCatalogue(organizationId: organizationId)
             let normalized = catalog.map(normalizeCategory)
-            if normalized.isEmpty {
-                items = (try? await fallbackItemsFromMaterialLines(firebaseBackend: firebaseBackend, organizationId: organizationId)) ?? []
-            } else {
+            if !normalized.isEmpty {
                 items = normalized
+                return
             }
+            // Bootstrap once for orgs with historical material lines but empty catalogue.
+            try? await firebaseBackend.backfillMaterialCatalogueFromExistingMaterials(organizationId: organizationId)
+            let refreshed = try await firebaseBackend.loadMaterialCatalogue(organizationId: organizationId)
+            items = refreshed.map(normalizeCategory)
         } catch {
             // Fallback: if catalogue read fails or returns nothing, synthesize from existing materials so users can still see items.
             items = (try? await fallbackItemsFromMaterialLines(firebaseBackend: firebaseBackend, organizationId: organizationId)) ?? []
@@ -87,7 +87,8 @@ final class MaterialCatalogStore: ObservableObject {
                 brand: row.brand,
                 productCode: row.productCode,
                 defaultUnit: row.defaultUnit,
-                sizeOrLength: row.sizeOrLength,
+                size: row.size,
+                length: row.length,
                 category: normalizedCategory(row.category),
                 createdByUserId: createdByUserId,
                 createdByName: createdByName
@@ -152,7 +153,8 @@ final class MaterialCatalogStore: ObservableObject {
                 brand: (brand?.isEmpty == false) ? brand! : "Custom",
                 productCode: line.productCode,
                 defaultUnit: line.unit,
-                sizeOrLength: line.sizeOrLength,
+                size: line.size,
+                length: line.length ?? line.sizeOrLength,
                 category: category,
                 createdByUserId: creatorId,
                 createdByName: creatorName

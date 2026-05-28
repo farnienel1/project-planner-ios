@@ -96,7 +96,7 @@ struct SendToWholesalerView: View {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(material.material)
                                         .font(.body)
-                                    Text("\(material.quantity) \(material.unit.rawValue)")
+                                    Text("\(material.quantity) \(material.unit.quantityLabel(for: material.quantity))")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 }
