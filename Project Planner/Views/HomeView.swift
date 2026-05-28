@@ -1322,23 +1322,21 @@ struct HomeView: View {
         let blue = homeBlue
         let purple = Color(red: 0.325, green: 0.29, blue: 0.718)
 
-        async let upNextTask: [HomeUpNextDaySection] = Task.detached(priority: .utility) {
-            HomeUpNextSupport.upcomingDaySections(
-                minDistinctDays: 2,
-                mergeRowLimit: 48,
-                now: Date(),
-                authUserId: authUserId,
-                currentUserEmail: userEmail,
-                operatives: operatives,
-                bookings: bookings,
-                managerBookings: managerBookings,
-                allProjects: projects,
-                organizationUsers: users,
-                accentBlue: blue,
-                accentPurple: purple,
-                payrollTimePolicy: policy
-            )
-        }.value
+        let upNextTask = HomeUpNextSupport.upcomingDaySections(
+            minDistinctDays: 2,
+            mergeRowLimit: 48,
+            now: Date(),
+            authUserId: authUserId,
+            currentUserEmail: userEmail,
+            operatives: operatives,
+            bookings: bookings,
+            managerBookings: managerBookings,
+            allProjects: projects,
+            organizationUsers: users,
+            accentBlue: blue,
+            accentPurple: purple,
+            payrollTimePolicy: policy
+        )
 
         if userStore.hasAdminAccess() {
             await WarningsRefreshHelper.refreshSharedWarnings(
@@ -1355,7 +1353,7 @@ struct HomeView: View {
             homeWarningCount = WarningsService.shared.warningCount
         }
 
-        cachedUpNextSections = await upNextTask
+        cachedUpNextSections = upNextTask
     }
 
     private func openWarningsDetail() async {

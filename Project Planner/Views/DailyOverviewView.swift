@@ -1340,7 +1340,7 @@ private extension DailyOverviewView {
                 },
                 onCancel: { bookingEditTarget = nil }
             )
-        case .subcontractor(let booking, _, let personName):
+        case .subcontractor(let booking, _, _):
             SubcontractorBookingEditSheet(booking: booking) {
                 bookingEditTarget = nil
             }

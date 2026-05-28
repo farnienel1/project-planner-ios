@@ -31,7 +31,7 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     /// When true, Sat/Sun count for unbooked labour warnings only.
     var includeWeekendsForUnbookedLabour: Bool
 
-    static let `default` = OrgWarningDetectionSettings(
+    nonisolated static let `default` = OrgWarningDetectionSettings(
         detectClashes: true,
         clashLookaheadMode: .endOfWorkingWeek,
         clashLookaheadDays: 28,

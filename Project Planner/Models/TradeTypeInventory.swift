@@ -1,9 +1,9 @@
 import Foundation
 
 enum TradeTypeInventory {
-    private static let storageKey = "tradeTypeInventory.v1"
+    nonisolated private static let storageKey = "tradeTypeInventory.v1"
 
-    private static let seededDefaults: [String] = [
+    nonisolated private static let seededDefaults: [String] = [
         "Electrician",
         "Plumber",
         "AC Engineer",
@@ -23,12 +23,12 @@ enum TradeTypeInventory {
         "Programmer",
     ]
 
-    static func knownTrades(extra: [String] = []) -> [String] {
+    nonisolated static func knownTrades(extra: [String] = []) -> [String] {
         let stored = UserDefaults.standard.stringArray(forKey: storageKey) ?? []
         return uniqueSorted(from: seededDefaults + stored + extra)
     }
 
-    static func register(_ trade: String) {
+    nonisolated static func register(_ trade: String) {
         let value = normalized(trade)
         guard !value.isEmpty else { return }
         let stored = UserDefaults.standard.stringArray(forKey: storageKey) ?? []
@@ -36,7 +36,7 @@ enum TradeTypeInventory {
         UserDefaults.standard.set(merged, forKey: storageKey)
     }
 
-    static func suggestions(query: String, extra: [String] = []) -> [String] {
+    nonisolated static func suggestions(query: String, extra: [String] = []) -> [String] {
         let q = normalized(query)
         guard !q.isEmpty else { return [] }
         return knownTrades(extra: extra)
@@ -46,7 +46,7 @@ enum TradeTypeInventory {
             }
     }
 
-    private static func uniqueSorted(from values: [String]) -> [String] {
+    nonisolated private static func uniqueSorted(from values: [String]) -> [String] {
         var seen = Set<String>()
         return values
             .map(normalized)
@@ -55,7 +55,7 @@ enum TradeTypeInventory {
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
-    private static func normalized(_ value: String) -> String {
+    nonisolated private static func normalized(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

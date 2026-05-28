@@ -882,7 +882,7 @@ struct OrgPayrollTimePolicy: Codable, Hashable {
         max(0, Double(unpaidBreakMinutes)) / 60.0
     }
 
-    static let `default` = OrgPayrollTimePolicy(
+    nonisolated static let `default` = OrgPayrollTimePolicy(
         standardDayStart: "07:30",
         standardDayEnd: "16:00",
         unpaidBreakMinutes: 30,

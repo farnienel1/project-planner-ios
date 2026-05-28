@@ -47,22 +47,6 @@ struct InvoicingView: View {
                         )
                     } else {
                         paymentSummaryCard
-                        if let deepLinkTargetUser, let deepLinkWeek {
-                            NavigationLink(
-                                destination: OperativeTimesheetReviewView(
-                                    operative: deepLinkTargetUser,
-                                    settings: settings,
-                                    week: deepLinkWeek
-                                )
-                                .environmentObject(firebaseBackend)
-                                .environmentObject(userStore)
-                                .environmentObject(bookingStore)
-                                .environmentObject(operativeStore)
-                                .environmentObject(notificationService),
-                                isActive: $showDeepLinkReview
-                            ) { EmptyView() }
-                            .hidden()
-                        }
                         if canShowOperativeTimesheets {
                             managerLandingCards
                         } else if canShowMyTimesheets {
@@ -79,6 +63,20 @@ struct InvoicingView: View {
             .task {
                 await syncLandingDraftsFromCloud()
                 await handleInitialTimesheetDeepLinkIfNeeded()
+            }
+            .navigationDestination(isPresented: $showDeepLinkReview) {
+                if let deepLinkTargetUser, let deepLinkWeek {
+                    OperativeTimesheetReviewView(
+                        operative: deepLinkTargetUser,
+                        settings: settings,
+                        week: deepLinkWeek
+                    )
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(userStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(notificationService)
+                }
             }
         }
     }
