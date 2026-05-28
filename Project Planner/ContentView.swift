@@ -244,6 +244,21 @@ struct ContentView: View {
                 NotificationCenter.default.post(name: .mainMenuOpenSurface, object: nil, userInfo: payload)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToTimesheetReview"))) { notification in
+            let payload = notification.userInfo
+            selectTab(0)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                NotificationCenter.default.post(
+                    name: .mainMenuOpenSurface,
+                    object: nil,
+                    userInfo: [
+                        "route": MainMenuSurfaceRoute.invoicing.rawValue,
+                        "targetUserId": payload?["targetUserId"] as? String ?? "",
+                        "weekStart": payload?["weekStart"] as? Date ?? Date()
+                    ]
+                )
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openHoliday"))) { notification in
             DispatchQueue.main.async {
                 guard userStore.isAnnualLeaveFeatureEnabled() else { return }

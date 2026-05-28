@@ -44,6 +44,8 @@ struct HomeView: View {
     @State private var showingOperativeQualifications = false
     @State private var showingSiteAudit = false
     @State private var showingInvoicing = false
+    @State private var timesheetReviewDeepLinkUserId: String?
+    @State private var timesheetReviewDeepLinkWeekStart: Date?
     
     // Navigation states for menu items
     @State private var showingClientsView = false
@@ -53,11 +55,12 @@ struct HomeView: View {
     @State private var showingQuickActionCustomizeHint = false
     @State private var persistedQuickActionIds: [String] = []
     @State private var showingGeneralAppSettings = false
-    @State private var hasLoadedQuickActionLayout = false
+    @State private var hasLoadedQuickActionLayoutForUserKey: String?
     @State private var showingAdminOverviewCustomize = false
     @State private var draftAdminOverviewMetricIds: [HomeOverviewMetricID] = []
     @State private var persistedAdminOverviewMetricIds: [HomeOverviewMetricID] = []
     @State private var hasLoadedAdminOverviewMetrics = false
+    @State private var showingHomeProfileCard = false
     
     var body: some View {
         ScrollView {
@@ -259,9 +262,23 @@ struct HomeView: View {
                 .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingInvoicing) {
-            InvoicingView()
+            InvoicingView(
+                initialReviewUserId: timesheetReviewDeepLinkUserId,
+                initialReviewWeekStart: timesheetReviewDeepLinkWeekStart
+            )
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(projectStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(notificationService)
+        }
+        .sheet(isPresented: $showingHomeProfileCard) {
+            HomeProfileCardSheet()
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+                .environmentObject(operativeStore)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openOrgSitesMapFromMore"))) { _ in
             showingOrgSitesMap = true
@@ -291,7 +308,10 @@ struct HomeView: View {
             case .generalAppSettings: showingGeneralAppSettings = true
             case .orgSitesMap: showingOrgSitesMap = true
             case .siteAudit: showingSiteAudit = true
-            case .invoicing: showingInvoicing = true
+            case .invoicing:
+                timesheetReviewDeepLinkUserId = note.userInfo?["targetUserId"] as? String
+                timesheetReviewDeepLinkWeekStart = note.userInfo?["weekStart"] as? Date
+                showingInvoicing = true
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .mainMenuResetPassword)) { _ in
@@ -316,12 +336,11 @@ struct HomeView: View {
             loadPersistedQuickActionsIfNeeded()
         }
         .onChange(of: userStore.currentUser?.id) { _, _ in
-            hasLoadedQuickActionLayout = false
+            hasLoadedQuickActionLayoutForUserKey = nil
             loadPersistedQuickActionsIfNeeded()
         }
         .onChange(of: userStore.isHomeProfileLoading) { _, isLoading in
             if !isLoading {
-                hasLoadedQuickActionLayout = false
                 loadPersistedQuickActionsIfNeeded()
             }
         }
@@ -656,13 +675,18 @@ struct HomeView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                Text(profileInitials)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white)
-                    .frame(width: 38, height: 38)
-                    .background(homeBlue)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
+                Button {
+                    showingHomeProfileCard = true
+                } label: {
+                    Text(profileInitials)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 38, height: 38)
+                        .background(homeBlue)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.bottom, 18)
@@ -833,26 +857,27 @@ struct HomeView: View {
     }
 
     private var quickActionStorageKey: String {
-        let uid = firebaseBackend.currentUser?.uid ?? "anonymous"
+        let uid = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "anonymous"
         return "homeQuickActionOrder.\(uid)"
     }
 
     private var quickActionCustomizeHintKey: String {
-        let uid = firebaseBackend.currentUser?.uid ?? "anonymous"
+        let uid = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "anonymous"
         return "homeQuickActionCustomizeHint.\(uid)"
     }
 
     private func loadPersistedQuickActionsIfNeeded() {
-        guard !hasLoadedQuickActionLayout else { return }
+        let userKey = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "anonymous"
+        guard hasLoadedQuickActionLayoutForUserKey != userKey else { return }
         guard userStore.currentUser != nil || !userStore.isHomeProfileLoading else { return }
-        hasLoadedQuickActionLayout = true
+        hasLoadedQuickActionLayoutForUserKey = userKey
         if let saved = UserDefaults.standard.array(forKey: quickActionStorageKey) as? [String], !saved.isEmpty {
             let allowed = Set(HomeQuickActionRegistry.allEligibleIds(userStore: userStore))
             var seen = Set<String>()
             let filtered = saved.filter { allowed.contains($0) }.filter { seen.insert($0).inserted }
-            let defaultIds = HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
-            let healed = filtered + defaultIds.filter { !filtered.contains($0) }
-            persistedQuickActionIds = healed.isEmpty ? defaultIds : healed
+            persistedQuickActionIds = filtered.isEmpty
+                ? HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
+                : filtered
         } else {
             persistedQuickActionIds = HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
         }
@@ -864,6 +889,7 @@ struct HomeView: View {
 
     private func sanitizePersistedQuickActionsIfNeeded() {
         guard userStore.currentUser != nil || !userStore.isHomeProfileLoading else { return }
+        if userStore.organizationUsers.isEmpty { return }
         let allowed = Set(HomeQuickActionRegistry.allEligibleIds(userStore: userStore))
         let next = persistedQuickActionIds.filter { allowed.contains($0) }
         if next.count != persistedQuickActionIds.count {
@@ -1789,6 +1815,114 @@ struct OperativeQualificationsReadOnlyView: View {
         )
         await operativeStore.addOperative(newOperative)
         repairMessage = "Created and linked operative profile."
+    }
+}
+
+private struct HomeProfileCardSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var operativeStore: OperativeStore
+
+    private var user: AppUser? { userStore.displayUser }
+
+    private var operative: Operative? {
+        guard let email = user?.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        return operativeStore.allOperatives.first {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+        }
+    }
+
+    private var displayName: String {
+        guard let user else { return "Profile" }
+        let full = "\(user.firstName) \(user.surname)".trimmingCharacters(in: .whitespacesAndNewlines)
+        return full.isEmpty ? user.email : full
+    }
+
+    private var initials: String { PlannerUIInitials.from(displayName) }
+
+    private var skillsText: String {
+        guard let operative, !operative.skills.isEmpty else { return "None added" }
+        return operative.skills.joined(separator: ", ")
+    }
+
+    private var qualificationsText: String {
+        guard let operative, !operative.qualifications.isEmpty else { return "None added" }
+        return operative.qualifications.map(\.name).joined(separator: ", ")
+    }
+
+    private var dayRateText: String {
+        guard let user else { return "£0.00" }
+        let rate = user.dayRate ?? operative?.dayRate ?? 0
+        return String(format: "£%.2f", rate)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 12) {
+                        if let url = URL(string: user?.profilePhotoURL ?? "") {
+                            AsyncImage(url: url) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image.resizable().scaledToFill()
+                                default:
+                                    Circle().fill(Color.blue.opacity(0.2))
+                                        .overlay(Text(initials).font(.headline).foregroundStyle(.blue))
+                                }
+                            }
+                            .frame(width: 62, height: 62)
+                            .clipShape(Circle())
+                        } else {
+                            Circle()
+                                .fill(Color.blue.opacity(0.2))
+                                .frame(width: 62, height: 62)
+                                .overlay(Text(initials).font(.headline).foregroundStyle(.blue))
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(displayName).font(.headline)
+                            Text(user?.email ?? "—").font(.subheadline).foregroundStyle(.secondary)
+                            Text(firebaseBackend.currentOrganization?.name ?? "No organisation")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(14)
+                    .background(Color(.systemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                    profileRow("Day rate", dayRateText)
+                    profileRow("Employment type", user?.employmentType(on: Date()).title ?? "—")
+                    profileRow("Skills", skillsText)
+                    profileRow("Qualifications", qualificationsText)
+                }
+                .padding(16)
+            }
+            .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+            .navigationTitle("My Profile")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func profileRow(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label.uppercased())
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

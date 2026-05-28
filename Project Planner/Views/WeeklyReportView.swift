@@ -220,6 +220,8 @@ struct WeeklyReportView: View {
                 holidayBookings: holidayStore.bookings,
                 payrollTimePolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
                 warningDetection: warningDetection,
+                labourCoverageStart: startDate,
+                labourCoverageEnd: endDate,
                 materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
                 materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
                 materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,

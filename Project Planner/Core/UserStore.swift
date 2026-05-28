@@ -474,7 +474,7 @@ class UserStore: ObservableObject {
     /// Self-employed users can submit their own timesheets.
     func canAccessMyTimesheets() -> Bool {
         guard let user = displayUser else { return false }
-        return user.employmentType == .selfEmployed
+        return user.employmentType(on: Date()) == .selfEmployed
     }
 
     /// Operative timesheets visibility:
@@ -696,8 +696,10 @@ class UserStore: ObservableObject {
         
         errorMessage = nil
         
-        if permissions.operativeMode && (assignedManagerUserId == nil || assignedManagerUserId?.isEmpty == true) {
-            errorMessage = "Every operative must be assigned a line manager."
+        if (permissions.operativeMode || permissions.manager) && (assignedManagerUserId == nil || assignedManagerUserId?.isEmpty == true) {
+            errorMessage = permissions.manager
+                ? "Every manager must be assigned a line manager."
+                : "Every operative must be assigned a line manager."
             return false
         }
         
@@ -1449,7 +1451,7 @@ class UserStore: ObservableObject {
         }
     }
 
-    func updateUserEmploymentType(userId: String, employmentType: EmploymentType) async -> Bool {
+    func updateUserEmploymentType(userId: String, employmentType: EmploymentType, effectiveAt: Date? = nil) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
         if isOrganizationCreator(userId: userId) { return false }
@@ -1457,14 +1459,29 @@ class UserStore: ObservableObject {
         if updated.isSuperAdmin && isOrganizationCreator(userId: updated.id) {
             return false
         }
+        let calendar = Calendar.current
+        let effectiveStart = effectiveAt.map { calendar.startOfDay(for: $0) } ?? calendar.startOfDay(for: Date())
+        let transitionFrom: EmploymentType? = (employmentType != updated.employmentType) ? updated.employmentType : nil
         updated.employmentType = employmentType
+        if transitionFrom != nil {
+            updated.employmentTypeTransitionFrom = transitionFrom
+            updated.employmentTypeEffectiveAt = effectiveStart
+        } else {
+            updated.employmentTypeTransitionFrom = nil
+            updated.employmentTypeEffectiveAt = nil
+        }
 
         do {
             if hasAdminAccess() {
                 try await firebaseBackend.saveUser(updated)
             } else if isActingManagerOperativeManagementOnly(),
                       updated.permissions.operativeMode || updated.role == .operative {
-                try await firebaseBackend.updateUserEmploymentType(userId: userId, employmentType: employmentType)
+                try await firebaseBackend.updateUserEmploymentType(
+                    userId: userId,
+                    employmentType: employmentType,
+                    transitionFrom: updated.employmentTypeTransitionFrom,
+                    effectiveAt: updated.employmentTypeEffectiveAt
+                )
             } else {
                 return false
             }
@@ -1492,7 +1509,7 @@ class UserStore: ObservableObject {
                 guard let firebaseBackend = firebaseBackend else { return false }
                 guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
                 var updatedUser = organizationUsers[index]
-                guard updatedUser.permissions.operativeMode || updatedUser.role == .operative else { return false }
+                guard updatedUser.permissions.operativeMode || updatedUser.role == .operative || updatedUser.permissions.manager || updatedUser.role == .manager else { return false }
 
                 updatedUser.assignedManagerUserId = assignedManagerUserId
                 updatedUser.dayRate = dayRate

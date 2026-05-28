@@ -369,6 +369,10 @@ struct AppUser: Identifiable, Codable, Hashable {
     var lastSeenAt: Date?
     /// Employment type controls invoicing visibility.
     var employmentType: EmploymentType
+    /// Previous employment type before a scheduled switch (nil when no pending switch).
+    var employmentTypeTransitionFrom: EmploymentType?
+    /// Calendar day the employment type switch becomes active.
+    var employmentTypeEffectiveAt: Date?
     /// When false, annual leave is hidden in the app (e.g. self-employed). Only managers/admins with user-management access can turn it back on.
     var annualLeaveEnabled: Bool
     /// Paid annual leave allowance for the configured leave year (days; supports half-days via bookings).
@@ -403,6 +407,8 @@ struct AppUser: Identifiable, Codable, Hashable {
         profilePhotoURL: String? = nil,
         lastSeenAt: Date? = nil,
         employmentType: EmploymentType = .selfEmployed,
+        employmentTypeTransitionFrom: EmploymentType? = nil,
+        employmentTypeEffectiveAt: Date? = nil,
         annualLeaveEnabled: Bool = true,
         annualLeaveDaysPerYear: Double = AnnualLeavePolicy.defaultDaysPerYear,
         annualLeaveYearStartMonth: Int = AnnualLeavePolicy.defaultStartMonth,
@@ -431,6 +437,8 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.profilePhotoURL = profilePhotoURL
         self.lastSeenAt = lastSeenAt
         self.employmentType = employmentType
+        self.employmentTypeTransitionFrom = employmentTypeTransitionFrom
+        self.employmentTypeEffectiveAt = employmentTypeEffectiveAt
         self.annualLeaveEnabled = annualLeaveEnabled
         self.annualLeaveDaysPerYear = AnnualLeavePolicy.clampDaysPerYear(annualLeaveDaysPerYear)
         self.annualLeaveYearStartMonth = AnnualLeavePolicy.clampMonth(annualLeaveYearStartMonth)
@@ -458,6 +466,19 @@ extension AppUser {
         if let hr = hourlyRate, hr > 0 { return hr }
         if let dr = dayRate, dr > 0 { return dr / 8.0 }
         return nil
+    }
+
+    /// Returns employment type active on a specific day, respecting scheduled transitions.
+    func employmentType(on date: Date) -> EmploymentType {
+        guard let from = employmentTypeTransitionFrom,
+              let effectiveAt = employmentTypeEffectiveAt else {
+            return employmentType
+        }
+        let cal = Calendar.current
+        if cal.startOfDay(for: date) < cal.startOfDay(for: effectiveAt) {
+            return from
+        }
+        return employmentType
     }
 }
 

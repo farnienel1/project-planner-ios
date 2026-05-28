@@ -203,10 +203,24 @@ struct NotificationsView: View {
                         name: NSNotification.Name("openTasksDetail"),
                         object: nil
                     )
-                case .warningRemoved:
+                case .timesheetPendingManagerSignoff:
                     NotificationCenter.default.post(
-                        name: NSNotification.Name("navigateToWarnings"),
-                        object: nil
+                        name: NSNotification.Name("navigateToTimesheetReview"),
+                        object: nil,
+                        userInfo: [
+                            "targetUserId": notification.deepLinkUserId ?? "",
+                            "weekStart": notification.deepLinkWeekStart ?? Date()
+                        ]
+                    )
+                case .timesheetSignedByManager:
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("mainMenuOpenSurface"),
+                        object: nil,
+                        userInfo: [
+                            "route": MainMenuSurfaceRoute.invoicing.rawValue,
+                            "targetUserId": notification.deepLinkUserId ?? "",
+                            "weekStart": notification.deepLinkWeekStart ?? Date()
+                        ]
                     )
                 }
                 
@@ -290,7 +304,8 @@ struct NotificationRowView: View {
         case .holidayRequestSubmitted: return "sun.max"
         case .holidayRequestApproved: return "sun.max.fill"
         case .holidayRequestDeclined: return "xmark.circle.fill"
-        case .warningRemoved: return "checkmark.shield"
+        case .timesheetPendingManagerSignoff: return "signature"
+        case .timesheetSignedByManager: return "checkmark.seal.fill"
         }
     }
 
@@ -309,7 +324,8 @@ struct NotificationRowView: View {
         case .holidayRequestSubmitted: return .orange
         case .holidayRequestApproved: return .green
         case .holidayRequestDeclined: return .red
-        case .warningRemoved: return .green
+        case .timesheetPendingManagerSignoff: return .orange
+        case .timesheetSignedByManager: return .green
         }
     }
 }

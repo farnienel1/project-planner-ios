@@ -748,6 +748,8 @@ struct EditUserView: View {
     @State private var employmentTypeDraft: EmploymentType
     @State private var showingEmploymentTypeConfirmation = false
     @State private var employmentTypeConfirmationAccepted = false
+    @State private var showingEmploymentTypeEffectiveDatePicker = false
+    @State private var employmentTypeEffectiveDate = Date()
 
     init(user: AppUser, suppressAdminAccessToggle: Bool = false) {
         self.user = user
@@ -939,7 +941,7 @@ struct EditUserView: View {
     }
 
     private var lineManagerSummary: String {
-        guard permissions.operativeMode else { return "" }
+        guard permissions.operativeMode || permissions.manager else { return "" }
         guard let id = selectedAssignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
             return "Select manager…"
         }
@@ -1023,6 +1025,15 @@ struct EditUserView: View {
         guard let actingUser = userStore.currentUser else { return false }
         if actingUser.permissions.operativeMode { return false }
         return actingUser.isSuperAdmin || actingUser.permissions.adminAccess || actingUser.permissions.manager
+    }
+
+    private var employmentTransitionSummary: String {
+        guard let from = displayedUser.employmentTypeTransitionFrom,
+              let effective = displayedUser.employmentTypeEffectiveAt else {
+            return "Effective immediately"
+        }
+        let dateText = effective.formatted(date: .abbreviated, time: .omitted)
+        return "\(from.title) until \(dateText), then \(displayedUser.employmentType.title)"
     }
     
     // Check if any changes have been made
@@ -1191,10 +1202,49 @@ struct EditUserView: View {
                 }
                 Button("Confirm Change") {
                     employmentTypeConfirmationAccepted = true
-                    saveChanges()
+                    employmentTypeEffectiveDate = calendarStartOfDay(Date())
+                    showingEmploymentTypeEffectiveDatePicker = true
                 }
             } message: {
-                Text("You are changing employment type to \(employmentTypeDraft.title). This affects invoicing access for this user.")
+                Text("You are changing employment type to \(employmentTypeDraft.title). This affects timesheet access and day-rate handling.")
+            }
+            .sheet(isPresented: $showingEmploymentTypeEffectiveDatePicker) {
+                NavigationStack {
+                    Form {
+                        Section("Employment type starts from") {
+                            DatePicker(
+                                employmentTypeDraft == .selfEmployed
+                                    ? "Select the date this user starts as Self-Employed"
+                                    : "Select the date this user starts as PAYE",
+                                selection: $employmentTypeEffectiveDate,
+                                in: ...Date.distantFuture,
+                                displayedComponents: .date
+                            )
+                        }
+                        Section {
+                            Text("Timesheets and day-rate application use this date. Days before this date follow the previous employment type.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .navigationTitle("Employment Type Date")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") {
+                                employmentTypeConfirmationAccepted = false
+                                showingEmploymentTypeEffectiveDatePicker = false
+                            }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Save") {
+                                let selected = calendarStartOfDay(employmentTypeEffectiveDate)
+                                showingEmploymentTypeEffectiveDatePicker = false
+                                Task { await runPersistUserEdits(dayRateEffectiveAt: nil, employmentTypeEffectiveAt: selected) }
+                            }
+                        }
+                    }
+                }
             }
             .confirmationDialog(
                 "Day rate change",
@@ -1202,10 +1252,10 @@ struct EditUserView: View {
                 titleVisibility: .visible
             ) {
                 Button("Today") {
-                    Task { await runPersistUserEdits(dayRateEffectiveAt: calendarStartOfDay(Date())) }
+                    Task { await runPersistUserEdits(dayRateEffectiveAt: calendarStartOfDay(Date()), employmentTypeEffectiveAt: nil) }
                 }
                 Button("Tomorrow") {
-                    Task { await runPersistUserEdits(dayRateEffectiveAt: calendarStartOfTomorrow()) }
+                    Task { await runPersistUserEdits(dayRateEffectiveAt: calendarStartOfTomorrow(), employmentTypeEffectiveAt: nil) }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
@@ -1742,6 +1792,14 @@ struct EditUserView: View {
                             value: employmentTypeDraft.title
                         )
                     }
+                    ManageUserCardDivider()
+                    ManageUserDetailStaticRow(
+                        iconName: "calendar",
+                        iconBackground: ManageUserProfilePalette.chipAmberBg,
+                        iconForeground: ManageUserProfilePalette.chipAmberFg,
+                        label: "Employment transition date",
+                        value: employmentTransitionSummary
+                    )
                 }
             }
         }
@@ -1750,7 +1808,7 @@ struct EditUserView: View {
     private var operativeAndManagerSetupCard: some View {
         ManageUserCard {
             VStack(spacing: 0) {
-                if permissions.operativeMode {
+                if permissions.operativeMode || permissions.manager {
                     lineManagerPickRow
                     ManageUserCardDivider()
                 }
@@ -2379,6 +2437,14 @@ struct EditUserView: View {
                 }
                 return
             }
+            if employmentTypeChanged && employmentTypeConfirmationAccepted {
+                await MainActor.run {
+                    isUpdating = false
+                    employmentTypeEffectiveDate = calendarStartOfDay(Date())
+                    showingEmploymentTypeEffectiveDatePicker = true
+                }
+                return
+            }
             if canEditIdentityDetails && identityDirty {
                 guard isValidEmail(editEmail) else {
                     await MainActor.run {
@@ -2398,12 +2464,12 @@ struct EditUserView: View {
                 return
             }
 
-            await runPersistUserEdits(dayRateEffectiveAt: nil)
+            await runPersistUserEdits(dayRateEffectiveAt: nil, employmentTypeEffectiveAt: nil)
         }
     }
 
     /// Persists edit-user changes. When `dayRateEffectiveAt` is non-nil, day-rate history uses that calendar day as the effective start (weekly report / future invoicing).
-    private func runPersistUserEdits(dayRateEffectiveAt: Date?) async {
+    private func runPersistUserEdits(dayRateEffectiveAt: Date?, employmentTypeEffectiveAt: Date?) async {
         await MainActor.run { isUpdating = true }
 
         var identitySuccess = true
@@ -2478,14 +2544,26 @@ struct EditUserView: View {
         var operativeDetailsSuccess = true
         let managerAssignmentChanged = (selectedAssignedManagerUserId ?? "") != (subjectUser.assignedManagerUserId ?? "")
         let operativeDayRateChanged = parseDayRate(dayRateText) != subjectUser.dayRate
-        let operativeProfileChanged = permissions.operativeMode && (managerAssignmentChanged || operativeDayRateChanged)
+        let operativeProfileChanged =
+            (permissions.operativeMode && (managerAssignmentChanged || operativeDayRateChanged))
+            || (permissions.manager && managerAssignmentChanged)
+        if canEditPermissionsMatrix && (permissions.operativeMode || permissions.manager) {
+            let lineManagerId = selectedAssignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if lineManagerId.isEmpty {
+                await MainActor.run {
+                    isUpdating = false
+                    saveErrorMessage = "Line manager is required for managers and operatives."
+                }
+                return
+            }
+        }
         if canEditPermissionsMatrix && operativeProfileChanged {
             let parsedDayRate = parseDayRate(dayRateText)
             let effectiveForHistory: Date? = operativeDayRateChanged ? (dayRateEffectiveAt ?? calendarStartOfDay(Date())) : nil
             operativeDetailsSuccess = await userStore.updateOperativeProfileFields(
                 for: subjectUser,
                 assignedManagerUserId: selectedAssignedManagerUserId,
-                dayRate: parsedDayRate,
+                dayRate: permissions.operativeMode ? parsedDayRate : subjectUser.dayRate,
                 operativeStore: operativeStore,
                 dayRateEffectiveAt: effectiveForHistory
             )
@@ -2519,7 +2597,8 @@ struct EditUserView: View {
         if canEditPermissionsMatrix && employmentTypeChanged {
             employmentTypeSuccess = await userStore.updateUserEmploymentType(
                 userId: user.id,
-                employmentType: employmentTypeDraft
+                employmentType: employmentTypeDraft,
+                effectiveAt: employmentTypeEffectiveAt
             )
         }
 
@@ -2554,6 +2633,7 @@ struct EditUserView: View {
             isUpdating = false
             showingDayRateEffectiveChoice = false
             employmentTypeConfirmationAccepted = false
+            showingEmploymentTypeEffectiveDatePicker = false
             if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && employmentTypeSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess {
                 dismiss()
             } else {

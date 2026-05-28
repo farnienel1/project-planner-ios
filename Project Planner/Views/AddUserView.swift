@@ -231,7 +231,7 @@ struct AddUserView: View {
             .onChange(of: invitedAccountType) { _, _ in
                 applyPermissionsForInvitedType()
                 resetAnnualLeaveInviteDefaults()
-                if invitedAccountType != .operative {
+                if invitedAccountType == .admin {
                     assignedManagerUserId = nil
                 }
             }
@@ -251,6 +251,20 @@ struct AddUserView: View {
                     Text("Line manager")
                         .font(.headline)
                     Text("Holiday requests from this operative will go to this manager (and organisation admins).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Picker("Manager", selection: $assignedManagerUserId) {
+                        Text("Select manager…").tag(nil as String?)
+                        ForEach(lineManagerCandidates, id: \.id) { u in
+                            Text(u.fullName.isEmpty ? u.email : u.fullName).tag(Optional(u.id))
+                        }
+                    }
+                }
+            } else if invitedAccountType == .manager {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Line manager")
+                        .font(.headline)
+                    Text("Mandatory for managers. Annual leave requests (when self-book is off) and self-employed timesheet sign-off route to this line manager.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Picker("Manager", selection: $assignedManagerUserId) {
@@ -886,6 +900,9 @@ struct AddUserView: View {
             if invitedAccountType == .operative {
                 return base && assignedManagerUserId != nil && !(assignedManagerUserId?.isEmpty ?? true)
             }
+            if invitedAccountType == .manager {
+                return base && assignedManagerUserId != nil && !(assignedManagerUserId?.isEmpty ?? true)
+            }
             return base
         case 3:
             return true
@@ -942,7 +959,7 @@ struct AddUserView: View {
                 mobileNumber: mobileNumber.isEmpty ? nil : mobileNumber,
                 permissions: permissions,
                 employmentType: employmentType,
-                assignedManagerUserId: permissions.operativeMode ? assignedManagerUserId : nil,
+                assignedManagerUserId: (permissions.operativeMode || permissions.manager) ? assignedManagerUserId : nil,
                 invitedOperativeDayRate: permissions.operativeMode ? parsedDayRate : nil,
                 invitedManagerDayRate: permissions.manager ? parsedDayRate : nil,
                 invitedTradeTypePreset: needsTrade ? tradePresetRaw : nil,

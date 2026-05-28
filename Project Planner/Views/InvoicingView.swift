@@ -6,6 +6,7 @@
 import SwiftUI
 import UIKit
 import FirebaseFirestore
+import PhotosUI
 
 struct InvoicingView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
@@ -14,7 +15,14 @@ struct InvoicingView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject var notificationService: NotificationService
     @State private var landingVersion = 0
+    @State private var deepLinkTargetUser: AppUser?
+    @State private var deepLinkWeek: WeekRange?
+    @State private var showDeepLinkReview = false
+
+    let initialReviewUserId: String?
+    let initialReviewWeekStart: Date?
 
     private var settings: OrganizationInvoicingSettings {
         firebaseBackend.currentOrganization?.settings.invoicing ?? .default
@@ -22,6 +30,10 @@ struct InvoicingView: View {
 
     private var canShowMyTimesheets: Bool { userStore.canAccessMyTimesheets() }
     private var canShowOperativeTimesheets: Bool { userStore.canAccessOperativeTimesheets() }
+    private var isAdminViewer: Bool {
+        guard let u = userStore.displayUser else { return false }
+        return u.isSuperAdmin || u.permissions.adminAccess || u.role == .admin
+    }
 
     var body: some View {
         NavigationStack {
@@ -35,6 +47,22 @@ struct InvoicingView: View {
                         )
                     } else {
                         paymentSummaryCard
+                        if let deepLinkTargetUser, let deepLinkWeek {
+                            NavigationLink(
+                                destination: OperativeTimesheetReviewView(
+                                    operative: deepLinkTargetUser,
+                                    settings: settings,
+                                    week: deepLinkWeek
+                                )
+                                .environmentObject(firebaseBackend)
+                                .environmentObject(userStore)
+                                .environmentObject(bookingStore)
+                                .environmentObject(operativeStore)
+                                .environmentObject(notificationService),
+                                isActive: $showDeepLinkReview
+                            ) { EmptyView() }
+                            .hidden()
+                        }
                         if canShowOperativeTimesheets {
                             managerLandingCards
                         } else if canShowMyTimesheets {
@@ -50,8 +78,14 @@ struct InvoicingView: View {
             .navigationBarTitleDisplayMode(.inline)
             .task {
                 await syncLandingDraftsFromCloud()
+                await handleInitialTimesheetDeepLinkIfNeeded()
             }
         }
+    }
+
+    init(initialReviewUserId: String? = nil, initialReviewWeekStart: Date? = nil) {
+        self.initialReviewUserId = initialReviewUserId
+        self.initialReviewWeekStart = initialReviewWeekStart
     }
 
     private var paymentSummaryCard: some View {
@@ -143,6 +177,7 @@ struct InvoicingView: View {
                 .environmentObject(operativeStore)
                 .environmentObject(projectStore)
                 .environmentObject(managerScheduleStore)
+                .environmentObject(notificationService)
         } label: {
             timesheetEntryCard(
                 title: "My Timesheet",
@@ -155,50 +190,50 @@ struct InvoicingView: View {
 
     @ViewBuilder
     private var previousTimesheetsCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Previous timesheets")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-            VStack(spacing: 0) {
-                previousRow("Signed · awaiting manager", status: "Awaiting", color: .orange)
-                Divider()
-                previousRow("Signed off · invoice generated", status: "Complete", color: .green)
-                Divider()
-                previousRow("Signed off", status: "Complete", color: .green)
-            }
-            .padding(12)
-            .background(Color(.systemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        }
-    }
-
-    @ViewBuilder
-    private func previousRow(_ subtitle: String, status: String, color: Color) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Previous payment run")
-                    .font(.subheadline.weight(.semibold))
-                Text(subtitle)
-                    .font(.footnote)
+        NavigationLink {
+            PreviousTimesheetsView(settings: settings)
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(projectStore)
+                .environmentObject(managerScheduleStore)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.blue)
+                    .frame(width: 34, height: 34)
+                    .background(Color.blue.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Previous Timesheets")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text("View previous payment runs and statuses.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
-            Spacer()
-            Text(status)
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(color.opacity(0.15))
-                .foregroundStyle(color)
-                .clipShape(Capsule())
+            .padding(14)
+            .background(Color(.systemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color(.separator), lineWidth: 0.5)
+            )
         }
-        .padding(.vertical, 8)
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
     private var managerLandingCards: some View {
         let _ = landingVersion
-        let directReports = lineManagedOperatives
+        let directReports = usersForManagerReview
         let awaiting = directReports.filter { TimesheetDraftStore.load(userId: $0.id, weekStart: WeekRange.current().start).operativeSignedAt != nil && TimesheetDraftStore.load(userId: $0.id, weekStart: WeekRange.current().start).managerSignedAt == nil }.count
         let signed = directReports.filter { TimesheetDraftStore.load(userId: $0.id, weekStart: WeekRange.current().start).managerSignedAt != nil && TimesheetDraftStore.load(userId: $0.id, weekStart: WeekRange.current().start).exportedAt == nil }.count
         let exported = directReports.filter { TimesheetDraftStore.load(userId: $0.id, weekStart: WeekRange.current().start).exportedAt != nil }.count
@@ -213,6 +248,7 @@ struct InvoicingView: View {
                         .environmentObject(operativeStore)
                         .environmentObject(projectStore)
                         .environmentObject(managerScheduleStore)
+                        .environmentObject(notificationService)
                 } label: {
                     managerTile(title: "My Timesheets", subtitle: "Your own hours, expenses and price work", symbol: "clock.fill", badge: nil)
                 }
@@ -226,8 +262,16 @@ struct InvoicingView: View {
                     .environmentObject(operativeStore)
                     .environmentObject(projectStore)
                     .environmentObject(managerScheduleStore)
+                    .environmentObject(notificationService)
             } label: {
-                managerTile(title: "Operative Timesheets", subtitle: "Review, sign off and export your team's sheets", symbol: "person.3.fill", badge: awaiting > 0 ? "\(awaiting) new" : nil)
+                managerTile(
+                    title: isAdminViewer ? "User Timesheets" : "Operative Timesheets",
+                    subtitle: isAdminViewer
+                        ? "Review, sign off and export company timesheets"
+                        : "Review, sign off and export your team's sheets",
+                    symbol: "person.3.fill",
+                    badge: awaiting > 0 ? "\(awaiting) new" : nil
+                )
             }
             .buttonStyle(.plain)
 
@@ -293,10 +337,18 @@ struct InvoicingView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private var lineManagedOperatives: [AppUser] {
+    private var usersForManagerReview: [AppUser] {
         guard let currentUser = userStore.displayUser else { return [] }
+        if isAdminViewer {
+            return userStore.organizationUsers.filter {
+                $0.isActive &&
+                $0.employmentType(on: Date()) == .selfEmployed &&
+                ($0.permissions.operativeMode || $0.permissions.manager || $0.permissions.adminAccess || $0.role == .manager || $0.role == .admin)
+            }
+        }
         return userStore.organizationUsers.filter {
-            $0.permissions.operativeMode && $0.isActive &&
+            $0.isActive &&
+            $0.employmentType(on: Date()) == .selfEmployed &&
             ($0.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == currentUser.id
         }
     }
@@ -304,7 +356,7 @@ struct InvoicingView: View {
     private func syncLandingDraftsFromCloud() async {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let weekStart = WeekRange.current().start
-        let ids = Set(lineManagedOperatives.map(\.id) + (userStore.displayUser.map { [$0.id] } ?? []))
+        let ids = Set(usersForManagerReview.map(\.id) + (userStore.displayUser.map { [$0.id] } ?? []))
         for userId in ids {
             _ = await TimesheetDraftStore.refreshFromCloud(
                 userId: userId,
@@ -314,6 +366,18 @@ struct InvoicingView: View {
             )
         }
         await MainActor.run { landingVersion += 1 }
+    }
+
+    private func handleInitialTimesheetDeepLinkIfNeeded() async {
+        guard let targetUserId = initialReviewUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !targetUserId.isEmpty else { return }
+        guard let target = userStore.organizationUsers.first(where: { $0.id == targetUserId }) else { return }
+        let week = WeekRange.from(start: initialReviewWeekStart ?? Date())
+        await MainActor.run {
+            deepLinkTargetUser = target
+            deepLinkWeek = week
+            showDeepLinkReview = true
+        }
     }
 }
 
@@ -481,6 +545,10 @@ private enum TimesheetDraftStore {
         return output
     }
 
+    static func decodeFirestoreMap(_ map: [String: Any]) -> TimesheetDraft? {
+        fromFirestoreMap(map)
+    }
+
     private static func key(userId: String, weekStart: Date) -> String {
         let stamp = Int(Calendar.current.startOfDay(for: weekStart).timeIntervalSince1970)
         return "timesheet-draft-\(userId)-\(stamp)"
@@ -500,6 +568,21 @@ private struct WeekRange {
         let title = "\(start.formatted(date: .abbreviated, time: .omitted)) - \(end.formatted(date: .abbreviated, time: .omitted))"
         return WeekRange(start: start, end: end, title: title)
     }
+
+    static func from(start: Date) -> WeekRange {
+        let cal = Calendar.current
+        let normalized = cal.startOfDay(for: start)
+        let weekStart = normalized.startOfISOWeek ?? normalized
+        let end = cal.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
+        let title = "\(weekStart.formatted(date: .abbreviated, time: .omitted)) - \(end.formatted(date: .abbreviated, time: .omitted))"
+        return WeekRange(start: weekStart, end: end, title: title)
+    }
+
+    func offset(byWeeks weeks: Int) -> WeekRange {
+        let cal = Calendar.current
+        let shifted = cal.date(byAdding: .day, value: 7 * weeks, to: start) ?? start
+        return .from(start: shifted)
+    }
 }
 
 private struct MyTimesheetView: View {
@@ -509,6 +592,7 @@ private struct MyTimesheetView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject var notificationService: NotificationService
 
     let settings: OrganizationInvoicingSettings
 
@@ -516,6 +600,7 @@ private struct MyTimesheetView: View {
     @State private var draft = TimesheetDraft()
     @State private var showAddExpense = false
     @State private var showAddPriceWork = false
+    @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
 
     private var currentUserId: String {
         userStore.displayUser?.id ?? "unknown"
@@ -537,6 +622,16 @@ private struct MyTimesheetView: View {
         workAmount + draft.additionalTotal
     }
 
+    private var weekInvoicePeriod: InvoicePeriodOption {
+        InvoicePeriodOption(
+            id: "timesheet-\(Int(week.start.timeIntervalSince1970))",
+            title: "Signed timesheet period",
+            dateRangeText: week.title,
+            startDate: week.start,
+            endDate: week.end
+        )
+    }
+
     private var invoiceRows: [InvoiceLineItem] {
         let currentUser = userStore.displayUser
         guard let currentUser else { return [] }
@@ -556,7 +651,11 @@ private struct MyTimesheetView: View {
             let day = cal.startOfDay(for: booking.date)
             guard day >= week.start && day <= week.end else { continue }
             let paid = booking.paidBookedHours(policy: policy)
-            let rate = matchedOperatives.first(where: { $0.id == booking.operativeId })?.dayRate ?? currentUser.dayRate ?? 0
+            let rate = dayRateForBookingDay(
+                user: currentUser,
+                matchedOperative: matchedOperatives.first(where: { $0.id == booking.operativeId }),
+                day: day
+            )
             let amount = rate * (paid / standardDayHours)
             rows.append(
                 InvoiceLineItem(
@@ -578,7 +677,7 @@ private struct MyTimesheetView: View {
             let day = cal.startOfDay(for: booking.date)
             guard day >= week.start && day <= week.end else { continue }
             let paid = booking.paidBookedHours(policy: policy)
-            let rate = currentUser.dayRate ?? 0
+            let rate = dayRateForUserDay(user: currentUser, day: day)
             let amount = rate * (paid / standardDayHours)
             rows.append(
                 InvoiceLineItem(
@@ -726,8 +825,7 @@ private struct MyTimesheetView: View {
                             priceWorkAmount: draft.priceWorkEntries.reduce(0) { $0 + $1.amount },
                             expensesAmount: draft.expenseEntries.reduce(0) { $0 + $1.amount },
                             onApprove: {
-                                draft.operativeSignedAt = Date()
-                                saveDraft()
+                                markTimesheetSigned()
                             }
                         )
                     } label: {
@@ -749,7 +847,7 @@ private struct MyTimesheetView: View {
 
                 if draft.operativeSignedAt != nil && draft.managerSignedAt != nil {
                     NavigationLink {
-                        GenerateInvoiceView(settings: settings)
+                        GenerateInvoiceView(settings: settings, lockedPeriod: weekInvoicePeriod)
                             .environmentObject(firebaseBackend)
                             .environmentObject(userStore)
                             .environmentObject(bookingStore)
@@ -805,6 +903,7 @@ private struct MyTimesheetView: View {
         .navigationTitle("My Timesheets")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { loadDraft() }
+        .task { await loadDayRateHistory() }
     }
 
     @ViewBuilder
@@ -912,6 +1011,20 @@ private struct MyTimesheetView: View {
         Task { await refreshDraftFromCloud() }
     }
 
+    private func markTimesheetSigned() {
+        draft.operativeSignedAt = Date()
+        saveDraft()
+        guard let current = userStore.displayUser else { return }
+        guard let managerId = current.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !managerId.isEmpty else { return }
+        Task {
+            await notificationService.notifyTimesheetPendingManagerSignoff(
+                signedByUser: current,
+                lineManagerUserId: managerId,
+                weekStart: week.start
+            )
+        }
+    }
+
     private func saveDraft() {
         TimesheetDraftStore.save(draft, userId: currentUserId, weekStart: week.start)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
@@ -949,15 +1062,328 @@ private struct MyTimesheetView: View {
             draft = remote
         }
     }
+
+    private func loadDayRateHistory() async {
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
+        await MainActor.run { dayRateHistoryCollection = history }
+    }
+
+    private func dayRateForUserDay(user: AppUser, day: Date) -> Double {
+        guard user.employmentType(on: day) == .selfEmployed else { return 0 }
+        let dayStart = Calendar.current.startOfDay(for: day)
+        let history = (dayRateHistoryCollection.byUserId[user.id] ?? []).sorted(by: { $0.effectiveAt < $1.effectiveAt })
+        let fromHistory = history.last(where: { Calendar.current.startOfDay(for: $0.effectiveAt) <= dayStart })?.dayRate
+        return fromHistory ?? user.dayRate ?? 0
+    }
+
+    private func dayRateForBookingDay(user: AppUser, matchedOperative: Operative?, day: Date) -> Double {
+        guard user.employmentType(on: day) == .selfEmployed else { return 0 }
+        let dayStart = Calendar.current.startOfDay(for: day)
+        if let matchedOperative {
+            let merged = dayRateHistoryCollection
+                .mergedEntries(userId: user.id, operativeId: matchedOperative.id)
+                .sorted(by: { $0.effectiveAt < $1.effectiveAt })
+            let fromHistory = merged.last(where: { Calendar.current.startOfDay(for: $0.effectiveAt) <= dayStart })?.dayRate
+            return fromHistory ?? matchedOperative.dayRate ?? user.dayRate ?? 0
+        }
+        return dayRateForUserDay(user: user, day: day)
+    }
+}
+
+private struct PreviousTimesheetsView: View {
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+
+    let settings: OrganizationInvoicingSettings
+
+    @State private var runs: [PreviousTimesheetRun] = []
+    @State private var selectedRunId: String = ""
+    @State private var isLoading = false
+
+    private var selectedRun: PreviousTimesheetRun? {
+        runs.first(where: { $0.id == selectedRunId }) ?? runs.first
+    }
+
+    private var selectedPeriod: InvoicePeriodOption? {
+        guard let selectedRun else { return nil }
+        return InvoicePeriodOption(
+            id: selectedRun.id,
+            title: "Signed timesheet period",
+            dateRangeText: selectedRun.week.title,
+            startDate: selectedRun.week.start,
+            endDate: selectedRun.week.end
+        )
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Previous payment runs")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+
+                if runs.isEmpty {
+                    if isLoading {
+                        ProgressView("Loading previous timesheets...")
+                    } else {
+                        ContentUnavailableView(
+                            "No Previous Timesheets",
+                            systemImage: "clock.arrow.circlepath",
+                            description: Text("Previous runs appear here once submitted.")
+                        )
+                    }
+                } else {
+                    Menu {
+                        ForEach(runs) { run in
+                            Button {
+                                selectedRunId = run.id
+                            } label: {
+                                Text(run.week.title)
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text("Select previous payment run")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Text(selectedRun?.week.title ?? "Choose")
+                                .foregroundStyle(.blue)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .foregroundStyle(.blue)
+                        }
+                        .padding(14)
+                        .background(Color(.systemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+
+                    if let run = selectedRun {
+                        summaryCard(run)
+                        signatureCard(run)
+                        if run.isCompleted, let selectedPeriod {
+                            NavigationLink {
+                                GenerateInvoiceView(settings: settings, lockedPeriod: selectedPeriod)
+                                    .environmentObject(firebaseBackend)
+                                    .environmentObject(userStore)
+                                    .environmentObject(bookingStore)
+                                    .environmentObject(operativeStore)
+                                    .environmentObject(projectStore)
+                                    .environmentObject(managerScheduleStore)
+                            } label: {
+                                Text("Generate Invoice")
+                                    .frame(maxWidth: .infinity)
+                                    .fontWeight(.semibold)
+                                    .padding(.vertical, 14)
+                                    .background(Color.green)
+                                    .foregroundStyle(.white)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding(16)
+        }
+        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .navigationTitle("Previous Timesheets")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await loadRuns() }
+    }
+
+    @ViewBuilder
+    private func summaryCard(_ run: PreviousTimesheetRun) -> some View {
+        let summary = bookingSummary(for: run.week)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(run.isCompleted ? "Completed" : "Sign Off Pending")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background((run.isCompleted ? Color.green : Color.orange).opacity(0.16))
+                    .foregroundStyle(run.isCompleted ? .green : .orange)
+                    .clipShape(Capsule())
+                Spacer()
+                Text(run.week.title)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            row("Hours", "\(formatHours(summary.hours))h")
+            row("Overtime", "\(formatHours(summary.overtimeHours))h")
+            row("Price work", String(format: "£%.2f", run.draft.priceWorkEntries.reduce(0) { $0 + $1.amount }))
+            row("Expenses", String(format: "£%.2f", run.draft.expenseEntries.reduce(0) { $0 + $1.amount }))
+            Divider()
+            row("Summary total", String(format: "£%.2f", summary.baseAmount + summary.overtimeAmount + run.draft.priceWorkEntries.reduce(0) { $0 + $1.amount } + run.draft.expenseEntries.reduce(0) { $0 + $1.amount }))
+        }
+        .padding(14)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func signatureCard(_ run: PreviousTimesheetRun) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Signature Status")
+                .font(.headline)
+            Text("Operative signed: \(run.draft.operativeSignedAt?.formatted(date: .abbreviated, time: .shortened) ?? "No")")
+                .font(.footnote)
+                .foregroundStyle(run.draft.operativeSignedAt == nil ? .orange : .green)
+            Text("Manager signed: \(run.draft.managerSignedAt?.formatted(date: .abbreviated, time: .shortened) ?? "No")")
+                .font(.footnote)
+                .foregroundStyle(run.draft.managerSignedAt == nil ? .orange : .green)
+        }
+        .padding(14)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func row(_ key: String, _ value: String) -> some View {
+        HStack {
+            Text(key).foregroundStyle(.secondary)
+            Spacer()
+            Text(value).fontWeight(.semibold)
+        }
+        .font(.subheadline)
+    }
+
+    private func loadRuns() async {
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        guard let userId = userStore.displayUser?.id else { return }
+        await MainActor.run { isLoading = true }
+        var output: [PreviousTimesheetRun] = []
+        if let rows = try? await firebaseBackend.listTimesheetStates(
+            organizationId: orgId,
+            userId: userId,
+            limit: 80
+        ) {
+            for row in rows {
+                guard let weekStart = (row["weekStart"] as? Timestamp)?.dateValue() else { continue }
+                let week = WeekRange.from(start: weekStart)
+                guard let draft = TimesheetDraftStore.decodeFirestoreMap(row) else { continue }
+                let hasAnyContent = !draft.expenseEntries.isEmpty
+                    || !draft.priceWorkEntries.isEmpty
+                    || draft.operativeSignedAt != nil
+                    || draft.managerSignedAt != nil
+                    || !draft.managerNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                guard hasAnyContent else { continue }
+                TimesheetDraftStore.save(draft, userId: userId, weekStart: week.start)
+                output.append(
+                    PreviousTimesheetRun(
+                        id: "prev-\(Int(week.start.timeIntervalSince1970))",
+                        week: week,
+                        draft: draft
+                    )
+                )
+            }
+        }
+        if output.isEmpty {
+            let current = WeekRange.current()
+            for offset in 1...16 {
+                let week = current.offset(byWeeks: -offset)
+                let local = TimesheetDraftStore.load(userId: userId, weekStart: week.start)
+                _ = await TimesheetDraftStore.refreshFromCloud(
+                    userId: userId,
+                    weekStart: week.start,
+                    firebaseBackend: firebaseBackend,
+                    organizationId: orgId
+                )
+                let merged = TimesheetDraftStore.load(userId: userId, weekStart: week.start)
+                let hasAnyContent = !merged.expenseEntries.isEmpty
+                    || !merged.priceWorkEntries.isEmpty
+                    || merged.operativeSignedAt != nil
+                    || merged.managerSignedAt != nil
+                    || !merged.managerNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || local.operativeSignedAt != nil
+                if hasAnyContent {
+                    output.append(
+                        PreviousTimesheetRun(
+                            id: "prev-\(Int(week.start.timeIntervalSince1970))",
+                            week: week,
+                            draft: merged
+                        )
+                    )
+                }
+            }
+        }
+        await MainActor.run {
+            runs = output.sorted(by: { $0.week.start > $1.week.start })
+            selectedRunId = runs.first?.id ?? ""
+            isLoading = false
+        }
+    }
+
+    private func bookingSummary(for week: WeekRange) -> (hours: Double, overtimeHours: Double, baseAmount: Double, overtimeAmount: Double) {
+        guard let currentUser = userStore.displayUser else { return (0, 0, 0, 0) }
+        let cal = Calendar.current
+        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let standardDayHours = max(policy.standardPaidHours, 0.01)
+        let userOperatives = operativeStore.allOperatives.filter {
+            $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                == currentUser.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        let ids = Set(userOperatives.map(\.id))
+        let dayRate = userOperatives.first?.dayRate ?? currentUser.dayRate ?? 0
+        var hours = 0.0
+        var otHours = 0.0
+        var base = 0.0
+        var otAmount = 0.0
+        for booking in bookingStore.bookings where booking.status != .cancelled {
+            guard ids.contains(booking.operativeId) else { continue }
+            let day = cal.startOfDay(for: booking.date)
+            guard day >= week.start && day <= week.end else { continue }
+            let paid = booking.paidBookedHours(policy: policy)
+            let ot = max(0, booking.overtimeHoursBeyondPaidStandard(policy: policy))
+            let normal = max(0, paid - ot)
+            hours += paid
+            otHours += ot
+            base += dayRate * (normal / standardDayHours)
+            if ot > 0 {
+                otAmount += dayRate * ((ot / standardDayHours) * booking.effectiveWeekdayOtMultiplier(policy: policy))
+            }
+        }
+        return (hours, otHours, base, otAmount)
+    }
+
+    private func formatHours(_ value: Double) -> String {
+        let rounded = (value * 2).rounded() / 2
+        if abs(rounded - rounded.rounded()) < 0.001 {
+            return String(format: "%.0f", rounded)
+        }
+        return String(format: "%.1f", rounded)
+    }
+}
+
+private struct PreviousTimesheetRun: Identifiable {
+    let id: String
+    let week: WeekRange
+    let draft: TimesheetDraft
+
+    var isCompleted: Bool {
+        draft.operativeSignedAt != nil && draft.managerSignedAt != nil
+    }
 }
 
 private struct OperativeTimesheetsView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var notificationService: NotificationService
     let settings: OrganizationInvoicingSettings
     let week: WeekRange
     @State private var selectedTab: ManagerTimesheetListTab = .awaiting
     @State private var refreshVersion = 0
+
+    private var isAdminViewer: Bool {
+        guard let u = userStore.displayUser else { return false }
+        return u.isSuperAdmin || u.permissions.adminAccess || u.role == .admin
+    }
 
     init(settings: OrganizationInvoicingSettings, week: WeekRange = .current()) {
         self.settings = settings
@@ -966,10 +1392,19 @@ private struct OperativeTimesheetsView: View {
 
     private var directReports: [AppUser] {
         guard let currentUser = userStore.displayUser else { return [] }
+        if isAdminViewer {
+            return userStore.organizationUsers
+                .filter { user in
+                    user.isActive
+                    && user.employmentType(on: Date()) == .selfEmployed
+                    && (user.permissions.operativeMode || user.permissions.manager || user.permissions.adminAccess || user.role == .manager || user.role == .admin)
+                }
+                .sorted(by: { $0.fullName < $1.fullName })
+        }
         return userStore.organizationUsers
             .filter { user in
-                user.permissions.operativeMode
-                && user.isActive
+                user.isActive
+                && user.employmentType(on: Date()) == .selfEmployed
                 && (user.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == currentUser.id
             }
             .sorted(by: { $0.fullName < $1.fullName })
@@ -1008,6 +1443,11 @@ private struct OperativeTimesheetsView: View {
                     ForEach(filteredReports, id: \.id) { operative in
                         NavigationLink {
                             OperativeTimesheetReviewView(operative: operative, settings: settings, week: week)
+                                .environmentObject(firebaseBackend)
+                                .environmentObject(userStore)
+                                .environmentObject(bookingStore)
+                                .environmentObject(operativeStore)
+                                .environmentObject(notificationService)
                         } label: {
                             HStack(spacing: 12) {
                                 Circle()
@@ -1023,9 +1463,15 @@ private struct OperativeTimesheetsView: View {
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.primary)
                                     let draft = TimesheetDraftStore.load(userId: operative.id, weekStart: week.start)
-                                    Text("\(week.title) · \(String(format: "£%.2f", draft.additionalTotal)) extras")
+                                    let summary = operativeSummary(for: operative, draft: draft)
+                                    Text("\(week.title) · Hrs \(formatHours(summary.hours)) · OT \(formatHours(summary.overtimeHours)) · PW \(String(format: "£%.2f", summary.priceWork)) · Exp \(String(format: "£%.2f", summary.expenses))")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                    if isAdminViewer {
+                                        Text("Line manager: \(lineManagerName(for: operative))")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                                 Spacer()
                                 statusPill(for: TimesheetDraftStore.load(userId: operative.id, weekStart: week.start))
@@ -1081,7 +1527,7 @@ private struct OperativeTimesheetsView: View {
             .padding(16)
         }
         .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
-        .navigationTitle("Operative Timesheets")
+        .navigationTitle(isAdminViewer ? "User Timesheets" : "Operative Timesheets")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await refreshFromCloud()
@@ -1144,6 +1590,50 @@ private struct OperativeTimesheetsView: View {
         }
         await MainActor.run { refreshVersion += 1 }
     }
+
+    private func operativeSummary(for user: AppUser, draft: TimesheetDraft) -> (hours: Double, overtimeHours: Double, priceWork: Double, expenses: Double) {
+        let cal = Calendar.current
+        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let operativeIds = Set(
+            operativeStore.allOperatives
+                .filter { $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == user.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .map(\.id)
+        )
+        var totalHours = 0.0
+        var otHours = 0.0
+        for booking in bookingStore.bookings where booking.status != .cancelled {
+            guard operativeIds.contains(booking.operativeId) else { continue }
+            let day = cal.startOfDay(for: booking.date)
+            guard day >= week.start && day <= week.end else { continue }
+            totalHours += booking.paidBookedHours(policy: policy)
+            otHours += max(0, booking.overtimeHoursBeyondPaidStandard(policy: policy))
+        }
+        return (
+            totalHours,
+            otHours,
+            draft.priceWorkEntries.reduce(0) { $0 + $1.amount },
+            draft.expenseEntries.reduce(0) { $0 + $1.amount }
+        )
+    }
+
+    private func formatHours(_ value: Double) -> String {
+        let rounded = (value * 2).rounded() / 2
+        if abs(rounded - rounded.rounded()) < 0.001 {
+            return String(format: "%.0f", rounded)
+        }
+        return String(format: "%.1f", rounded)
+    }
+
+    private func lineManagerName(for user: AppUser) -> String {
+        guard let id = user.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
+            return "Unassigned"
+        }
+        if let manager = userStore.organizationUsers.first(where: { $0.id == id }) {
+            let name = manager.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+            return name.isEmpty ? manager.email : name
+        }
+        return "Unknown"
+    }
 }
 
 private enum ManagerTimesheetListTab {
@@ -1166,6 +1656,9 @@ private enum ManagerTimesheetListTab {
 private struct OperativeTimesheetReviewView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var notificationService: NotificationService
     let operative: AppUser
     let settings: OrganizationInvoicingSettings
     let week: WeekRange
@@ -1190,8 +1683,15 @@ private struct OperativeTimesheetReviewView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Breakdown")
                         .font(.headline)
+                    rowLine(title: "Hours · \(hoursSummary.shifts) shifts (\(formatHours(hoursSummary.hours))h)", amount: hoursSummary.amount)
+                    rowLine(title: "Overtime", amount: hoursSummary.overtimeAmount)
                     rowLine(title: "Price work · \(draft.priceWorkEntries.count)", amount: draft.priceWorkEntries.reduce(0) { $0 + $1.amount })
                     rowLine(title: "Expenses · \(draft.expenseEntries.count)", amount: draft.expenseEntries.reduce(0) { $0 + $1.amount })
+                    Divider()
+                    rowLine(
+                        title: "Total",
+                        amount: hoursSummary.amount + hoursSummary.overtimeAmount + draft.priceWorkEntries.reduce(0) { $0 + $1.amount } + draft.expenseEntries.reduce(0) { $0 + $1.amount }
+                    )
                     if !draft.managerNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Divider()
                         Text("Note to manager")
@@ -1252,6 +1752,14 @@ private struct OperativeTimesheetReviewView: View {
                             ? userStore.displayUser?.fullName
                             : userStore.displayUser?.email
                         saveDraft()
+                        let signer = draft.managerSignedByName ?? "Line manager"
+                        Task {
+                            await notificationService.notifyTimesheetSignedByManager(
+                                targetUserId: operative.id,
+                                signedByName: signer,
+                                weekStart: week.start
+                            )
+                        }
                     } label: {
                         Label("Sign off & finalise", systemImage: "checkmark")
                             .frame(maxWidth: .infinity)
@@ -1337,6 +1845,51 @@ private struct OperativeTimesheetReviewView: View {
         ) else { return }
         await MainActor.run { draft = remote }
     }
+
+    private var hoursSummary: (hours: Double, shifts: Int, amount: Double, overtimeAmount: Double) {
+        let cal = Calendar.current
+        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let standardDayHours = max(policy.standardPaidHours, 0.01)
+        let operativeIds = Set(
+            operativeStore.allOperatives
+                .filter { $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == operative.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .map(\.id)
+        )
+
+        var totalHours = 0.0
+        var shifts = 0
+        var baseAmount = 0.0
+        var overtimeAmount = 0.0
+        let dayRate = operativeStore.allOperatives.first {
+            $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == operative.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }?.dayRate ?? operative.dayRate ?? 0
+
+        for booking in bookingStore.bookings where booking.status != .cancelled {
+            guard operativeIds.contains(booking.operativeId) else { continue }
+            let day = cal.startOfDay(for: booking.date)
+            guard day >= week.start && day <= week.end else { continue }
+            shifts += 1
+            let paid = booking.paidBookedHours(policy: policy)
+            let ot = booking.overtimeHoursBeyondPaidStandard(policy: policy)
+            let normal = max(0, paid - ot)
+            totalHours += paid
+            baseAmount += dayRate * (normal / standardDayHours)
+            if ot > 0 {
+                let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
+                overtimeAmount += dayRate * ((ot / standardDayHours) * otMultiplier)
+            }
+        }
+
+        return (totalHours, shifts, baseAmount, overtimeAmount)
+    }
+
+    private func formatHours(_ value: Double) -> String {
+        let rounded = (value * 2).rounded() / 2
+        if abs(rounded - rounded.rounded()) < 0.001 {
+            return String(format: "%.0f", rounded)
+        }
+        return String(format: "%.1f", rounded)
+    }
 }
 
 private struct TimesheetMoneyEntrySheet: View {
@@ -1353,6 +1906,8 @@ private struct TimesheetMoneyEntrySheet: View {
     @State private var date = Date()
     @State private var endDate: Date?
     @State private var includeEndDate = false
+    @State private var receiptItem: PhotosPickerItem?
+    @State private var receiptName: String?
 
     private var amount: Double? {
         Double(amountText.replacingOccurrences(of: "£", with: "").trimmingCharacters(in: .whitespacesAndNewlines))
@@ -1380,6 +1935,16 @@ private struct TimesheetMoneyEntrySheet: View {
                 TextField("Amount", text: $amountText)
                     .keyboardType(.decimalPad)
                 DatePicker(mode == .expense ? "Date" : "Start date", selection: $date, displayedComponents: .date)
+                if mode == .expense {
+                    PhotosPicker(selection: $receiptItem, matching: .any(of: [.images, .not(.livePhotos)])) {
+                        HStack {
+                            Label("Upload receipt", systemImage: "paperclip")
+                            Spacer()
+                            Text(receiptName ?? "Required")
+                                .foregroundStyle(receiptName == nil ? Color.secondary : Color.blue)
+                        }
+                    }
+                }
                 if mode == .priceWork {
                     TextField("Manager who agreed this", text: $managerName)
                     Toggle("Add end date", isOn: $includeEndDate)
@@ -1408,7 +1973,7 @@ private struct TimesheetMoneyEntrySheet: View {
                                     jobNumber: jobNumber,
                                     date: date,
                                     amount: amount,
-                                    receiptName: nil
+                                    receiptName: receiptName
                                 )
                             )
                         } else {
@@ -1427,8 +1992,16 @@ private struct TimesheetMoneyEntrySheet: View {
                         }
                         dismiss()
                     }
-                    .disabled(amount == nil || (amount ?? 0) <= 0)
+                    .disabled(amount == nil || (amount ?? 0) <= 0 || (mode == .expense && receiptName == nil))
                 }
+            }
+        }
+        .onChange(of: receiptItem) { _, newItem in
+            guard let newItem else { return }
+            if let name = newItem.supportedContentTypes.first?.preferredFilenameExtension {
+                receiptName = "receipt.\(name)"
+            } else {
+                receiptName = "receipt-uploaded"
             }
         }
     }
@@ -1541,6 +2114,7 @@ private struct GenerateInvoiceView: View {
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
 
     let settings: OrganizationInvoicingSettings
+    let lockedPeriod: InvoicePeriodOption?
 
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
     @State private var selectedPeriodId: String = ""
@@ -1550,6 +2124,9 @@ private struct GenerateInvoiceView: View {
     @State private var showShareSheet = false
 
     private var periodOptions: [InvoicePeriodOption] {
+        if let lockedPeriod {
+            return [lockedPeriod]
+        }
         if settings.paymentRunMode == .recurringTimeframe {
             guard let period = recurringInvoicePeriod() else { return [] }
             return [period]
@@ -1569,6 +2146,9 @@ private struct GenerateInvoiceView: View {
     }
 
     private var selectedPeriod: InvoicePeriodOption? {
+        if let lockedPeriod {
+            return lockedPeriod
+        }
         if settings.paymentRunMode == .recurringTimeframe {
             return periodOptions.first
         }
@@ -1586,7 +2166,11 @@ private struct GenerateInvoiceView: View {
                     .textCase(.uppercase)
                     .padding(.horizontal, 4)
 
-                invoicePeriodPickerCard
+                if let lockedPeriod {
+                    lockedInvoicePeriodCard(lockedPeriod)
+                } else {
+                    invoicePeriodPickerCard
+                }
 
                 Button {
                     Task { await generateInvoicePDF() }
@@ -1637,6 +2221,11 @@ private struct GenerateInvoiceView: View {
                 selectedPeriodId = periodOptions.first?.id ?? ""
             }
         }
+    }
+
+    init(settings: OrganizationInvoicingSettings, lockedPeriod: InvoicePeriodOption? = nil) {
+        self.settings = settings
+        self.lockedPeriod = lockedPeriod
     }
 
     private var summaryCard: some View {
@@ -1770,6 +2359,28 @@ private struct GenerateInvoiceView: View {
             Text("No recurring period available.")
                 .foregroundStyle(.secondary)
         }
+    }
+
+    @ViewBuilder
+    private func lockedInvoicePeriodCard(_ period: InvoicePeriodOption) -> some View {
+        HStack {
+            Text("Invoice Period")
+                .font(.body)
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(period.title)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.blue)
+                Text(period.dateRangeText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.06), radius: 8, y: 2)
     }
 
     private func loadRateHistory() async {

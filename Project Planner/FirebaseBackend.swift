@@ -3144,6 +3144,9 @@ class FirebaseBackend: ObservableObject {
         let lastSeenAt = (data["lastSeenAt"] as? Timestamp)?.dateValue()
         let employmentTypeRaw = (data["employmentType"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let employmentType = EmploymentType(rawValue: employmentTypeRaw ?? "") ?? .selfEmployed
+        let transitionFromRaw = (data["employmentTypeTransitionFrom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let employmentTypeTransitionFrom = EmploymentType(rawValue: transitionFromRaw ?? "")
+        let employmentTypeEffectiveAt = (data["employmentTypeEffectiveAt"] as? Timestamp)?.dateValue()
         let alDays = (data["annualLeaveDaysPerYear"] as? NSNumber)?.doubleValue
             ?? (data["annualLeaveDaysPerYear"] as? Double)
             ?? AnnualLeavePolicy.defaultDaysPerYear
@@ -3179,6 +3182,8 @@ class FirebaseBackend: ObservableObject {
             profilePhotoURL: (profilePhotoRaw?.isEmpty == false) ? profilePhotoRaw : nil,
             lastSeenAt: lastSeenAt,
             employmentType: employmentType,
+            employmentTypeTransitionFrom: employmentTypeTransitionFrom,
+            employmentTypeEffectiveAt: employmentTypeEffectiveAt,
             annualLeaveEnabled: alEnabled,
             annualLeaveDaysPerYear: alDays,
             annualLeaveYearStartMonth: alStart,
@@ -3536,6 +3541,17 @@ class FirebaseBackend: ObservableObject {
             "employmentType": user.employmentType.rawValue,
             "updatedAt": Timestamp(date: Date())
         ]
+
+        if let transitionFrom = user.employmentTypeTransitionFrom {
+            userData["employmentTypeTransitionFrom"] = transitionFrom.rawValue
+        } else {
+            userData["employmentTypeTransitionFrom"] = FieldValue.delete()
+        }
+        if let effectiveAt = user.employmentTypeEffectiveAt {
+            userData["employmentTypeEffectiveAt"] = Timestamp(date: effectiveAt)
+        } else {
+            userData["employmentTypeEffectiveAt"] = FieldValue.delete()
+        }
         
         let trimmedMobile = user.mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedMobile.isEmpty {
@@ -3640,11 +3656,26 @@ class FirebaseBackend: ObservableObject {
         try await db.collection("users").document(userId).updateData(payload)
     }
 
-    func updateUserEmploymentType(userId: String, employmentType: EmploymentType) async throws {
-        let payload: [String: Any] = [
+    func updateUserEmploymentType(
+        userId: String,
+        employmentType: EmploymentType,
+        transitionFrom: EmploymentType? = nil,
+        effectiveAt: Date? = nil
+    ) async throws {
+        var payload: [String: Any] = [
             "employmentType": employmentType.rawValue,
             "updatedAt": Timestamp(date: Date()),
         ]
+        if let transitionFrom {
+            payload["employmentTypeTransitionFrom"] = transitionFrom.rawValue
+        } else {
+            payload["employmentTypeTransitionFrom"] = FieldValue.delete()
+        }
+        if let effectiveAt {
+            payload["employmentTypeEffectiveAt"] = Timestamp(date: effectiveAt)
+        } else {
+            payload["employmentTypeEffectiveAt"] = FieldValue.delete()
+        }
         try await db.collection("users").document(userId).updateData(payload)
     }
 
@@ -4011,7 +4042,9 @@ class FirebaseBackend: ObservableObject {
             "relatedId": notification.relatedId?.uuidString ?? NSNull(),
             "isRead": notification.isRead,
             "createdAt": Timestamp(date: notification.createdAt),
-            "requiresPermission": notification.requiresPermission ?? NSNull()
+            "requiresPermission": notification.requiresPermission ?? NSNull(),
+            "deepLinkUserId": notification.deepLinkUserId ?? NSNull(),
+            "deepLinkWeekStart": notification.deepLinkWeekStart.map(Timestamp.init(date:)) ?? NSNull()
         ]
         
         try await db.collection("organizations").document(organizationId).collection("notifications").document(notification.id.uuidString).setData(data)
@@ -4052,6 +4085,8 @@ class FirebaseBackend: ObservableObject {
             let relatedIdString = data["relatedId"] as? String
             let relatedId = relatedIdString != nil ? UUID(uuidString: relatedIdString!) : nil
             let requiresPermission = data["requiresPermission"] as? String
+            let deepLinkUserId = data["deepLinkUserId"] as? String
+            let deepLinkWeekStart = (data["deepLinkWeekStart"] as? Timestamp)?.dateValue()
             
             let notification = AppNotification(
                 id: id,
@@ -4063,7 +4098,9 @@ class FirebaseBackend: ObservableObject {
                 relatedId: relatedId,
                 isRead: isRead,
                 createdAt: createdAt,
-                requiresPermission: requiresPermission
+                requiresPermission: requiresPermission,
+                deepLinkUserId: deepLinkUserId,
+                deepLinkWeekStart: deepLinkWeekStart
             )
             
             notifications.append(notification)
@@ -4136,7 +4173,7 @@ class FirebaseBackend: ObservableObject {
             "isUsed": false
         ]
         
-        if permissions.operativeMode, let mid = assignedManagerUserId, !mid.isEmpty {
+        if (permissions.operativeMode || permissions.manager), let mid = assignedManagerUserId, !mid.isEmpty {
             invitationData["assignedManagerUserId"] = mid
         }
         if permissions.operativeMode, let dr = invitedOperativeDayRate {
@@ -4196,7 +4233,7 @@ class FirebaseBackend: ObservableObject {
             }
             
             let operativeManagerId: String? = {
-                guard permissions.operativeMode, let m = assignedManagerUserId, !m.isEmpty else { return nil }
+                guard (permissions.operativeMode || permissions.manager), let m = assignedManagerUserId, !m.isEmpty else { return nil }
                 return m
             }()
             
@@ -7254,6 +7291,25 @@ extension FirebaseBackend {
             userId: userId,
             weekStart: weekStart
         ).setData(data, merge: true)
+    }
+
+    func listTimesheetStates(
+        organizationId: String,
+        userId: String,
+        limit: Int = 52
+    ) async throws -> [[String: Any]] {
+        let snapshot = try await db.collection("organizations")
+            .document(organizationId)
+            .collection("settings")
+            .whereField("userId", isEqualTo: userId)
+            .order(by: "weekStart", descending: true)
+            .limit(to: limit)
+            .getDocuments()
+        return snapshot.documents.map { doc in
+            var row = doc.data()
+            row["__documentId"] = doc.documentID
+            return row
+        }
     }
 
     private func hsCollectionName(for project: Project) -> String {

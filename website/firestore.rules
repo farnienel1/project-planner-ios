@@ -238,6 +238,8 @@ service cloud.firestore {
              'annualLeaveYearEndMonth',
              'annualLeaveCarriesOver',
              'employmentType',
+             'employmentTypeTransitionFrom',
+             'employmentTypeEffectiveAt',
              'updatedAt'
            ]);
   }
@@ -249,6 +251,8 @@ service cloud.firestore {
              'assignedManagerUserId',
              'dayRate',
              'employmentType',
+             'employmentTypeTransitionFrom',
+             'employmentTypeEffectiveAt',
              'updatedAt'
            ]);
   }

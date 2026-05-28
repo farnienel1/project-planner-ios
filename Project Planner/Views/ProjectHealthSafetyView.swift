@@ -604,12 +604,14 @@ struct ProjectHealthSafetyView: View {
 
     private var managerRams: some View {
         VStack(spacing: 8) {
-            Button {
-                showingAddRams = true
-            } label: {
-                Label("Upload RAMS", systemImage: "plus")
+            if !isOperative {
+                Button {
+                    showingAddRams = true
+                } label: {
+                    Label("Upload RAMS", systemImage: "plus")
+                }
+                .buttonStyle(FilledButtonStyle(tone: .blue))
             }
-            .buttonStyle(FilledButtonStyle(tone: .blue))
 
             ForEach(vm.data.ramsDocuments, id: \.id) { doc in
                 HStack {
@@ -627,12 +629,14 @@ struct ProjectHealthSafetyView: View {
 
     private var managerOtherDocs: some View {
         VStack(spacing: 8) {
-            Button {
-                showingAddOtherDoc = true
-            } label: {
-                Label("Add trade / site doc", systemImage: "plus")
+            if !isOperative {
+                Button {
+                    showingAddOtherDoc = true
+                } label: {
+                    Label("Add trade / site doc", systemImage: "plus")
+                }
+                .buttonStyle(FilledButtonStyle(tone: .blue))
             }
-            .buttonStyle(FilledButtonStyle(tone: .blue))
 
             ForEach(vm.data.otherDocuments, id: \.id) { doc in
                 HStack {

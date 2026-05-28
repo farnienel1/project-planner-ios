@@ -80,6 +80,12 @@ class LocalNotificationService {
         case .holidayRequestDeclined:
             content.title = "Holiday Declined"
             content.body = details.isEmpty ? "A holiday request has been declined." : details
+        case .timesheetPendingManagerSignoff:
+            content.title = "Timesheet needs sign-off"
+            content.body = details.isEmpty ? "A team member submitted a timesheet for your signature." : details
+        case .timesheetSignedByManager:
+            content.title = "Timesheet signed"
+            content.body = details.isEmpty ? "Your line manager signed your timesheet." : details
         }
         
         // Set sound
