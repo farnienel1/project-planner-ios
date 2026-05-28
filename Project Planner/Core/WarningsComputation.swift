@@ -46,7 +46,7 @@ enum WarningsComputation {
         return map
     }
 
-    static func generate(_ input: WarningsComputationInput) -> [Warning] {
+    nonisolated static func generate(_ input: WarningsComputationInput) -> [Warning] {
         var generated: [Warning] = []
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())

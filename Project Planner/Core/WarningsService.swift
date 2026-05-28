@@ -184,11 +184,13 @@ class WarningsService: ObservableObject {
     ) async {
         updateGeneration += 1
         let generation = updateGeneration
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let defaultCoverageStart = warningDetection.coverageStart(from: today, calendar: cal)
+        let defaultCoverageEnd = warningDetection.coverageEnd(from: today, calendar: cal)
+        let resolvedCoverageStart = cal.startOfDay(for: labourCoverageStart ?? defaultCoverageStart)
+        let resolvedCoverageEnd = cal.startOfDay(for: labourCoverageEnd ?? defaultCoverageEnd)
         let generated = await Task.detached(priority: .utility) {
-            let cal = Calendar.current
-            let today = cal.startOfDay(for: Date())
-            let coverageStart = cal.startOfDay(for: labourCoverageStart ?? warningDetection.coverageStart(from: today, calendar: cal))
-            let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? warningDetection.coverageEnd(from: today, calendar: cal))
             let input = WarningsComputationInput(
                 operatives: operatives,
                 bookings: bookings,
@@ -198,8 +200,8 @@ class WarningsService: ObservableObject {
                 holidayBookings: holidayBookings,
                 payrollTimePolicy: payrollTimePolicy,
                 warningDetection: warningDetection,
-                coverageStart: coverageStart,
-                coverageEnd: coverageEnd,
+                coverageStart: resolvedCoverageStart,
+                coverageEnd: resolvedCoverageEnd,
                 materialOrderCutOffEnabled: materialOrderCutOffEnabled,
                 materialCutOffOnSaturday: materialCutOffOnSaturday,
                 materialCutOffOnSunday: materialCutOffOnSunday,
@@ -209,13 +211,9 @@ class WarningsService: ObservableObject {
             return WarningsComputation.generate(input)
         }.value
         guard generation == updateGeneration else { return }
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let coverageStart = cal.startOfDay(for: labourCoverageStart ?? warningDetection.coverageStart(from: today, calendar: cal))
-        let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? warningDetection.coverageEnd(from: today, calendar: cal))
         resolutionStore.pruneDismissedUnbookedKeys(
-            from: max(coverageStart, today),
-            through: coverageEnd,
+            from: max(resolvedCoverageStart, today),
+            through: resolvedCoverageEnd,
             calendar: cal
         )
         allGeneratedWarnings = generated

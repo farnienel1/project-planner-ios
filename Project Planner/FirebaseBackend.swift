@@ -4033,7 +4033,12 @@ class FirebaseBackend: ObservableObject {
     }
     
     func saveNotification(_ notification: AppNotification, organizationId: String) async throws {
-        let deepLinkWeekStartValue: Any = notification.deepLinkWeekStart.map(Timestamp.init(date:)) ?? NSNull()
+        let deepLinkWeekStartValue: Any = {
+            if let deepLinkWeekStart = notification.deepLinkWeekStart {
+                return Timestamp(date: deepLinkWeekStart)
+            }
+            return NSNull()
+        }()
         let data: [String: Any] = [
             "organizationId": notification.organizationId,
             "type": notification.type.rawValue,

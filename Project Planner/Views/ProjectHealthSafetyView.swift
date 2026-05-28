@@ -1,6 +1,7 @@
 import SwiftUI
 import PencilKit
 import Combine
+import UIKit
 
 private enum HSManagerTab: String, CaseIterable, Identifiable {
     case hub = "Hub"
@@ -251,6 +252,7 @@ struct ProjectHealthSafetyView: View {
     @State private var operativeTab: HSOperativeTab = .toolbox
     @State private var selectedTradeFilter: String = "All"
     @State private var talkSearchText = ""
+    @State private var selectedLibraryTalk: HSToolboxTalk?
     @State private var showingIssueSheet = false
     @State private var showingUploadTalkSheet = false
     @State private var selectedTalkForIssue: HSToolboxTalk?
@@ -298,6 +300,10 @@ struct ProjectHealthSafetyView: View {
             }
         }
         .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private var blankToolboxTemplateURL: URL? {
+        HSToolboxTalkDocumentBuilder.makeBlankTemplate()
     }
 
     private var availableOperativeWeeks: [Date] {
@@ -383,6 +389,13 @@ struct ProjectHealthSafetyView: View {
                         userStore: userStore
                     )
                 }
+            }
+        }
+        .sheet(item: $selectedLibraryTalk) { talk in
+            HSToolboxTalkDetailView(talk: talk) {
+                selectedLibraryTalk = nil
+                selectedTalkForIssue = talk
+                showingIssueSheet = true
             }
         }
         .sheet(item: $selectedIssueToView) { issue in
@@ -538,35 +551,67 @@ struct ProjectHealthSafetyView: View {
                 .buttonStyle(GhostButtonStyle())
             }
 
+            if let blankToolboxTemplateURL {
+                ShareLink(item: blankToolboxTemplateURL) {
+                    Label("Download blank template", systemImage: "arrow.down.doc")
+                }
+                .buttonStyle(GhostButtonStyle())
+            }
+
             VStack(spacing: 8) {
                 ForEach(filteredLibraryTalks, id: \.id) { talk in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text(talk.title)
-                                .font(.system(size: 14, weight: .semibold))
-                            Spacer()
-                            HSStatusBadge(text: talk.source == .uploaded ? "Uploaded" : "Library", tone: talk.source == .uploaded ? .info : .ok)
-                        }
-                        Text(talk.purpose)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                        Text(talk.isGeneral ? "General" : talk.trades.joined(separator: ", "))
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(HS.blue)
+                    VStack(alignment: .leading, spacing: 9) {
+                        HStack(spacing: 12) {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill((talk.isGeneral ? HS.teal : HS.blue).opacity(0.13))
+                                .frame(width: 42, height: 42)
+                                .overlay(
+                                    Image(systemName: "doc.text")
+                                        .foregroundStyle(talk.isGeneral ? HS.teal : HS.blue)
+                                )
 
-                        Button {
-                            selectedTalkForIssue = talk
-                            showingIssueSheet = true
-                        } label: {
-                            Text("Issue")
-                                .font(.system(size: 12, weight: .semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(talk.title)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(HS.ink)
+                                Text(talk.purpose)
+                                    .font(.system(size: 12.5))
+                                    .foregroundStyle(HS.slate)
+                                    .lineLimit(1)
+                                Text(talk.isGeneral ? "General" : talk.trades.joined(separator: ", "))
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .foregroundStyle(HS.blue)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            HSStatusBadge(
+                                text: talk.source == .uploaded ? "Uploaded" : "Library",
+                                tone: talk.source == .uploaded ? .info : .ok
+                            )
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(HS.teal)
+
+                        HStack {
+                            Spacer()
+                            Button {
+                                selectedTalkForIssue = talk
+                                showingIssueSheet = true
+                            } label: {
+                                Text("Issue")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(HS.teal.opacity(0.12))
+                                    .foregroundStyle(HS.teal)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                     .hsCard(padding: 12)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        selectedLibraryTalk = talk
+                    }
                 }
             }
         }
@@ -798,40 +843,150 @@ private struct HSIssueTalkSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Picker("Talk", selection: $selectedTalkId) {
-                    Text("Select talk").tag(Optional<String>.none)
-                    ForEach(talks, id: \.id) { talk in
-                        Text(talk.title).tag(Optional(talk.id))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Issue toolbox talk")
+                            .font(.system(size: 18, weight: .bold))
+                        Text("Pick a talk from library/uploads, choose week commencing, then select recipients by trade.")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(HS.slate)
                     }
-                }
-                DatePicker("Week commencing", selection: $weekCommencing, displayedComponents: .date)
-                Picker("Filter by trade", selection: $selectedTrade) {
-                    ForEach(availableTrades, id: \.self) { trade in
-                        Text(trade).tag(trade)
-                    }
-                }
-                TextField("Search operative", text: $recipientSearch)
-                Button("Select all in trade") {
-                    selectedRecipientIds.formUnion(filteredRecipients.map(\.id))
-                }
-                Section("Recipients") {
-                    ForEach(filteredRecipients, id: \.id) { user in
-                        let isSelected = selectedRecipientIds.contains(user.id)
-                        Button {
-                            if isSelected { selectedRecipientIds.remove(user.id) } else { selectedRecipientIds.insert(user.id) }
-                        } label: {
-                            HStack {
-                                Text(user.fullName)
-                                Spacer()
-                                if isSelected {
-                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue)
-                                }
+                    .hsCard(padding: 14)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Talk")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(HS.slate2)
+                            .textCase(.uppercase)
+                        Picker("Talk", selection: $selectedTalkId) {
+                            Text("Select talk").tag(Optional<String>.none)
+                            ForEach(talks, id: \.id) { talk in
+                                Text(talk.title).tag(Optional(talk.id))
                             }
                         }
                     }
+                    .hsCard(padding: 14)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Week commencing")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(HS.slate2)
+                            .textCase(.uppercase)
+                        DatePicker("Week commencing", selection: $weekCommencing, displayedComponents: .date)
+                            .labelsHidden()
+                    }
+                    .hsCard(padding: 14)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Filter recipients by trade")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(HS.slate2)
+                            .textCase(.uppercase)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(availableTrades, id: \.self) { trade in
+                                    Button(trade) { selectedTrade = trade }
+                                        .font(.system(size: 12, weight: .medium))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(selectedTrade == trade ? HS.teal : HS.card)
+                                        .foregroundStyle(selectedTrade == trade ? .white : HS.slate)
+                                        .clipShape(Capsule())
+                                }
+                            }
+                        }
+
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundStyle(.secondary)
+                            TextField("Search operative by name", text: $recipientSearch)
+                        }
+                        .padding(10)
+                        .background(Color.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(HS.line, lineWidth: 1)
+                        )
+
+                        HStack {
+                            Text("Recipients (\(filteredRecipients.count))")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(HS.slate)
+                            Spacer()
+                            Button("Select all in filter") {
+                                selectedRecipientIds.formUnion(filteredRecipients.map(\.id))
+                            }
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(HS.teal)
+                        }
+
+                        VStack(spacing: 0) {
+                            ForEach(filteredRecipients, id: \.id) { user in
+                                let isSelected = selectedRecipientIds.contains(user.id)
+                                let trade = StaffTradeType.displayLabel(presetRaw: user.tradeTypePreset, custom: user.tradeTypeCustom)
+                                Button {
+                                    if isSelected { selectedRecipientIds.remove(user.id) } else { selectedRecipientIds.insert(user.id) }
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Circle()
+                                            .fill(HS.blue.opacity(0.14))
+                                            .frame(width: 34, height: 34)
+                                            .overlay(
+                                                Text(initials(for: user))
+                                                    .font(.system(size: 12, weight: .bold))
+                                                    .foregroundStyle(HS.blue)
+                                            )
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(user.fullName.isEmpty ? user.email : user.fullName)
+                                                .font(.system(size: 14, weight: .semibold))
+                                                .foregroundStyle(HS.ink)
+                                            Text(trade)
+                                                .font(.system(size: 11.5))
+                                                .foregroundStyle(HS.slate)
+                                        }
+                                        Spacer()
+                                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .foregroundStyle(isSelected ? HS.teal : HS.slate2)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 10)
+                                }
+                                .buttonStyle(.plain)
+                                if user.id != filteredRecipients.last?.id {
+                                    Divider().padding(.leading, 56)
+                                }
+                            }
+                            if filteredRecipients.isEmpty {
+                                Text("No recipients for this filter.")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(HS.slate2)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .padding(.vertical, 18)
+                            }
+                        }
+                        .background(Color.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .shadow(color: .black.opacity(0.05), radius: 9, x: 0, y: 6)
+                    }
+                    .hsCard(padding: 14)
+
+                    Button {
+                        guard let selectedTalkId, let talk = talks.first(where: { $0.id == selectedTalkId }) else { return }
+                        onIssue(talk, weekCommencing, Array(selectedRecipientIds))
+                        dismiss()
+                    } label: {
+                        Label("Issue to \(selectedRecipientIds.count) operatives", systemImage: "paperplane.fill")
+                    }
+                    .buttonStyle(FilledButtonStyle(tone: .teal))
+                    .disabled(selectedTalkId == nil || selectedRecipientIds.isEmpty)
+                    .opacity((selectedTalkId == nil || selectedRecipientIds.isEmpty) ? 0.5 : 1)
                 }
+                .padding(16)
             }
+            .background(HS.bg.ignoresSafeArea())
             .navigationTitle("Issue Toolbox Talk")
             .onAppear {
                 if selectedTalkId == nil {
@@ -840,15 +995,106 @@ private struct HSIssueTalkSheet: View {
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Close") { dismiss() }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Issue") {
-                        guard let selectedTalkId, let talk = talks.first(where: { $0.id == selectedTalkId }) else { return }
-                        onIssue(talk, weekCommencing, Array(selectedRecipientIds))
-                        dismiss()
+            }
+        }
+    }
+
+    private func initials(for user: AppUser) -> String {
+        let name = user.fullName.isEmpty ? user.email : user.fullName
+        let chunks = name.split(separator: " ").prefix(2)
+        let letters = chunks.compactMap { $0.first }.map { String($0) }.joined()
+        return letters.isEmpty ? "U" : letters.uppercased()
+    }
+}
+
+private struct HSToolboxTalkDetailView: View {
+    let talk: HSToolboxTalk
+    let onIssue: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var talkDocumentURL: URL? {
+        HSToolboxTalkDocumentBuilder.makeDocument(for: talk)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HSStatusBadge(
+                            text: "\(talk.status == .approved ? "Approved" : "Draft") · \(talk.id)",
+                            tone: talk.status == .approved ? .ok : .warn
+                        )
+                        Text(talk.title)
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundStyle(HS.ink)
+                        Text(talk.isGeneral ? "General H&S" : talk.trades.joined(separator: ", "))
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(HS.blue)
                     }
-                    .disabled(selectedTalkId == nil || selectedRecipientIds.isEmpty)
+                    .hsCard(padding: 16)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Purpose")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(HS.slate2)
+                            .textCase(.uppercase)
+                        Text(talk.purpose.isEmpty ? "No purpose text saved for this talk yet." : talk.purpose)
+                            .font(.system(size: 14))
+                            .foregroundStyle(HS.ink)
+                    }
+                    .hsCard(padding: 16)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Key control points")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(HS.slate2)
+                            .textCase(.uppercase)
+                        if talk.keyPoints.isEmpty {
+                            Text("No key points saved.")
+                                .font(.system(size: 13))
+                                .foregroundStyle(HS.slate)
+                        } else {
+                            ForEach(Array(talk.keyPoints.enumerated()), id: \.offset) { _, point in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Text("•")
+                                        .font(.system(size: 14, weight: .bold))
+                                        .foregroundStyle(HS.teal)
+                                        .padding(.top, 1)
+                                    Text(point)
+                                        .font(.system(size: 13.5))
+                                        .foregroundStyle(HS.ink)
+                                }
+                            }
+                        }
+                    }
+                    .hsCard(padding: 16)
+
+                    if let talkDocumentURL {
+                        ShareLink(item: talkDocumentURL) {
+                            Label("Download talk", systemImage: "arrow.down.doc")
+                        }
+                        .buttonStyle(GhostButtonStyle())
+                    }
+
+                    Button {
+                        dismiss()
+                        onIssue()
+                    } label: {
+                        Label("Issue this talk", systemImage: "paperplane.fill")
+                    }
+                    .buttonStyle(FilledButtonStyle(tone: .teal))
+                }
+                .padding(16)
+            }
+            .background(HS.bg.ignoresSafeArea())
+            .navigationTitle("Toolbox Talk")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
                 }
             }
         }
@@ -865,34 +1111,170 @@ private struct HSTrackIssueView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    Text(talk?.title ?? "Toolbox talk")
-                    let signedCount = signatures.filter { $0.status == .signed }.count
-                    ProgressView(value: Double(signedCount), total: Double(max(signatures.count, 1)))
-                    Text("\(signedCount) of \(max(signatures.count, 1)) signed")
-                }
-                Section("Recipients") {
-                    ForEach(signatures, id: \.id) { signature in
-                        let name = userStore.organizationUsers.first(where: { $0.id == signature.userId })?.fullName ?? signature.userId
-                        HStack {
-                            Text(name)
+            ScrollView {
+                let signed = signatures.filter { $0.status == .signed }
+                let pending = signatures.filter { $0.status != .signed }
+                let total = max(signatures.count, 1)
+                let percent = Int((Double(signed.count) / Double(total) * 100).rounded())
+
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .bottom) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("SIGN-OFF PROGRESS")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .tracking(0.5)
+                                    .foregroundStyle(.white.opacity(0.9))
+                                Text("\(percent)%")
+                                    .font(.system(size: 40, weight: .heavy))
+                                    .foregroundStyle(.white)
+                            }
                             Spacer()
-                            Text(signature.status == .signed ? "Signed" : "Pending")
-                                .foregroundStyle(signature.status == .signed ? .green : .orange)
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text("\(signed.count)/\(total)")
+                                    .font(.system(size: 26, weight: .heavy))
+                                    .foregroundStyle(.white)
+                                Text("signed")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(0.9))
+                            }
                         }
+                        ProgressView(value: Double(signed.count), total: Double(total))
+                            .tint(.white)
+                            .background(Color.white.opacity(0.28))
                     }
+                    .padding(18)
+                    .background(
+                        LinearGradient(colors: [Color(hex: "#19c4b3"), Color(hex: "#0fae9e")], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .shadow(color: HS.teal.opacity(0.3), radius: 11, x: 0, y: 8)
+
+                    if let documentURL = signoffSheetURL() {
+                        ShareLink(item: documentURL) {
+                            Label("Download operative signatures", systemImage: "arrow.down.doc")
+                        }
+                        .buttonStyle(FilledButtonStyle(tone: .blue))
+                    }
+
+                    Text("Signed (\(signed.count))")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(HS.slate2)
+                        .textCase(.uppercase)
+                        .padding(.horizontal, 4)
+                    recipientListCard(signatures: signed, pending: false)
+
+                    Text("Awaiting (\(pending.count))")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(HS.slate2)
+                        .textCase(.uppercase)
+                        .padding(.horizontal, 4)
+                    recipientListCard(signatures: pending, pending: true)
+
+                    Button("Send reminder to pending", action: onSendReminder)
+                        .buttonStyle(GhostButtonStyle(tint: HS.blue))
                 }
+                .padding(16)
             }
+            .background(HS.bg.ignoresSafeArea())
             .navigationTitle("Sign-off tracking")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Remind pending", action: onSendReminder)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func recipientListCard(signatures: [HSToolboxSignature], pending: Bool) -> some View {
+        VStack(spacing: 0) {
+            ForEach(signatures, id: \.id) { signature in
+                let user = userStore.organizationUsers.first(where: { $0.id == signature.userId })
+                let displayName = user?.fullName.isEmpty == false ? user?.fullName ?? signature.userId : (user?.email ?? signature.userId)
+                let trade = StaffTradeType.displayLabel(presetRaw: user?.tradeTypePreset, custom: user?.tradeTypeCustom)
+                HStack(spacing: 11) {
+                    Circle()
+                        .fill((pending ? HS.amberBg : HS.greenBg))
+                        .frame(width: 36, height: 36)
+                        .overlay(
+                            Text(initials(from: displayName))
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(pending ? HS.amber : HS.green)
+                        )
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(displayName)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(HS.ink)
+                        if pending {
+                            let reminderText = signature.reminderSentAt.map { "reminder sent \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "awaiting signature"
+                            Text("\(trade) · \(reminderText)")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(HS.slate)
+                        } else {
+                            Text("\(trade) · signed \(signature.signedAt?.formatted(date: .abbreviated, time: .shortened) ?? "")")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(HS.slate)
+                        }
+                    }
+                    Spacer()
+                    if pending {
+                        HSStatusBadge(text: "Pending", tone: .warn)
+                    } else {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 23))
+                            .foregroundStyle(HS.green)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                if signature.id != signatures.last?.id {
+                    Divider().padding(.leading, 58)
                 }
             }
+            if signatures.isEmpty {
+                Text("No records")
+                    .font(.system(size: 12))
+                    .foregroundStyle(HS.slate2)
+                    .padding(.vertical, 18)
+            }
+        }
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.05), radius: 9, x: 0, y: 6)
+    }
+
+    private func initials(from name: String) -> String {
+        let chunks = name.split(separator: " ").prefix(2)
+        let letters = chunks.compactMap { $0.first }.map { String($0) }.joined()
+        return letters.isEmpty ? "U" : letters.uppercased()
+    }
+
+    private func signoffSheetURL() -> URL? {
+        let title = talk?.title ?? "Toolbox talk"
+        var lines: [String] = []
+        lines.append("Toolbox Talk Sign-off Sheet")
+        lines.append("Talk: \(title)")
+        lines.append("Week commencing: \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
+        lines.append("")
+        lines.append("Name | Trade | Status | Signed At")
+        lines.append("---")
+        for signature in signatures {
+            let user = userStore.organizationUsers.first(where: { $0.id == signature.userId })
+            let displayName = user?.fullName.isEmpty == false ? user?.fullName ?? signature.userId : (user?.email ?? signature.userId)
+            let trade = StaffTradeType.displayLabel(presetRaw: user?.tradeTypePreset, custom: user?.tradeTypeCustom)
+            let status = signature.status == .signed ? "Signed" : "Pending"
+            let signedAt = signature.signedAt?.formatted(date: .abbreviated, time: .shortened) ?? "-"
+            lines.append("\(displayName) | \(trade) | \(status) | \(signedAt)")
+        }
+        let filename = "Toolbox-Signoff-\(title.replacingOccurrences(of: " ", with: "-"))-\(Int(issue.weekCommencing.timeIntervalSince1970)).txt"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+        do {
+            try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            return nil
         }
     }
 }
@@ -904,24 +1286,46 @@ private struct HSSignTalkView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var readConfirmed = false
     @State private var signatureImageData: Data?
+    
+    private var talkDocumentURL: URL? {
+        guard let talk else { return nil }
+        return HSToolboxTalkDocumentBuilder.makeDocument(for: talk)
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(talk?.title ?? "Toolbox talk")
-                        .font(.system(size: 20, weight: .bold))
-                    Text("W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                    Text(talk?.purpose ?? "Read full talk before signing.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                    Toggle("I have read and understood this toolbox talk", isOn: $readConfirmed)
-                    HSSignaturePad(imageData: $signatureImageData)
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(talk?.title ?? "Toolbox talk")
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundStyle(HS.ink)
+                        Text("W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
+                            .font(.system(size: 12))
+                            .foregroundStyle(HS.slate)
+                        Text(talk?.purpose ?? "Read full talk before signing.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(HS.slate)
+                    }
+                    .hsCard(padding: 16)
+
+                    if let talkDocumentURL {
+                        ShareLink(item: talkDocumentURL) {
+                            Label("Download toolbox talk", systemImage: "arrow.down.doc")
+                        }
+                        .buttonStyle(GhostButtonStyle())
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("I have read and understood this toolbox talk", isOn: $readConfirmed)
+                            .tint(HS.teal)
+                        HSSignaturePad(imageData: $signatureImageData)
+                    }
+                    .hsCard(padding: 16)
                 }
                 .padding(16)
             }
+            .background(HS.bg.ignoresSafeArea())
             .navigationTitle("Sign Toolbox Talk")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -933,6 +1337,7 @@ private struct HSSignTalkView: View {
                         onSubmit(signatureImageData.base64EncodedString())
                         dismiss()
                     }
+                    .foregroundStyle(HS.blue)
                     .disabled(!readConfirmed || signatureImageData == nil)
                 }
             }
@@ -944,11 +1349,17 @@ private struct HSSignedTalkView: View {
     let issue: HSToolboxIssue
     let talk: HSToolboxTalk?
     let signature: HSToolboxSignature?
+    
+    private var talkDocumentURL: URL? {
+        guard let talk else { return nil }
+        return HSToolboxTalkDocumentBuilder.makeDocument(for: talk)
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 12) {
                     Text(talk?.title ?? "Toolbox talk")
                         .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(HS.ink)
@@ -982,7 +1393,14 @@ private struct HSSignedTalkView: View {
                             .foregroundStyle(HS.slate2)
                     }
                 }
-                .hsCard()
+                    .hsCard()
+                    if let talkDocumentURL {
+                        ShareLink(item: talkDocumentURL) {
+                            Label("Download toolbox talk", systemImage: "arrow.down.doc")
+                        }
+                        .buttonStyle(GhostButtonStyle())
+                    }
+                }
                 .padding(16)
             }
             .background(HS.bg.ignoresSafeArea())
@@ -1069,6 +1487,173 @@ private struct HSAddDocSheet: View {
                 }
             }
         }
+    }
+}
+
+private enum HSToolboxTalkDocumentBuilder {
+    static func makeDocument(for talk: HSToolboxTalk) -> URL? {
+        if let fileURL = talk.fileURL {
+            let trimmed = fileURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                if trimmed.hasPrefix("/") {
+                    return URL(fileURLWithPath: trimmed)
+                }
+                if let url = URL(string: trimmed) {
+                    return url
+                }
+            }
+        }
+        let outputURL = libraryPDFURL(for: talk)
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            return outputURL
+        }
+        return buildTalkPDF(
+            to: outputURL,
+            title: talk.title,
+            subtitle: "\(talk.id) · \(talk.isGeneral ? "General H&S" : talk.trades.joined(separator: ", "))",
+            purpose: talk.purpose,
+            keyPoints: talk.keyPoints,
+            footer: "Project Planner Toolbox Library · v\(talk.version) · \(talk.status.rawValue.capitalized)"
+        )
+    }
+
+    static func makeBlankTemplate() -> URL? {
+        let url = libraryRootDirectory().appendingPathComponent("Project-Planner-Toolbox-Talk-Template.pdf")
+        if FileManager.default.fileExists(atPath: url.path) {
+            return url
+        }
+        return buildTalkPDF(
+            to: url,
+            title: "Project Planner Toolbox Talk Template",
+            subtitle: "Blank template",
+            purpose: "Use this template to author a site-specific toolbox talk before uploading it back into the library.",
+            keyPoints: [
+                "Title:",
+                "Ref / Trade:",
+                "Date / W/C:",
+                "Presented by:",
+                "Purpose:",
+                "Key control points:",
+                "References:",
+                "Attendee sign-off: Name | Trade | Signature | Date/Time"
+            ],
+            footer: "Project Planner"
+        )
+    }
+
+    @discardableResult
+    private static func buildTalkPDF(
+        to url: URL,
+        title: String,
+        subtitle: String,
+        purpose: String,
+        keyPoints: [String],
+        footer: String
+    ) -> URL? {
+        let pageRect = CGRect(x: 0, y: 0, width: 595, height: 842) // A4
+        let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
+        let margin: CGFloat = 44
+        let contentWidth = pageRect.width - margin * 2
+        let lines = keyPoints.isEmpty ? ["No key control points saved."] : keyPoints
+
+        do {
+            try renderer.writePDF(to: url) { context in
+                context.beginPage()
+                var y = margin
+
+                let titleAttrs: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 24, weight: .bold),
+                    .foregroundColor: UIColor(red: 0.086, green: 0.125, blue: 0.18, alpha: 1)
+                ]
+                (title as NSString).draw(in: CGRect(x: margin, y: y, width: contentWidth, height: 90), withAttributes: titleAttrs)
+                y += 40
+
+                let subtitleAttrs: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
+                    .foregroundColor: UIColor(red: 0.42, green: 0.47, blue: 0.55, alpha: 1)
+                ]
+                (subtitle as NSString).draw(in: CGRect(x: margin, y: y, width: contentWidth, height: 24), withAttributes: subtitleAttrs)
+                y += 30
+
+                let sectionAttrs: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 12, weight: .bold),
+                    .foregroundColor: UIColor(red: 0.19, green: 0.45, blue: 0.94, alpha: 1)
+                ]
+                ("PURPOSE" as NSString).draw(in: CGRect(x: margin, y: y, width: contentWidth, height: 18), withAttributes: sectionAttrs)
+                y += 20
+
+                let bodyAttrs: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 13),
+                    .foregroundColor: UIColor(red: 0.14, green: 0.17, blue: 0.21, alpha: 1)
+                ]
+                let purposeText = purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "No purpose text saved for this talk."
+                    : purpose
+                let purposeRect = CGRect(x: margin, y: y, width: contentWidth, height: 120)
+                (purposeText as NSString).draw(in: purposeRect, withAttributes: bodyAttrs)
+                let purposeHeight = (purposeText as NSString).boundingRect(
+                    with: CGSize(width: contentWidth, height: 1000),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading],
+                    attributes: bodyAttrs,
+                    context: nil
+                ).height
+                y += max(50, ceil(purposeHeight) + 14)
+
+                ("KEY CONTROL POINTS" as NSString).draw(in: CGRect(x: margin, y: y, width: contentWidth, height: 18), withAttributes: sectionAttrs)
+                y += 22
+
+                for point in lines {
+                    let bullet = "• \(point)"
+                    let bulletRect = CGRect(x: margin, y: y, width: contentWidth, height: 80)
+                    (bullet as NSString).draw(in: bulletRect, withAttributes: bodyAttrs)
+                    let bulletHeight = (bullet as NSString).boundingRect(
+                        with: CGSize(width: contentWidth, height: 1000),
+                        options: [.usesLineFragmentOrigin, .usesFontLeading],
+                        attributes: bodyAttrs,
+                        context: nil
+                    ).height
+                    y += max(22, ceil(bulletHeight) + 6)
+                    if y > pageRect.height - 110 {
+                        context.beginPage()
+                        y = margin
+                    }
+                }
+
+                let footerAttrs: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 10, weight: .regular),
+                    .foregroundColor: UIColor(red: 0.55, green: 0.59, blue: 0.66, alpha: 1)
+                ]
+                (footer as NSString).draw(in: CGRect(x: margin, y: pageRect.height - 36, width: contentWidth, height: 20), withAttributes: footerAttrs)
+            }
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    private static func libraryPDFURL(for talk: HSToolboxTalk) -> URL {
+        libraryRootDirectory().appendingPathComponent("\(safeFilename(talk.id))-\(safeFilename(talk.title)).pdf")
+    }
+
+    private static func libraryRootDirectory() -> URL {
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fm.temporaryDirectory
+        let directory = base.appendingPathComponent("ProjectPlanner-ToolboxTalkLibrary", isDirectory: true)
+        if !fm.fileExists(atPath: directory.path) {
+            try? fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
+        }
+        return directory
+    }
+
+    private static func safeFilename(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: " ", with: "-")
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: "-")
+            .prefix(50)
+            .description
     }
 }
 
