@@ -197,13 +197,16 @@ class NotificationService: ObservableObject {
                 if let operativeUser = userStore.organizationUsers.first(where: { user in
                     user.email.lowercased() == operative.email.lowercased() && user.permissions.operativeMode
                 }) {
+                    let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(operativeUser.id)
+                    let dedupeId = syntheticNotificationId(from: "bookingCreated|\(bookingId.uuidString)|\(canonicalUserId)")
                     // Create notification for this specific operative
                     let notification = AppNotification(
+                        id: dedupeId,
                         organizationId: organizationId,
                         type: .bookingCreated,
                         title: "You've Been Booked",
                         message: "\(createdBy) booked you for \(projectName) on \(date.formatted(date: .abbreviated, time: .omitted))",
-                        userId: operativeUser.id, // Target specific operative
+                        userId: canonicalUserId,
                         relatedId: bookingId,
                         requiresPermission: nil // No permission check needed since it's user-specific
                     )
@@ -211,17 +214,6 @@ class NotificationService: ObservableObject {
                 }
             }
         }
-        
-        // Also notify admins and managers
-        let adminManagerNotification = AppNotification(
-            organizationId: organizationId,
-            type: .bookingCreated,
-            title: "New Booking Created",
-            message: "\(createdBy) created a booking for \(projectName) on \(date.formatted(date: .abbreviated, time: .omitted))",
-            relatedId: bookingId,
-            requiresPermission: "canBookWork" // Admins and managers who can book work
-        )
-        await saveNotification(adminManagerNotification)
     }
     
     func notifyBookingBatchCreated(projectName: String, bookingCount: Int, createdBy: String) async {
@@ -273,14 +265,17 @@ class NotificationService: ObservableObject {
             let message = dateText.isEmpty
                 ? "\(bookedBy) booked you for \(projectName)."
                 : "\(bookedBy) booked you for \(projectName) on \(dateText)."
+            let dedupeKey = "bookedUsers|\(canonicalUserId)|\(recipient.operativeId.uuidString)|\(projectName.lowercased())|\(dateText.lowercased())"
+            let dedupeRelatedId = syntheticNotificationId(from: "bookedUsersRelated|\(dedupeKey)")
             
             let notification = AppNotification(
+                id: syntheticNotificationId(from: dedupeKey),
                 organizationId: organizationId,
                 type: .bookingCreated,
                 title: "You've Been Booked",
                 message: message,
                 userId: canonicalUserId,
-                relatedId: UUID(),
+                relatedId: dedupeRelatedId,
                 requiresPermission: nil
             )
             await saveNotification(notification)
@@ -429,14 +424,17 @@ class NotificationService: ObservableObject {
     func notifyTaskCompleted(taskId: UUID, taskTitle: String, completedBy: String, assignedToUserId: String) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(assignedToUserId)
+        let dedupeId = syntheticNotificationId(from: "taskCompleted|\(taskId.uuidString)|\(canonicalUserId)")
         
         // Only notify the user who assigned the task
         let notification = AppNotification(
+            id: dedupeId,
             organizationId: organizationId,
             type: .taskCompleted,
             title: "Task Completed",
             message: "\(completedBy) completed the task: \(taskTitle)",
-            userId: assignedToUserId,
+            userId: canonicalUserId,
             relatedId: taskId,
             requiresPermission: nil // Task creator always gets notified
         )
@@ -464,13 +462,16 @@ class NotificationService: ObservableObject {
                     if let operativeUser = userStore.organizationUsers.first(where: { user in
                         user.email.lowercased() == operative.email.lowercased() && user.permissions.operativeMode
                     }) {
+                        let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(operativeUser.id)
+                        let dedupeId = syntheticNotificationId(from: "taskCreated|\(taskId.uuidString)|\(canonicalUserId)")
                         // Create notification for this specific operative
                         let notification = AppNotification(
+                            id: dedupeId,
                             organizationId: organizationId,
                             type: .taskCreated,
                             title: "New Task Assigned",
                             message: "\(createdBy) assigned you a new task: \(taskTitle)",
-                            userId: operativeUser.id, // Target specific operative
+                            userId: canonicalUserId,
                             relatedId: taskId,
                             requiresPermission: nil // No permission check needed since it's user-specific
                         )
@@ -485,12 +486,15 @@ class NotificationService: ObservableObject {
                 if let managerUser = userStore.organizationUsers.first(where: { user in
                     user.email.lowercased() == manager.email.lowercased() && !user.permissions.operativeMode
                 }) {
+                    let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(managerUser.id)
+                    let dedupeId = syntheticNotificationId(from: "taskCreated|\(taskId.uuidString)|\(canonicalUserId)")
                     let notification = AppNotification(
+                        id: dedupeId,
                         organizationId: organizationId,
                         type: .taskCreated,
                         title: "New Task Assigned",
                         message: "\(createdBy) assigned you a new task: \(taskTitle)",
-                        userId: managerUser.id,
+                        userId: canonicalUserId,
                         relatedId: taskId,
                         requiresPermission: nil
                     )
@@ -513,7 +517,9 @@ class NotificationService: ObservableObject {
         for mid in filteredRecipients {
             let targetId = await resolvedRecipientUserIdResolvingStaleIds(mid)
             print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY SUBMIT] writing notification target=\(targetId) original=\(mid)")
+            let dedupeId = syntheticNotificationId(from: "holidaySubmitted|\(bookingId.uuidString)|\(targetId)")
             let toManager = AppNotification(
+                id: dedupeId,
                 organizationId: organizationId,
                 type: .holidayRequestSubmitted,
                 title: "Annual Leave Request",
@@ -546,7 +552,9 @@ class NotificationService: ObservableObject {
         for managerId in filteredRecipients {
             let targetId = await resolvedRecipientUserIdResolvingStaleIds(managerId)
             print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY SUBMIT_BY_USER] writing notification target=\(targetId) original=\(managerId)")
+            let dedupeId = syntheticNotificationId(from: "holidaySubmitted|\(bookingId.uuidString)|\(targetId)")
             let toManager = AppNotification(
+                id: dedupeId,
                 organizationId: organizationId,
                 type: .holidayRequestSubmitted,
                 title: "Annual Leave Request",
@@ -575,7 +583,9 @@ class NotificationService: ObservableObject {
         }
         for admin in recipients {
             let targetId = resolvedRecipientUserId(admin.id)
+            let dedupeId = syntheticNotificationId(from: "holidayAdminApproved|\(managerName.lowercased())|\(approvedByName.lowercased())|\(targetId)")
             let notification = AppNotification(
+                id: dedupeId,
                 organizationId: organizationId,
                 type: .holidayRequestApproved,
                 title: "Annual Leave Approved",
@@ -607,7 +617,9 @@ class NotificationService: ObservableObject {
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let targetId = resolvedRecipientUserId(userId)
         print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY DECISION] bookingId=\(bookingId.uuidString) approved=\(approved) decidedBy=\(decidedByName) target=\(targetId) original=\(userId)")
+        let dedupeId = syntheticNotificationId(from: "holidayDecision|\(bookingId.uuidString)|\(targetId)|\(approved)")
         let notification = AppNotification(
+            id: dedupeId,
             organizationId: organizationId,
             type: approved ? .holidayRequestApproved : .holidayRequestDeclined,
             title: approved ? "Annual Leave Approved" : "Annual Leave Declined",
@@ -663,7 +675,9 @@ class NotificationService: ObservableObject {
             shouldShowNotification(notification, for: currentUser)
         }
         let synthetic = syntheticAnnualLeaveNotifications(for: currentUser, organizationId: organizationId)
-        let merged = dedupeHolidayNotificationRows((filteredNotifications + synthetic).sorted { $0.createdAt > $1.createdAt })
+        let merged = dedupeVisibleNotifications(
+            dedupeHolidayNotificationRows((filteredNotifications + synthetic).sorted { $0.createdAt > $1.createdAt })
+        )
         let targetedToCurrent = allNotifications.filter { $0.userId == currentUser.id }.count
         let broadcastCount = allNotifications.filter { $0.userId == nil }.count
         print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] targetedToCurrent=\(targetedToCurrent) broadcasts=\(broadcastCount) filteredVisible=\(filteredNotifications.count)")
@@ -743,7 +757,9 @@ class NotificationService: ObservableObject {
     private func shouldShowNotification(_ notification: AppNotification, for user: AppUser) -> Bool {
         // If notification is targeted to a specific user, only show if it's for them
         if let userId = notification.userId {
-            return userId == user.id
+            let targetCanonical = resolvedRecipientUserId(userId)
+            let currentCanonical = resolvedRecipientUserId(user.id)
+            return targetCanonical == currentCanonical
         }
         
         // Check if user has required permission
@@ -773,6 +789,21 @@ class NotificationService: ObservableObject {
         
         // No permission requirement, show to all
         return true
+    }
+
+    private func dedupeVisibleNotifications(_ notifications: [AppNotification]) -> [AppNotification] {
+        var seen = Set<String>()
+        var out: [AppNotification] = []
+        for notification in notifications.sorted(by: { $0.createdAt > $1.createdAt }) {
+            let target = notification.userId.map(resolvedRecipientUserId) ?? "broadcast"
+            let related = notification.relatedId?.uuidString ?? "none"
+            let normalizedMessage = notification.message.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = "\(notification.type.rawValue)|\(target)|\(related)|\(normalizedMessage)"
+            if seen.contains(key) { continue }
+            seen.insert(key)
+            out.append(notification)
+        }
+        return out
     }
     
     private func saveNotification(_ notification: AppNotification) async {
@@ -816,7 +847,9 @@ class NotificationService: ObservableObject {
                 let filtered = parsed.filter { self.shouldShowNotification($0, for: currentUser) }
                 let sorted = filtered.sorted { $0.createdAt > $1.createdAt }
                 let synthetic = self.syntheticAnnualLeaveNotifications(for: currentUser, organizationId: organizationId)
-                let merged = self.dedupeHolidayNotificationRows((sorted + synthetic).sorted { $0.createdAt > $1.createdAt })
+                let merged = self.dedupeVisibleNotifications(
+                    self.dedupeHolidayNotificationRows((sorted + synthetic).sorted { $0.createdAt > $1.createdAt })
+                )
                 let changedParsed = (snapshot?.documentChanges ?? [])
                     .compactMap { change -> AppNotification? in
                         // Alert only for newly added notifications after the stream is primed.
@@ -877,6 +910,7 @@ class NotificationService: ObservableObject {
 
     private func processBookingToasts(from notifications: [AppNotification]) {
         guard userStore?.isOperativeMode() == true else { return }
+        loadPersistedLocalAlertDedupKeysIfNeeded()
         let bookingNotifications = notifications
             .filter { $0.type == .bookingCreated }
             .sorted { $0.createdAt > $1.createdAt }
@@ -884,7 +918,10 @@ class NotificationService: ObservableObject {
             seenBookingNotificationIds.insert(n.id)
             if !n.isRead {
                 bookingToastMessage = n.message
-                scheduleLocalBookingAlert(message: n.message)
+                let key = notificationDedupKey(for: n)
+                guard !seenLocalAlertNotificationKeys.contains(key) else { break }
+                recordLocalAlertDedupKey(key)
+                scheduleLocalBookingAlert(message: n.message, dedupeIdentifier: key)
             }
             break
         }
@@ -920,6 +957,9 @@ class NotificationService: ObservableObject {
         let sorted = notifications.sorted { $0.createdAt > $1.createdAt }
         for notification in sorted {
             switch notification.type {
+            case .bookingCreated:
+                // Handled by processBookingToasts; avoid duplicate scheduling.
+                continue
             case .holidayRequestSubmitted, .holidayRequestApproved, .holidayRequestDeclined:
                 continue
             default:
@@ -1135,14 +1175,17 @@ class NotificationService: ObservableObject {
         return false
     }
 
-    private func scheduleLocalBookingAlert(message: String) {
+    private func scheduleLocalBookingAlert(message: String, dedupeIdentifier: String) {
         requestLocalNotificationPermissionIfNeeded()
         let content = UNMutableNotificationContent()
         content.title = "You've Been Booked"
         content.body = message
         content.sound = .default
+        let sanitizedId = String(dedupeIdentifier
+            .replacingOccurrences(of: "/", with: "-")
+            .prefix(200))
         let request = UNNotificationRequest(
-            identifier: "booking-\(UUID().uuidString)",
+            identifier: "booking-local-\(sanitizedId)",
             content: content,
             trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
         )

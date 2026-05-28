@@ -46,8 +46,8 @@ private enum FirebaseStartup {
     }
 }
 
-/// Subclass `NSObject` (not `UIResponder` alone) so GoogleUtilities’ Obj‑C swizzler sees a real `UIApplicationDelegate` and stops **I-SWZ001014** with `@UIApplicationDelegateAdaptor`.
-final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+/// Use `UIResponder` + `UIApplicationDelegate` for clean app-delegate discovery with Firebase Messaging.
+final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     var onPushToken: ((String) -> Void)?
     private var firebaseAuthStateHandle: AuthStateDidChangeListenerHandle?
 
@@ -103,6 +103,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 #endif
     }
 
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+#if canImport(FirebaseMessaging)
+        Messaging.messaging().appDidReceiveMessage(userInfo)
+#endif
+        completionHandler(.newData)
+    }
+
     private func requestRemoteNotificationRegistration(application: UIApplication) {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
             if let error {
@@ -134,24 +145,38 @@ extension AppDelegate: MessagingDelegate {
 struct Project_PlannerApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    @StateObject private var firebaseBackend: FirebaseBackend
+    @StateObject private var smartCache: SmartCacheService
+    @StateObject private var projectStore: ProjectStore
+    @StateObject private var operativeStore: OperativeStore
+    @StateObject private var bookingStore: BookingStore
+    @StateObject private var managerScheduleStore: ManagerScheduleStore
+    @StateObject private var userStore: UserStore
+    @StateObject private var taskStore: ProjectTaskStore
+    @StateObject private var holidayStore: HolidayStore
+    @StateObject private var subcontractorStore: SubcontractorStore
+    @StateObject private var appSettings: AppSettingsStore
+    @StateObject private var notificationService: NotificationService
+
     init() {
         _ = FirebaseStartup.configureIfNeeded()
+        let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
+        print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
         // Avoid a plain white UIKit window before the first SwiftUI frame (especially during Firebase / store init).
         UIWindow.appearance().backgroundColor = UIColor.systemGroupedBackground
+        _firebaseBackend = StateObject(wrappedValue: FirebaseBackend())
+        _smartCache = StateObject(wrappedValue: SmartCacheService())
+        _projectStore = StateObject(wrappedValue: ProjectStore())
+        _operativeStore = StateObject(wrappedValue: OperativeStore())
+        _bookingStore = StateObject(wrappedValue: BookingStore())
+        _managerScheduleStore = StateObject(wrappedValue: ManagerScheduleStore())
+        _userStore = StateObject(wrappedValue: UserStore())
+        _taskStore = StateObject(wrappedValue: ProjectTaskStore())
+        _holidayStore = StateObject(wrappedValue: HolidayStore())
+        _subcontractorStore = StateObject(wrappedValue: SubcontractorStore())
+        _appSettings = StateObject(wrappedValue: AppSettingsStore())
+        _notificationService = StateObject(wrappedValue: NotificationService())
     }
-
-    @StateObject private var firebaseBackend = FirebaseBackend()
-    @StateObject private var smartCache = SmartCacheService()
-    @StateObject private var projectStore = ProjectStore()
-    @StateObject private var operativeStore = OperativeStore()
-    @StateObject private var bookingStore = BookingStore()
-    @StateObject private var managerScheduleStore = ManagerScheduleStore()
-    @StateObject private var userStore = UserStore()
-    @StateObject private var taskStore = ProjectTaskStore()
-    @StateObject private var holidayStore = HolidayStore()
-    @StateObject private var subcontractorStore = SubcontractorStore()
-    @StateObject private var appSettings = AppSettingsStore()
-    @StateObject private var notificationService = NotificationService()
 
     var body: some Scene {
         WindowGroup {

@@ -615,6 +615,7 @@ struct ManageUserRowView: View {
                         "smallWorks": user.permissions.smallWorks,
                         "operativeMode": user.permissions.operativeMode,
                         "weeklyReports": user.permissions.weeklyReports,
+                        "dailyOverview": user.permissions.dailyOverview,
                         "subContractors": user.permissions.subContractors,
                         "siteAudit": user.permissions.siteAudit
                     ],
@@ -730,6 +731,7 @@ struct EditUserView: View {
     @State private var managerTransitionSkills = true
     @State private var managerTransitionQualifications = true
     @State private var managerTransitionWeeklyReports = false
+    @State private var managerTransitionDailyOverview = true
     @State private var managerTransitionSubContractors = false
     @State private var managerTransitionProjects = false
     @State private var managerTransitionSmallWorks = false
@@ -978,6 +980,7 @@ struct EditUserView: View {
                 && managerTransitionSkills == permissions.skills
                 && managerTransitionQualifications == permissions.qualifications
                 && managerTransitionWeeklyReports == permissions.weeklyReports
+                && managerTransitionDailyOverview == permissions.dailyOverview
                 && managerTransitionSubContractors == permissions.subContractors
                 && managerTransitionProjects == permissions.projects
                 && managerTransitionSmallWorks == permissions.smallWorks
@@ -993,6 +996,7 @@ struct EditUserView: View {
             managerTransitionSkills = m.skills
             managerTransitionQualifications = m.qualifications
             managerTransitionWeeklyReports = m.weeklyReports
+            managerTransitionDailyOverview = m.dailyOverview
             managerTransitionSubContractors = m.subContractors
             managerTransitionProjects = m.projects
             managerTransitionSmallWorks = m.smallWorks
@@ -1316,6 +1320,15 @@ struct EditUserView: View {
                             )
                             ManageUserCardDivider()
                             ManageUserExpandablePermissionToggleRow(
+                                iconName: "calendar.badge.clock",
+                                iconBackground: ManageUserProfilePalette.chipTealBg,
+                                iconForeground: ManageUserProfilePalette.chipTealFg,
+                                title: "Daily Overview",
+                                description: "Can open daily overview from the home screen and menus.",
+                                isOn: $managerTransitionDailyOverview
+                            )
+                            ManageUserCardDivider()
+                            ManageUserExpandablePermissionToggleRow(
                                 iconName: "person.2.wave.2.fill",
                                 iconBackground: ManageUserProfilePalette.chipTealBg,
                                 iconForeground: ManageUserProfilePalette.chipTealFg,
@@ -1458,6 +1471,7 @@ struct EditUserView: View {
                 skills: managerTransitionSkills,
                 qualifications: managerTransitionQualifications,
                 weeklyReports: managerTransitionWeeklyReports,
+                dailyOverview: managerTransitionDailyOverview,
                 subContractors: managerTransitionSubContractors,
                 projects: managerTransitionProjects,
                 smallWorks: managerTransitionSmallWorks
@@ -2258,6 +2272,18 @@ struct EditUserView: View {
             ManageUserCardDivider()
 
             ManageUserExpandablePermissionToggleRow(
+                iconName: "calendar.badge.clock",
+                iconBackground: ManageUserProfilePalette.chipTealBg,
+                iconForeground: ManageUserProfilePalette.chipTealFg,
+                title: "Daily Overview",
+                description: "Can open daily overview from the home screen and menus.",
+                isOn: $permissions.dailyOverview,
+                isDisabled: false
+            )
+
+            ManageUserCardDivider()
+
+            ManageUserExpandablePermissionToggleRow(
                 iconName: "person.2.wave.2.fill",
                 iconBackground: ManageUserProfilePalette.chipTealBg,
                 iconForeground: ManageUserProfilePalette.chipTealFg,
@@ -2401,7 +2427,12 @@ struct EditUserView: View {
         })?.id
 
         let dayRateEligible = permissions.operativeMode || permissions.manager || permissions.adminAccess
-        if canEditPermissionsMatrix && dayRateEligible && !StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText) {
+        let trimmedP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let origP = subjectUser.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let origC = subjectUser.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let tradeDirty = dayRateEligible && (trimmedP != origP || trimmedC != origC)
+        if canEditPermissionsMatrix && tradeDirty && !StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText) {
             await MainActor.run {
                 isUpdating = false
                 saveErrorMessage = "Please choose a trade type. If you select Other, enter the trade name."
@@ -2475,11 +2506,6 @@ struct EditUserView: View {
         }
 
         var tradeSuccess = true
-        let trimmedP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let origP = subjectUser.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let origC = subjectUser.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let tradeDirty = dayRateEligible && (trimmedP != origP || trimmedC != origC)
         if canEditPermissionsMatrix && tradeDirty {
             tradeSuccess = await userStore.updateUserStaffTrade(
                 for: subjectUser,
@@ -2620,6 +2646,7 @@ struct EditUserView: View {
                 "smallWorks": permissions.smallWorks,
                 "operativeMode": permissions.operativeMode,
                 "weeklyReports": permissions.weeklyReports,
+                "dailyOverview": permissions.dailyOverview,
                 "subContractors": permissions.subContractors,
                 "siteAudit": permissions.siteAudit
             ],
@@ -2689,6 +2716,7 @@ struct EditUserView: View {
                         "smallWorks": user.permissions.smallWorks,
                         "operativeMode": user.permissions.operativeMode,
                         "weeklyReports": user.permissions.weeklyReports,
+                        "dailyOverview": user.permissions.dailyOverview,
                         "subContractors": user.permissions.subContractors,
                         "siteAudit": user.permissions.siteAudit
                     ],

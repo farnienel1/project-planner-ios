@@ -32,7 +32,7 @@ struct EditProjectView: View {
     @State private var projectWorksType: String
     @State private var projectDescription: String
     @State private var selectedClient: Client?
-    @State private var selectedManager: Manager?
+    @State private var selectedManagers: [Manager]
 
     @State private var locationMode: EditLocationMode
     @State private var pinLatitude: Double?
@@ -97,7 +97,7 @@ struct EditProjectView: View {
             }
         }()
         _projectWorksType = State(initialValue: worksType)
-        _selectedManager = State(initialValue: nil)
+        _selectedManagers = State(initialValue: [])
     }
 
     var body: some View {
@@ -193,10 +193,8 @@ struct EditProjectView: View {
                 }
             }
             .onAppear {
-                if let managerId = project.managerId,
-                   let manager = operativeStore.allManagers.first(where: { $0.id == managerId }) {
-                    selectedManager = manager
-                }
+                let ids = Set(project.allAssignedManagerIds)
+                selectedManagers = operativeStore.allManagers.filter { ids.contains($0.id) }
             }
             .sheet(isPresented: $showingCreateClient) {
                 CreateClientView()
@@ -546,19 +544,38 @@ struct EditProjectView: View {
                 Text("Manager")
                     .font(.system(size: 11))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
-                Text(selectedManager.map { "\($0.firstName) \($0.lastName)" } ?? "Select manager")
+                Text(selectedManagersSummary)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
             }
             Spacer()
             Menu {
-                ForEach(operativeStore.allManagers, id: \.id) { m in
-                    Button("\(m.firstName) \(m.lastName)") { selectedManager = m }
+                ForEach(availableManagersToAdd, id: \.id) { m in
+                    Button("\(m.firstName) \(m.lastName)") { selectedManagers.append(m) }
+                }
+                if availableManagersToAdd.isEmpty {
+                    Button("All managers added") {}
+                        .disabled(true)
                 }
                 Button("Create manager…") { showingCreateManager = true }
             } label: {
-                Image(systemName: "chevron.down")
+                Image(systemName: selectedManagers.isEmpty ? "chevron.down" : "plus")
                     .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
+            if !selectedManagers.isEmpty {
+                Menu {
+                    ForEach(selectedManagers, id: \.id) { manager in
+                        Button(role: .destructive) {
+                            selectedManagers.removeAll { $0.id == manager.id }
+                        } label: {
+                            Text("Remove \(manager.firstName) \(manager.lastName)")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "minus.circle")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color(red: 0.74, green: 0.2, blue: 0.2))
+                }
             }
         }
         .padding(.vertical, 12)
@@ -572,10 +589,29 @@ struct EditProjectView: View {
     }
 
     private var managerInitials: String {
-        guard let m = selectedManager else { return "?" }
+        guard let m = selectedManagers.first else { return "?" }
         let f = m.firstName.prefix(1)
         let l = m.lastName.prefix(1)
         return "\(f)\(l)".uppercased()
+    }
+
+    private var availableManagersToAdd: [Manager] {
+        operativeStore.allManagers.filter { manager in
+            !selectedManagers.contains(where: { $0.id == manager.id })
+        }
+    }
+
+    private var selectedManagersSummary: String {
+        switch selectedManagers.count {
+        case 0:
+            return "Select manager(s)"
+        case 1:
+            let first = selectedManagers[0]
+            return "\(first.firstName) \(first.lastName)"
+        default:
+            let first = selectedManagers[0]
+            return "\(first.firstName) \(first.lastName) +\(selectedManagers.count - 1) more"
+        }
     }
 
     private var quickAddressFormSheet: some View {
@@ -652,8 +688,9 @@ struct EditProjectView: View {
             endDate: projectEndDate,
             jobType: finalJobType,
             customJobType: projectWorksType.isEmpty ? nil : projectWorksType,
-            manager: selectedManager != nil ? .custom : project.manager,
-            managerId: selectedManager?.id,
+            manager: selectedManagers.isEmpty ? project.manager : .custom,
+            managerId: selectedManagers.first?.id,
+            managerIds: selectedManagers.map(\.id),
             isLive: project.isLive,
             description: projectDescription.isEmpty ? nil : projectDescription,
             notes: project.notes,

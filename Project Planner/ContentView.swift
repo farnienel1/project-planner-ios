@@ -50,11 +50,14 @@ struct ContentView: View {
     @State private var holidaySheetShowRequests = false
     @State private var showingBookingToast = false
     @State private var bookingToastText: String?
+    @State private var relayingMainMenuSurface = false
     @State private var isReorderingTabs = false
     @State private var orderedMovableTabTags: [Int] = []
     @State private var jiggleTabs = false
     @State private var jiggleTask: Task<Void, Never>?
     @State private var tabButtonFrames: [Int: CGRect] = [:]
+    @State private var isInitialDataLoading = false
+    @State private var lastLoadedOrganizationId: String?
     
     /// Drives TabView `.id` so the page controller is recreated when role preview adds/removes tabs (avoids UIPageViewController deadlock on invalid selection).
     private var tabViewIdentity: String {
@@ -146,18 +149,15 @@ struct ContentView: View {
             // Load all data after a brief delay to ensure Firebase connection is established
             Task {
                 try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second delay
-                await loadInitialData()
+                await performInitialDataLoadIfNeeded()
             }
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         }
         .task(id: firebaseBackend.isAuthenticated) {
             guard firebaseBackend.isAuthenticated else { return }
-            // Defer first poll so startup Firestore traffic and home layout aren’t all fighting the main actor.
+            // Defer first load so startup Firestore traffic and home layout aren’t all fighting the main actor.
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            while firebaseBackend.isAuthenticated {
-                await notificationService.loadNotifications()
-                try? await Task.sleep(nanoseconds: 60_000_000_000)
-            }
+            await notificationService.loadNotifications()
         }
         .onChange(of: notificationService.bookingToastMessage) { _, newValue in
             guard let text = newValue, !text.isEmpty else { return }
@@ -175,11 +175,12 @@ struct ContentView: View {
             if let newOrgId, newOrgId != oldOrgId {
                 print("🔥🔥🔥 DEBUG: Organization changed to \(newOrgId) - reloading all data once")
                 Task {
-                    await loadInitialData()
+                    await performInitialDataLoadIfNeeded(force: true)
                 }
             } else if oldValue != nil && newValue == nil {
                 // Organization was lost - try to recover
                 print("🔥🔥🔥 DEBUG: ⚠️ Organization was lost, attempting recovery...")
+                lastLoadedOrganizationId = nil
                 Task {
                     if let userId = firebaseBackend.currentUser?.uid {
                         await firebaseBackend.loadUserOrganizationWithRecovery(userId: userId)
@@ -198,6 +199,7 @@ struct ContentView: View {
                 Task {
                     await userStore.recordCurrentUserLastSeenIfDue()
                     await notificationService.refreshQualificationExpiryReminders()
+                    await notificationService.loadNotifications()
                 }
             }
         }
@@ -226,6 +228,20 @@ struct ContentView: View {
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
                     isReorderingTabs = true
                 }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .mainMenuOpenSurface)) { notification in
+            if relayingMainMenuSurface {
+                relayingMainMenuSurface = false
+                return
+            }
+            guard selectedTab != 0 else { return }
+            let payload = notification.userInfo
+            showMoreMenuSheet = false
+            selectTab(0)
+            relayingMainMenuSurface = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                NotificationCenter.default.post(name: .mainMenuOpenSurface, object: nil, userInfo: payload)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openHoliday"))) { notification in
@@ -309,6 +325,24 @@ struct ContentView: View {
         await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
         await notificationService.refreshDailyMaterialCutOffReminder()
         await notificationService.refreshQualificationExpiryReminders()
+    }
+
+    private func performInitialDataLoadIfNeeded(force: Bool = false) async {
+        guard firebaseBackend.isAuthenticated else { return }
+        guard !isInitialDataLoading else { return }
+
+        let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId
+        if !force, let organizationId, organizationId == lastLoadedOrganizationId {
+            return
+        }
+
+        isInitialDataLoading = true
+        defer { isInitialDataLoading = false }
+
+        await loadInitialData()
+        if let organizationId {
+            lastLoadedOrganizationId = organizationId
+        }
     }
     
     /// Single visible root (no `TabView`). Hiding the system tab bar + `TabView` left the main area blank on recent iOS SDKs; we already use a custom bottom bar.

@@ -30,6 +30,7 @@ struct ManagerUserTypeTransitionConfig: Equatable {
     var skills: Bool
     var qualifications: Bool
     var weeklyReports: Bool
+    var dailyOverview: Bool
     var subContractors: Bool
     var projects: Bool
     var smallWorks: Bool
@@ -61,6 +62,7 @@ enum UserRoleTransitionPolicy {
                 skills: current.skills,
                 qualifications: current.qualifications,
                 weeklyReports: current.weeklyReports,
+                dailyOverview: current.dailyOverview,
                 subContractors: current.subContractors,
                 projects: current.projects,
                 smallWorks: current.smallWorks
@@ -72,6 +74,7 @@ enum UserRoleTransitionPolicy {
                 skills: current.skills,
                 qualifications: current.qualifications,
                 weeklyReports: current.weeklyReports,
+                dailyOverview: current.dailyOverview,
                 subContractors: current.subContractors,
                 projects: current.projects,
                 smallWorks: current.smallWorks
@@ -84,6 +87,7 @@ enum UserRoleTransitionPolicy {
                 skills: true,
                 qualifications: true,
                 weeklyReports: false,
+                dailyOverview: true,
                 subContractors: false,
                 projects: false,
                 smallWorks: false
@@ -135,6 +139,7 @@ enum UserRoleTransitionPolicy {
                 skills: true,
                 qualifications: true,
                 weeklyReports: current.weeklyReports,
+                dailyOverview: current.dailyOverview,
                 subContractors: current.subContractors,
                 projects: true,
                 smallWorks: true
@@ -151,6 +156,7 @@ enum UserRoleTransitionPolicy {
                 operativeMode: false,
                 annualLeaveSelfBook: m.annualLeaveSelfBook,
                 weeklyReports: m.weeklyReports,
+                dailyOverview: m.dailyOverview,
                 subContractors: m.subContractors,
                 siteAudit: true
             )
@@ -167,6 +173,7 @@ enum UserRoleTransitionPolicy {
                 operativeMode: false,
                 annualLeaveSelfBook: true,
                 weeklyReports: true,
+                dailyOverview: true,
                 subContractors: true,
                 siteAudit: true
             )

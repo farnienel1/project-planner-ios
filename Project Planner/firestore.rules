@@ -16,12 +16,16 @@ service cloud.firestore {
   function adminLikeUser(userData) {
     return ('isSuperAdmin' in userData && truthyBool(userData.isSuperAdmin)) ||
            ('adminAccess' in userData && truthyBool(userData.adminAccess)) ||
+           ('permissions' in userData && userData.permissions is map &&
+             ('adminAccess' in userData.permissions && truthyBool(userData.permissions.adminAccess))) ||
            ('role' in userData && userData.role == 'admin');
   }
 
   function materialManagerLikeUser(userData) {
     return adminLikeUser(userData) ||
            ('manager' in userData && truthyBool(userData.manager)) ||
+           ('permissions' in userData && userData.permissions is map &&
+             ('manager' in userData.permissions && truthyBool(userData.permissions.manager))) ||
            ('role' in userData && userData.role == 'manager');
   }
   
@@ -402,12 +406,24 @@ service cloud.firestore {
         // Path already scopes org; do not require body organizationId type (string vs ref) to match.
         allow create, update: if canAccessOrganization(organizationId);
         allow delete: if isOrganizationAdmin(organizationId);
+
+        match /healthSafety/{documentId} {
+          allow read: if canAccessOrganization(organizationId);
+          allow create, update: if canAccessOrganization(organizationId);
+          allow delete: if isOrganizationAdmin(organizationId);
+        }
       }
       
       match /smallWorks/{smallWorkId} {
         allow read: if canAccessOrganization(organizationId);
         allow create, update: if canAccessOrganization(organizationId);
         allow delete: if isOrganizationAdmin(organizationId);
+
+        match /healthSafety/{documentId} {
+          allow read: if canAccessOrganization(organizationId);
+          allow create, update: if canAccessOrganization(organizationId);
+          allow delete: if isOrganizationAdmin(organizationId);
+        }
       }
       
       // Path already scopes to this org; body organizationId can drift or be typed oddly on some clients.

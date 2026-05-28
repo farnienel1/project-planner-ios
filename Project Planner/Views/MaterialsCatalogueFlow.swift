@@ -22,6 +22,7 @@ struct MaterialCatalogueRootView: View {
     @State private var editItem: MaterialCatalogItem?
     @State private var saveError: String?
     @State private var deleteError: String?
+    @State private var expandedCategories: Set<String> = []
 
     private struct CategoryGroup: Identifiable {
         let id: String
@@ -84,18 +85,39 @@ struct MaterialCatalogueRootView: View {
                         emptyCatalogue
                     } else {
                         ForEach(groupedFilteredItems) { group in
-                            VStack(alignment: .leading, spacing: 7) {
-                                Text(group.category.uppercased())
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(MaterialsOrderingTheme.muted)
-                                    .padding(.leading, 2)
-                                ForEach(group.items) { item in
-                                    Button { selectedItem = item } label: {
-                                        catalogueRow(item)
+                            DisclosureGroup(
+                                isExpanded: Binding(
+                                    get: { expandedCategories.contains(group.category) },
+                                    set: { isExpanded in
+                                        if isExpanded {
+                                            expandedCategories.insert(group.category)
+                                        } else {
+                                            expandedCategories.remove(group.category)
+                                        }
                                     }
-                                    .buttonStyle(.plain)
+                                )
+                            ) {
+                                VStack(spacing: 8) {
+                                    ForEach(group.items) { item in
+                                        Button { selectedItem = item } label: {
+                                            catalogueRow(item)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(.top, 8)
+                            } label: {
+                                HStack {
+                                    Text(group.category.uppercased())
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                                    Spacer()
+                                    Text("\(group.items.count) item\(group.items.count == 1 ? "" : "s")")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(MaterialsOrderingTheme.muted)
                                 }
                             }
+                            .padding(.vertical, 4)
                         }
                     }
                 }
@@ -355,8 +377,17 @@ struct MaterialCatalogueRootView: View {
                         .padding(.vertical, 1)
                         .background(Color(red: 0.949, green: 0.953, blue: 0.961))
                         .clipShape(RoundedRectangle(cornerRadius: 3))
-                    if let size = item.sizeOrLengthLabel {
-                        Text(size)
+                    if let size = item.size?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty {
+                        Text("Size: \(size)")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Color(red: 0.949, green: 0.953, blue: 0.961))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                    if let length = item.length?.trimmingCharacters(in: .whitespacesAndNewlines), !length.isEmpty {
+                        Text("Length: \(length)")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(MaterialsOrderingTheme.muted)
                             .padding(.horizontal, 6)
@@ -418,7 +449,8 @@ private struct MaterialCatalogueEditorSheet: View {
     @State private var brand = ""
     @State private var productCode = ""
     @State private var unit: MaterialUnit = .number
-    @State private var sizeOrLength = ""
+    @State private var sizeValue = ""
+    @State private var lengthValue = ""
     @State private var category = ""
     @State private var showingDuplicateAlert = false
     @State private var duplicateMatch: MaterialCatalogItem?
@@ -484,7 +516,8 @@ private struct MaterialCatalogueEditorSheet: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    textFieldRow(label: "Size/Length", text: $sizeOrLength, required: false, placeholder: "Optional")
+                    textFieldRow(label: "Size", text: $sizeValue, required: false, placeholder: "Optional")
+                    textFieldRow(label: "Length", text: $lengthValue, required: false, placeholder: "Optional")
                 }
                 .padding(16)
             }
@@ -508,7 +541,8 @@ private struct MaterialCatalogueEditorSheet: View {
                     brand = item.brand
                     productCode = item.productCode ?? ""
                     unit = item.defaultUnit
-                    sizeOrLength = item.sizeOrLength ?? ""
+                    sizeValue = item.size ?? ""
+                    lengthValue = item.length ?? item.sizeOrLength ?? ""
                     category = item.category ?? "Other"
                 }
             }
@@ -548,7 +582,8 @@ private struct MaterialCatalogueEditorSheet: View {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBrand = brand.trimmingCharacters(in: .whitespacesAndNewlines)
         let code = productCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        let size = sizeOrLength.trimmingCharacters(in: .whitespacesAndNewlines)
+        let size = sizeValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let length = lengthValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let cat = category.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let uid = firebaseBackend.currentUser?.uid ?? Auth.auth().currentUser?.uid ?? ""
@@ -567,7 +602,8 @@ private struct MaterialCatalogueEditorSheet: View {
             brand: trimmedBrand.isEmpty ? "Custom" : trimmedBrand,
             productCode: code.isEmpty ? nil : code,
             defaultUnit: unit,
-            sizeOrLength: size.isEmpty ? nil : size,
+            size: size.isEmpty ? nil : size,
+            length: length.isEmpty ? nil : length,
             category: cat.isEmpty ? "Other" : cat,
             createdAt: {
                 if case .edit(let existing) = mode { return existing.createdAt }
@@ -693,7 +729,8 @@ private struct MaterialCatalogueDetailView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 14))
 
                     specRow(label: "Default unit", value: unitLabel)
-                    specRow(label: "Size/Length", value: item.sizeOrLengthLabel ?? "—")
+                    specRow(label: "Size", value: item.size?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? item.size! : "—")
+                    specRow(label: "Length", value: item.length?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? item.length! : "—")
                     specRow(label: "Category", value: item.category ?? "—")
                     specRow(label: "Added", value: "\(item.createdAt.formatted(date: .abbreviated, time: .omitted)) by \(item.createdByName)")
 
@@ -728,7 +765,7 @@ private struct MaterialCatalogueDetailView: View {
     }
 
     private var unitLabel: String {
-        if let size = item.sizeOrLengthLabel, item.defaultUnit == .box {
+        if let size = item.length?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty, item.defaultUnit == .box {
             return "Box · \(size)"
         }
         return item.defaultUnit.rawValue
@@ -766,6 +803,7 @@ struct MaterialCatalogueBulkImportView: View {
     @State private var isImporting = false
     @State private var templateShareURL: URL?
     @State private var showTemplateShare = false
+    @State private var showCSVDownloadWarning = false
 
     var body: some View {
         NavigationStack {
@@ -776,10 +814,7 @@ struct MaterialCatalogueBulkImportView: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(MaterialsOrderingTheme.muted)
                     Button {
-                        if templateShareURL == nil {
-                            templateShareURL = try? MaterialCatalogCSV.writeTemplateToTemporaryFile()
-                        }
-                        showTemplateShare = templateShareURL != nil
+                        showCSVDownloadWarning = true
                     } label: {
                         Label("Download CSV template", systemImage: "arrow.down.circle")
                             .frame(maxWidth: .infinity)
@@ -851,6 +886,17 @@ struct MaterialCatalogueBulkImportView: View {
             } message: {
                 Text(importError ?? "")
             }
+            .alert("⚠️ CSV Warning", isPresented: $showCSVDownloadWarning) {
+                Button("Cancel", role: .cancel) {}
+                Button("Download CSV") {
+                    if templateShareURL == nil {
+                        templateShareURL = try? MaterialCatalogCSV.writeTemplateToTemporaryFile()
+                    }
+                    showTemplateShare = templateShareURL != nil
+                }
+            } message: {
+                Text("When re-importing the file for a batch upload, make sure you save the file as csv and not .xls (excel) or .numbers (for mac). The batch upload function can only read .csv files. The template you download will be .csv by default.")
+            }
         }
     }
 
@@ -858,7 +904,7 @@ struct MaterialCatalogueBulkImportView: View {
         HStack(alignment: .top, spacing: 9) {
             Image(systemName: "info.circle.fill")
                 .foregroundStyle(MaterialsOrderingTheme.primary)
-            Text("Add many materials at once. Columns: Name, Manufacturer, Code, Default Unit, Size/Length, Length, Category. Duplicate checks use material name.")
+            Text("Add many materials at once. Columns: Name, Category, Manufacturer/Brand, Product Code, Default Unit (Length, Box or Number), Size, Length. Duplicate checks use material name.")
                 .font(.system(size: 11))
                 .foregroundStyle(MaterialsOrderingTheme.primary)
         }

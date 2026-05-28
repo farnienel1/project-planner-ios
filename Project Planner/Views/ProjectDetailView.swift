@@ -84,7 +84,11 @@ struct ProjectDetailView: View {
     @State private var showingScheduleOperative = false
     /// When non-nil, operative schedule opens pre-filled to edit this booking (same project).
     @State private var scheduleOperativeSeedBooking: Booking? = nil
+    @State private var scheduleOperativeGroupId: String? = nil
     @State private var bookingEditTarget: DailyOverviewEditTarget?
+    @State private var lastSchedulingDataRefreshAt: Date?
+    @State private var subcontractorEditBooking: SubcontractorBooking?
+    @State private var expandedSchedulingDayKeys: Set<TimeInterval> = []
     @State private var showingScheduleSubcontractor = false
     @State private var showingEditProject = false
     @State private var showingMapOptions = false
@@ -99,6 +103,7 @@ struct ProjectDetailView: View {
         case visibility = "View"
         case tasks = "My Tasks"
         case materials = "Materials"
+        case healthSafety = "H&S"
         case siteAudit = "Site Audit"
         case location = "Location"
 
@@ -109,6 +114,7 @@ struct ProjectDetailView: View {
             case .visibility: return "eye"
             case .tasks: return "checklist"
             case .materials: return "shippingbox"
+            case .healthSafety: return "cross.case.fill"
             case .siteAudit: return "clipboard.fill"
             case .location: return "mappin.and.ellipse"
             }
@@ -190,8 +196,15 @@ struct ProjectDetailView: View {
             Color.clear
                 .preference(key: HideBottomMenuKey.self, value: true)
         )
-        .sheet(isPresented: $showingScheduleOperative, onDismiss: { scheduleOperativeSeedBooking = nil }) {
-            ScheduleOperativeView(project: project, editingBooking: scheduleOperativeSeedBooking)
+        .sheet(isPresented: $showingScheduleOperative, onDismiss: {
+            scheduleOperativeSeedBooking = nil
+            scheduleOperativeGroupId = nil
+        }) {
+            ScheduleOperativeView(
+                project: project,
+                editingBooking: scheduleOperativeSeedBooking,
+                editingGroupId: scheduleOperativeGroupId
+            )
                 .environmentObject(bookingStore)
                 .environmentObject(operativeStore)
                 .environmentObject(projectStore)
@@ -209,6 +222,14 @@ struct ProjectDetailView: View {
             ScheduleSubcontractorView(project: project)
                 .environmentObject(subcontractorStore)
                 .preference(key: HideBottomMenuKey.self, value: true)
+        }
+        .sheet(item: $subcontractorEditBooking) { booking in
+            SubcontractorBookingEditSheet(booking: booking) {
+                subcontractorEditBooking = nil
+            }
+            .environmentObject(firebaseBackend)
+            .environmentObject(subcontractorStore)
+            .preference(key: HideBottomMenuKey.self, value: true)
         }
         .sheet(isPresented: $showingEditProject) {
             EditProjectView(project: project)
@@ -231,7 +252,7 @@ struct ProjectDetailView: View {
         }
         .onAppear {
             geocodeAddress()
-            loadWeekBookings()
+            loadWeekBookings(force: true)
             loadWeekViewPreference()
             Task {
                 await taskStore.loadData()
@@ -248,10 +269,10 @@ struct ProjectDetailView: View {
             geocodeAddress()
         }
         .onChange(of: selectedWeek) { _, _ in
-            loadWeekBookings()
+            // Week navigation uses in-memory data; avoid reloading network on every tap.
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
-            loadWeekBookings()
+            // Store state is already updated by save/delete paths; avoid immediate refetch storms.
         }
         .onDisappear {
             // When leaving, the preference will automatically reset
@@ -499,15 +520,15 @@ struct ProjectDetailView: View {
         let availableTiles: [DetailTile] = {
             if userStore.isOperativeMode() {
                 if userStore.canViewMaterials() {
-                    return userStore.canViewSiteAudit() ? [.tasks, .materials, .siteAudit, .location] : [.tasks, .materials, .location]
+                    return userStore.canViewSiteAudit() ? [.tasks, .materials, .healthSafety, .siteAudit, .location] : [.tasks, .materials, .healthSafety, .location]
                 }
-                return userStore.canViewSiteAudit() ? [.tasks, .siteAudit, .location] : [.tasks, .location]
+                return userStore.canViewSiteAudit() ? [.tasks, .healthSafety, .siteAudit, .location] : [.tasks, .healthSafety, .location]
             }
             var tiles: [DetailTile] = [.scheduling]
             if canConfigureProjectVisibility {
                 tiles.append(.visibility)
             }
-            tiles.append(contentsOf: [.tasks, .materials, .siteAudit, .location])
+            tiles.append(contentsOf: [.tasks, .materials, .healthSafety, .siteAudit, .location])
             return tiles
         }()
 
@@ -582,6 +603,7 @@ struct ProjectDetailView: View {
         case .visibility: return ProjectWorksRevampColors.jobTypePillBg
         case .tasks: return Color(red: 0.882, green: 0.961, blue: 0.933)
         case .materials: return Color(red: 0.98, green: 0.933, blue: 0.855)
+        case .healthSafety: return Color(red: 0.89, green: 0.98, blue: 0.95)
         case .siteAudit: return Color(red: 0.98, green: 0.925, blue: 0.906)
         case .location: return Color(red: 0.984, green: 0.918, blue: 0.941)
         }
@@ -593,6 +615,7 @@ struct ProjectDetailView: View {
         case .visibility: return Color(red: 0.325, green: 0.29, blue: 0.718)
         case .tasks: return ProjectWorksRevampColors.activeGreen
         case .materials: return ProjectWorksRevampColors.upcomingAmber
+        case .healthSafety: return Color(red: 0.07, green: 0.62, blue: 0.47)
         case .siteAudit: return Color(red: 0.6, green: 0.235, blue: 0.114)
         case .location: return Color(red: 0.6, green: 0.208, blue: 0.337)
         }
@@ -620,6 +643,9 @@ struct ProjectDetailView: View {
                 .environmentObject(firebaseBackend)
                 .navigationTitle(tile.rawValue)
                 .navigationBarTitleDisplayMode(.inline)
+        case .healthSafety:
+            ProjectHealthSafetyView(project: project)
+                .environmentObject(userStore)
         case .scheduling, .tasks, .location:
             ScrollView {
                 VStack(spacing: 20) {
@@ -647,6 +673,34 @@ struct ProjectDetailView: View {
             schedulingWeekPickerCard
             schedulingDualActions
             schedulingWeekOverviewSection
+        }
+        .onAppear {
+            ensureTodaySchedulingDayExpanded()
+        }
+        .onChange(of: selectedWeek) { _, _ in
+            ensureTodaySchedulingDayExpanded()
+        }
+    }
+
+    private func ensureTodaySchedulingDayExpanded() {
+        let todayKey = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
+        if expandedSchedulingDayKeys.isEmpty {
+            expandedSchedulingDayKeys = [todayKey]
+        } else if !expandedSchedulingDayKeys.contains(todayKey) {
+            expandedSchedulingDayKeys.insert(todayKey)
+        }
+    }
+
+    private func isSchedulingDayExpanded(_ date: Date) -> Bool {
+        expandedSchedulingDayKeys.contains(Calendar.current.startOfDay(for: date).timeIntervalSince1970)
+    }
+
+    private func toggleSchedulingDayExpanded(_ date: Date) {
+        let key = Calendar.current.startOfDay(for: date).timeIntervalSince1970
+        if expandedSchedulingDayKeys.contains(key) {
+            expandedSchedulingDayKeys.remove(key)
+        } else {
+            expandedSchedulingDayKeys.insert(key)
         }
     }
 
@@ -781,8 +835,10 @@ struct ProjectDetailView: View {
                 HStack(spacing: 5) {
                     Image(systemName: "person.badge.plus")
                         .font(.system(size: 13, weight: .medium))
-                    Text("Operative")
-                        .font(.system(size: 11, weight: .medium))
+                    Text("Operatives and Managers")
+                        .font(.system(size: 10, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
@@ -795,8 +851,10 @@ struct ProjectDetailView: View {
                 HStack(spacing: 5) {
                     Image(systemName: "person.2.badge.plus")
                         .font(.system(size: 13, weight: .medium))
-                    Text("Sub")
-                        .font(.system(size: 11, weight: .medium))
+                    Text("Subcontractors")
+                        .font(.system(size: 10, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
@@ -845,7 +903,7 @@ struct ProjectDetailView: View {
     private var schedulingListWeekOverview: some View {
         VStack(spacing: 6) {
             ForEach(weekDays, id: \.self) { day in
-                schedulingDayCard(for: day)
+                schedulingDayCard(for: day, isExpanded: isSchedulingDayExpanded(day))
             }
         }
     }
@@ -892,26 +950,18 @@ struct ProjectDetailView: View {
         for b in managerBookingsForDate(date) {
             t += b.overtimeHoursBeyondPaidStandard(policy: p)
         }
+        for b in subcontractorBookingsForDate(date) {
+            t += b.payrollMirrorBooking().overtimeHoursBeyondPaidStandard(policy: p)
+        }
         return t
     }
 
     private func subcontractorApproximateHours(_ booking: SubcontractorBooking) -> Double {
-        let p = payrollTimePolicy
-        switch booking.timeSlot {
-        case .fullDay, .customHours: return max(p.standardPaidHours, 0)
-        case .morning, .afternoon: return max(p.standardPaidHours, 0) / 2
-        case .evening: return 4
-        case .overtime: return 2
-        }
+        booking.payrollMirrorBooking().paidBookedHours(policy: payrollTimePolicy)
     }
 
     private func subcontractorScheduleLabel(_ booking: SubcontractorBooking) -> String {
-        switch booking.timeSlot {
-        case .fullDay:
-            return "\(payrollTimePolicy.standardDayStart)–\(payrollTimePolicy.standardDayEnd)"
-        default:
-            return booking.timeSlot.displayName
-        }
+        booking.payrollMirrorBooking().scheduleLabel(policy: payrollTimePolicy)
     }
 
     private func formatSchedulingOTHours(_ hours: Double) -> String {
@@ -920,6 +970,14 @@ struct ProjectDetailView: View {
             return String(format: "%.0f", rounded)
         }
         return String(format: "%.1f", rounded)
+    }
+
+    private var otMultiplierBadgeLabel: String {
+        let mult = payrollTimePolicy.weekdayOutsideStandardMultiplier
+        if abs(mult - mult.rounded()) < 0.01 {
+            return "x\(Int(mult.rounded()))"
+        }
+        return String(format: "x%.1f", mult)
     }
 
     private func schedulingHoursPill(hours: Double, hasOvertime: Bool) -> some View {
@@ -937,9 +995,9 @@ struct ProjectDetailView: View {
 
     private func schedulingAvatar(initials: String, accent: LinearGradient) -> some View {
         Text(initials)
-            .font(.system(size: 7, weight: .medium))
+            .font(.system(size: 10, weight: .medium))
             .foregroundStyle(.white)
-            .frame(width: 16, height: 16)
+            .frame(width: 22, height: 22)
             .background(accent)
             .clipShape(Circle())
     }
@@ -1000,10 +1058,16 @@ struct ProjectDetailView: View {
                 },
                 onCancel: { bookingEditTarget = nil }
             )
+        case .subcontractor(let booking, _, _):
+            SubcontractorBookingEditSheet(booking: booking) {
+                bookingEditTarget = nil
+            }
+            .environmentObject(firebaseBackend)
+            .environmentObject(subcontractorStore)
         }
     }
 
-    private func schedulingDayCard(for date: Date) -> some View {
+    private func schedulingDayCard(for date: Date, isExpanded: Bool) -> some View {
         let isToday = Calendar.current.isDateInToday(date)
         let count = schedulingDayBookedCount(date)
         let dayOT = schedulingDayOvertimeTotal(date)
@@ -1013,57 +1077,122 @@ struct ProjectDetailView: View {
         let hasRows = count > 0
 
         return VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(schedulingShortDayTitle(date))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(isToday ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.ink)
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    if dayOT > 0.05 {
-                        Text("+\(formatSchedulingOTHours(dayOT))h OT")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    toggleSchedulingDayExpanded(date)
+                }
+            } label: {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(schedulingShortDayTitle(date))
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(isToday ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.ink)
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        if dayOT > 0.05 {
+                            Text("+\(formatSchedulingOTHours(dayOT))h OT (\(otMultiplierBadgeLabel))")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+                        }
+                        if count > 0 {
+                            Text("\(count) booked")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.blue)
+                        } else {
+                            Text("No bookings")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                        }
                     }
-                    if count > 0 {
-                        Text("\(count) booked")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
-                    } else {
-                        Text("No bookings")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                    }
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
                 }
             }
-            if hasRows {
-                VStack(alignment: .leading, spacing: 4) {
+            .buttonStyle(.plain)
+
+            if isExpanded, hasRows {
+                VStack(alignment: .leading, spacing: 6) {
                     ForEach(mgrBookings, id: \.id) { booking in
                         schedulingManagerBookingRow(booking: booking)
                     }
-                    ForEach(opBookings, id: \.id) { booking in
-                        schedulingOperativeBookingRow(booking: booking) {
-                            let name = operativeStore.activeOperatives.first { $0.id == booking.operativeId }?.name ?? "Operative"
-                            bookingEditTarget = .operative(
-                                booking: booking,
-                                project: project,
-                                personName: name
-                            )
-                        }
-                    }
+                    schedulingGroupedOperativeRows(opBookings, date: date)
                     ForEach(subBookings, id: \.id) { booking in
                         schedulingSubcontractorBookingRow(booking: booking)
                     }
                 }
             }
         }
-        .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+        .padding(EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12))
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(isToday ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.border, lineWidth: isToday ? 0.5 : 0.5)
+                .stroke(isToday ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.border, lineWidth: 0.5)
         )
+    }
+
+    @ViewBuilder
+    private func schedulingGroupedOperativeRows(_ opBookings: [Booking], date: Date) -> some View {
+        let grouped = Dictionary(grouping: opBookings) { booking in
+            booking.bookingGroupId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? booking.bookingGroupId!
+                : "single-\(booking.id.uuidString)"
+        }
+        ForEach(grouped.keys.sorted(), id: \.self) { key in
+            let rows = grouped[key] ?? []
+            let isGroup = rows.count > 1 && !key.hasPrefix("single-")
+            if isGroup, let groupId = rows.first?.bookingGroupId {
+                VStack(alignment: .leading, spacing: 4) {
+                    Button {
+                        scheduleOperativeSeedBooking = nil
+                        scheduleOperativeGroupId = groupId
+                        showingScheduleOperative = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "person.2.fill")
+                                .font(.system(size: 11, weight: .medium))
+                            Text("Group booking · \(rows.count) people")
+                                .font(.system(size: 11, weight: .semibold))
+                            Spacer()
+                            Text("Edit group")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(ProjectWorksRevampColors.blue.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    ForEach(rows, id: \.id) { booking in
+                        schedulingOperativeBookingRow(booking: booking) {
+                            Task { await detachBookingFromGroupAndEdit(booking) }
+                        }
+                    }
+                }
+            } else {
+                ForEach(rows, id: \.id) { booking in
+                    schedulingOperativeBookingRow(booking: booking) {
+                        let name = operativeStore.activeOperatives.first { $0.id == booking.operativeId }?.name ?? "Operative"
+                        bookingEditTarget = .operative(
+                            booking: booking,
+                            project: project,
+                            personName: name
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func detachBookingFromGroupAndEdit(_ booking: Booking) async {
+        var updated = booking
+        updated.bookingGroupId = nil
+        updated.updatedAt = Date()
+        await bookingStore.updateBooking(updated)
+        let name = operativeStore.activeOperatives.first { $0.id == booking.operativeId }?.name ?? "Operative"
+        bookingEditTarget = .operative(booking: updated, project: project, personName: name)
     }
 
     private func schedulingOperativeBookingRow(booking: Booking, onTap: @escaping () -> Void) -> some View {
@@ -1074,24 +1203,25 @@ struct ProjectDetailView: View {
         let hrs = booking.paidBookedHours(policy: p)
         let ot = booking.overtimeHoursBeyondPaidStandard(policy: p)
         return Button(action: onTap) {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 schedulingAvatar(initials: initials, accent: schedulingOperativeGradient)
                 Text(name)
-                    .font(.system(size: 10))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 Text(booking.scheduleLabel(policy: p))
-                    .font(.system(size: 9))
+                    .font(.system(size: 11))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                 schedulingHoursPill(hours: hrs, hasOvertime: ot > 0.05)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(ProjectWorksRevampColors.muted.opacity(0.7))
             }
-            .padding(EdgeInsets(top: 4, leading: 7, bottom: 4, trailing: 7))
+            .padding(EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10))
+            .frame(minHeight: 44)
             .background(ProjectWorksRevampColors.canvas)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -1109,24 +1239,25 @@ struct ProjectDetailView: View {
                 personName: managerName
             )
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 schedulingAvatar(initials: initials, accent: schedulingSubcontractorGradient)
                 Text(managerName)
-                    .font(.system(size: 10))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 Text(booking.scheduleLabel(policy: p))
-                    .font(.system(size: 9))
+                    .font(.system(size: 11))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                 schedulingHoursPill(hours: hrs, hasOvertime: ot > 0.05)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(ProjectWorksRevampColors.muted.opacity(0.7))
             }
-            .padding(EdgeInsets(top: 4, leading: 7, bottom: 4, trailing: 7))
+            .padding(EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10))
+            .frame(minHeight: 44)
             .background(ProjectWorksRevampColors.canvas)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -1136,22 +1267,31 @@ struct ProjectDetailView: View {
         let name = sub?.name ?? "Subcontractor"
         let initials = PlannerUIInitials.from(name)
         let hrs = subcontractorApproximateHours(booking)
-        let ot = max(0, hrs - max(payrollTimePolicy.standardPaidHours, 0))
-        return HStack(spacing: 6) {
-            schedulingAvatar(initials: initials, accent: schedulingSubcontractorGradient)
-            Text(name)
-                .font(.system(size: 10))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            Text(subcontractorScheduleLabel(booking))
-                .font(.system(size: 9))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-            schedulingHoursPill(hours: hrs, hasOvertime: ot > 0.05)
+        let ot = booking.payrollMirrorBooking().overtimeHoursBeyondPaidStandard(policy: payrollTimePolicy)
+        return Button {
+            subcontractorEditBooking = booking
+        } label: {
+            HStack(spacing: 8) {
+                schedulingAvatar(initials: initials, accent: schedulingSubcontractorGradient)
+                Text(name)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(subcontractorScheduleLabel(booking))
+                    .font(.system(size: 11))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                schedulingHoursPill(hours: hrs, hasOvertime: ot > 0.05)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ProjectWorksRevampColors.muted.opacity(0.7))
+            }
+            .padding(EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10))
+            .frame(minHeight: 44)
+            .background(ProjectWorksRevampColors.canvas)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
-        .padding(EdgeInsets(top: 4, leading: 7, bottom: 4, trailing: 7))
-        .background(ProjectWorksRevampColors.canvas)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .buttonStyle(.plain)
     }
 
     private func schedulingCompactDayCell(for date: Date) -> some View {
@@ -1562,7 +1702,11 @@ struct ProjectDetailView: View {
         }
     }
     
-    private func loadWeekBookings() {
+    private func loadWeekBookings(force: Bool = false) {
+        if !force, let last = lastSchedulingDataRefreshAt, Date().timeIntervalSince(last) < 8 {
+            return
+        }
+        lastSchedulingDataRefreshAt = Date()
         bookingStore.loadData()
         managerScheduleStore.loadData()
         Task { await subcontractorStore.loadData() }
@@ -1712,17 +1856,15 @@ struct ProjectDetailView: View {
         return VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Spacer(minLength: 0)
-                if !userStore.isOperativeMode() {
-                    Button(action: { showingAddTask = true }) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 36, height: 36)
-                            .background(ProjectMyTasksPalette.blue)
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
+                Button(action: { showingAddTask = true }) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(ProjectMyTasksPalette.blue)
+                        .clipShape(Circle())
                 }
+                .buttonStyle(.plain)
             }
             
             HStack(spacing: 8) {
@@ -1789,7 +1931,7 @@ struct ProjectDetailView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(ProjectMyTasksPalette.muted)
                         .multilineTextAlignment(.center)
-                    if selectedProjectTaskScope == .active && !userStore.isOperativeMode() {
+                    if selectedProjectTaskScope == .active {
                         Button { showingAddTask = true } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "plus")
@@ -3996,6 +4138,7 @@ struct TaskCompletionPopupView: View {
     @State private var selectedImages: [TaskCapturedImage] = []
     @State private var selectedFiles: [URL] = []
     @State private var completionNotes: String = ""
+    @State private var draftCompletedItemIds: Set<UUID> = []
     @State private var showingCameraPicker = false
     @State private var showingImagePicker = false
     @State private var showingFilePicker = false
@@ -4008,28 +4151,39 @@ struct TaskCompletionPopupView: View {
     }
     
     private var markCompleteEnabled: Bool {
-        displayTask.allItemsTicked
+        let ids = Set(displayTask.effectiveItems.map(\.id))
+        return ids.isSubset(of: draftCompletedItemIds)
+    }
+
+    private var hasUnsavedChanges: Bool {
+        let existing = Set(displayTask.completedItemIds)
+        let existingNotes = (displayTask.completionNotes ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let draftNotes = completionNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        return draftCompletedItemIds != existing ||
+            !selectedImages.isEmpty ||
+            !selectedFiles.isEmpty ||
+            draftNotes != existingNotes
     }
     
     private var checklistProgress: CGFloat {
         let items = displayTask.effectiveItems
         guard !items.isEmpty else { return 0 }
         let ids = Set(items.map(\.id))
-        let done = Set(displayTask.completedItemIds).intersection(ids).count
+        let done = draftCompletedItemIds.intersection(ids).count
         return CGFloat(done) / CGFloat(items.count)
     }
     
     private var checklistDoneLabel: String {
         let items = displayTask.effectiveItems
         let ids = Set(items.map(\.id))
-        let done = Set(displayTask.completedItemIds).intersection(ids).count
+        let done = draftCompletedItemIds.intersection(ids).count
         return "\(done) of \(items.count)"
     }
     
     private var tickRemainingHint: String {
         let items = displayTask.effectiveItems
         let ids = Set(items.map(\.id))
-        let done = Set(displayTask.completedItemIds).intersection(ids).count
+        let done = draftCompletedItemIds.intersection(ids).count
         let left = max(0, ids.count - done)
         if left <= 0 { return "" }
         return left == 1 ? "Tick 1 more item to enable" : "Tick \(left) more items to enable"
@@ -4075,21 +4229,21 @@ struct TaskCompletionPopupView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 9) {
                     Button {
-                        submitCompletion()
+                        saveProgress()
                     } label: {
                         HStack(spacing: 8) {
-                            Image(systemName: "checkmark.circle")
+                            Image(systemName: markCompleteEnabled ? "checkmark.circle.fill" : "tray.and.arrow.down.fill")
                                 .font(.system(size: 18, weight: .medium))
-                            Text("Mark task complete")
+                            Text(markCompleteEnabled ? "Save & mark complete" : "Save")
                                 .font(.system(size: 15, weight: .medium))
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 15)
                         .foregroundStyle(Color.white)
-                        .background(markCompleteEnabled && !isUploading ? CompleteTaskUXPalette.blue : CompleteTaskUXPalette.disabledBar)
+                        .background(hasUnsavedChanges && !isUploading ? CompleteTaskUXPalette.blue : CompleteTaskUXPalette.disabledBar)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
-                    .disabled(!markCompleteEnabled || isUploading)
+                    .disabled(!hasUnsavedChanges || isUploading)
                     if !markCompleteEnabled {
                         Text(tickRemainingHint)
                             .font(.system(size: 11))
@@ -4125,6 +4279,10 @@ struct TaskCompletionPopupView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(validationMessage ?? "")
+            }
+            .onAppear {
+                draftCompletedItemIds = Set(displayTask.completedItemIds)
+                completionNotes = displayTask.completionNotes ?? ""
             }
         }
     }
@@ -4216,7 +4374,7 @@ struct TaskCompletionPopupView: View {
                 .padding(.bottom, 16)
                 
                 ForEach(Array(displayTask.effectiveItems.enumerated()), id: \.element.id) { index, item in
-                    let ticked = displayTask.completedItemIds.contains(item.id)
+                    let ticked = draftCompletedItemIds.contains(item.id)
                     Button {
                         toggleItemTicked(itemId: item.id)
                     } label: {
@@ -4377,24 +4535,10 @@ struct TaskCompletionPopupView: View {
     }
     
     private func toggleItemTicked(itemId: UUID) {
-        var updatedTask = displayTask
-        if updatedTask.completedItemIds.contains(itemId) {
-            updatedTask.completedItemIds.removeAll { $0 == itemId }
+        if draftCompletedItemIds.contains(itemId) {
+            draftCompletedItemIds.remove(itemId)
         } else {
-            updatedTask.completedItemIds.append(itemId)
-        }
-        updatedTask.updatedAt = Date()
-        if !updatedTask.isCompleted {
-            let effectiveIds = Set(updatedTask.effectiveItems.map(\.id))
-            let done = Set(updatedTask.completedItemIds).intersection(effectiveIds)
-            if done.isEmpty {
-                updatedTask.status = .todo
-            } else {
-                updatedTask.status = .inProgress
-            }
-        }
-        Task {
-            await taskStore.updateTask(updatedTask)
+            draftCompletedItemIds.insert(itemId)
         }
     }
     
@@ -4422,19 +4566,14 @@ struct TaskCompletionPopupView: View {
         }
     }
     
-    private func submitCompletion() {
-        guard displayTask.allItemsTicked else {
-            validationMessage = "Tick every checklist item before completing this task."
-            return
-        }
-        
+    private func saveProgress() {
         isUploading = true
         uploadProgress = 0
         
         Task {
             let completedBy = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
-            var imageURLs: [String] = []
-            var fileURLs: [String] = []
+            var imageURLs: [String] = displayTask.completionImages
+            var fileURLs: [String] = displayTask.completionFiles
             let totalUploads = max(selectedImages.count + selectedFiles.count, 1)
             
             for captured in selectedImages {
@@ -4456,10 +4595,32 @@ struct TaskCompletionPopupView: View {
             
             let notesTrim = completionNotes.trimmingCharacters(in: .whitespacesAndNewlines)
             let notesOut: String? = notesTrim.isEmpty ? nil : notesTrim
+            let effectiveIds = Set(displayTask.effectiveItems.map(\.id))
+            let allTicked = effectiveIds.isSubset(of: draftCompletedItemIds)
+            
+            if allTicked {
+                await MainActor.run {
+                    isUploading = false
+                    onComplete(completedBy, imageURLs, fileURLs, notesOut)
+                    isPresented = false
+                }
+                return
+            }
+
+            var updatedTask = displayTask
+            updatedTask.completedItemIds = Array(draftCompletedItemIds)
+            let done = draftCompletedItemIds.intersection(effectiveIds).count
+            updatedTask.status = done == 0 ? .todo : .inProgress
+            updatedTask.completionImages = imageURLs
+            updatedTask.completionFiles = fileURLs
+            updatedTask.completionNotes = notesOut
+            updatedTask.updatedAt = Date()
+            await taskStore.updateTask(updatedTask)
             
             await MainActor.run {
                 isUploading = false
-                onComplete(completedBy, imageURLs, fileURLs, notesOut)
+                selectedImages.removeAll()
+                selectedFiles.removeAll()
                 isPresented = false
             }
         }
@@ -5434,6 +5595,7 @@ struct CompletedTaskDetailView: View {
 
     private func applyCompletion(completedBy: String, images: [String], files: [String], notes: String?) async {
         var updatedTask = displayTask
+        updatedTask.completedItemIds = Array(Set(updatedTask.effectiveItems.map(\.id)))
         updatedTask.status = .completed
         updatedTask.completedBy = completedBy
         updatedTask.completedAt = Date()

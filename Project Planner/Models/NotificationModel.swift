@@ -16,12 +16,12 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case projectCreated = "project_created"
         case smallWorksCreated = "small_works_created"
         case bookingClash = "booking_clash"
+        case warningRemoved = "warning_removed"
         case taskCompleted = "task_completed"
         case taskCreated = "task_created"
         case holidayRequestSubmitted = "holiday_request_submitted"
         case holidayRequestApproved = "holiday_request_approved"
         case holidayRequestDeclined = "holiday_request_declined"
-        case warningRemoved = "warning_removed"
     }
     
     let id: UUID

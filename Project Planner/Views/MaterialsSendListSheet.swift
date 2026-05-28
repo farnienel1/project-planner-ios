@@ -138,12 +138,12 @@ struct MaterialsSendListSheet: View {
             Text(project.siteAddress)
                 .font(.system(size: 10))
                 .foregroundStyle(MaterialsOrderingTheme.muted)
-            if !selectedMaterialsForSend.isEmpty {
+            if !materials.isEmpty {
                 Button {
                     materialSelectionExpanded.toggle()
                 } label: {
                     HStack {
-                        Text("Selected materials")
+                        Text("Materials in this send")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(MaterialsOrderingTheme.muted)
                         Spacer()
@@ -156,18 +156,24 @@ struct MaterialsSendListSheet: View {
             }
             if materialSelectionExpanded {
                 VStack(spacing: 8) {
-                    ForEach(selectedMaterialsForSend) { item in
+                    ForEach(materials) { item in
+                        let isSelected = selectedMaterialIds.contains(item.id)
                         HStack(alignment: .top, spacing: 8) {
                             Button {
-                                selectedMaterialIds.remove(item.id)
+                                if isSelected {
+                                    selectedMaterialIds.remove(item.id)
+                                } else {
+                                    selectedMaterialIds.insert(item.id)
+                                }
                             } label: {
-                                Image(systemName: "checkmark.square.fill")
-                                    .foregroundStyle(MaterialsOrderingTheme.primary)
+                                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                                    .foregroundStyle(isSelected ? MaterialsOrderingTheme.primary : MaterialsOrderingTheme.disabled)
                             }
                             .buttonStyle(.plain)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(item.material)
                                     .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(isSelected ? MaterialsOrderingTheme.ink : MaterialsOrderingTheme.muted)
                                 HStack(spacing: 6) {
                                     MaterialsStatusPill(status: item.status)
                                     if let sentAt = item.lastSentAt {
@@ -179,6 +185,7 @@ struct MaterialsSendListSheet: View {
                             }
                             Spacer()
                         }
+                        .opacity(isSelected ? 1 : 0.6)
                     }
                 }
                 .padding(8)
@@ -321,10 +328,6 @@ struct MaterialsSendListSheet: View {
 
     private var recipientCount: Int {
         selectedContactIds.count + oneOffRecipients.count
-    }
-
-    private var selectedMaterialsForSend: [MaterialItem] {
-        materials.filter { selectedMaterialIds.contains($0.id) }
     }
 
     private func loadWholesalers() async {

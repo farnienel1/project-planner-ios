@@ -142,9 +142,13 @@ private struct BookingHoursTimelineBar: View {
     let startMinutes: Int
     let endMinutes: Int
     let breakIncluded: Bool
+    let forceSolidBlue: Bool
 
     private var segments: [BookingTimelineSegment] {
-        BookingHoursTimelineLayout.segments(policy: policy, startMinutes: startMinutes, endMinutes: endMinutes)
+        if forceSolidBlue {
+            return [BookingTimelineSegment(kind: .standard, startMinute: startMinutes, endMinute: endMinutes)]
+        }
+        return BookingHoursTimelineLayout.segments(policy: policy, startMinutes: startMinutes, endMinutes: endMinutes)
     }
 
     var body: some View {
@@ -173,12 +177,12 @@ private struct BookingHoursTimelineBar: View {
                         ZStack(alignment: .leading) {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .fill(segmentFill(seg.kind))
-                            if seg.kind == .overtime, barW > 22 {
+                            if !forceSolidBlue, seg.kind == .overtime, barW > 22 {
                                 Text("OT")
                                     .font(.system(size: 9, weight: .bold))
                                     .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
                                     .padding(.leading, 5)
-                            } else if seg.kind == .standard, barW > 44 {
+                            } else if !forceSolidBlue, seg.kind == .standard, barW > 44 {
                                 Text("Standard")
                                     .font(.system(size: 10, weight: .medium))
                                     .foregroundStyle(.white)
@@ -297,6 +301,10 @@ struct OperativeCustomHoursSheet: View {
     var headerName: String?
     var headerInitials: String?
     var allowsOtMultiplierOverride: Bool
+    var showsBreakControls: Bool
+    var showsBreakdown: Bool
+    var showsFooterNote: Bool
+    var forceSolidBlueTimeline: Bool
     let initialChoice: OperativeDayBookingChoice?
     let onSave: (String, String, Bool, Double?) -> Void
     let onCancel: () -> Void
@@ -322,6 +330,10 @@ struct OperativeCustomHoursSheet: View {
         headerName: String? = nil,
         headerInitials: String? = nil,
         allowsOtMultiplierOverride: Bool = false,
+        showsBreakControls: Bool = true,
+        showsBreakdown: Bool = true,
+        showsFooterNote: Bool = true,
+        forceSolidBlueTimeline: Bool = false,
         initialChoice: OperativeDayBookingChoice?,
         onSave: @escaping (String, String, Bool, Double?) -> Void,
         onCancel: @escaping () -> Void
@@ -332,6 +344,10 @@ struct OperativeCustomHoursSheet: View {
         self.headerName = headerName
         self.headerInitials = headerInitials
         self.allowsOtMultiplierOverride = allowsOtMultiplierOverride
+        self.showsBreakControls = showsBreakControls
+        self.showsBreakdown = showsBreakdown
+        self.showsFooterNote = showsFooterNote
+        self.forceSolidBlueTimeline = forceSolidBlueTimeline
         self.initialChoice = initialChoice
         self.onSave = onSave
         self.onCancel = onCancel
@@ -360,7 +376,7 @@ struct OperativeCustomHoursSheet: View {
                     fallbackMinute: 30
                 )
             }
-            included = !ic.isBreakRemoved
+            included = showsBreakControls ? !ic.isBreakRemoved : false
             if let m = ic.otMultiplierOverride {
                 otm = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
             }
@@ -375,7 +391,7 @@ struct OperativeCustomHoursSheet: View {
                 fallbackHour: 16,
                 fallbackMinute: 30
             )
-            included = true
+            included = showsBreakControls
         }
 
         _startHour = State(initialValue: startHM.0)
@@ -445,9 +461,15 @@ struct OperativeCustomHoursSheet: View {
                         }
                         headerSection
                         hoursCard
-                        breakToggleCard
-                        breakdownCard
-                        footerNoteCard
+                        if showsBreakControls {
+                            breakToggleCard
+                        }
+                        if showsBreakdown {
+                            breakdownCard
+                        }
+                        if showsFooterNote {
+                            footerNoteCard
+                        }
                         if let errorMessage {
                             Text(errorMessage)
                                 .font(.system(size: 12))
@@ -568,7 +590,8 @@ struct OperativeCustomHoursSheet: View {
                     policy: policy,
                     startMinutes: startMinutes,
                     endMinutes: endMinutes,
-                    breakIncluded: breakIncluded
+                    breakIncluded: breakIncluded,
+                    forceSolidBlue: forceSolidBlueTimeline
                 )
             }
         }

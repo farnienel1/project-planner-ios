@@ -24,6 +24,7 @@ struct Project: Identifiable, Codable, Hashable {
     var customJobType: String? // Optional custom job type for display (e.g., "CAT A", "CAT B", "Small Works", etc.)
     var manager: ManagerLegacy
     var managerId: UUID? // Reference to actual Manager object
+    var managerIds: [UUID] // Supports assigning multiple managers
     var isLive: Bool
     var description: String?
     var notes: String?
@@ -39,6 +40,18 @@ struct Project: Identifiable, Codable, Hashable {
     var latitude: Double?
     /// WGS84 longitude when using map pin.
     var longitude: Double?
+
+    var allAssignedManagerIds: [UUID] {
+        var seen = Set<UUID>()
+        var output: [UUID] = []
+        if let managerId, seen.insert(managerId).inserted {
+            output.append(managerId)
+        }
+        for id in managerIds where seen.insert(id).inserted {
+            output.append(id)
+        }
+        return output
+    }
 
     // Legacy support - computed property for backward compatibility
     var siteAddress: String {
@@ -71,6 +84,7 @@ struct Project: Identifiable, Codable, Hashable {
         customJobType: String? = nil,
         manager: ManagerLegacy,
         managerId: UUID? = nil,
+        managerIds: [UUID] = [],
         isLive: Bool = true,
         description: String? = nil,
         notes: String? = nil,
@@ -94,6 +108,7 @@ struct Project: Identifiable, Codable, Hashable {
         self.customJobType = customJobType
         self.manager = manager
         self.managerId = managerId
+        self.managerIds = managerIds
         self.isLive = isLive
         self.description = description
         self.notes = notes
@@ -162,6 +177,7 @@ struct Project: Identifiable, Codable, Hashable {
         self.customJobType = nil // Legacy projects don't have customJobType
         self.manager = manager
         self.managerId = nil // Legacy projects don't have managerId
+        self.managerIds = []
         self.isLive = isLive
         self.description = description
         self.notes = notes
@@ -194,6 +210,7 @@ struct Project: Identifiable, Codable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, jobNumber, siteName, addressLine1, addressLine2, townCity, postcode
         case client, startDate, endDate, jobType, customJobType, manager, managerId
+        case managerIds
         case isLive, description, notes, createdAt, updatedAt
         case hiddenManagerUserIds, hiddenOperativeUserIds
         case usesMapPinForLocation, latitude, longitude
@@ -215,6 +232,7 @@ struct Project: Identifiable, Codable, Hashable {
         customJobType = try c.decodeIfPresent(String.self, forKey: .customJobType)
         manager = try c.decode(ManagerLegacy.self, forKey: .manager)
         managerId = try c.decodeIfPresent(UUID.self, forKey: .managerId)
+        managerIds = try c.decodeIfPresent([UUID].self, forKey: .managerIds) ?? (managerId.map { [$0] } ?? [])
         isLive = try c.decodeIfPresent(Bool.self, forKey: .isLive) ?? true
         description = try c.decodeIfPresent(String.self, forKey: .description)
         notes = try c.decodeIfPresent(String.self, forKey: .notes)
@@ -243,6 +261,7 @@ struct Project: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(customJobType, forKey: .customJobType)
         try c.encode(manager, forKey: .manager)
         try c.encodeIfPresent(managerId, forKey: .managerId)
+        try c.encode(managerIds, forKey: .managerIds)
         try c.encode(isLive, forKey: .isLive)
         try c.encodeIfPresent(description, forKey: .description)
         try c.encodeIfPresent(notes, forKey: .notes)

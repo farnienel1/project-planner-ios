@@ -27,7 +27,7 @@ struct CreateSmallWorksView: View {
     @State private var projectEndDate = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
     @State private var projectDescription = ""
     @State private var selectedClient: Client?
-    @State private var selectedManager: Manager?
+    @State private var selectedManagers: [Manager] = []
     @State private var selectedJobType: String = ""
 
     @State private var pinLatitude: Double?
@@ -67,8 +67,27 @@ struct CreateSmallWorksView: View {
             if !projectPostcode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { n += 1 }
         }
         if selectedClient != nil { n += 1 }
-        if selectedManager != nil { n += 1 }
+        if !selectedManagers.isEmpty { n += 1 }
         return n
+    }
+
+    private var availableManagersToAdd: [Manager] {
+        operativeStore.allManagers.filter { manager in
+            !selectedManagers.contains(where: { $0.id == manager.id })
+        }
+    }
+
+    private var selectedManagersSummary: String {
+        switch selectedManagers.count {
+        case 0:
+            return "Assign manager(s)"
+        case 1:
+            let first = selectedManagers[0]
+            return "\(first.firstName) \(first.lastName)"
+        default:
+            let first = selectedManagers[0]
+            return "\(first.firstName) \(first.lastName) +\(selectedManagers.count - 1) more"
+        }
     }
 
     private var progressFraction: CGFloat {
@@ -645,9 +664,9 @@ struct CreateSmallWorksView: View {
                 Text("Manager")
                     .font(.system(size: 11))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
-                Text(selectedManager.map { "\($0.firstName) \($0.lastName)" } ?? "Assign a manager")
+                Text(selectedManagersSummary)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(selectedManager == nil ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.ink)
+                    .foregroundStyle(selectedManagers.isEmpty ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.ink)
             }
             Spacer()
             if operativeStore.allManagers.isEmpty {
@@ -655,15 +674,36 @@ struct CreateSmallWorksView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(accentRust)
             } else {
-                Menu {
-                    ForEach(operativeStore.allManagers, id: \.id) { m in
-                        Button("\(m.firstName) \(m.lastName)") { selectedManager = m }
+                HStack(spacing: 8) {
+                    Menu {
+                        ForEach(availableManagersToAdd, id: \.id) { m in
+                            Button("\(m.firstName) \(m.lastName)") { selectedManagers.append(m) }
+                        }
+                        if availableManagersToAdd.isEmpty {
+                            Button("All managers added") {}
+                                .disabled(true)
+                        }
+                        Button("Create manager…") { showingCreateManager = true }
+                    } label: {
+                        Image(systemName: selectedManagers.isEmpty ? "chevron.down" : "plus")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
                     }
-                    Button("Create manager…") { showingCreateManager = true }
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                    if !selectedManagers.isEmpty {
+                        Menu {
+                            ForEach(selectedManagers, id: \.id) { manager in
+                                Button(role: .destructive) {
+                                    selectedManagers.removeAll { $0.id == manager.id }
+                                } label: {
+                                    Text("Remove \(manager.firstName) \(manager.lastName)")
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "minus.circle")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(Color(red: 0.74, green: 0.2, blue: 0.2))
+                        }
+                    }
                 }
             }
         }
@@ -777,8 +817,8 @@ struct CreateSmallWorksView: View {
             await MainActor.run { errorMessage = "Please select a client" }
             return
         }
-        guard selectedManager != nil else {
-            await MainActor.run { errorMessage = "Please assign a manager" }
+        guard !selectedManagers.isEmpty else {
+            await MainActor.run { errorMessage = "Please assign at least one manager" }
             return
         }
         guard projectStartDate <= projectEndDate else {
@@ -809,7 +849,8 @@ struct CreateSmallWorksView: View {
             jobType: .smallWorks,
             customJobType: selectedJobType.isEmpty ? nil : selectedJobType,
             manager: .custom,
-            managerId: selectedManager?.id,
+            managerId: selectedManagers.first?.id,
+            managerIds: selectedManagers.map(\.id),
             isLive: true,
             description: projectDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : projectDescription,
             hiddenManagerUserIds: sanitizedHidden,

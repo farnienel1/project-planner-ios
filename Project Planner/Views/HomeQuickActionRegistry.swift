@@ -40,6 +40,7 @@ enum HomeQuickActionID: String, CaseIterable {
     case staffMyQualifications = "staff-my-qualifications"
     case staffJobTypes = "staff-job-types"
     case staffWholesalers = "staff-wholesalers"
+    case staffMaterialCatalogue = "staff-material-catalogue"
     case staffAddUser = "staff-add-user"
     case staffManageUsersSheet = "staff-manage-users"
     case staffHelp = "staff-help"
@@ -77,45 +78,121 @@ enum HomeQuickActionRegistry {
     private static let blue = (0.094, 0.373, 0.647)
     private static let muted = (0.42, 0.45, 0.49)
 
-    static func meta(for id: String) -> HomeQuickActionMeta? {
+    private static func configuredTitle(
+        key: String,
+        fallback: String,
+        userStore: UserStore?,
+        preferTwoLines: Bool = false
+    ) -> String {
+        guard let userStore else { return fallback }
+        let resolved = userStore.navigationLabel(key, fallback: fallback.replacingOccurrences(of: "\n", with: " "))
+        if preferTwoLines, !resolved.contains("\n"), let firstSpace = resolved.firstIndex(of: " ") {
+            var withBreak = resolved
+            withBreak.replaceSubrange(firstSpace...firstSpace, with: "\n")
+            return withBreak
+        }
+        return resolved
+    }
+
+    static func meta(for id: String, userStore: UserStore? = nil) -> HomeQuickActionMeta? {
         switch id {
         case HomeQuickActionID.opProjects.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "folder.fill", title: "Projects", tint: green)
+            return HomeQuickActionMeta(
+                id: id,
+                symbol: "folder.fill",
+                title: configuredTitle(key: "dashboard_projects", fallback: "Projects", userStore: userStore),
+                tint: green
+            )
         case HomeQuickActionID.opSmallWorks.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "hammer.fill", title: "Small\nworks", tint: brown)
+            return HomeQuickActionMeta(
+                id: id,
+                symbol: "hammer.fill",
+                title: configuredTitle(key: "dashboard_small_works", fallback: "Small\nworks", userStore: userStore, preferTwoLines: true),
+                tint: brown
+            )
         case HomeQuickActionID.opAnnualLeave.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "sun.max.fill", title: "Annual\nleave", tint: rust)
         case HomeQuickActionID.opSiteAudit.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "doc.text.viewfinder", title: "Site\naudit", tint: blue)
+            return HomeQuickActionMeta(
+                id: id,
+                symbol: "doc.text.viewfinder",
+                title: configuredTitle(key: "site_audit", fallback: "Site\naudit", userStore: userStore, preferTwoLines: true),
+                tint: blue
+            )
         case HomeQuickActionID.opSchedule.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "calendar", title: "My\nschedule", tint: rose)
+            return HomeQuickActionMeta(
+                id: id,
+                symbol: "calendar",
+                title: configuredTitle(key: "dashboard_schedule", fallback: "My\nschedule", userStore: userStore, preferTwoLines: true),
+                tint: rose
+            )
         case HomeQuickActionID.opSettings.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "gearshape.fill", title: "Settings", tint: muted)
+            return HomeQuickActionMeta(
+                id: id,
+                symbol: "gearshape.fill",
+                title: configuredTitle(key: "dashboard_settings", fallback: "Settings", userStore: userStore),
+                tint: muted
+            )
 
         case HomeQuickActionID.staffWeeklyReport.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "chart.bar.doc.horizontal", title: "Weekly\nreport", tint: blue)
         case HomeQuickActionID.staffDailyOverview.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "calendar.badge.clock", title: "Daily\noverview", tint: purple)
         case HomeQuickActionID.staffProjects.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "folder.fill", title: "Projects", tint: green)
+            return HomeQuickActionMeta(
+                id: id,
+                symbol: "folder.fill",
+                title: configuredTitle(key: "dashboard_projects", fallback: "Projects", userStore: userStore),
+                tint: green
+            )
         case HomeQuickActionID.staffSmallWorks.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "hammer.fill", title: "Small\nworks", tint: brown)
+            return HomeQuickActionMeta(
+                id: id,
+                symbol: "hammer.fill",
+                title: configuredTitle(key: "dashboard_small_works", fallback: "Small\nworks", userStore: userStore, preferTwoLines: true),
+                tint: brown
+            )
         case HomeQuickActionID.staffAnnualLeave.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "sun.max.fill", title: "Annual\nleave", tint: rust)
         case HomeQuickActionID.staffSchedule.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "calendar", title: "My\nschedule", tint: rose)
+            return HomeQuickActionMeta(
+                id: id,
+                symbol: "calendar",
+                title: configuredTitle(key: "dashboard_schedule", fallback: "My\nschedule", userStore: userStore, preferTwoLines: true),
+                tint: rose
+            )
         case HomeQuickActionID.staffSiteAudit.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "doc.text.viewfinder", title: "Site\naudit", tint: blue)
+            return HomeQuickActionMeta(
+                id: id,
+                symbol: "doc.text.viewfinder",
+                title: configuredTitle(key: "site_audit", fallback: "Site\naudit", userStore: userStore, preferTwoLines: true),
+                tint: blue
+            )
         case HomeQuickActionID.staffManagers.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "person.badge.key.fill", title: "Managers", tint: purple)
+            return HomeQuickActionMeta(
+                id: id,
+                symbol: "person.badge.key.fill",
+                title: configuredTitle(key: "dashboard_managers", fallback: "Managers", userStore: userStore),
+                tint: purple
+            )
         case HomeQuickActionID.staffOperatives.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "person.3.fill", title: "Operatives", tint: green)
+            return HomeQuickActionMeta(
+                id: id,
+                symbol: "person.3.fill",
+                title: configuredTitle(key: "dashboard_operatives", fallback: "Operatives", userStore: userStore),
+                tint: green
+            )
         case HomeQuickActionID.staffSubcontractors.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "person.2.badge.gearshape.fill", title: "Sub\ncontractors", tint: muted)
         case HomeQuickActionID.staffSiteMap.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "map.fill", title: "Site\nmap", tint: green)
         case HomeQuickActionID.staffSettings.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "gearshape.fill", title: "Settings", tint: muted)
+            return HomeQuickActionMeta(
+                id: id,
+                symbol: "gearshape.fill",
+                title: configuredTitle(key: "dashboard_settings", fallback: "Settings", userStore: userStore),
+                tint: muted
+            )
 
         case HomeQuickActionID.staffClients.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "person.2.fill", title: "Clients", tint: blue)
@@ -133,6 +210,8 @@ enum HomeQuickActionRegistry {
             return HomeQuickActionMeta(id: id, symbol: "folder.fill", title: "Job\ntypes", tint: green)
         case HomeQuickActionID.staffWholesalers.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "building.2.fill", title: "Whole-\nsalers", tint: muted)
+        case HomeQuickActionID.staffMaterialCatalogue.rawValue:
+            return HomeQuickActionMeta(id: id, symbol: "shippingbox.fill", title: "Material\ncatalogue", tint: blue)
         case HomeQuickActionID.staffAddUser.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "person.badge.plus.fill", title: "Add\nuser", tint: purple)
         case HomeQuickActionID.staffManageUsersSheet.rawValue:
@@ -146,7 +225,7 @@ enum HomeQuickActionRegistry {
         case HomeQuickActionID.staffTasks.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "plus.rectangle.on.rectangle", title: "Tasks", tint: blue)
         case HomeQuickActionID.staffInvoicing.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "doc.text.fill", title: "Invoicing", tint: blue)
+            return HomeQuickActionMeta(id: id, symbol: "doc.text.fill", title: "Timesheets", tint: blue)
         default:
             return nil
         }
@@ -171,7 +250,7 @@ enum HomeQuickActionRegistry {
                 && (userStore.hasAdminAccess() || userStore.displayUser?.permissions.weeklyReports == true || userStore.isHomeProfileLoading)
         case HomeQuickActionID.staffDailyOverview.rawValue:
             return !userStore.isOperativeMode()
-                && (userStore.hasAdminAccess() || userStore.displayUser?.permissions.weeklyReports == true || userStore.isHomeProfileLoading)
+                && (userStore.hasAdminAccess() || userStore.displayUser?.permissions.dailyOverview == true || userStore.isHomeProfileLoading)
         case HomeQuickActionID.staffProjects.rawValue, HomeQuickActionID.staffSmallWorks.rawValue:
             return !userStore.isOperativeMode() && userStore.canViewProjects()
         case HomeQuickActionID.staffAnnualLeave.rawValue:
@@ -187,7 +266,7 @@ enum HomeQuickActionRegistry {
         case HomeQuickActionID.staffOperatives.rawValue:
             return !userStore.isOperativeMode() && userStore.canViewOperatives()
         case HomeQuickActionID.staffSubcontractors.rawValue:
-            return !userStore.isOperativeMode() && userStore.canManageSubcontractors()
+            return !userStore.isOperativeMode() && (userStore.canManageSubcontractors() || userStore.isHomeProfileLoading)
         case HomeQuickActionID.staffSiteMap.rawValue:
             return !userStore.isOperativeMode() && userStore.hasAdminAccess()
         case HomeQuickActionID.staffSettings.rawValue:
@@ -207,6 +286,8 @@ enum HomeQuickActionRegistry {
             return userStore.isOperativeMode()
         case HomeQuickActionID.staffJobTypes.rawValue, HomeQuickActionID.staffWholesalers.rawValue:
             return !userStore.isOperativeMode() && userStore.hasAdminAccess()
+        case HomeQuickActionID.staffMaterialCatalogue.rawValue:
+            return userStore.canManageMaterialCatalogue()
         case HomeQuickActionID.staffAddUser.rawValue, HomeQuickActionID.staffManageUsersSheet.rawValue:
             return !userStore.isOperativeMode()
                 && (userStore.canManageUsers()
@@ -222,7 +303,7 @@ enum HomeQuickActionRegistry {
         case HomeQuickActionID.staffTasks.rawValue:
             return !userStore.isOperativeMode()
         case HomeQuickActionID.staffInvoicing.rawValue:
-            return userStore.canAccessInvoicing()
+            return userStore.canAccessTimesheetsSurface()
         default:
             return false
         }

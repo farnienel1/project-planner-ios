@@ -11,7 +11,8 @@ struct MaterialCatalogCSVRow: Identifiable, Hashable {
     var brand: String
     var productCode: String?
     var defaultUnit: MaterialUnit
-    var sizeOrLength: String?
+    var size: String?
+    var length: String?
     var category: String?
 }
 
@@ -19,7 +20,7 @@ enum MaterialCatalogCSV {
     static let templateFileName = "material_catalogue_upload_template.csv"
 
     static let templateContents = """
-Name,Manufacturer,Code,Default Unit,Size/Length,Length,Category
+Name,Category,Manufacturer/Brand,Product Code,Default Unit (Length, Box or Number),Size,Length
 
 """
 
@@ -60,12 +61,13 @@ Name,Manufacturer,Code,Default Unit,Size/Length,Length,Category
         guard let nameIdx = columnIndex(["name"]) else {
             throw NSError(domain: "MaterialCatalogCSV", code: 3, userInfo: [NSLocalizedDescriptionKey: "Missing required column: Name"])
         }
-        let brandIdx = columnIndex(["manufacturer", "brand"])
-        let codeIdx = columnIndex(["code", "product code"])
-        let unitIdx = columnIndex(["default unit", "unit"])
-        let sizeOrLengthIdx = columnIndex(["size/length", "size", "pack size", "packsize"])
+        let categoryIdx = columnIndex(["category"])
+        let brandIdx = columnIndex(["manufacturer/brand", "manufacturer", "brand"])
+        let codeIdx = columnIndex(["product code", "code"])
+        let unitIdx = columnIndex(["default unit (length, box or number)", "default unit", "unit"])
+        let sizeIdx = columnIndex(["size", "size/length", "pack size", "packsize"])
         let lengthIdx = columnIndex(["length"])
-        guard let categoryIdx = columnIndex(["category"]) else {
+        guard let categoryIdx else {
             throw NSError(domain: "MaterialCatalogCSV", code: 6, userInfo: [NSLocalizedDescriptionKey: "Missing required column: Category"])
         }
 
@@ -94,13 +96,19 @@ Name,Manufacturer,Code,Default Unit,Size/Length,Length,Category
             let unitRaw = (unitIdx.flatMap { $0 < cols.count ? cols[$0] : nil }) ?? "Number"
             let unit = parseUnit(unitRaw)
 
-            let sizeOrLength: String? = {
-                let primary = sizeOrLengthIdx.flatMap { $0 < cols.count ? cols[$0] : nil }?
+            let size: String? = {
+                let value = sizeIdx.flatMap { $0 < cols.count ? cols[$0] : nil }?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return value.isEmpty ? nil : value
+            }()
+
+            let length: String? = {
+                let primary = lengthIdx.flatMap { $0 < cols.count ? cols[$0] : nil }?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if !primary.isEmpty { return primary }
-                let fallback = lengthIdx.flatMap { $0 < cols.count ? cols[$0] : nil }?
+                let fallbackLegacy = sizeIdx.flatMap { $0 < cols.count ? cols[$0] : nil }?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return fallback.isEmpty ? nil : fallback
+                return fallbackLegacy.isEmpty ? nil : fallbackLegacy
             }()
 
             let category: String
@@ -117,7 +125,8 @@ Name,Manufacturer,Code,Default Unit,Size/Length,Length,Category
                     brand: brand.isEmpty ? "Unknown" : brand,
                     productCode: code,
                     defaultUnit: unit,
-                    sizeOrLength: sizeOrLength,
+                    size: size,
+                    length: length,
                     category: category
                 )
             )

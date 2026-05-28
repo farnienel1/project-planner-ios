@@ -12,11 +12,13 @@ import SwiftUI
 enum DailyOverviewEditTarget: Identifiable {
     case operative(booking: Booking, project: Project, personName: String)
     case manager(booking: ManagerSiteBooking, locationTitle: String, personName: String)
+    case subcontractor(booking: SubcontractorBooking, project: Project, personName: String)
 
     var id: String {
         switch self {
         case .operative(let b, _, _): return "op-\(b.id.uuidString)"
         case .manager(let b, _, _): return "mgr-\(b.id.uuidString)"
+        case .subcontractor(let b, _, _): return "sub-\(b.id.uuidString)"
         }
     }
 }
@@ -40,6 +42,7 @@ struct DailyOverviewView: View {
     @State private var showingPastBookings = false
     @State private var showingBookLabour = false
     @State private var bookingEditTarget: DailyOverviewEditTarget?
+    @State private var selectedProjectToOpen: Project?
     @State private var scheduleRefreshTick = UUID()
     /// When `displayDate` is nil, the user can change the day from the strip (today’s overview sheet).
     @State private var selectedCalendarDay: Date = Calendar.current.startOfDay(for: Date())
@@ -192,15 +195,15 @@ struct DailyOverviewView: View {
         let cal = Calendar.current
         var t = 0.0
         for b in dayBookings where b.status == .confirmed || b.status == .tentative {
-            t += b.totalBookedHours(policy: p)
+            t += b.paidBookedHours(policy: p)
         }
         for b in managerScheduleStore.managerSiteBookings {
             guard cal.isDate(b.date, inSameDayAs: overviewDate) else { continue }
             guard b.locationType == .project || b.locationType == .smallWork else { continue }
-            t += b.totalBookedHours(policy: p)
+            t += b.paidBookedHours(policy: p)
         }
         for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
-            t += b.payrollMirrorBooking().totalBookedHours(policy: p)
+            t += b.payrollMirrorBooking().paidBookedHours(policy: p)
         }
         return t
     }
@@ -229,18 +232,18 @@ struct DailyOverviewView: View {
         let cal = Calendar.current
         var t = 0.0
         for b in dayBookings where b.status == .confirmed || b.status == .tentative {
-            let wall = b.totalBookedHours(policy: p)
+            let wall = b.paidBookedHours(policy: p)
             t += wall - b.overtimeHoursBeyondPaidStandard(policy: p)
         }
         for b in managerScheduleStore.managerSiteBookings {
             guard cal.isDate(b.date, inSameDayAs: overviewDate) else { continue }
             guard b.locationType == .project || b.locationType == .smallWork else { continue }
-            let wall = b.totalBookedHours(policy: p)
+            let wall = b.paidBookedHours(policy: p)
             t += wall - b.overtimeHoursBeyondPaidStandard(policy: p)
         }
         for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
             let m = b.payrollMirrorBooking()
-            let wall = m.totalBookedHours(policy: p)
+            let wall = m.paidBookedHours(policy: p)
             t += wall - m.overtimeHoursBeyondPaidStandard(policy: p)
         }
         return t
@@ -983,27 +986,24 @@ struct DailyOverviewView: View {
                         locationTitle: "\(project.jobNumber) \(project.siteName)",
                         personName: managerName(for: booking.userId)
                     )
+                },
+                onEditSubcontractor: { booking in
+                    let name = subcontractorStore.subcontractors.first(where: { $0.id == booking.subcontractorId })?.name ?? "Subcontractor"
+                    bookingEditTarget = .subcontractor(
+                        booking: booking,
+                        project: project,
+                        personName: name
+                    )
                 }
             )
             .environmentObject(managerScheduleStore)
             .environmentObject(subcontractorStore)
 
-            NavigationLink {
-                ProjectDetailView(project: project)
-                    .environmentObject(bookingStore)
-                    .environmentObject(managerScheduleStore)
-                    .environmentObject(operativeStore)
-                    .environmentObject(projectStore)
-                    .environmentObject(userStore)
-                    .environmentObject(holidayStore)
-                    .environmentObject(subcontractorStore)
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(notificationService)
-                    .environmentObject(appSettings)
-                    .environmentObject(taskStore)
+            Button {
+                selectedProjectToOpen = project
             } label: {
                 HStack(spacing: 5) {
-                    Text("Open project")
+                    Text(project.jobType == .smallWorks ? "Open small works" : "Open project")
                         .font(.system(size: 12, weight: .medium))
                     Image(systemName: "arrow.right")
                         .font(.system(size: 13, weight: .medium))
@@ -1211,6 +1211,20 @@ struct DailyOverviewView: View {
         .sheet(item: $bookingEditTarget) { target in
             dailyOverviewEditSheet(for: target)
         }
+        .sheet(item: $selectedProjectToOpen) { project in
+            ProjectDetailView(project: project)
+                .environmentObject(bookingStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(operativeStore)
+                .environmentObject(projectStore)
+                .environmentObject(userStore)
+                .environmentObject(holidayStore)
+                .environmentObject(subcontractorStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
+                .environmentObject(appSettings)
+                .environmentObject(taskStore)
+        }
     }
     
     private var noBookingsView: some View {
@@ -1326,6 +1340,12 @@ private extension DailyOverviewView {
                 },
                 onCancel: { bookingEditTarget = nil }
             )
+        case .subcontractor(let booking, _, let personName):
+            SubcontractorBookingEditSheet(booking: booking) {
+                bookingEditTarget = nil
+            }
+            .environmentObject(firebaseBackend)
+            .environmentObject(subcontractorStore)
         }
     }
 
@@ -1536,6 +1556,7 @@ struct ProjectBookingCard: View {
     var canEditBookings: Bool = false
     var onEditOperative: ((Booking) -> Void)?
     var onEditManager: ((ManagerSiteBooking) -> Void)?
+    var onEditSubcontractor: ((SubcontractorBooking) -> Void)?
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
@@ -1624,7 +1645,8 @@ struct ProjectBookingCard: View {
                 initials: PlannerUIInitials.from(op.name),
                 gradientPair: initialsGradient(for: op.name),
                 operativeBooking: b,
-                managerBooking: nil
+                managerBooking: nil,
+                subcontractorBooking: nil
             )
             let tie = op.name
             keyed.append((b.minutesSortKey(policy: p), tie, row))
@@ -1641,7 +1663,8 @@ struct ProjectBookingCard: View {
                 initials: PlannerUIInitials.from(managerName(userId: b.userId)),
                 gradientPair: initialsGradient(for: managerName(userId: b.userId)),
                 operativeBooking: nil,
-                managerBooking: b
+                managerBooking: b,
+                subcontractorBooking: nil
             )
             let tie = managerName(userId: b.userId)
             keyed.append((b.minutesSortKey(policy: p), tie, row))
@@ -1660,7 +1683,8 @@ struct ProjectBookingCard: View {
                 initials: PlannerUIInitials.from(baseName),
                 gradientPair: initialsGradient(for: baseName),
                 operativeBooking: nil,
-                managerBooking: nil
+                managerBooking: nil,
+                subcontractorBooking: b
             )
             keyed.append((mirror.minutesSortKey(policy: p), baseName, row))
         }
@@ -1726,7 +1750,7 @@ struct ProjectBookingCard: View {
 
     @ViewBuilder
     private func projectPersonRowView(_ row: ProjectDayPersonRow) -> some View {
-        let isEditable = canEditBookings && (row.operativeBooking != nil || row.managerBooking != nil)
+        let isEditable = canEditBookings && (row.operativeBooking != nil || row.managerBooking != nil || row.subcontractorBooking != nil)
         let content = HStack(alignment: .center, spacing: 9) {
             Text(row.initials)
                 .font(.system(size: 9, weight: .medium))
@@ -1769,6 +1793,8 @@ struct ProjectBookingCard: View {
                     onEditOperative?(b)
                 } else if let b = row.managerBooking {
                     onEditManager?(b)
+                } else if let b = row.subcontractorBooking {
+                    onEditSubcontractor?(b)
                 }
             } label: {
                 content
@@ -1822,6 +1848,7 @@ private struct ProjectDayPersonRow: Identifiable {
     let gradientPair: [Color]
     let operativeBooking: Booking?
     let managerBooking: ManagerSiteBooking?
+    let subcontractorBooking: SubcontractorBooking?
 }
 
 

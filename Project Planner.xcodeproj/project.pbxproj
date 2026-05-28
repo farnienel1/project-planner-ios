@@ -302,6 +302,9 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_FirebaseAppDelegateProxyEnabled = NO;
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
+				INFOPLIST_KEY_NSCalendarsWriteOnlyAccessUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access for profile photos, site audits, and task attachments.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving photos for your profile, site audits, and tasks.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow selecting photos for your profile, site audits, and task attachments.";
@@ -318,12 +321,12 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "farnie.Project-Planner";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = NO;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SKIP_INSTALL = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -344,6 +347,9 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_FirebaseAppDelegateProxyEnabled = NO;
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
+				INFOPLIST_KEY_NSCalendarsWriteOnlyAccessUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access for profile photos, site audits, and task attachments.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving photos for your profile, site audits, and tasks.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow selecting photos for your profile, site audits, and task attachments.";

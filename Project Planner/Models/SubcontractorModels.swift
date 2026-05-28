@@ -73,6 +73,9 @@ struct SubcontractorBooking: Identifiable, Codable, Hashable {
     var projectId: UUID
     var date: Date
     var timeSlot: TimeSlot
+    var workStartTime: String?
+    var workEndTime: String?
+    var isBreakRemoved: Bool
     var bookedBy: String
     var status: BookingStatus
     var createdAt: Date
@@ -84,6 +87,9 @@ struct SubcontractorBooking: Identifiable, Codable, Hashable {
         projectId: UUID,
         date: Date,
         timeSlot: TimeSlot,
+        workStartTime: String? = nil,
+        workEndTime: String? = nil,
+        isBreakRemoved: Bool = false,
         bookedBy: String,
         status: BookingStatus = .confirmed,
         createdAt: Date = Date(),
@@ -94,6 +100,9 @@ struct SubcontractorBooking: Identifiable, Codable, Hashable {
         self.projectId = projectId
         self.date = date
         self.timeSlot = timeSlot
+        self.workStartTime = workStartTime
+        self.workEndTime = workEndTime
+        self.isBreakRemoved = isBreakRemoved
         self.bookedBy = bookedBy
         self.status = status
         self.createdAt = createdAt
@@ -111,7 +120,10 @@ extension SubcontractorBooking {
             date: date,
             timeSlot: timeSlot,
             bookedBy: bookedBy,
-            status: status
+            status: status,
+            workStartTime: workStartTime,
+            workEndTime: workEndTime,
+            isBreakRemoved: isBreakRemoved,
         )
     }
 }

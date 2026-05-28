@@ -92,10 +92,10 @@ struct AddUserView: View {
                 }
             }
             .onAppear {
+                resetAnnualLeaveInviteDefaults()
                 if mode == .managerAddingOperative {
                     invitedAccountType = .operative
                     applyPermissionsForInvitedType()
-                    resetAnnualLeaveInviteDefaults()
                     assignedManagerUserId = userStore.currentUser?.id
                 }
             }
@@ -418,15 +418,18 @@ struct AddUserView: View {
     }
 
     private func resetAnnualLeaveInviteDefaults() {
-        annualLeaveDaysText = String(Int(AnnualLeavePolicy.defaultDaysPerYear))
-        annualLeaveStartMonth = AnnualLeavePolicy.defaultStartMonth
-        annualLeaveEndMonth = AnnualLeavePolicy.defaultEndMonth
-        annualLeaveCarriesOver = AnnualLeavePolicy.defaultCarriesOver
+        let defaults = userStore.organizationAnnualLeaveDefaults()
+        annualLeaveDaysText = defaults.daysPerYear.truncatingRemainder(dividingBy: 1) == 0
+            ? String(Int(defaults.daysPerYear))
+            : String(format: "%.1f", defaults.daysPerYear)
+        annualLeaveStartMonth = defaults.startMonth
+        annualLeaveEndMonth = defaults.endMonth
+        annualLeaveCarriesOver = defaults.carriesOver
     }
 
     private func parseAnnualLeaveDaysForInvite() -> Double {
         let t = annualLeaveDaysText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let d = Double(t), d > 0 else { return AnnualLeavePolicy.defaultDaysPerYear }
+        guard let d = Double(t), d > 0 else { return userStore.organizationAnnualLeaveDefaults().daysPerYear }
         return AnnualLeavePolicy.clampDaysPerYear(d)
     }
 
@@ -534,6 +537,14 @@ struct AddUserView: View {
                                 title: "Weekly Report",
                                 description: "Can open and pull weekly reports.",
                                 isOn: $permissions.weeklyReports,
+                                isDisabled: false,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Daily Overview",
+                                description: "Can open daily overview from the home screen and menus.",
+                                isOn: $permissions.dailyOverview,
                                 isDisabled: false,
                                 style: .plainInset
                             )
@@ -827,6 +838,7 @@ struct AddUserView: View {
                 operativeMode: false,
                 annualLeaveSelfBook: false,
                 weeklyReports: false,
+                dailyOverview: true,
                 subContractors: false,
                 siteAudit: true
             )
@@ -897,6 +909,7 @@ struct AddUserView: View {
             ("Operative Mode", permissions.operativeMode),
             ("Annual Leave Self-Book", permissions.annualLeaveSelfBook),
             ("Weekly Reports", permissions.weeklyReports),
+            ("Daily Overview", permissions.dailyOverview),
             ("Sub Contractors", permissions.subContractors),
             ("Site Audit", permissions.siteAudit)
         ]

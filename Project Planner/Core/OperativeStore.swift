@@ -24,6 +24,7 @@ class OperativeStore: ObservableObject {
     private(set) var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
     private var cancellables = Set<AnyCancellable>()
+    private var pendingReloadAfterCurrentLoad = false
     
     init() {
         // Listen for user sign in/out notifications
@@ -138,6 +139,11 @@ class OperativeStore: ObservableObject {
     // MARK: - Data Loading
     
     func loadData() {
+        if isLoading {
+            pendingReloadAfterCurrentLoad = true
+            print("🔥🔥🔥 DEBUG: OperativeStore loadData ignored (already loading); queued one follow-up reload")
+            return
+        }
         isLoading = true
         errorMessage = nil
         
@@ -155,6 +161,10 @@ class OperativeStore: ObservableObject {
             defer {
                 timeoutTask.cancel()
                 isLoading = false
+                if pendingReloadAfterCurrentLoad {
+                    pendingReloadAfterCurrentLoad = false
+                    loadData()
+                }
             }
             
             do {

@@ -19,6 +19,8 @@ struct WarningsComputationInput {
     let coverageStart: Date
     let coverageEnd: Date
     let materialOrderCutOffEnabled: Bool
+    let materialCutOffOnSaturday: Bool
+    let materialCutOffOnSunday: Bool
     let projectsWithTomorrowBookings: [Project]
     /// Material lines dated for tomorrow (loaded when computing warnings).
     let materialItemsForTomorrow: [MaterialItem]
@@ -289,6 +291,13 @@ enum WarningsComputation {
         let hour = cal.component(.hour, from: Date())
         if input.materialOrderCutOffEnabled, hour >= 16 {
             let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
+            let tomorrowWeekday = cal.component(.weekday, from: tomorrow)
+            if tomorrowWeekday == 7 && !input.materialCutOffOnSaturday {
+                return generated
+            }
+            if tomorrowWeekday == 1 && !input.materialCutOffOnSunday {
+                return generated
+            }
             for project in input.projectsWithTomorrowBookings {
                 let tomorrowMaterials = input.materialItemsForTomorrow.filter {
                     $0.projectId == project.id && cal.isDate($0.date, inSameDayAs: tomorrow)

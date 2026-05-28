@@ -15,7 +15,8 @@ private struct MaterialAutocompleteSuggestion: Identifiable {
     let brand: String
     let productCode: String?
     let unit: MaterialUnit
-    let sizeOrLength: String?
+    let size: String?
+    let length: String?
     let category: String?
     let catalogueItem: MaterialCatalogItem?
 }
@@ -41,7 +42,8 @@ struct MaterialsAddWithCatalogueSheet: View {
     @State private var customItemName = ""
     @State private var customBrand = ""
     @State private var customProductCode = ""
-    @State private var sizeOrLength = ""
+    @State private var sizeValue = ""
+    @State private var lengthValue = ""
     @State private var customCategory = "Other"
     @State private var websiteURL = ""
     @State private var showingDuplicateAlert = false
@@ -50,6 +52,7 @@ struct MaterialsAddWithCatalogueSheet: View {
     @State private var saveError: String?
     @State private var recentMaterials: [MaterialItem] = []
     @State private var prefersCustomEntry = false
+    @State private var editMatchedLineItemDetails = false
 
     private var categorySuggestions: [String] {
         let typed = customCategory.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -91,7 +94,8 @@ struct MaterialsAddWithCatalogueSheet: View {
                     brand: item.brand,
                     productCode: item.productCode,
                     unit: item.defaultUnit,
-                    sizeOrLength: item.sizeOrLength,
+                    size: item.size,
+                    length: item.length ?? item.sizeOrLength,
                     category: item.category,
                     catalogueItem: item
                 ))
@@ -116,7 +120,8 @@ struct MaterialsAddWithCatalogueSheet: View {
                     brand: item.brand ?? "Custom",
                     productCode: item.productCode,
                     unit: item.unit,
-                    sizeOrLength: item.sizeOrLength,
+                    size: item.size,
+                    length: item.length ?? item.sizeOrLength,
                     category: item.category,
                     catalogueItem: nil
                 ))
@@ -138,7 +143,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                     if selectedCatalogue == nil {
                         customHint
                     }
-                    if selectedCatalogue == nil {
+                    if selectedCatalogue == nil || editMatchedLineItemDetails {
                         customDetailsSection
                     }
                     quantityUnitRow
@@ -171,7 +176,8 @@ struct MaterialsAddWithCatalogueSheet: View {
                     notes = existing.notes ?? ""
                     customBrand = existing.brand ?? ""
                     customProductCode = existing.productCode ?? ""
-                    sizeOrLength = existing.sizeOrLength ?? ""
+                    sizeValue = existing.size ?? ""
+                    lengthValue = existing.length ?? existing.sizeOrLength ?? ""
                     let existingCategory = existing.category?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     customCategory = existingCategory.isEmpty ? "Other" : existingCategory
                     websiteURL = existing.websiteURL ?? ""
@@ -179,6 +185,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                        let match = catalogueStore.items.first(where: { $0.id == cid }) {
                         selectedCatalogue = match
                         prefersCustomEntry = false
+                        editMatchedLineItemDetails = true
                     }
                     if existing.catalogueItemId == nil { prefersCustomEntry = true }
                 } else {
@@ -226,6 +233,10 @@ struct MaterialsAddWithCatalogueSheet: View {
 
     private var resolvedCategory: String {
         if let selectedCatalogue {
+            if editMatchedLineItemDetails {
+                let custom = customCategory.trimmingCharacters(in: .whitespacesAndNewlines)
+                return custom.isEmpty ? "Other" : custom
+            }
             let cat = selectedCatalogue.category?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return cat.isEmpty ? "Other" : cat
         }
@@ -274,28 +285,43 @@ struct MaterialsAddWithCatalogueSheet: View {
                             .foregroundStyle(MaterialsOrderingTheme.primary)
                     }
                     if let sizeOrLength = item.sizeOrLengthLabel {
-                        Text("Size/Length: \(sizeOrLength)")
+                        Text(sizeOrLength)
                             .font(.system(size: 10))
                             .foregroundStyle(MaterialsOrderingTheme.muted)
                     }
                 }
                 Spacer()
-                Button {
-                    selectedCatalogue = nil
-                    query = item.name
-                    customItemName = item.name
-                    unit = item.defaultUnit
-                    prefersCustomEntry = true
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11))
-                        .foregroundStyle(MaterialsOrderingTheme.muted)
-                        .padding(6)
-                        .background(MaterialsOrderingTheme.pageBackground)
-                        .clipShape(Circle())
+                HStack(spacing: 8) {
+                    Button {
+                        editMatchedLineItemDetails.toggle()
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(MaterialsOrderingTheme.primary)
+                            .padding(6)
+                            .background(MaterialsOrderingTheme.primaryTint)
+                            .clipShape(Circle())
+                    }
+                    Button {
+                        selectedCatalogue = nil
+                        query = item.name
+                        customItemName = item.name
+                        unit = item.defaultUnit
+                        prefersCustomEntry = true
+                        editMatchedLineItemDetails = false
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11))
+                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                            .padding(6)
+                            .background(MaterialsOrderingTheme.pageBackground)
+                            .clipShape(Circle())
+                    }
                 }
             }
-            Text("Matched from organisation catalogue · auto-filled")
+            Text(editMatchedLineItemDetails
+                 ? "Matched from organisation catalogue · line-item detail edit enabled"
+                 : "Matched from organisation catalogue · auto-filled")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(MaterialsOrderingTheme.success)
                 .padding(8)
@@ -325,7 +351,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                             Text(highlighted(suggestion.name))
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(MaterialsOrderingTheme.ink)
-                            Text("\(suggestion.brand) · \(suggestion.productCode ?? "—") · \(suggestion.unit.rawValue)\(suggestion.sizeOrLength?.isEmpty == false ? " · \(suggestion.sizeOrLength!)" : "")")
+                            Text("\(suggestion.brand) · \(suggestion.productCode ?? "—") · \(suggestion.unit.rawValue)\(suggestion.size?.isEmpty == false ? " · Size: \(suggestion.size!)" : "")\(suggestion.length?.isEmpty == false ? " · Length: \(suggestion.length!)" : "")")
                                 .font(.system(size: 10))
                                 .foregroundStyle(MaterialsOrderingTheme.muted)
                                 .lineLimit(1)
@@ -392,18 +418,20 @@ struct MaterialsAddWithCatalogueSheet: View {
             Text("ITEM DETAILS")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(MaterialsOrderingTheme.muted)
-            HStack(spacing: 4) {
-                Text("Item name")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(MaterialsOrderingTheme.muted)
-                Text("*")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(MaterialsOrderingTheme.danger)
+            if selectedCatalogue == nil {
+                HStack(spacing: 4) {
+                    Text("Item name")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                    Text("*")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(MaterialsOrderingTheme.danger)
+                }
+                TextField("Item name *", text: $customItemName)
+                    .padding(10)
+                    .background(MaterialsOrderingTheme.cardBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
             }
-            TextField("Item name *", text: $customItemName)
-                .padding(10)
-                .background(MaterialsOrderingTheme.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
             HStack(spacing: 4) {
                 Text("Category")
                     .font(.system(size: 11, weight: .medium))
@@ -444,7 +472,11 @@ struct MaterialsAddWithCatalogueSheet: View {
                 .padding(10)
                 .background(MaterialsOrderingTheme.cardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
-            TextField("Size/Length (optional)", text: $sizeOrLength)
+            TextField("Size (Optional)", text: $sizeValue)
+                .padding(10)
+                .background(MaterialsOrderingTheme.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            TextField("Length (Optional)", text: $lengthValue)
                 .padding(10)
                 .background(MaterialsOrderingTheme.cardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -528,15 +560,18 @@ struct MaterialsAddWithCatalogueSheet: View {
         if let item = suggestion.catalogueItem {
             selectedCatalogue = item
             prefersCustomEntry = false
+            editMatchedLineItemDetails = false
         } else {
             selectedCatalogue = nil
             prefersCustomEntry = true
+            editMatchedLineItemDetails = false
         }
         query = suggestion.name
         customItemName = suggestion.name
         customBrand = suggestion.brand
         customProductCode = suggestion.productCode ?? ""
-        sizeOrLength = suggestion.sizeOrLength ?? ""
+        sizeValue = suggestion.size ?? ""
+        lengthValue = suggestion.length ?? ""
         customCategory = suggestion.category ?? "Other"
         unit = suggestion.unit
         quantity = 1
@@ -547,8 +582,10 @@ struct MaterialsAddWithCatalogueSheet: View {
         let code = selectedCatalogue?.productCode
         let trimmedCustomBrand = customBrand.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCustomCode = customProductCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedSizeOrLength = sizeOrLength.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSize = sizeValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedLength = lengthValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedWebsiteURL = websiteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shouldOverrideMatched = selectedCatalogue != nil && editMatchedLineItemDetails
         if !force, existingMaterial == nil,
            let match = MaterialCatalogDuplicateDetection.findCatalogueMatch(
             name: name,
@@ -577,9 +614,18 @@ struct MaterialsAddWithCatalogueSheet: View {
             date: cal.startOfDay(for: neededDate),
             status: .draft,
             catalogueItemId: selectedCatalogue?.id,
-            brand: selectedCatalogue?.brand ?? (trimmedCustomBrand.isEmpty ? nil : trimmedCustomBrand),
-            productCode: selectedCatalogue?.productCode ?? (trimmedCustomCode.isEmpty ? nil : trimmedCustomCode),
-            sizeOrLength: selectedCatalogue?.sizeOrLength ?? (trimmedSizeOrLength.isEmpty ? nil : trimmedSizeOrLength),
+            brand: shouldOverrideMatched
+                ? (trimmedCustomBrand.isEmpty ? selectedCatalogue?.brand : trimmedCustomBrand)
+                : (selectedCatalogue?.brand ?? (trimmedCustomBrand.isEmpty ? nil : trimmedCustomBrand)),
+            productCode: shouldOverrideMatched
+                ? (trimmedCustomCode.isEmpty ? selectedCatalogue?.productCode : trimmedCustomCode)
+                : (selectedCatalogue?.productCode ?? (trimmedCustomCode.isEmpty ? nil : trimmedCustomCode)),
+            size: shouldOverrideMatched
+                ? (trimmedSize.isEmpty ? selectedCatalogue?.size : trimmedSize)
+                : (selectedCatalogue?.size ?? (trimmedSize.isEmpty ? nil : trimmedSize)),
+            length: shouldOverrideMatched
+                ? (trimmedLength.isEmpty ? (selectedCatalogue?.length ?? selectedCatalogue?.sizeOrLength) : trimmedLength)
+                : ((selectedCatalogue?.length ?? selectedCatalogue?.sizeOrLength) ?? (trimmedLength.isEmpty ? nil : trimmedLength)),
             category: resolvedCategory,
             websiteURL: trimmedWebsiteURL.isEmpty ? nil : trimmedWebsiteURL,
             notes: notes.isEmpty ? nil : notes
@@ -589,9 +635,18 @@ struct MaterialsAddWithCatalogueSheet: View {
         item.material = name
         item.date = cal.startOfDay(for: neededDate)
         item.catalogueItemId = selectedCatalogue?.id
-        item.brand = selectedCatalogue?.brand ?? (trimmedCustomBrand.isEmpty ? nil : trimmedCustomBrand)
-        item.productCode = selectedCatalogue?.productCode ?? (trimmedCustomCode.isEmpty ? nil : trimmedCustomCode)
-        item.sizeOrLength = selectedCatalogue?.sizeOrLength ?? (trimmedSizeOrLength.isEmpty ? nil : trimmedSizeOrLength)
+        item.brand = shouldOverrideMatched
+            ? (trimmedCustomBrand.isEmpty ? selectedCatalogue?.brand : trimmedCustomBrand)
+            : (selectedCatalogue?.brand ?? (trimmedCustomBrand.isEmpty ? nil : trimmedCustomBrand))
+        item.productCode = shouldOverrideMatched
+            ? (trimmedCustomCode.isEmpty ? selectedCatalogue?.productCode : trimmedCustomCode)
+            : (selectedCatalogue?.productCode ?? (trimmedCustomCode.isEmpty ? nil : trimmedCustomCode))
+        item.size = shouldOverrideMatched
+            ? (trimmedSize.isEmpty ? selectedCatalogue?.size : trimmedSize)
+            : (selectedCatalogue?.size ?? (trimmedSize.isEmpty ? nil : trimmedSize))
+        item.length = shouldOverrideMatched
+            ? (trimmedLength.isEmpty ? (selectedCatalogue?.length ?? selectedCatalogue?.sizeOrLength) : trimmedLength)
+            : ((selectedCatalogue?.length ?? selectedCatalogue?.sizeOrLength) ?? (trimmedLength.isEmpty ? nil : trimmedLength))
         item.category = resolvedCategory
         item.websiteURL = trimmedWebsiteURL.isEmpty ? nil : trimmedWebsiteURL
         item.notes = notes.isEmpty ? nil : notes

@@ -51,8 +51,51 @@ struct Warning: Identifiable, Hashable {
         type == .managerLocationClash
     }
 
+    /// Human-readable summary for admin notifications when a warning is removed without resolving.
     var removalNotificationDetail: String {
-        message
+        let dateText = occurrenceDate.map {
+            $0.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).year())
+        } ?? ""
+
+        switch type {
+        case .operativeBookingClash:
+            if let clash = operativeClash {
+                let a = Self.clashLocationDescription(clash.entryA)
+                let b = Self.clashLocationDescription(clash.entryB)
+                return "\(clash.operativeName) on \(dateText): \(title). \(a) overlaps with \(b). \(clash.overlapSummary)."
+            }
+        case .managerLocationClash:
+            if let clash = managerClash {
+                let a = Self.clashLocationDescription(clash.entryA)
+                let b = Self.clashLocationDescription(clash.entryB)
+                return "\(clash.personName) on \(dateText): \(title). \(a) overlaps with \(b). \(clash.overlapSummary)."
+            }
+        case .unbookedLabour:
+            if let detail = unbookedLabour {
+                let names = detail.names.joined(separator: ", ")
+                return "\(title) on \(dateText): \(names). \(message)"
+            }
+        case .materialsCutoff:
+            if let detail = materialsCutoff {
+                return "\(title): \(detail.jobNumber) · \(detail.siteName). \(message)"
+            }
+        case .qualificationExpiry, .operativeNotVerified:
+            break
+        }
+        if dateText.isEmpty {
+            return "\(title). \(message)"
+        }
+        return "\(title) on \(dateText). \(message)"
+    }
+
+    private static func clashLocationDescription(_ entry: ClashTimelineEntry) -> String {
+        if let jobNumber = entry.jobNumber {
+            if let siteName = entry.siteName {
+                return "\(jobNumber) (\(siteName))"
+            }
+            return jobNumber
+        }
+        return entry.locationLabel
     }
 
     struct ClashTimelineEntry: Hashable, Codable {

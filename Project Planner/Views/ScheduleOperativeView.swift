@@ -21,6 +21,8 @@ struct ScheduleOperativeView: View {
     let project: Project
     /// When opening from a project week booking row, pre-selects operative/date/hours and replaces that booking after confirm.
     var editingBooking: Booking? = nil
+    /// When set, pre-selects all operatives/dates in this group for batch edit.
+    var editingGroupId: String? = nil
 
     @State private var selectedOperatives: Set<UUID> = []
     @State private var showingSelectOperatives = false
@@ -50,6 +52,7 @@ struct ScheduleOperativeView: View {
     @State private var approvedOverlapOperativeIds: Set<UUID> = []
     @State private var didApplyOrgDefaultHours = false
     @State private var didApplyEditingBookingPrefill = false
+    @State private var didApplyEditingGroupPrefill = false
     /// `operativeOverrideKey` → booking id to delete before creating the replacement on confirm.
     @State private var replaceBookingOnConfirmByOverrideKey: [String: UUID] = [:]
     @EnvironmentObject var notificationService: NotificationService
@@ -177,6 +180,9 @@ struct ScheduleOperativeView: View {
             .sheet(isPresented: $showingSelectOperatives) {
                 SelectOperativesView(
                     selectedOperatives: $selectedOperatives,
+                    visiblySelectedOperativeIds: selectedOperatives
+                        .union(clashReviewOperativeIds)
+                        .union(approvedOverlapOperativeIds),
                     unavailableOperativeIds: unavailableOperativeIdsForSelectedDates
                 )
                     .environmentObject(operativeStore)
@@ -221,6 +227,10 @@ struct ScheduleOperativeView: View {
                     didApplyEditingBookingPrefill = true
                     applyPrefillFromEditingBooking(b)
                 }
+                if let gid = editingGroupId, !didApplyEditingGroupPrefill {
+                    didApplyEditingGroupPrefill = true
+                    applyPrefillFromEditingGroup(gid)
+                }
             }
         }
     }
@@ -242,6 +252,26 @@ struct ScheduleOperativeView: View {
         operativeSlotOverrides[k] = choice
         operativeDefaultChoice[booking.operativeId] = choice
         replaceBookingOnConfirmByOverrideKey[k] = booking.id
+    }
+
+    private func applyPrefillFromEditingGroup(_ groupId: String) {
+        let cal = Calendar.current
+        let inGroup = bookingStore.bookings.filter {
+            $0.projectId == project.id &&
+                $0.bookingGroupId == groupId &&
+                ($0.status == .confirmed || $0.status == .tentative)
+        }
+        guard !inGroup.isEmpty else { return }
+        selectedOperatives = Set(inGroup.map(\.operativeId))
+        selectedDates = Set(inGroup.map { cal.startOfDay(for: $0.date) })
+        for b in inGroup {
+            let day = cal.startOfDay(for: b.date)
+            let choice = OperativeDayBookingChoice(from: b)
+            let k = operativeOverrideKey(b.operativeId, day)
+            operativeSlotOverrides[k] = choice
+            operativeDefaultChoice[b.operativeId] = choice
+            replaceBookingOnConfirmByOverrideKey[k] = b.id
+        }
     }
 
     // MARK: - Schedule booking (project_planner_scheduling_with_overtime.html)
@@ -1150,6 +1180,7 @@ struct ScheduleOperativeView: View {
             let dates = Array(selectedDates.sorted())
             var newBookings: [Booking] = []
             var createdDatesByOperative: [UUID: Set<Date>] = [:]
+            let groupId: String? = operatives.count > 1 ? UUID().uuidString : nil
 
             for operative in operatives {
                 for date in dates {
@@ -1174,16 +1205,18 @@ struct ScheduleOperativeView: View {
                     }
 
                     if !duplicateExists && !isOperativeOnApprovedHoliday(operative: operative, date: date) {
+                        let normalizedDate = Calendar.current.startOfDay(for: date)
                         var booking = Booking(
                             operativeId: operative.id,
                             projectId: project.id,
-                            date: date,
+                            date: normalizedDate,
                             timeSlot: choice.timeSlot,
                             bookedBy: loggedInUserName,
                             workStartTime: choice.workStartTime,
                             workEndTime: choice.workEndTime,
                             isBreakRemoved: choice.isBreakRemoved,
-                            otMultiplierOverride: choice.otMultiplierOverride
+                            otMultiplierOverride: choice.otMultiplierOverride,
+                            bookingGroupId: groupId
                         )
                         booking.updatedAt = Date()
                         newBookings.append(booking)
@@ -1194,11 +1227,7 @@ struct ScheduleOperativeView: View {
 
             if !newBookings.isEmpty {
                 await bookingStore.addBookings(newBookings)
-                await notificationService.notifyBookingBatchCreated(
-                    projectName: project.siteName,
-                    bookingCount: newBookings.count,
-                    createdBy: loggedInUserName
-                )
+                ScheduleChangeNotifier.postBookingStoreDidChange()
                 let bookedRecipients = createdDatesByOperative.map { (operativeId, dates) in
                     NotificationService.BookedUserRecipient(
                         operativeId: operativeId,

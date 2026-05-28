@@ -101,9 +101,8 @@ struct HomeView: View {
                 .environmentObject(taskStore)
         }
         .task {
-            // Defer slightly so Home can render before notification work; ContentView also refreshes periodically.
+            // Defer slightly so Home can render before task work.
             try? await Task.sleep(nanoseconds: 800_000_000)
-            await notificationService.loadNotifications()
             await taskStore.loadData()
         }
         .sheet(isPresented: $showingCreateClient) {
@@ -168,6 +167,11 @@ struct HomeView: View {
                 .environmentObject(holidayStore)
                 .environmentObject(firebaseBackend)
         }
+        .sheet(isPresented: $showingMaterialCatalogue) {
+            MaterialCatalogueRootView()
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+        }
         .sheet(isPresented: $showingWholesalers) {
             WholesalersView()
                 .environmentObject(userStore)
@@ -183,6 +187,9 @@ struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openTasksDetail"))) { _ in
             showingTasksDetail = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToWarnings"))) { _ in
+            Task { await openWarningsDetail() }
         }
         .fullScreenCover(isPresented: $showingClientsView) {
             ClientsView()
@@ -274,7 +281,10 @@ struct HomeView: View {
             case .myQualifications: showingOperativeQualifications = true
             case .jobTypes: showingJobTypesManagement = true
             case .wholesalers: showingWholesalers = true
-            case .materialCatalogue: showingMaterialCatalogue = true
+            case .materialCatalogue:
+                if userStore.canManageMaterialCatalogue() {
+                    showingMaterialCatalogue = true
+                }
             case .addUser: showingAddUser = true
             case .manageUsers: showingManageUsers = true
             case .tasksDetail: showingTasksDetail = true
@@ -308,6 +318,12 @@ struct HomeView: View {
         .onChange(of: userStore.currentUser?.id) { _, _ in
             hasLoadedQuickActionLayout = false
             loadPersistedQuickActionsIfNeeded()
+        }
+        .onChange(of: userStore.isHomeProfileLoading) { _, isLoading in
+            if !isLoading {
+                hasLoadedQuickActionLayout = false
+                loadPersistedQuickActionsIfNeeded()
+            }
         }
         .sheet(isPresented: $showingAddQuickActionPicker) {
             HomeQuickActionAddSheet(
@@ -458,6 +474,11 @@ struct HomeView: View {
         ).count
     }
 
+    /// Combined daily on-site headcount across operative bookings and manager site bookings.
+    private var peopleOnSiteTodayCount: Int {
+        operativesOnSiteTodayCount + managersOnSiteTodayCount
+    }
+
     private var operativesOnALTodayCount: Int {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
@@ -532,7 +553,7 @@ struct HomeView: View {
         case .tasksDueTodayPersonal: return "\(tasksDueTodayCount)"
         case .tasksDueWeekPersonal: return "\(tasksDueThisWeekCount)"
         case .warnings: return "\(homeWarningCount)"
-        case .operativesOnSite: return "\(operativesOnSiteTodayCount)"
+        case .operativesOnSite: return "\(peopleOnSiteTodayCount)"
         case .managersOnSite: return "\(managersOnSiteTodayCount)"
         case .operativesOnAL: return "\(operativesOnALTodayCount)"
         case .managersOnAL: return "\(managersOnALTodayCount)"
@@ -580,6 +601,13 @@ struct HomeView: View {
         }
         .task(id: homeDataRefreshTrigger) {
             await refreshHomeDerivedData()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .warningsDidRecompute)) { notification in
+            if let count = notification.userInfo?["count"] as? Int {
+                homeWarningCount = count
+            } else {
+                homeWarningCount = WarningsService.shared.warningCount
+            }
         }
         .onChange(of: showingAdminOverviewCustomize) { _, isOpen in
             if isOpen {
@@ -700,8 +728,8 @@ struct HomeView: View {
         if userStore.isOperativeMode() {
             HStack(spacing: 10) {
                 overviewStatPill(value: "\(tasksDueTodayCount)", label: "Tasks Due Today")
-                overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "Tasks due this week")
-                overviewStatPill(value: "\(tasksOverdueCount)", label: "Tasks Overdue")
+                overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "Tasks Due This Week")
+                overviewStatPill(value: "\(tasksOverdueCount)", label: "My Tasks Overdue")
             }
         } else if userStore.hasAdminAccess() {
             HStack(spacing: 10) {
@@ -714,9 +742,9 @@ struct HomeView: View {
             }
         } else {
             HStack(spacing: 10) {
-                overviewStatPill(value: "\(tasksDueTodayCount)", label: "Due today")
-                overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "This week")
-                overviewStatPill(value: "\(assignedTasksCount)", label: "Tasks")
+                overviewStatPill(value: "\(tasksDueTodayCount)", label: "Tasks Due Today")
+                overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "Tasks Due This Week")
+                overviewStatPill(value: "\(assignedTasksCount)", label: "Open Tasks (My Tasks)")
             }
         }
     }
@@ -816,14 +844,15 @@ struct HomeView: View {
 
     private func loadPersistedQuickActionsIfNeeded() {
         guard !hasLoadedQuickActionLayout else { return }
+        guard userStore.currentUser != nil || !userStore.isHomeProfileLoading else { return }
         hasLoadedQuickActionLayout = true
         if let saved = UserDefaults.standard.array(forKey: quickActionStorageKey) as? [String], !saved.isEmpty {
             let allowed = Set(HomeQuickActionRegistry.allEligibleIds(userStore: userStore))
             var seen = Set<String>()
             let filtered = saved.filter { allowed.contains($0) }.filter { seen.insert($0).inserted }
-            persistedQuickActionIds = filtered.isEmpty
-                ? HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
-                : filtered
+            let defaultIds = HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
+            let healed = filtered + defaultIds.filter { !filtered.contains($0) }
+            persistedQuickActionIds = healed.isEmpty ? defaultIds : healed
         } else {
             persistedQuickActionIds = HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
         }
@@ -834,6 +863,7 @@ struct HomeView: View {
     }
 
     private func sanitizePersistedQuickActionsIfNeeded() {
+        guard userStore.currentUser != nil || !userStore.isHomeProfileLoading else { return }
         let allowed = Set(HomeQuickActionRegistry.allEligibleIds(userStore: userStore))
         let next = persistedQuickActionIds.filter { allowed.contains($0) }
         if next.count != persistedQuickActionIds.count {
@@ -896,7 +926,7 @@ struct HomeView: View {
         } else if id == HomeQuickActionID.staffManageUsersSheet.rawValue, !userStore.canManageUsers() {
             raw = "Manage\noperatives"
         } else {
-            raw = HomeQuickActionRegistry.meta(for: id)?.title ?? ""
+            raw = HomeQuickActionRegistry.meta(for: id, userStore: userStore)?.title ?? ""
         }
         return capitalizeSecondWordsInQuickActionTitle(raw)
     }
@@ -968,6 +998,8 @@ struct HomeView: View {
             showingJobTypesManagement = true
         case HomeQuickActionID.staffWholesalers.rawValue:
             showingWholesalers = true
+        case HomeQuickActionID.staffMaterialCatalogue.rawValue:
+            showingMaterialCatalogue = true
         case HomeQuickActionID.staffAddUser.rawValue:
             showingAddUser = true
         case HomeQuickActionID.staffManageUsersSheet.rawValue:
@@ -1069,7 +1101,7 @@ struct HomeView: View {
     private var quickActionsIconGrid: some View {
         LazyVGrid(columns: quickGrid, spacing: 10) {
             ForEach(persistedQuickActionIds, id: \.self) { id in
-                if let meta = HomeQuickActionRegistry.meta(for: id),
+                if let meta = HomeQuickActionRegistry.meta(for: id, userStore: userStore),
                    HomeQuickActionRegistry.isEligible(id: id, userStore: userStore) {
                     if isCustomisingQuickActions {
                         quickActionCustomizeTile(id: id, meta: meta)
@@ -1283,30 +1315,15 @@ struct HomeView: View {
         }.value
 
         if userStore.hasAdminAccess() {
-            let cal = Calendar.current
-            let today = cal.startOfDay(for: Date())
-            let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
-            let tomorrowProjectIds = Set(
-                bookings
-                    .filter {
-                        cal.isDate($0.date, inSameDayAs: tomorrow) &&
-                            ($0.status == .confirmed || $0.status == .tentative)
-                    }
-                    .map(\.projectId)
-            )
-            let projectsTomorrow = projects.filter { tomorrowProjectIds.contains($0.id) }
-            await WarningsService.shared.updateWarningsAsync(
-                operatives: operatives,
-                bookings: bookings,
-                projects: projects,
-                users: users,
-                managerSiteBookings: managerBookings,
-                holidayBookings: holidayStore.bookings,
-                payrollTimePolicy: policy,
-                labourCoverageStart: cal.date(byAdding: .day, value: -14, to: today),
-                labourCoverageEnd: cal.date(byAdding: .day, value: 28, to: today),
-                materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
-                projectsWithTomorrowBookings: projectsTomorrow
+            await WarningsRefreshHelper.refreshSharedWarnings(
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                projectStore: projectStore,
+                userStore: userStore,
+                managerScheduleStore: managerScheduleStore,
+                holidayStore: holidayStore,
+                firebaseBackend: firebaseBackend,
+                appSettings: appSettings
             )
             guard !Task.isCancelled else { return }
             homeWarningCount = WarningsService.shared.warningCount

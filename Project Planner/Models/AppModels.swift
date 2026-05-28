@@ -148,6 +148,7 @@ struct UserPermissions: Codable, Hashable {
     var operativeMode: Bool // Operative mode - limited view of app
     var annualLeaveSelfBook: Bool // Managers can self-book annual leave without approval
     var weeklyReports: Bool // Managers can access weekly reports
+    var dailyOverview: Bool // Managers can access Daily Overview
     var subContractors: Bool // Managers can add/manage sub contractors
     var siteAudit: Bool // Operative can access site audits
     
@@ -163,6 +164,7 @@ struct UserPermissions: Codable, Hashable {
         operativeMode: Bool = false,
         annualLeaveSelfBook: Bool = false,
         weeklyReports: Bool = false,
+        dailyOverview: Bool = true,
         subContractors: Bool = false,
         siteAudit: Bool = true
     ) {
@@ -177,8 +179,62 @@ struct UserPermissions: Codable, Hashable {
         self.operativeMode = operativeMode
         self.annualLeaveSelfBook = annualLeaveSelfBook
         self.weeklyReports = weeklyReports
+        self.dailyOverview = dailyOverview
         self.subContractors = subContractors
         self.siteAudit = siteAudit
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case adminAccess
+        case manager
+        case operatives
+        case skills
+        case qualifications
+        case materials
+        case projects
+        case smallWorks
+        case operativeMode
+        case annualLeaveSelfBook
+        case weeklyReports
+        case dailyOverview
+        case subContractors
+        case siteAudit
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        adminAccess = try c.decodeIfPresent(Bool.self, forKey: .adminAccess) ?? false
+        manager = try c.decodeIfPresent(Bool.self, forKey: .manager) ?? false
+        operatives = try c.decodeIfPresent(Bool.self, forKey: .operatives) ?? false
+        skills = try c.decodeIfPresent(Bool.self, forKey: .skills) ?? false
+        qualifications = try c.decodeIfPresent(Bool.self, forKey: .qualifications) ?? false
+        materials = try c.decodeIfPresent(Bool.self, forKey: .materials) ?? false
+        projects = try c.decodeIfPresent(Bool.self, forKey: .projects) ?? false
+        smallWorks = try c.decodeIfPresent(Bool.self, forKey: .smallWorks) ?? false
+        operativeMode = try c.decodeIfPresent(Bool.self, forKey: .operativeMode) ?? false
+        annualLeaveSelfBook = try c.decodeIfPresent(Bool.self, forKey: .annualLeaveSelfBook) ?? false
+        weeklyReports = try c.decodeIfPresent(Bool.self, forKey: .weeklyReports) ?? false
+        dailyOverview = try c.decodeIfPresent(Bool.self, forKey: .dailyOverview) ?? true
+        subContractors = try c.decodeIfPresent(Bool.self, forKey: .subContractors) ?? false
+        siteAudit = try c.decodeIfPresent(Bool.self, forKey: .siteAudit) ?? true
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(adminAccess, forKey: .adminAccess)
+        try c.encode(manager, forKey: .manager)
+        try c.encode(operatives, forKey: .operatives)
+        try c.encode(skills, forKey: .skills)
+        try c.encode(qualifications, forKey: .qualifications)
+        try c.encode(materials, forKey: .materials)
+        try c.encode(projects, forKey: .projects)
+        try c.encode(smallWorks, forKey: .smallWorks)
+        try c.encode(operativeMode, forKey: .operativeMode)
+        try c.encode(annualLeaveSelfBook, forKey: .annualLeaveSelfBook)
+        try c.encode(weeklyReports, forKey: .weeklyReports)
+        try c.encode(dailyOverview, forKey: .dailyOverview)
+        try c.encode(subContractors, forKey: .subContractors)
+        try c.encode(siteAudit, forKey: .siteAudit)
     }
 }
 
@@ -507,12 +563,16 @@ struct OrganizationSettings: Codable, Hashable {
     var defaultUserRole: UserRole
     var workingHours: WorkingHours
     var holidayCalendar: HolidayCalendar
+    /// Shared cross-platform labels (app + web) from `organizations/{orgId}.settings.uiLabels`.
+    var uiLabels: OrganizationUILabels
     /// Company-wide defaults for standard day, breaks, and overtime (editable in Organisation settings).
     var payrollTimePolicy: OrgPayrollTimePolicy
     /// Warning detection horizon and unbooked-labour rules.
     var warningDetection: OrgWarningDetectionSettings
     /// Invoicing setup (payment runs + payment dates).
     var invoicing: OrganizationInvoicingSettings
+    /// Defaults used only for newly invited manager/operative users.
+    var annualLeaveDefaults: OrganizationAnnualLeaveDefaults
     
     init(
         allowSelfRegistration: Bool = true,
@@ -520,25 +580,31 @@ struct OrganizationSettings: Codable, Hashable {
         defaultUserRole: UserRole = .basic,
         workingHours: WorkingHours = WorkingHours(),
         holidayCalendar: HolidayCalendar = HolidayCalendar(),
+        uiLabels: OrganizationUILabels = OrganizationUILabels(),
         payrollTimePolicy: OrgPayrollTimePolicy = .default,
         warningDetection: OrgWarningDetectionSettings = .default,
-        invoicing: OrganizationInvoicingSettings = .default
+        invoicing: OrganizationInvoicingSettings = .default,
+        annualLeaveDefaults: OrganizationAnnualLeaveDefaults = .default
     ) {
         self.allowSelfRegistration = allowSelfRegistration
         self.requireEmailVerification = requireEmailVerification
         self.defaultUserRole = defaultUserRole
         self.workingHours = workingHours
         self.holidayCalendar = holidayCalendar
+        self.uiLabels = uiLabels
         self.payrollTimePolicy = payrollTimePolicy
         self.warningDetection = warningDetection
         self.invoicing = invoicing
+        self.annualLeaveDefaults = annualLeaveDefaults
     }
 
     enum CodingKeys: String, CodingKey {
         case allowSelfRegistration, requireEmailVerification, defaultUserRole, workingHours, holidayCalendar
+        case uiLabels
         case payrollTimePolicy
         case warningDetection
         case invoicing
+        case annualLeaveDefaults
     }
 
     init(from decoder: Decoder) throws {
@@ -548,9 +614,11 @@ struct OrganizationSettings: Codable, Hashable {
         defaultUserRole = try c.decodeIfPresent(UserRole.self, forKey: .defaultUserRole) ?? .basic
         workingHours = try c.decodeIfPresent(WorkingHours.self, forKey: .workingHours) ?? WorkingHours()
         holidayCalendar = try c.decodeIfPresent(HolidayCalendar.self, forKey: .holidayCalendar) ?? HolidayCalendar()
+        uiLabels = try c.decodeIfPresent(OrganizationUILabels.self, forKey: .uiLabels) ?? OrganizationUILabels()
         payrollTimePolicy = try c.decodeIfPresent(OrgPayrollTimePolicy.self, forKey: .payrollTimePolicy) ?? .default
         warningDetection = try c.decodeIfPresent(OrgWarningDetectionSettings.self, forKey: .warningDetection) ?? .default
         invoicing = try c.decodeIfPresent(OrganizationInvoicingSettings.self, forKey: .invoicing) ?? .default
+        annualLeaveDefaults = try c.decodeIfPresent(OrganizationAnnualLeaveDefaults.self, forKey: .annualLeaveDefaults) ?? .default
     }
 
     func encode(to encoder: Encoder) throws {
@@ -560,9 +628,32 @@ struct OrganizationSettings: Codable, Hashable {
         try c.encode(defaultUserRole, forKey: .defaultUserRole)
         try c.encode(workingHours, forKey: .workingHours)
         try c.encode(holidayCalendar, forKey: .holidayCalendar)
+        try c.encode(uiLabels, forKey: .uiLabels)
         try c.encode(payrollTimePolicy, forKey: .payrollTimePolicy)
         try c.encode(warningDetection, forKey: .warningDetection)
         try c.encode(invoicing, forKey: .invoicing)
+        try c.encode(annualLeaveDefaults, forKey: .annualLeaveDefaults)
+    }
+}
+
+struct OrganizationAnnualLeaveDefaults: Codable, Hashable {
+    var daysPerYear: Double
+    var startMonth: Int
+    var endMonth: Int
+    var carriesOver: Bool
+
+    static let `default` = OrganizationAnnualLeaveDefaults(
+        daysPerYear: AnnualLeavePolicy.defaultDaysPerYear,
+        startMonth: AnnualLeavePolicy.defaultStartMonth,
+        endMonth: AnnualLeavePolicy.defaultEndMonth,
+        carriesOver: AnnualLeavePolicy.defaultCarriesOver
+    )
+
+    init(daysPerYear: Double, startMonth: Int, endMonth: Int, carriesOver: Bool) {
+        self.daysPerYear = AnnualLeavePolicy.clampDaysPerYear(daysPerYear)
+        self.startMonth = AnnualLeavePolicy.clampMonth(startMonth)
+        self.endMonth = AnnualLeavePolicy.clampMonth(endMonth)
+        self.carriesOver = carriesOver
     }
 }
 
@@ -630,7 +721,11 @@ struct OrganizationInvoicingSettings: Codable, Hashable {
     var paymentDateMode: PaymentDateConfigurationMode
     var paymentRunDateRanges: [PaymentRunDateRange]
     var paymentDates: [Int]
+    /// Optional admin note shown to users on the invoicing page.
+    var noteToUsers: String
     var recurringPaymentRunSummary: String
+    var recurringRunStartDay: RecurringPaymentDay
+    var recurringRunEndDay: RecurringPaymentDay
     var recurringPaymentDay: RecurringPaymentDay
 
     static let `default` = OrganizationInvoicingSettings(
@@ -638,7 +733,10 @@ struct OrganizationInvoicingSettings: Codable, Hashable {
         paymentDateMode: .specificDates,
         paymentRunDateRanges: [PaymentRunDateRange(startDay: 1, endDay: 2)],
         paymentDates: [18],
+        noteToUsers: "",
         recurringPaymentRunSummary: "In arrears: Monday to Sunday (previous week)",
+        recurringRunStartDay: .monday,
+        recurringRunEndDay: .sunday,
         recurringPaymentDay: .friday
     )
 
@@ -656,6 +754,10 @@ struct OrganizationInvoicingSettings: Codable, Hashable {
         return Array(deduped.prefix(2))
     }
 
+    var normalizedUserNote: String {
+        noteToUsers.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func fullMonthCoverageWarning() -> String? {
         guard paymentRunMode == .dateRanges else { return nil }
         let ranges = normalizedRanges
@@ -666,6 +768,42 @@ struct OrganizationInvoicingSettings: Codable, Hashable {
         }
         return nil
     }
+
+    var recurringRunDisplaySummary: String {
+        "In arrears: \(recurringRunStartDay.title) to \(recurringRunEndDay.title) (of the previous week)"
+    }
+
+    mutating func refreshRecurringSummaryFromDays() {
+        recurringPaymentRunSummary = recurringRunDisplaySummary
+    }
+}
+
+struct OrganizationUILabels: Codable, Hashable {
+    /// Key/value map shared with web for navigation labels.
+    var navigationLabels: [String: String]
+
+    init(navigationLabels: [String: String] = OrganizationUILabels.defaultNavigationLabels) {
+        self.navigationLabels = navigationLabels
+    }
+
+    func navigationLabel(for key: String, fallback: String) -> String {
+        guard let value = navigationLabels[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return fallback
+        }
+        return value
+    }
+
+    static let defaultNavigationLabels: [String: String] = [
+        "dashboard_home": "Home",
+        "dashboard_projects": "Projects",
+        "dashboard_small_works": "Small works",
+        "dashboard_operatives": "Operatives",
+        "dashboard_managers": "Managers",
+        "dashboard_schedule": "Schedule",
+        "dashboard_settings": "Settings",
+        "site_audit": "Site audit",
+    ]
 }
 
 // MARK: - Organisation payroll / working time (hours & OT)

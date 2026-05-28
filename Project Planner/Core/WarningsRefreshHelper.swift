@@ -21,6 +21,9 @@ enum WarningsRefreshHelper {
         appSettings: AppSettingsStore
     ) async {
         guard userStore.hasAdminAccess() else { return }
+        if bookingStore.isLoading || managerScheduleStore.isLoading || operativeStore.isLoading || holidayStore.isLoading {
+            return
+        }
         let now = Date()
         if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < minRefreshInterval {
             return
@@ -51,6 +54,8 @@ enum WarningsRefreshHelper {
             holidayBookings: holidayStore.bookings,
             payrollTimePolicy: policy,
             materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
+            materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
+            materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsTomorrow
         )
         NotificationCenter.default.post(

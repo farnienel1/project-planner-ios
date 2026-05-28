@@ -229,10 +229,18 @@ struct ClashTimelineDiagram: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(accent.foreground)
                 }
-                Text(entry.jobNumber ?? entry.locationLabel)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(accent.foreground)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.jobNumber ?? entry.locationLabel)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(accent.foreground)
+                        .lineLimit(1)
+                    if let siteName = entry.siteName, entry.jobNumber != nil {
+                        Text(siteName)
+                            .font(.system(size: 9))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .lineLimit(1)
+                    }
+                }
             }
             .frame(width: 68, alignment: .leading)
 
@@ -360,6 +368,7 @@ struct ClashTimelineDiagram: View {
         )
     }
 }
+
 
 struct OperativeClashWarningCard: View {
     let warning: Warning
@@ -510,24 +519,6 @@ private struct BookingClashWarningCard: View {
             .background(severity == .high ? Color(red: 0.988, green: 0.922, blue: 0.922) : Color(red: 0.98, green: 0.933, blue: 0.855))
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
 
-            Text("Bookings involved:")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .padding(.leading, 4)
-
-            VStack(spacing: 0) {
-                bookingInvolvedRow(entry: entryA)
-                Divider().overlay(ProjectWorksRevampColors.border)
-                bookingInvolvedRow(entry: entryB)
-            }
-            .padding(.horizontal, 14)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
-            )
-
             Text("Choose how to resolve:")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
@@ -551,39 +542,6 @@ private struct BookingClashWarningCard: View {
                 .stroke(border, lineWidth: 0.5)
         )
         .shadow(color: border.opacity(0.35), radius: 0, x: 0, y: 0)
-    }
-
-    private func bookingInvolvedRow(entry: Warning.ClashTimelineEntry) -> some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(entry.isSmallWorks ? ProjectWorksRevampColors.upcomingAmber.opacity(0.15) : Color(red: 0.882, green: 0.961, blue: 0.933))
-                .frame(width: 28, height: 28)
-                .overlay(
-                    Image(systemName: entry.isSmallWorks ? "hammer.fill" : "folder.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(entry.isSmallWorks ? ProjectWorksRevampColors.upcomingAmber : Color(red: 0.059, green: 0.431, blue: 0.337))
-                )
-            VStack(alignment: .leading, spacing: 2) {
-                if let num = entry.jobNumber, let site = entry.siteName {
-                    HStack(spacing: 6) {
-                        Text(num)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(entry.isSmallWorks ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.blue)
-                        Text(site)
-                            .font(.system(size: 12, weight: .medium))
-                            .lineLimit(1)
-                    }
-                } else {
-                    Text(entry.locationLabel)
-                        .font(.system(size: 12, weight: .medium))
-                }
-                Text("\(entry.timeLabel) · \(entry.hoursLabel)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 10)
     }
 
     private func resolveButton(title: String, icon: String, action: @escaping () -> Void) -> some View {

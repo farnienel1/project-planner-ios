@@ -101,20 +101,15 @@ struct OrganisationSettingsHubView: View {
                     .buttonStyle(.plain)
                     Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 54)
                     NavigationLink {
-                        HolidayView(showRequests: true)
-                            .environmentObject(holidayStore)
-                            .environmentObject(userStore)
-                            .environmentObject(operativeStore)
+                        OrganisationAnnualLeaveDefaultsView()
                             .environmentObject(firebaseBackend)
-                            .environmentObject(notificationService)
-                            .environmentObject(appSettings)
                     } label: {
                         hubRowLabel(
                             icon: "beach.umbrella.fill",
                             iconBg: ProjectWorksRevampColors.endDateBg,
                             iconFg: ProjectWorksRevampColors.endDateFg,
                             title: "Annual leave",
-                            subtitle: "Allowance, approvals, calendar"
+                            subtitle: annualLeaveDefaultsSubtitle
                         )
                     }
                     .buttonStyle(.plain)
@@ -236,7 +231,7 @@ struct OrganisationSettingsHubView: View {
                     .padding(.vertical, 11)
                 }
 
-                hubSectionTitle("Invoicing")
+                hubSectionTitle("Payment Runs and Timesheets")
                 hubCard {
                     NavigationLink {
                         OrganisationInvoicingSettingsView()
@@ -246,7 +241,7 @@ struct OrganisationSettingsHubView: View {
                             icon: "doc.text.fill",
                             iconBg: ProjectWorksRevampColors.blue.opacity(0.12),
                             iconFg: ProjectWorksRevampColors.blue,
-                            title: "Payment runs",
+                            title: "Payment Runs and Timesheets",
                             subtitle: invoicingSubtitle
                         )
                     }
@@ -429,6 +424,17 @@ struct OrganisationSettingsHubView: View {
         return "\(p.standardDayStart)–\(p.standardDayEnd) · \(Int(p.standardPaidHours))h · weekday OT \(wk)×"
     }
 
+    private var annualLeaveDefaultsSubtitle: String {
+        let d = org?.settings.annualLeaveDefaults ?? .default
+        let months = AnnualLeavePolicy.shortMonthSymbols()
+        let start = months[max(0, min(11, d.startMonth - 1))]
+        let end = months[max(0, min(11, d.endMonth - 1))]
+        let daysText = d.daysPerYear.truncatingRemainder(dividingBy: 1) == 0
+            ? String(Int(d.daysPerYear))
+            : String(format: "%.1f", d.daysPerYear)
+        return "\(daysText) days · \(start)→\(end) · \(d.carriesOver ? "carry over" : "no carry over")"
+    }
+
     private var scheduleOptionsSubtitle: String {
         let o = appSettings.settings.myScheduleOptions
         var n = 0
@@ -498,7 +504,7 @@ struct OrganisationSettingsHubView: View {
                 .map { "\($0.startDay)-\($0.endDay)" }
                 .joined(separator: " · ")
         case .recurringTimeframe:
-            return "Recurring: Every \(invoicing.recurringPaymentDay.title)"
+            return "Recurring: \(invoicing.recurringRunStartDay.title)-\(invoicing.recurringRunEndDay.title)"
         }
     }
     private func hubSectionTitle(_ t: String) -> some View {
