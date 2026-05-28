@@ -813,7 +813,6 @@ struct ManagerScheduleContentView: View {
     private func annualLeaveTimeSlot(on day: Date) -> HolidayTimeSlot? {
         myHolidayBookings(on: day).first?.timeSlot
     }
-
     var body: some View {
         ZStack(alignment: .top) {
             VStack(spacing: 0) {
@@ -2541,7 +2540,6 @@ struct OperativeScheduleContentView: View {
             return day >= start && day <= end
         })?.timeSlot
     }
-
     var body: some View {
         VStack(spacing: 0) {
             weekNavigation
