@@ -2,6 +2,8 @@ import SwiftUI
 import PencilKit
 import Combine
 import UIKit
+import PDFKit
+import UniformTypeIdentifiers
 
 private enum HSManagerTab: String, CaseIterable, Identifiable {
     case hub = "Hub"
@@ -47,8 +49,11 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             var loaded = try await firebaseBackend.loadHealthSafetyData(project: project, organizationId: orgId)
-            if loaded.talks.isEmpty {
-                loaded.talks = Self.defaultLibraryTalks
+            let mergedTalks = mergeLibraryTalks(into: loaded.talks)
+            let mergedIds = Set(mergedTalks.map(\.id))
+            let loadedIds = Set(loaded.talks.map(\.id))
+            if loaded.talks.isEmpty || mergedIds != loadedIds {
+                loaded.talks = mergedTalks
                 loaded.updatedAt = Date()
                 try await firebaseBackend.saveHealthSafetyData(loaded, project: project, organizationId: orgId)
             }
@@ -103,6 +108,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         trade: String,
         purpose: String,
         keyPoints: [String],
+        fileURL: String?,
         firebaseBackend: FirebaseBackend,
         userStore: UserStore
     ) async {
@@ -121,7 +127,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
             status: .approved,
             version: 1,
             updatedAt: Date(),
-            fileURL: nil
+            fileURL: fileURL
         )
         data.talks.insert(talk, at: 0)
         await persist(firebaseBackend: firebaseBackend, userStore: userStore)
@@ -228,17 +234,131 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private func mergeLibraryTalks(into existing: [HSToolboxTalk]) -> [HSToolboxTalk] {
+        let uploaded = existing.filter { $0.source == .uploaded }
+        let existingLibraryById = Dictionary(uniqueKeysWithValues: existing.filter { $0.source == .library }.map { ($0.id, $0) })
+        let baseLibrary = Self.defaultLibraryTalks.map { talk in
+            if let existingTalk = existingLibraryById[talk.id] {
+                var merged = talk
+                merged.updatedAt = existingTalk.updatedAt
+                merged.version = max(existingTalk.version, talk.version)
+                return merged
+            }
+            return talk
+        }
+        let defaultIds = Set(Self.defaultLibraryTalks.map(\.id))
+        let extraLibrary = existing.filter { talk in
+            talk.source == .library && !defaultIds.contains(talk.id)
+        }
+        return (baseLibrary + extraLibrary + uploaded)
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private static func makeTalk(
+        id: String,
+        title: String,
+        trade: String? = nil,
+        purpose: String,
+        keyPoints: [String]
+    ) -> HSToolboxTalk {
+        let isGeneral = trade == nil
+        return HSToolboxTalk(
+            id: id,
+            title: title,
+            category: isGeneral ? .general : .trade,
+            isGeneral: isGeneral,
+            trades: trade.map { [$0] } ?? [],
+            purpose: purpose,
+            keyPoints: keyPoints,
+            source: .library,
+            ownerOrganizationId: nil,
+            status: .approved,
+            version: 1,
+            updatedAt: Date(),
+            fileURL: nil
+        )
+    }
+
     private static let defaultLibraryTalks: [HSToolboxTalk] = [
-        HSToolboxTalk(id: "TBT-GEN-001", title: "Working at Height", category: .general, isGeneral: true, trades: [], purpose: "Prevent falls and dropped-object incidents.", keyPoints: ["Use suitable access equipment", "Inspect edge protection", "Keep exclusion zones below"], source: .library, ownerOrganizationId: nil, status: .approved, version: 1, updatedAt: Date(), fileURL: nil),
-        HSToolboxTalk(id: "TBT-GEN-002", title: "Manual Handling", category: .general, isGeneral: true, trades: [], purpose: "Reduce musculoskeletal injuries while lifting and carrying.", keyPoints: ["Assess load and route first", "Use mechanical aids where possible", "Team lift when needed"], source: .library, ownerOrganizationId: nil, status: .approved, version: 1, updatedAt: Date(), fileURL: nil),
-        HSToolboxTalk(id: "TBT-GEN-003", title: "PPE Selection and Use", category: .general, isGeneral: true, trades: [], purpose: "Ensure mandatory PPE is selected and used correctly.", keyPoints: ["Task-specific PPE checks", "Inspect damaged PPE", "Replace defective PPE immediately"], source: .library, ownerOrganizationId: nil, status: .approved, version: 1, updatedAt: Date(), fileURL: nil),
-        HSToolboxTalk(id: "TBT-ELE-001", title: "Safe Isolation Procedure", category: .trade, isGeneral: false, trades: ["Electrical"], purpose: "Prove circuits are dead before any electrical intervention.", keyPoints: ["Lock off and tag", "Prove-test-prove sequence", "Record isolation point"], source: .library, ownerOrganizationId: nil, status: .approved, version: 1, updatedAt: Date(), fileURL: nil),
-        HSToolboxTalk(id: "TBT-ELE-002", title: "Temporary Electrical Installations", category: .trade, isGeneral: false, trades: ["Electrical"], purpose: "Control electrical risk on temporary power systems.", keyPoints: ["RCD protection", "Lead routing and inspection", "No damaged connectors"], source: .library, ownerOrganizationId: nil, status: .approved, version: 1, updatedAt: Date(), fileURL: nil),
-        HSToolboxTalk(id: "TBT-PLG-001", title: "Gas Safe Working and Purging", category: .trade, isGeneral: false, trades: ["Plumbing & Gas"], purpose: "Manage purge and ignition risks during gas works.", keyPoints: ["Gas Safe competence", "Tightness testing", "Control ignition sources"], source: .library, ownerOrganizationId: nil, status: .approved, version: 1, updatedAt: Date(), fileURL: nil),
-        HSToolboxTalk(id: "TBT-PLG-002", title: "Legionella and Water Hygiene", category: .trade, isGeneral: false, trades: ["Plumbing & Gas"], purpose: "Maintain hygienic control of water systems.", keyPoints: ["Avoid dead legs", "Flush correctly", "Record disinfection"], source: .library, ownerOrganizationId: nil, status: .approved, version: 1, updatedAt: Date(), fileURL: nil),
-        HSToolboxTalk(id: "TBT-MEC-001", title: "Hot Works Permit Controls", category: .trade, isGeneral: false, trades: ["Mechanical / HVAC"], purpose: "Reduce fire and fume hazards during hot works.", keyPoints: ["Permit before start", "Fire watch and post-watch", "Protect nearby combustibles"], source: .library, ownerOrganizationId: nil, status: .approved, version: 1, updatedAt: Date(), fileURL: nil),
-        HSToolboxTalk(id: "TBT-GRD-001", title: "Excavations and Services Avoidance", category: .trade, isGeneral: false, trades: ["Groundworks"], purpose: "Prevent collapse and service strikes in excavations.", keyPoints: ["CAT and Genny checks", "Edge barriers and access", "Daily inspections"], source: .library, ownerOrganizationId: nil, status: .approved, version: 1, updatedAt: Date(), fileURL: nil),
-        HSToolboxTalk(id: "TBT-JOI-001", title: "Wood Dust and Extraction", category: .trade, isGeneral: false, trades: ["Joinery"], purpose: "Control carcinogenic wood dust exposure.", keyPoints: ["On-tool extraction", "RPE where needed", "Never dry sweep"], source: .library, ownerOrganizationId: nil, status: .approved, version: 1, updatedAt: Date(), fileURL: nil)
+        makeTalk(id: "TBT-GEN-001", title: "Working at Height", purpose: "Plan and control all work at height to prevent falls.", keyPoints: ["Use suitable access equipment", "Inspect edge protection", "Use exclusion zones below"]),
+        makeTalk(id: "TBT-GEN-002", title: "Working Near Openings, Voids & Risers", purpose: "Prevent falls into openings and risers.", keyPoints: ["Cover and barrier openings", "Use load-rated fixed covers", "Reinstate protection immediately"]),
+        makeTalk(id: "TBT-GEN-003", title: "Manual Handling", purpose: "Reduce injuries from lifting and carrying.", keyPoints: ["Assess load and route", "Use mechanical aids", "Team-lift where needed"]),
+        makeTalk(id: "TBT-GEN-004", title: "Slips, Trips & Falls", purpose: "Keep site access routes safe and clear.", keyPoints: ["Maintain housekeeping", "Manage cables and spills", "Wear suitable footwear"]),
+        makeTalk(id: "TBT-GEN-005", title: "PPE — Selection, Use & Care", purpose: "Ensure PPE is task-appropriate and maintained.", keyPoints: ["Wear site minimum PPE", "Inspect before use", "Replace damaged PPE"]),
+        makeTalk(id: "TBT-GEN-006", title: "COSHH — General Awareness", purpose: "Control exposure to hazardous substances.", keyPoints: ["Read COSHH/SDS first", "Use ventilation controls", "Never mix chemicals"]),
+        makeTalk(id: "TBT-GEN-007", title: "Dust & Silica (RCS) Control", purpose: "Limit harmful dust exposure on site.", keyPoints: ["Use extraction/water suppression", "Avoid dry sweeping", "Use suitable RPE"]),
+        makeTalk(id: "TBT-GEN-008", title: "Noise & Hand-Arm Vibration (HAVS)", purpose: "Reduce long-term hearing and vibration injury.", keyPoints: ["Wear hearing protection", "Control trigger time", "Report symptoms early"]),
+        makeTalk(id: "TBT-GEN-009", title: "Fire Safety & Emergency Procedures", purpose: "Ensure everyone understands fire response.", keyPoints: ["Know exits and assembly points", "Keep routes clear", "Use correct extinguisher type"]),
+        makeTalk(id: "TBT-GEN-010", title: "First Aid, Welfare & Reporting (RIDDOR)", purpose: "Promote immediate reporting and correct response.", keyPoints: ["Report all incidents", "Know first aid points", "Use correct emergency address"]),
+        makeTalk(id: "TBT-GEN-011", title: "Site Induction & Rules Refresh", purpose: "Reinforce project-specific safety rules.", keyPoints: ["Review key site rules", "Sign in/out correctly", "Confirm permit-controlled zones"]),
+        makeTalk(id: "TBT-GEN-012", title: "Plant & Pedestrian Segregation", purpose: "Prevent plant-person interface incidents.", keyPoints: ["Use designated walkways", "Follow banksman signals", "Never walk behind moving plant"]),
+        makeTalk(id: "TBT-GEN-013", title: "Hand & Power Tools (Safe Use)", purpose: "Use tools safely and isolate defects.", keyPoints: ["Use the right tool", "Check guards and condition", "Quarantine defective tools"]),
+        makeTalk(id: "TBT-GEN-014", title: "Adverse Weather (Heat, Cold, Wind)", purpose: "Adjust working practices for weather risk.", keyPoints: ["Stop unsafe height work", "Hydrate and take breaks", "Secure loose materials"]),
+
+        makeTalk(id: "TBT-ELE-001", title: "Safe Isolation Procedure", trade: "Electrical", purpose: "Prove circuits are dead before intervention.", keyPoints: ["Prove-test-prove", "Use lock-off/tag", "Record isolation points"]),
+        makeTalk(id: "TBT-ELE-002", title: "Cable Strike / Working Near Live Services", trade: "Electrical", purpose: "Prevent contact with hidden live services.", keyPoints: ["Review drawings", "Use CAT and Genny", "Use permit to break-in"]),
+        makeTalk(id: "TBT-ELE-003", title: "Temporary Electrical Installations", trade: "Electrical", purpose: "Control temporary electrical hazards.", keyPoints: ["Use 110V/RCD protection", "Inspect leads and connectors", "Protect outdoor equipment"]),
+        makeTalk(id: "TBT-ELE-004", title: "Working in Risers & Confined Electrical Spaces", trade: "Electrical", purpose: "Work safely in constrained electrical areas.", keyPoints: ["Protect riser openings", "Isolate before work", "Maintain safe egress"]),
+        makeTalk(id: "TBT-ELE-005", title: "Live Working (Prohibited / Exceptional)", trade: "Electrical", purpose: "Avoid live work unless formally authorised.", keyPoints: ["Avoid live work by default", "Use documented controls", "Only competent persons"]),
+        makeTalk(id: "TBT-ELE-006", title: "Test Instruments (GS38)", trade: "Electrical", purpose: "Use testing equipment safely and correctly.", keyPoints: ["Check calibration", "Use GS38-compliant leads", "Use correct CAT rating"]),
+        makeTalk(id: "TBT-ELE-007", title: "Containment & Tray at Height", trade: "Electrical", purpose: "Install containment safely at height.", keyPoints: ["Use suitable access", "Control dropped objects", "Handle long lengths safely"]),
+        makeTalk(id: "TBT-ELE-008", title: "Battery, Solar PV & Stored Energy", trade: "Electrical", purpose: "Manage DC and stored-energy electrical risks.", keyPoints: ["Apply DC isolation controls", "Account for arc risk", "Use competent personnel"]),
+
+        makeTalk(id: "TBT-MEC-001", title: "Hot Works (Welding, Brazing, Cutting)", trade: "Mechanical / HVAC", purpose: "Control fire and fume risks in hot works.", keyPoints: ["Use permit to work", "Protect combustibles", "Fire watch and post-watch"]),
+        makeTalk(id: "TBT-MEC-002", title: "Pressure Testing of Pipework", trade: "Mechanical / HVAC", purpose: "Pressure test systems safely.", keyPoints: ["Follow test procedure", "Use exclusion zones", "Increase pressure gradually"]),
+        makeTalk(id: "TBT-MEC-003", title: "Ductwork Install at Height", trade: "Mechanical / HVAC", purpose: "Install ductwork safely above ground level.", keyPoints: ["Use suitable access platform", "Control dropped objects", "Coordinate with trades below"]),
+        makeTalk(id: "TBT-MEC-004", title: "Lifting & Rigging Plant (AHUs, Chillers)", trade: "Mechanical / HVAC", purpose: "Lift plant safely under a controlled lift plan.", keyPoints: ["Use appointed person plan", "Check lifting gear", "Maintain exclusion zone"]),
+        makeTalk(id: "TBT-MEC-005", title: "Refrigerants & F-Gas Handling", trade: "Mechanical / HVAC", purpose: "Handle refrigerants safely and compliantly.", keyPoints: ["Use F-Gas competence", "Ventilate working area", "Detect and recover leaks safely"]),
+        makeTalk(id: "TBT-MEC-006", title: "Commissioning Rotating Plant", trade: "Mechanical / HVAC", purpose: "Commission rotating equipment safely.", keyPoints: ["Check guards in place", "Isolate before access", "Use controlled test-runs"]),
+        makeTalk(id: "TBT-MEC-007", title: "Insulation & Lagging", trade: "Mechanical / HVAC", purpose: "Control fibre and dust exposure during lagging.", keyPoints: ["Use suitable RPE", "Protect skin and eyes", "Report possible asbestos immediately"]),
+        makeTalk(id: "TBT-MEC-008", title: "Plantroom Working", trade: "Mechanical / HVAC", purpose: "Manage plantroom-specific hazards.", keyPoints: ["Control noise and heat risk", "Follow isolation rules", "Maintain safe housekeeping"]),
+
+        makeTalk(id: "TBT-PLG-001", title: "Gas Safe Working & Purging", trade: "Plumbing & Gas", purpose: "Control gas risks during purge and commissioning.", keyPoints: ["Use Gas Safe competence", "Perform tightness tests", "Control ignition sources"]),
+        makeTalk(id: "TBT-PLG-002", title: "Hot Works on Pipework (Solder/Braze)", trade: "Plumbing & Gas", purpose: "Control heat-related hazards in pipework works.", keyPoints: ["Use permit controls", "Apply heat protection mats", "Perform fire watch"]),
+        makeTalk(id: "TBT-PLG-003", title: "Legionella & Water Hygiene", trade: "Plumbing & Gas", purpose: "Maintain water hygiene and reduce legionella risk.", keyPoints: ["Avoid dead legs", "Flush and disinfect correctly", "Record hygiene actions"]),
+        makeTalk(id: "TBT-PLG-004", title: "Below-Ground Drainage Connections", trade: "Plumbing & Gas", purpose: "Install drainage safely in below-ground conditions.", keyPoints: ["Manage excavation safety", "Use hygiene controls", "Handle pipe sections safely"]),
+        makeTalk(id: "TBT-PLG-005", title: "Soil & Waste at Height", trade: "Plumbing & Gas", purpose: "Install soil and waste systems safely at height.", keyPoints: ["Use proper access", "Control dropped materials", "Manage solvent fumes"]),
+        makeTalk(id: "TBT-PLG-006", title: "Solvent Cements & Adhesives", trade: "Plumbing & Gas", purpose: "Use cements and adhesives without exposure incidents.", keyPoints: ["Ventilate work area", "Use PPE and RPE", "Store away from ignition sources"]),
+        makeTalk(id: "TBT-PLG-007", title: "Carbon Monoxide Awareness", trade: "Plumbing & Gas", purpose: "Prevent and detect CO exposure hazards.", keyPoints: ["Check flues and ventilation", "Recognize CO symptoms", "Use functional CO alarms"]),
+        makeTalk(id: "TBT-PLG-008", title: "Water Bursts & Flooding Control", trade: "Plumbing & Gas", purpose: "Respond quickly to burst and flooding events.", keyPoints: ["Know isolation points", "Protect finishes and equipment", "Escalate and report quickly"]),
+
+        makeTalk(id: "TBT-GRD-001", title: "Excavations — Collapse & Access", trade: "Groundworks", purpose: "Prevent excavation collapse and access incidents.", keyPoints: ["Support or batter excavations", "Inspect daily", "Maintain spoil set-back"]),
+        makeTalk(id: "TBT-GRD-002", title: "Underground Services Avoidance", trade: "Groundworks", purpose: "Avoid utility strikes during groundworks.", keyPoints: ["Use utility drawings", "Use CAT and Genny", "Use trial holes/hand dig"]),
+        makeTalk(id: "TBT-GRD-003", title: "Confined Spaces (Chambers, Manholes)", trade: "Groundworks", purpose: "Control confined-space entry hazards.", keyPoints: ["Use permit controls", "Perform gas testing", "Have rescue plan ready"]),
+        makeTalk(id: "TBT-GRD-004", title: "Plant on Groundworks (Excavators, Dumpers)", trade: "Groundworks", purpose: "Operate groundworks plant safely.", keyPoints: ["Use segregation and banksman", "Check quick-hitch safety", "Control refuelling safely"]),
+        makeTalk(id: "TBT-GRD-005", title: "Concrete & Wet Pours", trade: "Groundworks", purpose: "Control burns and placement hazards during pours.", keyPoints: ["Use skin protection", "Control pump-line whip", "Provide wash facilities"]),
+        makeTalk(id: "TBT-GRD-006", title: "Working Near Water / Flooding", trade: "Groundworks", purpose: "Reduce drowning and contamination risks.", keyPoints: ["Use edge protection", "Keep rescue equipment ready", "Monitor weather and pumping"]),
+
+        makeTalk(id: "TBT-JOI-001", title: "Woodworking Machinery & Saws", trade: "Joinery", purpose: "Operate woodworking machinery without injury.", keyPoints: ["Keep guards/riving knife fitted", "Use push sticks", "Use extraction controls"]),
+        makeTalk(id: "TBT-JOI-002", title: "Wood Dust (Carcinogen)", trade: "Joinery", purpose: "Control carcinogenic wood dust exposure.", keyPoints: ["Use on-tool extraction", "Use suitable RPE", "Avoid dry sweeping"]),
+        makeTalk(id: "TBT-JOI-003", title: "Nail Guns & Cartridge Tools", trade: "Joinery", purpose: "Prevent inadvertent discharge injuries.", keyPoints: ["Never bypass safety tip", "Keep hands clear of firing line", "Disconnect when idle"]),
+        makeTalk(id: "TBT-JOI-004", title: "1st Fix at Height & Access", trade: "Joinery", purpose: "Deliver first-fix works safely at height.", keyPoints: ["Use podium/tower access", "Control timber handling", "Control dropped objects"]),
+        makeTalk(id: "TBT-JOI-005", title: "Adhesives, Sealants & Solvents", trade: "Joinery", purpose: "Use adhesives safely and limit exposure.", keyPoints: ["Ventilate enclosed areas", "Use eye/skin protection", "Control flammability risk"]),
+        makeTalk(id: "TBT-JOI-006", title: "Manual Handling of Sheet Materials", trade: "Joinery", purpose: "Handle sheet materials without strain injury.", keyPoints: ["Use team-lifts/board lifters", "Protect from sharp edges", "Plan clear routes"]),
+
+        makeTalk(id: "TBT-SCA-001", title: "Scaffold Erection & Dismantle (SG4)", trade: "Scaffolding", purpose: "Erect and dismantle scaffolds with controlled fall protection.", keyPoints: ["Work to SG4 methods", "Use advance guardrails", "Maintain exclusion zones below"]),
+        makeTalk(id: "TBT-SCA-002", title: "Scaffold Inspection & Tagging", trade: "Scaffolding", purpose: "Ensure only safe tagged scaffolds are used.", keyPoints: ["Check tags before use", "Inspect after weather/events", "Report alterations or damage"]),
+
+        makeTalk(id: "TBT-BRK-001", title: "Silica Dust from Cutting Blocks & Bricks", trade: "Brick & Block", purpose: "Control silica exposure during brick and block cutting.", keyPoints: ["Use water suppression or extraction", "Wear face-fit-tested FFP3", "Vacuum dust instead of dry sweeping"]),
+        makeTalk(id: "TBT-BRK-002", title: "Manual Handling of Blocks", trade: "Brick & Block", purpose: "Reduce musculoskeletal injuries in block laying.", keyPoints: ["Use mechanical aids where possible", "Use team-lifts for heavy blocks", "Set work at suitable height"]),
+
+        makeTalk(id: "TBT-DRY-001", title: "Board Handling & Working at Height", trade: "Drylining", purpose: "Install plasterboard safely at height.", keyPoints: ["Use board lifters or 2-person lift", "Use suitable podium/tower access", "Control dropped materials"]),
+        makeTalk(id: "TBT-DRY-002", title: "Dust from Sanding & Mixing", trade: "Drylining", purpose: "Minimise dust exposure from drylining and finishing.", keyPoints: ["Use extraction-compatible sanding", "Wear RPE", "Vacuum dust, do not sweep"]),
+
+        makeTalk(id: "TBT-PNT-001", title: "Solvents & Isocyanates (COSHH)", trade: "Painting & Decorating", purpose: "Control chemical exposure from coatings and thinners.", keyPoints: ["Check COSHH/SDS", "Ventilate work area", "Use suitable RPE/PPE"]),
+        makeTalk(id: "TBT-PNT-002", title: "Access for Decorating", trade: "Painting & Decorating", purpose: "Use safe access methods for decorating tasks.", keyPoints: ["Use podiums/towers over overreaching ladders", "Keep access routes clear", "Beware wet/slippery surfaces"]),
+
+        makeTalk(id: "TBT-ROO-001", title: "Roof Edge Protection & Fragile Surfaces", trade: "Roofing", purpose: "Prevent falls from roofs and through fragile surfaces.", keyPoints: ["Provide edge protection", "Cover/barrier rooflights", "Use collective protection first"]),
+        makeTalk(id: "TBT-ROO-002", title: "Hot Works on Roofs (Torch-On)", trade: "Roofing", purpose: "Control fire risk during torch-on roofing works.", keyPoints: ["Use permit system", "Control combustibles", "Provide fire watch during and after"]),
+
+        makeTalk(id: "TBT-DEM-001", title: "Asbestos & Unexpected Discovery", trade: "Demolition", purpose: "Prevent exposure during demolition and strip-out.", keyPoints: ["Check surveys before work", "Stop immediately if suspected ACM is found", "Escalate to licensed removal process"]),
+        makeTalk(id: "TBT-DEM-002", title: "Structural Stability During Demolition", trade: "Demolition", purpose: "Follow safe sequence to avoid collapse.", keyPoints: ["Follow demolition method statement", "Maintain exclusion zones", "Do not deviate sequence"]),
+
+        makeTalk(id: "TBT-STL-001", title: "Rebar Handling & Protruding Bar", trade: "Steel Fixing", purpose: "Control impalement and handling hazards in steel fixing.", keyPoints: ["Cap protruding bars", "Use handling aids", "Control sharp cut ends"]),
+        makeTalk(id: "TBT-STL-002", title: "Concrete Pours & Pump Lines", trade: "Steel Fixing", purpose: "Control whip, splash and burn risk during pours.", keyPoints: ["Establish exclusion zones", "Control pump-line movement", "Wear wet-concrete PPE"]),
+
+        makeTalk(id: "TBT-PLA-001", title: "Operator Competence & Daily Checks", trade: "Plant", purpose: "Ensure only competent operators use inspected plant.", keyPoints: ["Use CPCS/NPORS competence", "Complete daily checks", "Quarantine defective plant"]),
+        makeTalk(id: "TBT-PLA-002", title: "MEWP Safe Use & Rescue", trade: "Plant", purpose: "Operate MEWPs with rescue readiness.", keyPoints: ["Confirm IPAF competence", "Assess ground/stability", "Have rescue plan in place"])
     ]
 }
 
@@ -304,6 +424,39 @@ struct ProjectHealthSafetyView: View {
 
     private var blankToolboxTemplateURL: URL? {
         HSToolboxTalkDocumentBuilder.makeBlankTemplate()
+    }
+
+    private var groupedLibraryTalks: [(title: String, talks: [HSToolboxTalk])] {
+        let order = [
+            "General",
+            "Electrical",
+            "Groundworks",
+            "Joinery",
+            "Mechanical / HVAC",
+            "Plumbing & Gas",
+            "Scaffolding",
+            "Brick & Block",
+            "Drylining",
+            "Painting & Decorating",
+            "Roofing",
+            "Demolition",
+            "Steel Fixing",
+            "Plant"
+        ]
+        var buckets: [String: [HSToolboxTalk]] = [:]
+        for talk in filteredLibraryTalks {
+            let key: String
+            if talk.isGeneral {
+                key = "General"
+            } else {
+                key = talk.trades.first ?? "General"
+            }
+            buckets[key, default: []].append(talk)
+        }
+        return order.compactMap { title in
+            guard let talks = buckets[title], !talks.isEmpty else { return nil }
+            return (title, talks.sorted { $0.title < $1.title })
+        }
     }
 
     private var availableOperativeWeeks: [Date] {
@@ -372,13 +525,24 @@ struct ProjectHealthSafetyView: View {
             .environmentObject(userStore)
         }
         .sheet(item: $selectedIssueToTrack) { issue in
-            HSTrackIssueView(issue: issue, talk: vm.data.talks.first(where: { $0.id == issue.talkId }), signatures: vm.signatures(for: issue.id)) {
+            HSTrackIssueView(
+                issue: issue,
+                talk: vm.data.talks.first(where: { $0.id == issue.talkId }),
+                signatures: vm.signatures(for: issue.id),
+                projectName: project.siteName
+            ) {
                 Task { await vm.sendReminder(issueId: issue.id, firebaseBackend: firebaseBackend, userStore: userStore) }
             }
             .environmentObject(userStore)
         }
         .sheet(item: $selectedIssueToSign) { issue in
-            HSSignTalkView(issue: issue, talk: vm.data.talks.first(where: { $0.id == issue.talkId })) { base64Signature in
+            HSSignTalkView(
+                issue: issue,
+                talk: vm.data.talks.first(where: { $0.id == issue.talkId }),
+                signatures: vm.signatures(for: issue.id),
+                users: userStore.organizationUsers,
+                projectName: project.siteName
+            ) { base64Signature in
                 Task {
                     await vm.signTalk(
                         issueId: issue.id,
@@ -402,17 +566,21 @@ struct ProjectHealthSafetyView: View {
             HSSignedTalkView(
                 issue: issue,
                 talk: vm.data.talks.first(where: { $0.id == issue.talkId }),
-                signature: vm.signatures(for: issue.id).first(where: { $0.userId == (userStore.currentUser?.id ?? "") })
+                signature: vm.signatures(for: issue.id).first(where: { $0.userId == (userStore.currentUser?.id ?? "") }),
+                signatures: vm.signatures(for: issue.id),
+                users: userStore.organizationUsers,
+                projectName: project.siteName
             )
         }
         .sheet(isPresented: $showingUploadTalkSheet) {
-            HSUploadTalkSheet { title, trade, purpose, keyPoints in
+            HSUploadTalkSheet { title, trade, purpose, keyPoints, fileURL in
                 Task {
                     await vm.addUploadedTalk(
                         title: title,
                         trade: trade,
                         purpose: purpose,
                         keyPoints: keyPoints,
+                        fileURL: fileURL,
                         firebaseBackend: firebaseBackend,
                         userStore: userStore
                     )
@@ -420,11 +588,11 @@ struct ProjectHealthSafetyView: View {
             }
         }
         .sheet(isPresented: $showingAddRams) {
-            HSAddDocSheet(title: "Upload RAMS") { title, trade, category in
+            HSUploadRAMSSheet { title, trade in
                 Task {
                     await vm.addRams(
                         title: title,
-                        trade: trade ?? "General",
+                        trade: trade,
                         firebaseBackend: firebaseBackend,
                         userStore: userStore
                     )
@@ -432,12 +600,12 @@ struct ProjectHealthSafetyView: View {
             }
         }
         .sheet(isPresented: $showingAddOtherDoc) {
-            HSAddDocSheet(title: "Add H&S Document") { title, trade, category in
+            HSUploadSiteDocumentSheet { title, trade, category in
                 Task {
                     await vm.addOtherDoc(
                         title: title,
                         trade: trade,
-                        category: category ?? "trade",
+                        category: category,
                         firebaseBackend: firebaseBackend,
                         userStore: userStore
                     )
@@ -494,19 +662,140 @@ struct ProjectHealthSafetyView: View {
     }
 
     private var managerHub: some View {
-        VStack(spacing: 10) {
+        let myId = userStore.currentUser?.id ?? ""
+        let myIssues = vm.data.issues.filter { issue in
+            vm.signatures(for: issue.id).contains(where: { $0.userId == myId })
+        }
+        let pendingMyIssues = myIssues.filter { issue in
+            vm.signatures(for: issue.id).first(where: { $0.userId == myId })?.status != .signed
+        }
+
+        return VStack(alignment: .leading, spacing: 12) {
+            if !myIssues.isEmpty {
+                HStack {
+                    Text("My Toolbox Talks")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(HS.slate2)
+                        .textCase(.uppercase)
+                    Spacer()
+                    if !pendingMyIssues.isEmpty {
+                        Text("\(pendingMyIssues.count)")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(HS.amber)
+                            .clipShape(Capsule())
+                    }
+                }
+                VStack(spacing: 0) {
+                    ForEach(myIssues, id: \.id) { issue in
+                        let mySignature = vm.signatures(for: issue.id).first(where: { $0.userId == myId })
+                        let isPending = mySignature?.status != .signed
+                        let title = vm.data.talks.first(where: { $0.id == issue.talkId })?.title ?? "Toolbox talk"
+                        HStack(spacing: 12) {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(isPending ? HS.amberBg : HS.greenBg)
+                                .frame(width: 40, height: 40)
+                                .overlay(
+                                    Image(systemName: isPending ? "doc.text" : "checkmark")
+                                        .foregroundStyle(isPending ? HS.amber : HS.green)
+                                )
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(title)
+                                    .font(.system(size: 14.5, weight: .semibold))
+                                    .foregroundStyle(HS.ink)
+                                    .lineLimit(1)
+                                Text("W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted)) · assigned to you")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(HS.slate)
+                            }
+                            Spacer()
+                            Button(isPending ? "Sign" : "Signed") {
+                                if isPending { selectedIssueToSign = issue } else { selectedIssueToView = issue }
+                            }
+                            .buttonStyle(FilledButtonStyle(tone: isPending ? .teal : .blue))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        if issue.id != myIssues.last?.id {
+                            Divider().padding(.leading, 66)
+                        }
+                    }
+                }
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .shadow(color: .black.opacity(0.05), radius: 10, x: 0, y: 6)
+            }
+
+            Text("This project")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(HS.slate2)
+                .textCase(.uppercase)
+
             HStack(spacing: 10) {
                 hsMetricCard(title: "Talks issued", value: "\(vm.data.issues.count)")
                 hsMetricCard(title: "Awaiting signatures", value: "\(vm.data.signatures.filter { $0.status == .pending }.count)")
                 hsMetricCard(title: "RAMS docs", value: "\(vm.data.ramsDocuments.count)")
             }
-            HStack(spacing: 10) {
-                hsActionCard(title: "Toolbox Library", subtitle: "Search talks, filter by trade, issue immediately", icon: "books.vertical.fill") {
-                    managerTab = .library
+
+            Text("Quick actions")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(HS.slate2)
+                .textCase(.uppercase)
+
+            VStack(spacing: 0) {
+                hsActionRow(title: "Issue a Toolbox Talk", subtitle: "Pick a talk and send to operatives", icon: "paperplane.fill", tone: HS.teal) {
+                    selectedTalkForIssue = nil
+                    showingIssueSheet = true
                 }
-                hsActionCard(title: "Track Sign-off", subtitle: "See progress and remind pending operatives", icon: "checkmark.shield.fill") {
-                    managerTab = .tracking
+                hsActionRow(title: "Upload a Toolbox Talk", subtitle: "Add your own talk to the library", icon: "square.and.arrow.up", tone: HS.teal) {
+                    showingUploadTalkSheet = true
                 }
+                hsActionRow(title: "Upload RAMS", subtitle: "Add a risk assessment / method statement", icon: "doc.text.fill", tone: HS.blue) {
+                    showingAddRams = true
+                }
+                hsActionRow(title: "Add H&S document", subtitle: "Safe isolation, COSHH, permits", icon: "plus", tone: HS.amber, isLast: true) {
+                    showingAddOtherDoc = true
+                }
+            }
+            .background(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .shadow(color: .black.opacity(0.05), radius: 10, x: 0, y: 6)
+        }
+    }
+
+    private func hsActionRow(title: String, subtitle: String, icon: String, tone: Color, isLast: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(tone.opacity(0.13))
+                    .frame(width: 42, height: 42)
+                    .overlay(
+                        Image(systemName: icon)
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(tone)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(HS.ink)
+                    Text(subtitle)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(HS.slate)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(HS.slate2)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .bottom) {
+            if !isLast {
+                Divider().padding(.leading, 68)
             }
         }
     }
@@ -558,59 +847,69 @@ struct ProjectHealthSafetyView: View {
                 .buttonStyle(GhostButtonStyle())
             }
 
-            VStack(spacing: 8) {
-                ForEach(filteredLibraryTalks, id: \.id) { talk in
-                    VStack(alignment: .leading, spacing: 9) {
-                        HStack(spacing: 12) {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill((talk.isGeneral ? HS.teal : HS.blue).opacity(0.13))
-                                .frame(width: 42, height: 42)
-                                .overlay(
-                                    Image(systemName: "doc.text")
-                                        .foregroundStyle(talk.isGeneral ? HS.teal : HS.blue)
-                                )
+            VStack(spacing: 12) {
+                ForEach(groupedLibraryTalks, id: \.title) { group in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(group.title)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(HS.slate2)
+                            .textCase(.uppercase)
+                            .padding(.horizontal, 4)
 
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(talk.title)
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundStyle(HS.ink)
-                                Text(talk.purpose)
-                                    .font(.system(size: 12.5))
-                                    .foregroundStyle(HS.slate)
-                                    .lineLimit(1)
-                                Text(talk.isGeneral ? "General" : talk.trades.joined(separator: ", "))
-                                    .font(.system(size: 11.5, weight: .semibold))
-                                    .foregroundStyle(HS.blue)
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                            HSStatusBadge(
-                                text: talk.source == .uploaded ? "Uploaded" : "Library",
-                                tone: talk.source == .uploaded ? .info : .ok
-                            )
-                        }
+                        ForEach(group.talks, id: \.id) { talk in
+                            VStack(alignment: .leading, spacing: 9) {
+                                HStack(spacing: 12) {
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill((talk.isGeneral ? HS.teal : HS.blue).opacity(0.13))
+                                        .frame(width: 42, height: 42)
+                                        .overlay(
+                                            Image(systemName: "doc.text")
+                                                .foregroundStyle(talk.isGeneral ? HS.teal : HS.blue)
+                                        )
 
-                        HStack {
-                            Spacer()
-                            Button {
-                                selectedTalkForIssue = talk
-                                showingIssueSheet = true
-                            } label: {
-                                Text("Issue")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
-                                    .background(HS.teal.opacity(0.12))
-                                    .foregroundStyle(HS.teal)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(talk.title)
+                                            .font(.system(size: 15, weight: .semibold))
+                                            .foregroundStyle(HS.ink)
+                                        Text(talk.purpose)
+                                            .font(.system(size: 12.5))
+                                            .foregroundStyle(HS.slate)
+                                            .lineLimit(1)
+                                        Text(talk.isGeneral ? "General" : talk.trades.joined(separator: ", "))
+                                            .font(.system(size: 11.5, weight: .semibold))
+                                            .foregroundStyle(HS.blue)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    HSStatusBadge(
+                                        text: talk.source == .uploaded ? "Uploaded" : "Library",
+                                        tone: talk.source == .uploaded ? .info : .ok
+                                    )
+                                }
+
+                                HStack {
+                                    Spacer()
+                                    Button {
+                                        selectedTalkForIssue = talk
+                                        showingIssueSheet = true
+                                    } label: {
+                                        Text("Issue")
+                                            .font(.system(size: 12, weight: .bold))
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 5)
+                                            .background(HS.teal.opacity(0.12))
+                                            .foregroundStyle(HS.teal)
+                                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
-                            .buttonStyle(.plain)
+                            .hsCard(padding: 12)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedLibraryTalk = talk
+                            }
                         }
-                    }
-                    .hsCard(padding: 12)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        selectedLibraryTalk = talk
                     }
                 }
             }
@@ -1105,6 +1404,7 @@ private struct HSTrackIssueView: View {
     let issue: HSToolboxIssue
     let talk: HSToolboxTalk?
     let signatures: [HSToolboxSignature]
+    let projectName: String
     let onSendReminder: () -> Void
     @EnvironmentObject var userStore: UserStore
     @Environment(\.dismiss) private var dismiss
@@ -1164,12 +1464,14 @@ private struct HSTrackIssueView: View {
                         .padding(.horizontal, 4)
                     recipientListCard(signatures: signed, pending: false)
 
-                    Text("Awaiting (\(pending.count))")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(HS.slate2)
-                        .textCase(.uppercase)
-                        .padding(.horizontal, 4)
-                    recipientListCard(signatures: pending, pending: true)
+                    if !pending.isEmpty {
+                        Text("Awaiting (\(pending.count))")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(HS.slate2)
+                            .textCase(.uppercase)
+                            .padding(.horizontal, 4)
+                        recipientListCard(signatures: pending, pending: true)
+                    }
 
                     Button("Send reminder to pending", action: onSendReminder)
                         .buttonStyle(GhostButtonStyle(tint: HS.blue))
@@ -1252,36 +1554,23 @@ private struct HSTrackIssueView: View {
     }
 
     private func signoffSheetURL() -> URL? {
-        let title = talk?.title ?? "Toolbox talk"
-        var lines: [String] = []
-        lines.append("Toolbox Talk Sign-off Sheet")
-        lines.append("Talk: \(title)")
-        lines.append("Week commencing: \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
-        lines.append("")
-        lines.append("Name | Trade | Status | Signed At")
-        lines.append("---")
-        for signature in signatures {
-            let user = userStore.organizationUsers.first(where: { $0.id == signature.userId })
-            let displayName = user?.fullName.isEmpty == false ? user?.fullName ?? signature.userId : (user?.email ?? signature.userId)
-            let trade = StaffTradeType.displayLabel(presetRaw: user?.tradeTypePreset, custom: user?.tradeTypeCustom)
-            let status = signature.status == .signed ? "Signed" : "Pending"
-            let signedAt = signature.signedAt?.formatted(date: .abbreviated, time: .shortened) ?? "-"
-            lines.append("\(displayName) | \(trade) | \(status) | \(signedAt)")
-        }
-        let filename = "Toolbox-Signoff-\(title.replacingOccurrences(of: " ", with: "-"))-\(Int(issue.weekCommencing.timeIntervalSince1970)).txt"
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
-        do {
-            try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
-            return url
-        } catch {
-            return nil
-        }
+        guard let talk else { return nil }
+        return HSToolboxTalkDocumentBuilder.makeIssuedTalkDocument(
+            issue: issue,
+            talk: talk,
+            signatures: signatures,
+            users: userStore.organizationUsers,
+            projectName: projectName
+        )
     }
 }
 
 private struct HSSignTalkView: View {
     let issue: HSToolboxIssue
     let talk: HSToolboxTalk?
+    let signatures: [HSToolboxSignature]
+    let users: [AppUser]
+    let projectName: String
     let onSubmit: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var readConfirmed = false
@@ -1289,7 +1578,13 @@ private struct HSSignTalkView: View {
     
     private var talkDocumentURL: URL? {
         guard let talk else { return nil }
-        return HSToolboxTalkDocumentBuilder.makeDocument(for: talk)
+        return HSToolboxTalkDocumentBuilder.makeIssuedTalkDocument(
+            issue: issue,
+            talk: talk,
+            signatures: signatures,
+            users: users,
+            projectName: projectName
+        )
     }
 
     var body: some View {
@@ -1349,10 +1644,19 @@ private struct HSSignedTalkView: View {
     let issue: HSToolboxIssue
     let talk: HSToolboxTalk?
     let signature: HSToolboxSignature?
+    let signatures: [HSToolboxSignature]
+    let users: [AppUser]
+    let projectName: String
     
     private var talkDocumentURL: URL? {
         guard let talk else { return nil }
-        return HSToolboxTalkDocumentBuilder.makeDocument(for: talk)
+        return HSToolboxTalkDocumentBuilder.makeIssuedTalkDocument(
+            issue: issue,
+            talk: talk,
+            signatures: signatures,
+            users: users,
+            projectName: projectName
+        )
     }
 
     var body: some View {
@@ -1411,28 +1715,113 @@ private struct HSSignedTalkView: View {
 }
 
 private struct HSUploadTalkSheet: View {
-    let onSave: (String, String, String, [String]) -> Void
+    let onSave: (String, String, String, [String], String?) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
     @State private var trade = "General"
     @State private var purpose = ""
     @State private var keyPointsRaw = ""
+    @State private var pickedFileName: String?
+    @State private var copiedFilePath: String?
+    @State private var showImporter = false
+
+    private let trades = ["General", "Electrical", "Mechanical / HVAC", "Plumbing & Gas", "Groundworks", "Joinery"]
 
     var body: some View {
         NavigationStack {
-            Form {
-                TextField("Talk title", text: $title)
-                TextField("Trade (or General)", text: $trade)
-                TextField("Purpose", text: $purpose, axis: .vertical)
-                TextField("Key points (one per line)", text: $keyPointsRaw, axis: .vertical)
-            }
-            .navigationTitle("Upload Toolbox Talk")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Upload Toolbox Talk")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(HS.ink)
+                    Text("Add your own talk to the library. Upload a PDF or complete details below.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(HS.slate)
+
+                    Button {
+                        showImporter = true
+                    } label: {
+                        VStack(spacing: 8) {
+                            Image(systemName: copiedFilePath == nil ? "square.and.arrow.up" : "checkmark.circle.fill")
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundStyle(copiedFilePath == nil ? HS.blue : HS.green)
+                            Text(pickedFileName ?? "Upload talk (PDF)")
+                                .font(.system(size: 14.5, weight: .semibold))
+                                .foregroundStyle(HS.ink)
+                            Text(copiedFilePath == nil ? "Tap to choose a PDF" : "Ready to save")
+                                .font(.system(size: 12))
+                                .foregroundStyle(HS.slate)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 20)
+                    }
+                    .buttonStyle(.plain)
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(copiedFilePath == nil ? HS.line : HS.green, style: StrokeStyle(lineWidth: 1.6, dash: copiedFilePath == nil ? [5] : []))
+                    )
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Talk title")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(HS.slate2)
+                            .textCase(.uppercase)
+                        TextField("e.g. Site-specific working rules", text: $title)
+                            .textFieldStyle(.plain)
+                            .padding(12)
+                            .background(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .hsCard(padding: 14)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Category")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(HS.slate2)
+                            .textCase(.uppercase)
+                        Picker("Category", selection: $trade) {
+                            ForEach(trades, id: \.self) { item in
+                                Text(item).tag(item)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                    .hsCard(padding: 14)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Purpose")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(HS.slate2)
+                            .textCase(.uppercase)
+                        TextField("One line - why this matters", text: $purpose)
+                            .textFieldStyle(.plain)
+                            .padding(12)
+                            .background(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .hsCard(padding: 14)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Key control points")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(HS.slate2)
+                            .textCase(.uppercase)
+                        TextField("One point per line", text: $keyPointsRaw, axis: .vertical)
+                            .lineLimit(5, reservesSpace: true)
+                            .textFieldStyle(.plain)
+                            .padding(12)
+                            .background(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .hsCard(padding: 14)
+
+                    Text("Saved as approved and ready to issue.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(HS.slate)
+
+                    Button {
                         let points = keyPointsRaw
                             .split(separator: "\n")
                             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -1441,56 +1830,216 @@ private struct HSUploadTalkSheet: View {
                             title.trimmingCharacters(in: .whitespacesAndNewlines),
                             trade.trimmingCharacters(in: .whitespacesAndNewlines),
                             purpose.trimmingCharacters(in: .whitespacesAndNewlines),
-                            points
+                            points,
+                            copiedFilePath
                         )
                         dismiss()
+                    } label: {
+                        Label("Save to library", systemImage: "checkmark")
                     }
+                    .buttonStyle(FilledButtonStyle(tone: .blue))
                     .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+                .padding(16)
+            }
+            .background(HS.bg.ignoresSafeArea())
+            .navigationTitle("Upload Toolbox Talk")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf]) { result in
+            if case .success(let url) = result {
+                pickedFileName = url.lastPathComponent
+                copiedFilePath = HSToolboxTalkDocumentBuilder.copyImportedTalkFile(url)
             }
         }
     }
 }
 
-private struct HSAddDocSheet: View {
-    let title: String
-    let onSave: (String, String?, String?) -> Void
+private struct HSUploadRAMSSheet: View {
+    let onSave: (String, String) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var docTitle = ""
-    @State private var trade = ""
-    @State private var category = "trade"
+    @State private var title = ""
+    @State private var trade = "General"
+    @State private var showImporter = false
+    @State private var pickedFileName: String?
+    private let trades = ["General", "Electrical", "Mechanical / HVAC", "Plumbing & Gas", "Groundworks", "Joinery"]
 
     var body: some View {
         NavigationStack {
-            Form {
-                TextField("Document title", text: $docTitle)
-                TextField("Trade (optional)", text: $trade)
-                TextField("Category (trade/site_wide)", text: $category)
-            }
-            .navigationTitle(title)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Upload RAMS")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(HS.ink)
+                    Text("Upload a RAMS document for this project and tag the relevant trade.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(HS.slate)
+                    Button { showImporter = true } label: {
+                        HStack {
+                            Image(systemName: pickedFileName == nil ? "doc.badge.plus" : "checkmark.circle.fill")
+                            Text(pickedFileName ?? "Upload RAMS document")
+                            Spacer()
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(HS.ink)
+                        .padding(14)
+                    }
+                    .buttonStyle(.plain)
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(HS.line, lineWidth: 1))
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Document title").font(.system(size: 11, weight: .bold)).foregroundStyle(HS.slate2).textCase(.uppercase)
+                        TextField("e.g. CAT A fit-out master RAMS", text: $title)
+                            .padding(12).background(.white).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }.hsCard(padding: 14)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Trade / area").font(.system(size: 11, weight: .bold)).foregroundStyle(HS.slate2).textCase(.uppercase)
+                        Picker("Trade", selection: $trade) { ForEach(trades, id: \.self) { Text($0).tag($0) } }
+                            .pickerStyle(.menu)
+                    }.hsCard(padding: 14)
+
+                    Button {
+                        onSave(title.trimmingCharacters(in: .whitespacesAndNewlines), trade)
+                        dismiss()
+                    } label: {
+                        Label("Publish RAMS", systemImage: "checkmark")
+                    }
+                    .buttonStyle(FilledButtonStyle(tone: .blue))
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                .padding(16)
+            }
+            .background(HS.bg.ignoresSafeArea())
+            .navigationTitle("Upload RAMS")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            }
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .rtf, .plainText]) { result in
+            if case .success(let url) = result { pickedFileName = url.lastPathComponent }
+        }
+    }
+}
+
+private struct HSUploadSiteDocumentSheet: View {
+    let onSave: (String, String?, String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var trade = ""
+    @State private var category = "trade"
+    @State private var showImporter = false
+    @State private var pickedFileName: String?
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Add H&S Document")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(HS.ink)
+                    Text("Add a trade or site-wide H&S document to this project.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(HS.slate)
+
+                    Button { showImporter = true } label: {
+                        HStack {
+                            Image(systemName: pickedFileName == nil ? "doc.badge.plus" : "checkmark.circle.fill")
+                            Text(pickedFileName ?? "Upload document")
+                            Spacer()
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(HS.ink)
+                        .padding(14)
+                    }
+                    .buttonStyle(.plain)
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(HS.line, lineWidth: 1))
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Document title").font(.system(size: 11, weight: .bold)).foregroundStyle(HS.slate2).textCase(.uppercase)
+                        TextField("e.g. Safe isolation procedure", text: $title)
+                            .padding(12).background(.white).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }.hsCard(padding: 14)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Trade (optional)").font(.system(size: 11, weight: .bold)).foregroundStyle(HS.slate2).textCase(.uppercase)
+                        TextField("Electrical / Mechanical / etc", text: $trade)
+                            .padding(12).background(.white).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }.hsCard(padding: 14)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Category").font(.system(size: 11, weight: .bold)).foregroundStyle(HS.slate2).textCase(.uppercase)
+                        Picker("Category", selection: $category) {
+                            Text("Trade").tag("trade")
+                            Text("Site wide").tag("site_wide")
+                        }
+                        .pickerStyle(.segmented)
+                    }.hsCard(padding: 14)
+
+                    Button {
                         let cleanTrade = trade.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let cleanCategory = category.trimmingCharacters(in: .whitespacesAndNewlines)
                         onSave(
-                            docTitle.trimmingCharacters(in: .whitespacesAndNewlines),
+                            title.trimmingCharacters(in: .whitespacesAndNewlines),
                             cleanTrade.isEmpty ? nil : cleanTrade,
-                            cleanCategory.isEmpty ? nil : cleanCategory
+                            category
                         )
                         dismiss()
+                    } label: {
+                        Label("Save document", systemImage: "checkmark")
                     }
-                    .disabled(docTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .buttonStyle(FilledButtonStyle(tone: .blue))
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+                .padding(16)
             }
+            .background(HS.bg.ignoresSafeArea())
+            .navigationTitle("Add H&S Document")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            }
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .image, .plainText]) { result in
+            if case .success(let url) = result { pickedFileName = url.lastPathComponent }
         }
     }
 }
 
 private enum HSToolboxTalkDocumentBuilder {
+    private struct SignoffRow {
+        let name: String
+        let trade: String
+        let signatureImage: UIImage?
+        let signedAtText: String
+    }
+
+    static func copyImportedTalkFile(_ sourceURL: URL) -> String? {
+        let destination = libraryRootDirectory().appendingPathComponent("uploads", isDirectory: true)
+        try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true, attributes: nil)
+        let target = destination.appendingPathComponent("\(UUID().uuidString)-\(safeFilename(sourceURL.lastPathComponent)).pdf")
+        do {
+            let access = sourceURL.startAccessingSecurityScopedResource()
+            defer { if access { sourceURL.stopAccessingSecurityScopedResource() } }
+            if FileManager.default.fileExists(atPath: target.path) {
+                try? FileManager.default.removeItem(at: target)
+            }
+            try FileManager.default.copyItem(at: sourceURL, to: target)
+            return target.path
+        } catch {
+            return nil
+        }
+    }
+
     static func makeDocument(for talk: HSToolboxTalk) -> URL? {
         if let fileURL = talk.fileURL {
             let trimmed = fileURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1504,16 +2053,75 @@ private enum HSToolboxTalkDocumentBuilder {
             }
         }
         let outputURL = libraryPDFURL(for: talk)
-        if FileManager.default.fileExists(atPath: outputURL.path) {
-            return outputURL
-        }
         return buildTalkPDF(
             to: outputURL,
+            reference: talk.id,
             title: talk.title,
             subtitle: "\(talk.id) · \(talk.isGeneral ? "General H&S" : talk.trades.joined(separator: ", "))",
             purpose: talk.purpose,
             keyPoints: talk.keyPoints,
-            footer: "Project Planner Toolbox Library · v\(talk.version) · \(talk.status.rawValue.capitalized)"
+            footer: "Project Planner Toolbox Library · v\(talk.version) · \(talk.status.rawValue.capitalized)",
+            projectName: "Library",
+            weekCommencing: nil,
+            presentedBy: "Project Planner",
+            signoffRows: [],
+            expectedSignoffCount: 0
+        )
+    }
+
+    static func makeIssuedTalkDocument(
+        issue: HSToolboxIssue,
+        talk: HSToolboxTalk,
+        signatures: [HSToolboxSignature],
+        users: [AppUser],
+        projectName: String
+    ) -> URL? {
+        let rows = signatures.map { signature in
+            let user = users.first(where: { $0.id == signature.userId })
+            let displayName = user?.fullName.isEmpty == false ? (user?.fullName ?? signature.userId) : (user?.email ?? signature.userId)
+            let trade = StaffTradeType.displayLabel(presetRaw: user?.tradeTypePreset, custom: user?.tradeTypeCustom)
+            let image: UIImage? = signature.signatureImageBase64.flatMap { Data(base64Encoded: $0) }.flatMap { UIImage(data: $0) }
+            let signedAtText = signature.signedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Awaiting"
+            return SignoffRow(name: displayName, trade: trade, signatureImage: image, signedAtText: signedAtText)
+        }
+
+        let issuedURL = issuePDFURL(issueId: issue.id, title: talk.title)
+        let presentedBy = users.first(where: { $0.id == issue.issuedByUserId })?.fullName ?? issue.issuedByUserId
+
+        if talk.source == .uploaded, let sourceURL = resolveTalkFileURL(talk.fileURL) {
+            let signoffURL = issueSignaturePageURL(issueId: issue.id)
+            guard buildTalkPDF(
+                to: signoffURL,
+                reference: talk.id,
+                title: talk.title,
+                subtitle: "\(talk.id) · \(talk.isGeneral ? "General H&S" : talk.trades.joined(separator: ", "))",
+                purpose: talk.purpose,
+                keyPoints: talk.keyPoints,
+                footer: "Project Planner issued toolbox talk",
+                projectName: projectName,
+                weekCommencing: issue.weekCommencing,
+                presentedBy: presentedBy,
+                signoffRows: rows,
+                expectedSignoffCount: max(issue.recipientUserIds.count, rows.count)
+            ) != nil else {
+                return nil
+            }
+            return appendPDF(source: sourceURL, appendix: signoffURL, output: issuedURL)
+        }
+
+        return buildTalkPDF(
+            to: issuedURL,
+            reference: talk.id,
+            title: talk.title,
+            subtitle: "\(talk.id) · \(talk.isGeneral ? "General H&S" : talk.trades.joined(separator: ", "))",
+            purpose: talk.purpose,
+            keyPoints: talk.keyPoints,
+            footer: "Generated by Project Planner",
+            projectName: projectName,
+            weekCommencing: issue.weekCommencing,
+            presentedBy: presentedBy,
+            signoffRows: rows,
+            expectedSignoffCount: max(issue.recipientUserIds.count, rows.count)
         )
     }
 
@@ -1524,6 +2132,7 @@ private enum HSToolboxTalkDocumentBuilder {
         }
         return buildTalkPDF(
             to: url,
+            reference: "TBT-XXX-000",
             title: "Project Planner Toolbox Talk Template",
             subtitle: "Blank template",
             purpose: "Use this template to author a site-specific toolbox talk before uploading it back into the library.",
@@ -1537,18 +2146,29 @@ private enum HSToolboxTalkDocumentBuilder {
                 "References:",
                 "Attendee sign-off: Name | Trade | Signature | Date/Time"
             ],
-            footer: "Project Planner"
+            footer: "Project Planner",
+            projectName: "Project",
+            weekCommencing: nil,
+            presentedBy: "Presenter",
+            signoffRows: [],
+            expectedSignoffCount: 6
         )
     }
 
     @discardableResult
     private static func buildTalkPDF(
         to url: URL,
+        reference: String,
         title: String,
         subtitle: String,
         purpose: String,
         keyPoints: [String],
-        footer: String
+        footer: String,
+        projectName: String,
+        weekCommencing: Date?,
+        presentedBy: String,
+        signoffRows: [SignoffRow],
+        expectedSignoffCount: Int
     ) -> URL? {
         let pageRect = CGRect(x: 0, y: 0, width: 595, height: 842) // A4
         let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
@@ -1561,12 +2181,32 @@ private enum HSToolboxTalkDocumentBuilder {
                 context.beginPage()
                 var y = margin
 
+                UIColor(red: 0.13, green: 0.4, blue: 0.93, alpha: 1).setFill()
+                UIBezierPath(roundedRect: CGRect(x: margin, y: y, width: contentWidth, height: 44), cornerRadius: 8).fill()
+                ("PROJECT PLANNER TOOLBOX TALK" as NSString).draw(
+                    in: CGRect(x: margin + 14, y: y + 12, width: contentWidth - 28, height: 20),
+                    withAttributes: [
+                        .font: UIFont.systemFont(ofSize: 13, weight: .heavy),
+                        .foregroundColor: UIColor.white
+                    ]
+                )
+                y += 58
+
                 let titleAttrs: [NSAttributedString.Key: Any] = [
                     .font: UIFont.systemFont(ofSize: 24, weight: .bold),
                     .foregroundColor: UIColor(red: 0.086, green: 0.125, blue: 0.18, alpha: 1)
                 ]
                 (title as NSString).draw(in: CGRect(x: margin, y: y, width: contentWidth, height: 90), withAttributes: titleAttrs)
                 y += 40
+
+                let metaAttrs: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 11, weight: .semibold),
+                    .foregroundColor: UIColor(red: 0.2, green: 0.24, blue: 0.3, alpha: 1)
+                ]
+                let weekString = weekCommencing?.formatted(date: .abbreviated, time: .omitted) ?? "-"
+                let meta = "REF \(reference)    PROJECT \(projectName)    W/C \(weekString)    PRESENTED BY \(presentedBy)"
+                (meta as NSString).draw(in: CGRect(x: margin, y: y, width: contentWidth, height: 20), withAttributes: metaAttrs)
+                y += 26
 
                 let subtitleAttrs: [NSAttributedString.Key: Any] = [
                     .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
@@ -1619,6 +2259,50 @@ private enum HSToolboxTalkDocumentBuilder {
                     }
                 }
 
+                y += 12
+                ("REFERENCES" as NSString).draw(in: CGRect(x: margin, y: y, width: contentWidth, height: 18), withAttributes: sectionAttrs)
+                y += 20
+                let references = "Master RAMS · Working at Height Regulations 2005 · Permit to Work (where applicable)"
+                (references as NSString).draw(in: CGRect(x: margin, y: y, width: contentWidth, height: 30), withAttributes: bodyAttrs)
+                y += 36
+
+                ("ATTENDEE SIGN-OFF" as NSString).draw(in: CGRect(x: margin, y: y, width: contentWidth, height: 18), withAttributes: sectionAttrs)
+                y += 22
+
+                let totalRows = max(expectedSignoffCount, signoffRows.count, 1)
+                let rowHeight: CGFloat = 28
+                let headerRect = CGRect(x: margin, y: y, width: contentWidth, height: rowHeight)
+                UIColor(red: 0.95, green: 0.97, blue: 0.99, alpha: 1).setFill()
+                UIBezierPath(rect: headerRect).fill()
+                let tableHeader = "NAME                        TRADE               SIGNATURE               DATE & TIME"
+                (tableHeader as NSString).draw(in: CGRect(x: margin + 8, y: y + 7, width: contentWidth - 16, height: 20), withAttributes: [
+                    .font: UIFont.systemFont(ofSize: 10, weight: .bold),
+                    .foregroundColor: UIColor(red: 0.2, green: 0.24, blue: 0.3, alpha: 1)
+                ])
+                y += rowHeight
+
+                for index in 0..<totalRows {
+                    if y > pageRect.height - 80 {
+                        context.beginPage()
+                        y = margin
+                    }
+                    let rowRect = CGRect(x: margin, y: y, width: contentWidth, height: rowHeight)
+                    UIColor(red: 0.9, green: 0.93, blue: 0.97, alpha: 1).setStroke()
+                    UIBezierPath(rect: rowRect).stroke()
+                    if index < signoffRows.count {
+                        let row = signoffRows[index]
+                        (row.name as NSString).draw(in: CGRect(x: margin + 8, y: y + 6, width: 170, height: 18), withAttributes: [.font: UIFont.systemFont(ofSize: 10), .foregroundColor: UIColor.black])
+                        (row.trade as NSString).draw(in: CGRect(x: margin + 180, y: y + 6, width: 90, height: 18), withAttributes: [.font: UIFont.systemFont(ofSize: 10), .foregroundColor: UIColor.black])
+                        if let signatureImage = row.signatureImage {
+                            signatureImage.draw(in: CGRect(x: margin + 282, y: y + 4, width: 90, height: 20))
+                        } else {
+                            ("Awaiting" as NSString).draw(in: CGRect(x: margin + 282, y: y + 6, width: 90, height: 18), withAttributes: [.font: UIFont.systemFont(ofSize: 10), .foregroundColor: UIColor.darkGray])
+                        }
+                        (row.signedAtText as NSString).draw(in: CGRect(x: margin + 386, y: y + 6, width: 120, height: 18), withAttributes: [.font: UIFont.systemFont(ofSize: 10), .foregroundColor: UIColor.black])
+                    }
+                    y += rowHeight
+                }
+
                 let footerAttrs: [NSAttributedString.Key: Any] = [
                     .font: UIFont.systemFont(ofSize: 10, weight: .regular),
                     .foregroundColor: UIColor(red: 0.55, green: 0.59, blue: 0.66, alpha: 1)
@@ -1633,6 +2317,46 @@ private enum HSToolboxTalkDocumentBuilder {
 
     private static func libraryPDFURL(for talk: HSToolboxTalk) -> URL {
         libraryRootDirectory().appendingPathComponent("\(safeFilename(talk.id))-\(safeFilename(talk.title)).pdf")
+    }
+
+    private static func issuePDFURL(issueId: String, title: String) -> URL {
+        libraryRootDirectory().appendingPathComponent("Issued-\(safeFilename(title))-\(safeFilename(issueId)).pdf")
+    }
+
+    private static func issueSignaturePageURL(issueId: String) -> URL {
+        libraryRootDirectory().appendingPathComponent("Issued-Signatures-\(safeFilename(issueId)).pdf")
+    }
+
+    private static func resolveTalkFileURL(_ path: String?) -> URL? {
+        guard let path else { return nil }
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("/") {
+            return URL(fileURLWithPath: trimmed)
+        }
+        return URL(string: trimmed)
+    }
+
+    private static func appendPDF(source: URL, appendix: URL, output: URL) -> URL? {
+        guard let sourceDoc = PDFDocument(url: source),
+              let appendixDoc = PDFDocument(url: appendix) else {
+            return nil
+        }
+        let combined = PDFDocument()
+        var insertIndex = 0
+        for pageIndex in 0..<sourceDoc.pageCount {
+            if let page = sourceDoc.page(at: pageIndex) {
+                combined.insert(page, at: insertIndex)
+                insertIndex += 1
+            }
+        }
+        for pageIndex in 0..<appendixDoc.pageCount {
+            if let page = appendixDoc.page(at: pageIndex) {
+                combined.insert(page, at: insertIndex)
+                insertIndex += 1
+            }
+        }
+        return combined.write(to: output) ? output : nil
     }
 
     private static func libraryRootDirectory() -> URL {
