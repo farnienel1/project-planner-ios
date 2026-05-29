@@ -1,0 +1,234 @@
+//
+//  LocalNotificationService.swift
+//  Project Planner
+//
+//  Created by Assistant on 26/11/2025.
+//
+
+import Foundation
+import UserNotifications
+
+@MainActor
+class LocalNotificationService {
+    static let shared = LocalNotificationService()
+    static let dailyMaterialCutoffIdentifierPrefix = "daily-material-order-cutoff"
+    static let qualificationExpiryIdentifierPrefix = "qual-exp-v2-"
+    
+    private init() {}
+    
+    // Request notification permissions
+    func requestAuthorization() async -> Bool {
+        do {
+            let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+            return granted
+        } catch {
+            print("🔥🔥🔥 DEBUG: Error requesting notification authorization: \(error)")
+            return false
+        }
+    }
+    
+        // Schedule a test notification 3 seconds in the future
+    func scheduleTestNotification(type: AppNotification.NotificationType, details: String) async {
+        // Request permission first
+        let authorized = await requestAuthorization()
+        guard authorized else {
+            print("🔥🔥🔥 DEBUG: Notification permission not granted")
+            return
+        }
+        
+        // Create notification content
+        let content = UNMutableNotificationContent()
+        
+        // Set title and body based on type
+        switch type {
+        case .operativeCreated:
+            content.title = "New Operative Created"
+            content.body = details.isEmpty ? "John Smith has been added as a new operative." : details
+        case .managerCreated:
+            content.title = "New Manager Created"
+            content.body = details.isEmpty ? "Jane Doe has been added as a new manager." : details
+        case .clientCreated:
+            content.title = "New Client Created"
+            content.body = details.isEmpty ? "ABC Company has been added as a new client." : details
+        case .projectCreated:
+            content.title = "New Project"
+            content.body = details.isEmpty ? "A new project was added to your organisation." : details
+        case .smallWorksCreated:
+            content.title = "New Small Works"
+            content.body = details.isEmpty ? "New small works were added to your organisation." : details
+        case .bookingCreated:
+            content.title = "New Booking Created"
+            content.body = details.isEmpty ? "A new booking has been created for Project XYZ on December 1, 2025." : details
+        case .taskCreated:
+            content.title = "New Task Created"
+            content.body = details.isEmpty ? "A new task has been assigned: Complete site inspection." : details
+        case .taskCompleted:
+            content.title = "Task Completed"
+            content.body = details.isEmpty ? "Task 'Complete site inspection' has been completed." : details
+        case .bookingClash:
+            content.title = "Booking Clash Detected"
+            content.body = details.isEmpty ? "A booking clash has been detected for John Smith on December 1, 2025." : details
+        case .warningRemoved:
+            content.title = "Warning Removed"
+            content.body = details.isEmpty ? "An admin removed a booking clash warning. Review and resolve manually if still needed." : details
+        case .holidayRequestSubmitted:
+            content.title = "Holiday Request"
+            content.body = details.isEmpty ? "An operative has submitted a holiday request." : details
+        case .holidayRequestApproved:
+            content.title = "Holiday Approved"
+            content.body = details.isEmpty ? "A holiday request has been approved." : details
+        case .holidayRequestDeclined:
+            content.title = "Holiday Declined"
+            content.body = details.isEmpty ? "A holiday request has been declined." : details
+        case .timesheetPendingManagerSignoff:
+            content.title = "Timesheet needs sign-off"
+            content.body = details.isEmpty ? "A team member submitted a timesheet for your signature." : details
+        case .timesheetSignedByManager:
+            content.title = "Timesheet signed"
+            content.body = details.isEmpty ? "Your line manager signed your timesheet." : details
+        }
+        
+        // Set sound
+        content.sound = .default
+        
+        // Set badge
+        content.badge = 1
+        
+        // Create trigger for 3 seconds from now
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)
+        
+        // Create request with unique identifier
+        let identifier = "test_notification_\(UUID().uuidString)"
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
+        
+        // Schedule the notification
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+            print("✅ Test notification scheduled: \(content.title) - will appear in 3 seconds")
+        } catch {
+            print("🔥🔥🔥 DEBUG: Error scheduling notification: \(error)")
+        }
+    }
+    
+    // Schedule a test notification with custom title and body
+    func scheduleCustomTestNotification(title: String, body: String) async {
+        // Request permission first
+        let authorized = await requestAuthorization()
+        guard authorized else {
+            print("🔥🔥🔥 DEBUG: Notification permission not granted")
+            return
+        }
+        
+        // Create notification content
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.badge = 1
+        
+        // Create trigger for 3 seconds from now
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)
+        
+        // Create request with unique identifier
+        let identifier = "test_notification_\(UUID().uuidString)"
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
+        
+        // Schedule the notification
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+            print("✅ Custom test notification scheduled: \(title) - will appear in 3 seconds")
+        } catch {
+            print("🔥🔥🔥 DEBUG: Error scheduling notification: \(error)")
+        }
+    }
+
+    func scheduleDailyMaterialCutOffReminder(
+        hour: Int = 16,
+        minute: Int = 0,
+        includeSaturday: Bool = false,
+        includeSunday: Bool = false
+    ) async {
+        let authorized = await requestAuthorization()
+        guard authorized else {
+            print("🔥🔥🔥 DEBUG: Notification permission not granted")
+            return
+        }
+
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: materialCutOffWeekdayIdentifiers())
+
+        let content = UNMutableNotificationContent()
+        content.title = "Material order cut off"
+        content.body = "Material order cut off"
+        content.sound = .default
+
+        let weekdays = materialReminderWeekdays(includeSaturday: includeSaturday, includeSunday: includeSunday)
+        for weekday in weekdays {
+            var components = DateComponents()
+            components.weekday = weekday
+            components.hour = hour
+            components.minute = minute
+            let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
+            let request = UNNotificationRequest(
+                identifier: materialCutOffIdentifier(for: weekday),
+                content: content,
+                trigger: trigger
+            )
+            do {
+                try await center.add(request)
+            } catch {
+                print("🔥🔥🔥 DEBUG: Error scheduling daily material cut off reminder (weekday \(weekday)): \(error)")
+            }
+        }
+        print("✅ Material cut off reminders scheduled for \(weekdays.count) day(s) at \(hour):\(String(format: "%02d", minute))")
+    }
+
+    func removeDailyMaterialCutOffReminder() {
+        UNUserNotificationCenter.current()
+            .removePendingNotificationRequests(withIdentifiers: materialCutOffWeekdayIdentifiers())
+    }
+
+    private func materialReminderWeekdays(includeSaturday: Bool, includeSunday: Bool) -> [Int] {
+        var weekdays: [Int] = [2, 3, 4, 5, 6] // Mon-Fri
+        if includeSaturday { weekdays.append(7) }
+        if includeSunday { weekdays.append(1) }
+        return weekdays
+    }
+
+    private func materialCutOffIdentifier(for weekday: Int) -> String {
+        "\(Self.dailyMaterialCutoffIdentifierPrefix)-\(weekday)"
+    }
+
+    private func materialCutOffWeekdayIdentifiers() -> [String] {
+        (1...7).map(materialCutOffIdentifier(for:))
+    }
+
+    /// Clears all pending one-shot qualification expiry reminders (3-month and 1-month) before rescheduling.
+    func removeQualificationExpiryReminders() async {
+        let center = UNUserNotificationCenter.current()
+        let pending = await center.pendingNotificationRequests()
+        let ids = pending.map(\.identifier).filter { $0.hasPrefix(Self.qualificationExpiryIdentifierPrefix) }
+        center.removePendingNotificationRequests(withIdentifiers: ids)
+    }
+
+    func scheduleQualificationExpiryOneShot(identifier: String, title: String, body: String, fireAt: Date) async {
+        guard fireAt > Date() else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+
+        var cal = Calendar.current
+        cal.timeZone = TimeZone.current
+        let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: fireAt)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+        } catch {
+            print("🔥🔥🔥 DEBUG: Error scheduling qualification expiry notification \(identifier): \(error.localizedDescription)")
+        }
+    }
+}
+
+
