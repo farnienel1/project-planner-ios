@@ -208,7 +208,9 @@ class WarningsService: ObservableObject {
                 projectsWithTomorrowBookings: projectsWithTomorrowBookings,
                 materialItemsForTomorrow: materialItemsForTomorrow
             )
-            return WarningsComputation.generate(input)
+            return await MainActor.run {
+                WarningsComputation.generate(input)
+            }
         }.value
         guard generation == updateGeneration else { return }
         resolutionStore.pruneDismissedUnbookedKeys(
