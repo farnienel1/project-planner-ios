@@ -18,8 +18,8 @@ class WarningsService: ObservableObject {
     private var updateTask: Task<Void, Never>?
     private var updateGeneration = 0
 
-    init(resolutionStore: WarningResolutionStore = .shared) {
-        self.resolutionStore = resolutionStore
+    init(resolutionStore: WarningResolutionStore? = nil) {
+        self.resolutionStore = resolutionStore ?? .shared
     }
 
     /// Counts only core priority warnings (operative clashes, unbooked labour, manager clashes, materials).
@@ -95,8 +95,8 @@ class WarningsService: ObservableObject {
         users: [AppUser] = [],
         managerSiteBookings: [ManagerSiteBooking] = [],
         holidayBookings: [HolidayBooking] = [],
-        payrollTimePolicy: OrgPayrollTimePolicy = .default,
-        warningDetection: OrgWarningDetectionSettings = .default,
+        payrollTimePolicy: OrgPayrollTimePolicy? = nil,
+        warningDetection: OrgWarningDetectionSettings? = nil,
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
         materialOrderCutOffEnabled: Bool = true,
@@ -105,6 +105,9 @@ class WarningsService: ObservableObject {
         projectsWithTomorrowBookings: [Project] = [],
         materialItemsForTomorrow: [MaterialItem] = []
     ) {
+        let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
+        let resolvedWarningDetection = warningDetection ?? .default
+
         updateTask?.cancel()
         updateTask = Task { @MainActor in
             await performUpdate(
@@ -114,8 +117,8 @@ class WarningsService: ObservableObject {
                 users: users,
                 managerSiteBookings: managerSiteBookings,
                 holidayBookings: holidayBookings,
-                payrollTimePolicy: payrollTimePolicy,
-                warningDetection: warningDetection,
+                payrollTimePolicy: resolvedPayrollTimePolicy,
+                warningDetection: resolvedWarningDetection,
                 labourCoverageStart: labourCoverageStart,
                 labourCoverageEnd: labourCoverageEnd,
                 materialOrderCutOffEnabled: materialOrderCutOffEnabled,
@@ -135,8 +138,8 @@ class WarningsService: ObservableObject {
         users: [AppUser] = [],
         managerSiteBookings: [ManagerSiteBooking] = [],
         holidayBookings: [HolidayBooking] = [],
-        payrollTimePolicy: OrgPayrollTimePolicy = .default,
-        warningDetection: OrgWarningDetectionSettings = .default,
+        payrollTimePolicy: OrgPayrollTimePolicy? = nil,
+        warningDetection: OrgWarningDetectionSettings? = nil,
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
         materialOrderCutOffEnabled: Bool = true,
@@ -145,6 +148,9 @@ class WarningsService: ObservableObject {
         projectsWithTomorrowBookings: [Project] = [],
         materialItemsForTomorrow: [MaterialItem] = []
     ) async {
+        let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
+        let resolvedWarningDetection = warningDetection ?? .default
+
         updateTask?.cancel()
         await performUpdate(
             operatives: operatives,
@@ -153,8 +159,8 @@ class WarningsService: ObservableObject {
             users: users,
             managerSiteBookings: managerSiteBookings,
             holidayBookings: holidayBookings,
-            payrollTimePolicy: payrollTimePolicy,
-            warningDetection: warningDetection,
+            payrollTimePolicy: resolvedPayrollTimePolicy,
+            warningDetection: resolvedWarningDetection,
             labourCoverageStart: labourCoverageStart,
             labourCoverageEnd: labourCoverageEnd,
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
@@ -184,35 +190,31 @@ class WarningsService: ObservableObject {
     ) async {
         updateGeneration += 1
         let generation = updateGeneration
-        let generated = await Task.detached(priority: .utility) {
-            let cal = Calendar.current
-            let today = cal.startOfDay(for: Date())
-            let coverageStart = cal.startOfDay(for: labourCoverageStart ?? warningDetection.coverageStart(from: today, calendar: cal))
-            let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? warningDetection.coverageEnd(from: today, calendar: cal))
-            let input = WarningsComputationInput(
-                operatives: operatives,
-                bookings: bookings,
-                projects: projects,
-                users: users,
-                managerSiteBookings: managerSiteBookings,
-                holidayBookings: holidayBookings,
-                payrollTimePolicy: payrollTimePolicy,
-                warningDetection: warningDetection,
-                coverageStart: coverageStart,
-                coverageEnd: coverageEnd,
-                materialOrderCutOffEnabled: materialOrderCutOffEnabled,
-                materialCutOffOnSaturday: materialCutOffOnSaturday,
-                materialCutOffOnSunday: materialCutOffOnSunday,
-                projectsWithTomorrowBookings: projectsWithTomorrowBookings,
-                materialItemsForTomorrow: materialItemsForTomorrow
-            )
-            return WarningsComputation.generate(input)
-        }.value
-        guard generation == updateGeneration else { return }
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let coverageStart = cal.startOfDay(for: labourCoverageStart ?? warningDetection.coverageStart(from: today, calendar: cal))
         let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? warningDetection.coverageEnd(from: today, calendar: cal))
+        let input = WarningsComputationInput(
+            operatives: operatives,
+            bookings: bookings,
+            projects: projects,
+            users: users,
+            managerSiteBookings: managerSiteBookings,
+            holidayBookings: holidayBookings,
+            payrollTimePolicy: payrollTimePolicy,
+            warningDetection: warningDetection,
+            coverageStart: coverageStart,
+            coverageEnd: coverageEnd,
+            materialOrderCutOffEnabled: materialOrderCutOffEnabled,
+            materialCutOffOnSaturday: materialCutOffOnSaturday,
+            materialCutOffOnSunday: materialCutOffOnSunday,
+            projectsWithTomorrowBookings: projectsWithTomorrowBookings,
+            materialItemsForTomorrow: materialItemsForTomorrow
+        )
+        let generated = await Task.detached(priority: .utility) {
+            WarningsComputation.generate(input)
+        }.value
+        guard generation == updateGeneration else { return }
         resolutionStore.pruneDismissedUnbookedKeys(
             from: max(coverageStart, today),
             through: coverageEnd,

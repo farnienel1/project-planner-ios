@@ -25,14 +25,6 @@ enum SiteAuditPDFBuilder {
         clientName: String? = nil,
         siteAddress: String? = nil
     ) -> URL? {
-        let ctx = Context(
-            audit: audit,
-            localItems: localItems,
-            organizationName: organizationName,
-            logoImage: logoImage,
-            clientName: clientName,
-            siteAddress: siteAddress
-        )
         let ref = referenceCode(for: audit)
         let fileName = "SiteAudit_\(audit.projectJobNumber)_\(audit.type.rawValue.replacingOccurrences(of: " ", with: ""))_\(pdfDateStamp(audit.date)).pdf"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)

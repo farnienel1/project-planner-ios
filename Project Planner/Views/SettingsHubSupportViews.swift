@@ -38,7 +38,8 @@ struct SettingsProfileDetailView: View {
     }
 
     var body: some View {
-        List {
+        AnyView(
+            List {
             Section("Profile image") {
                 HStack(spacing: 12) {
                     profileAvatar
@@ -180,16 +181,17 @@ struct SettingsProfileDetailView: View {
             pickedProfileImage = nil
             Task { await uploadPickedProfilePhoto(newImage) }
         }
-        .alert("Profile photo", isPresented: Binding(
-            get: { profilePhotoUploadMessage != nil },
-            set: { if !$0 { profilePhotoUploadMessage = nil } }
-        )) {
+            .alert("Profile photo", isPresented: Binding(
+                get: { profilePhotoUploadMessage != nil },
+                set: { if !$0 { profilePhotoUploadMessage = nil } }
+            )) {
             Button("OK") { profilePhotoUploadMessage = nil }
         } message: {
             if let profilePhotoUploadMessage {
                 Text(profilePhotoUploadMessage)
             }
         }
+        )
     }
 
     @ViewBuilder

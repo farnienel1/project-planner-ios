@@ -4044,7 +4044,7 @@ class FirebaseBackend: ObservableObject {
             "createdAt": Timestamp(date: notification.createdAt),
             "requiresPermission": notification.requiresPermission ?? NSNull(),
             "deepLinkUserId": notification.deepLinkUserId ?? NSNull(),
-            "deepLinkWeekStart": notification.deepLinkWeekStart.map(Timestamp.init(date:)) ?? NSNull()
+            "deepLinkWeekStart": (notification.deepLinkWeekStart.map(Timestamp.init(date:)) ?? NSNull()) as Any
         ]
         
         try await db.collection("organizations").document(organizationId).collection("notifications").document(notification.id.uuidString).setData(data)
@@ -6382,7 +6382,6 @@ extension FirebaseBackend {
 
                 let docs = snapshot.documents
                 var loaded: [MaterialItem] = []
-                let calendar = Calendar.current
 
                 for doc in docs {
                     let data = doc.data()
