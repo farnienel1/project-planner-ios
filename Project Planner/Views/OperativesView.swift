@@ -770,7 +770,12 @@ struct AddOperativeView: View {
         
         // Extract currency symbol
         let currencyPattern = "[£$€¥₹₽₩₪₫₨₴₸₺₼₾₿]"
-        let regex = try! NSRegularExpression(pattern: currencyPattern)
+        guard let regex = try? NSRegularExpression(pattern: currencyPattern) else {
+            let cleanedInput = input
+                .replacingOccurrences(of: ",", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return (Double(cleanedInput), defaultCurrencySymbol())
+        }
         let range = NSRange(location: 0, length: input.utf16.count)
         let matches = regex.matches(in: input, range: range)
         
@@ -1077,7 +1082,12 @@ struct EditOperativeView: View {
         
         // Extract currency symbol
         let currencyPattern = "[£$€¥₹₽₩₪₫₨₴₸₺₼₾₿]"
-        let regex = try! NSRegularExpression(pattern: currencyPattern)
+        guard let regex = try? NSRegularExpression(pattern: currencyPattern) else {
+            let cleanedInput = input
+                .replacingOccurrences(of: ",", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return (Double(cleanedInput), defaultCurrencySymbol())
+        }
         let range = NSRange(location: 0, length: input.utf16.count)
         let matches = regex.matches(in: input, range: range)
         

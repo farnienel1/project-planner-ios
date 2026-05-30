@@ -211,8 +211,9 @@ class WarningsService: ObservableObject {
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
             materialItemsForTomorrow: materialItemsForTomorrow
         )
+        let snapshot = WarningsComputation.makeSnapshot(from: input)
         let generated = await Task.detached(priority: .utility) {
-            WarningsComputation.generate(input)
+            WarningsComputation.generate(snapshot)
         }.value
         guard generation == updateGeneration else { return }
         resolutionStore.pruneDismissedUnbookedKeys(

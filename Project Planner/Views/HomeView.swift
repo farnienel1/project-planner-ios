@@ -1322,7 +1322,7 @@ struct HomeView: View {
         let blue = homeBlue
         let purple = Color(red: 0.325, green: 0.29, blue: 0.718)
 
-        async let upNextTask: [HomeUpNextDaySection] = Task.detached(priority: .utility) {
+        async let upNextTask: [HomeUpNextDaySection] = Task(priority: .utility) { @MainActor in
             HomeUpNextSupport.upcomingDaySections(
                 minDistinctDays: 2,
                 mergeRowLimit: 48,
