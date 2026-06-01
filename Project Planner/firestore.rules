@@ -28,6 +28,12 @@ service cloud.firestore {
              ('manager' in userData.permissions && truthyBool(userData.permissions.manager))) ||
            ('role' in userData && userData.role == 'manager');
   }
+
+  function canReadMaterialSendHistory(userData) {
+    return adminLikeUser(userData) ||
+           (materialManagerLikeUser(userData) &&
+            (!('wholesalersOrderHistory' in userData) || truthyBool(userData.wholesalersOrderHistory)));
+  }
   
   // True if users/{auth.uid}.organizationId matches this org (string case-insensitive, DocumentReference exact path,
   // or DocumentReference whose *document id* matches case-insensitive — avoids strict path equality when UUID casing differs).
@@ -493,6 +499,19 @@ service cloud.firestore {
       }
 
       match /materialCatalogue/{catalogueItemId} {
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update, delete: if isOrganizationMaterialManager(organizationId);
+      }
+
+      match /materialSendRecords/{recordId} {
+        allow read: if belongsToOrganization(organizationId) &&
+          exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+          canReadMaterialSendHistory(get(/databases/(default)/documents/users/$(request.auth.uid)).data);
+        allow create: if isOrganizationMaterialManager(organizationId);
+        allow update, delete: if isOrganizationAdmin(organizationId);
+      }
+
+      match /wholesalers/{wholesalerId} {
         allow read: if canAccessOrganization(organizationId);
         allow create, update, delete: if isOrganizationMaterialManager(organizationId);
       }

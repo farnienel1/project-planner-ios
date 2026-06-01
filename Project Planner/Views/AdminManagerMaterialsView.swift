@@ -66,16 +66,15 @@ struct AdminManagerMaterialsView: View {
             MaterialsSendListSheet(
                 project: project,
                 materials: materialsForSend,
+                materialsDay: selectedDate,
                 isPresented: $showingSendToWholesaler
             )
             .environmentObject(userStore)
             .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingHistory) {
-            MaterialsOrderHistorySheet(
-                date: selectedDate,
-                materials: dayMaterials
-            )
+            MaterialsOrderHistorySheet(project: project, selectedDate: selectedDate)
+                .environmentObject(firebaseBackend)
         }
         .alert("Could Not Delete Material", isPresented: $showingDeleteErrorAlert) {
             Button("OK", role: .cancel) { }
@@ -91,7 +90,7 @@ struct AdminManagerMaterialsView: View {
     }
 
     private var canViewQuoteOrderHistory: Bool {
-        !userStore.isOperativeMode()
+        userStore.canViewWholesalerOrderHistory()
     }
 
     private var dayHeader: some View {

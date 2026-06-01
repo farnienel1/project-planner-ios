@@ -837,7 +837,8 @@ struct AddUserView: View {
                 materials: true,
                 projects: true,
                 smallWorks: true,
-                operativeMode: false
+                operativeMode: false,
+                wholesalersOrderHistory: true
             )
         case .manager:
             permissions = UserPermissions(
@@ -854,7 +855,8 @@ struct AddUserView: View {
                 weeklyReports: false,
                 dailyOverview: true,
                 subContractors: false,
-                siteAudit: true
+                siteAudit: true,
+                wholesalersOrderHistory: true
             )
         case .operative:
             permissions = UserPermissions(

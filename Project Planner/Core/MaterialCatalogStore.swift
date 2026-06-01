@@ -89,6 +89,7 @@ final class MaterialCatalogStore: ObservableObject {
                 defaultUnit: row.defaultUnit,
                 size: row.size,
                 length: row.length,
+                lengthUnit: row.lengthUnit,
                 category: normalizedCategory(row.category),
                 createdByUserId: createdByUserId,
                 createdByName: createdByName
@@ -155,6 +156,7 @@ final class MaterialCatalogStore: ObservableObject {
                 defaultUnit: line.unit,
                 size: line.size,
                 length: line.length ?? line.sizeOrLength,
+                lengthUnit: line.lengthUnit,
                 category: category,
                 createdByUserId: creatorId,
                 createdByName: creatorName

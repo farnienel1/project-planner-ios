@@ -62,17 +62,32 @@ class AppSettingsStore: ObservableObject {
         errorMessage = nil
         
         Task {
+            let previousOptions = settings.myScheduleOptions
             do {
                 let loadedSettings = try await persistenceService.loadAppSettings()
-                self.settings = loadedSettings
+                self.settings = Self.mergedSettings(loaded: loadedSettings, preserving: previousOptions)
                 self.isLoading = false
             } catch {
                 self.errorMessage = error.localizedDescription
                 self.isLoading = false
-                // Use default settings if loading fails
-                self.settings = AppSettings()
+                // Keep existing in-memory settings on failure — do not wipe custom My Schedule items.
             }
         }
+    }
+
+    /// Preserves custom My Schedule locations across reloads and merges enabled flags.
+    private static func mergedSettings(loaded: AppSettings, preserving previous: MyScheduleOptions) -> AppSettings {
+        var merged = loaded
+        var items = Set(previous.customItems)
+        items.formUnion(loaded.myScheduleOptions.customItems)
+        merged.myScheduleOptions.customItems = items.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        for item in merged.myScheduleOptions.customItems {
+            let enabled = loaded.myScheduleOptions.customItemEnabled[item]
+                ?? previous.customItemEnabled[item]
+                ?? true
+            merged.myScheduleOptions.customItemEnabled[item] = enabled
+        }
+        return merged
     }
     
     // MARK: - Settings Operations
@@ -103,7 +118,10 @@ class AppSettingsStore: ObservableObject {
     }
     
     func updateMyScheduleOptions(_ options: MyScheduleOptions) async {
-        settings.myScheduleOptions = options
+        settings.myScheduleOptions = Self.mergedSettings(
+            loaded: AppSettings(myScheduleOptions: options),
+            preserving: settings.myScheduleOptions
+        ).myScheduleOptions
         await saveSettings()
     }
     
@@ -111,7 +129,12 @@ class AppSettingsStore: ObservableObject {
     
     private func saveSettings() async {
         do {
-            try await persistenceService.saveAppSettings(settings)
+            var toSave = settings
+            if let onDisk = try? await persistenceService.loadAppSettings() {
+                toSave = Self.mergedSettings(loaded: toSave, preserving: onDisk.myScheduleOptions)
+            }
+            settings = toSave
+            try await persistenceService.saveAppSettings(toSave)
         } catch {
             errorMessage = "Failed to save settings: \(error.localizedDescription)"
         }

@@ -132,10 +132,10 @@ class ProjectStore: ObservableObject {
         
         Task {
             // Add timeout to prevent infinite loading
-            let timeoutTask = Task {
-                try? await Task.sleep(nanoseconds: 30_000_000_000) // 30 seconds
+            let timeoutTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
                 if isLoading {
-                    print("🔥🔥🔥 DEBUG: ⚠️ Load timeout - forcing completion")
+                    print("🔥🔥🔥 DEBUG: ⚠️ ProjectStore load timeout - forcing completion")
                     isLoading = false
                     errorMessage = "Loading timed out. Please try 'Force Reload Data' in Settings."
                 }

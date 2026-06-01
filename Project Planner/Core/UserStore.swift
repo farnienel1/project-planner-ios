@@ -312,8 +312,47 @@ class UserStore: ObservableObject {
             errorMessage = "Failed to load user data: \(error.localizedDescription)"
             print("🔥🔥🔥 DEBUG: Error loading current user: \(error)")
         }
+
+        if currentUser == nil, let firebaseUser = Auth.auth().currentUser,
+           let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+           !organizationId.isEmpty {
+            currentUser = provisionalSessionUser(
+                firebaseUser: firebaseUser,
+                organizationId: organizationId
+            )
+            print("🔥🔥🔥 DEBUG: Using provisional session profile so the main shell can render")
+        }
         
         isLoading = false
+    }
+
+    /// Minimal profile when Firestore is slow or unreachable — keeps `isHomeProfileLoading` false enough to show UI.
+    private func provisionalSessionUser(firebaseUser: FirebaseAuth.User, organizationId: String) -> AppUser {
+        let email = firebaseUser.email ?? ""
+        let namePart = email.components(separatedBy: "@").first ?? ""
+        return AppUser(
+            id: firebaseUser.uid,
+            email: email,
+            organizationId: organizationId,
+            role: .manager,
+            firstName: namePart.capitalized,
+            surname: "",
+            passwordSet: true,
+            permissions: UserPermissions(
+                adminAccess: true,
+                manager: true,
+                operatives: true,
+                skills: true,
+                qualifications: true,
+                materials: true,
+                projects: true,
+                smallWorks: true,
+                operativeMode: false,
+                siteAudit: true,
+                wholesalersOrderHistory: true
+            ),
+            policyAccepted: true
+        )
     }
     
     func loadOrganizationUsers() async {
@@ -440,6 +479,21 @@ class UserStore: ObservableObject {
         if isOperativeMode() { return false }
         guard let u = displayUser else { return false }
         return hasAdminAccess() || u.permissions.manager
+    }
+
+    /// Wholesalers directory — admins and managers can add/edit wholesaler records.
+    func canAccessWholesalers() -> Bool {
+        if isOperativeMode() { return false }
+        guard let u = displayUser else { return false }
+        return hasAdminAccess() || u.permissions.manager
+    }
+
+    /// Quote/order history in materials and wholesaler profiles (admins always; managers need toggle).
+    func canViewWholesalerOrderHistory() -> Bool {
+        if isOperativeMode() { return false }
+        guard let u = displayUser else { return false }
+        if hasAdminAccess() { return true }
+        return u.permissions.manager && u.permissions.wholesalersOrderHistory
     }
 
     func canManageSkills() -> Bool {

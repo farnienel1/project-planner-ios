@@ -13,6 +13,7 @@ struct MaterialCatalogCSVRow: Identifiable, Hashable {
     var defaultUnit: MaterialUnit
     var size: String?
     var length: String?
+    var lengthUnit: MaterialLengthUnit?
     var category: String?
 }
 
@@ -20,7 +21,7 @@ enum MaterialCatalogCSV {
     static let templateFileName = "material_catalogue_upload_template.csv"
 
     static let templateContents = """
-Name,Category,Manufacturer/Brand,Product Code,Default Unit (Length, Box or Number),Size,Length
+Name,Category,Manufacturer/Brand,Product Code,Default Type (Length Drum Box Pallet or Number),Size,Length,Length Unit (M or MM)
 
 """
 
@@ -64,9 +65,16 @@ Name,Category,Manufacturer/Brand,Product Code,Default Unit (Length, Box or Numbe
         let categoryIdx = columnIndex(["category"])
         let brandIdx = columnIndex(["manufacturer/brand", "manufacturer", "brand"])
         let codeIdx = columnIndex(["product code", "code"])
-        let unitIdx = columnIndex(["default unit (length, box or number)", "default unit", "unit"])
+        let unitIdx = columnIndex([
+            "default type (length drum box or number)",
+            "default unit (length, box or number)",
+            "default unit",
+            "unit",
+            "type"
+        ])
         let sizeIdx = columnIndex(["size", "size/length", "pack size", "packsize"])
         let lengthIdx = columnIndex(["length"])
+        let lengthUnitIdx = columnIndex(["length unit (m or mm)", "length unit"])
         guard let categoryIdx else {
             throw NSError(domain: "MaterialCatalogCSV", code: 6, userInfo: [NSLocalizedDescriptionKey: "Missing required column: Category"])
         }
@@ -111,6 +119,12 @@ Name,Category,Manufacturer/Brand,Product Code,Default Unit (Length, Box or Numbe
                 return fallbackLegacy.isEmpty ? nil : fallbackLegacy
             }()
 
+            let lengthUnit: MaterialLengthUnit? = {
+                let raw = lengthUnitIdx.flatMap { $0 < cols.count ? cols[$0] : nil }?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return MaterialLengthSpecification.parseUnit(from: raw)
+            }()
+
             let category: String
             if categoryIdx < cols.count {
                 let c = cols[categoryIdx].trimmingCharacters(in: .whitespacesAndNewlines)
@@ -127,6 +141,7 @@ Name,Category,Manufacturer/Brand,Product Code,Default Unit (Length, Box or Numbe
                     defaultUnit: unit,
                     size: size,
                     length: length,
+                    lengthUnit: lengthUnit,
                     category: category
                 )
             )
@@ -145,6 +160,8 @@ Name,Category,Manufacturer/Brand,Product Code,Default Unit (Length, Box or Numbe
         switch raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) {
         case "box": return .box
         case "length": return .length
+        case "drum", "drums": return .drum
+        case "pallet", "pallets": return .pallet
         default: return .number
         }
     }

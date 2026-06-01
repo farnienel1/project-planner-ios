@@ -179,7 +179,6 @@ struct MaterialsView: View {
                 // is non-empty: that blocked newly saved rows from ever appearing if a cached full snapshot
                 // arrived after the initial load (common right after "Submit All" while other days already had lines).
                 materials = updated
-                syncWeekSelectionToLoadedMaterialsIfNothingForCurrentDay()
             }
         }
     }
@@ -469,8 +468,8 @@ struct MaterialItemRow: View {
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
-                if let length = material.length?.trimmingCharacters(in: .whitespacesAndNewlines), !length.isEmpty {
-                    Text("Length: \(length)")
+                if !material.formattedLengthSpecification.isEmpty {
+                    Text("Length: \(material.formattedLengthSpecification)")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -554,7 +553,8 @@ struct AddMaterialView: View {
         var materialDescription: String = ""
         var size: String = ""
         var length: String = ""
-        
+        var lengthUnit: MaterialLengthUnit?
+
         init(selectedDate: Date) {
             self.selectedDate = selectedDate
         }
@@ -672,7 +672,10 @@ struct AddMaterialView: View {
                         : entry.size.trimmingCharacters(in: .whitespacesAndNewlines),
                     length: entry.length.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         ? nil
-                        : entry.length.trimmingCharacters(in: .whitespacesAndNewlines)
+                        : entry.length.trimmingCharacters(in: .whitespacesAndNewlines),
+                    lengthUnit: entry.length.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? nil
+                        : entry.lengthUnit
                 )
                 
                 do {
@@ -762,7 +765,7 @@ private struct MaterialEntrySection: View {
                 }
             }
             
-            Picker("Unit", selection: Binding(
+            Picker(MaterialUnit.typePickerTitle, selection: Binding(
                 get: { entry.unit },
                 set: { newValue in
                     if let index = entries.firstIndex(where: { $0.id == entry.id }) {
@@ -773,6 +776,31 @@ private struct MaterialEntrySection: View {
                 ForEach(MaterialUnit.allCases, id: \.self) { unit in
                     Text(unit.displayName).tag(unit)
                 }
+            }
+
+            HStack(spacing: 8) {
+                TextField("Length (optional)", text: Binding(
+                    get: { entry.length },
+                    set: { newValue in
+                        if let index = entries.firstIndex(where: { $0.id == entry.id }) {
+                            entries[index].length = newValue
+                        }
+                    }
+                ))
+                Picker("Unit", selection: Binding(
+                    get: { entry.lengthUnit ?? .metres },
+                    set: { newValue in
+                        if let index = entries.firstIndex(where: { $0.id == entry.id }) {
+                            let trimmed = entries[index].length.trimmingCharacters(in: .whitespacesAndNewlines)
+                            entries[index].lengthUnit = trimmed.isEmpty ? nil : newValue
+                        }
+                    }
+                )) {
+                    ForEach(MaterialLengthUnit.allCases, id: \.self) { u in
+                        Text(u.displayName).tag(u)
+                    }
+                }
+                .pickerStyle(.menu)
             }
             
             TextField("Material Description", text: Binding(
@@ -790,14 +818,6 @@ private struct MaterialEntrySection: View {
                 set: { newValue in
                     if let index = entries.firstIndex(where: { $0.id == entry.id }) {
                         entries[index].size = newValue
-                    }
-                }
-            ))
-            TextField("Length (optional)", text: Binding(
-                get: { entry.length },
-                set: { newValue in
-                    if let index = entries.firstIndex(where: { $0.id == entry.id }) {
-                        entries[index].length = newValue
                     }
                 }
             ))

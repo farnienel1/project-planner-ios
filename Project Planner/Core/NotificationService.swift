@@ -37,7 +37,8 @@ class NotificationService: ObservableObject {
     private static let persistedLocalAlertDedupKey = "NotificationService.localAlertDedupKeysV2"
     private static let persistedLastProcessedAtKey = "NotificationService.lastProcessedNotificationAtV1"
     private static let maxPersistedDedupKeys = 400
-    
+    private var materialCutoffRefreshTask: Task<Void, Never>?
+
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         self.firebaseBackend = backend
         loadPersistedLocalAlertDedupKeysIfNeeded()
@@ -66,21 +67,32 @@ class NotificationService: ObservableObject {
     }
 
     func refreshDailyMaterialCutOffReminder() async {
+        materialCutoffRefreshTask?.cancel()
+        let task = Task {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
+            await performDailyMaterialCutOffReminderRefresh()
+        }
+        materialCutoffRefreshTask = task
+        await task.value
+    }
+
+    private func performDailyMaterialCutOffReminderRefresh() async {
         guard let userStore, let currentUser = userStore.currentUser else {
-            LocalNotificationService.shared.removeDailyMaterialCutOffReminder()
+            await LocalNotificationService.shared.removeAllMaterialCutOffReminders()
             return
         }
         let roleCanReceive = !currentUser.permissions.operativeMode &&
             (currentUser.isSuperAdmin || currentUser.permissions.adminAccess || currentUser.permissions.manager || currentUser.role == .manager || currentUser.role == .admin)
         guard roleCanReceive else {
-            LocalNotificationService.shared.removeDailyMaterialCutOffReminder()
+            await LocalNotificationService.shared.removeAllMaterialCutOffReminders()
             return
         }
 
         let notificationSettings = appSettingsStore?.settings.notifications ?? NotificationSettings()
         let notificationsEnabled = notificationSettings.materialOrderCutOff
         guard notificationsEnabled else {
-            LocalNotificationService.shared.removeDailyMaterialCutOffReminder()
+            await LocalNotificationService.shared.removeAllMaterialCutOffReminders()
             return
         }
 
@@ -979,7 +991,6 @@ class NotificationService: ObservableObject {
                 let key = notificationDedupKey(for: n)
                 guard !seenLocalAlertNotificationKeys.contains(key) else { break }
                 recordLocalAlertDedupKey(key)
-                scheduleLocalBookingAlert(message: n.message, dedupeIdentifier: key)
             }
             break
         }
@@ -1026,29 +1037,36 @@ class NotificationService: ObservableObject {
         }
     }
 
-    private func scheduleLocalHolidayRequestAlert(title: String, message: String, dedupeIdentifier: String) {
+    private func scheduleLocalInAppMirrorAlert(title: String, message: String, dedupeIdentifier: String) {
         Task {
             let granted = await LocalNotificationService.shared.requestAuthorization()
             guard granted else {
                 print("🔥🔥🔥 DEBUG: Local notification permission not granted; skipping banner")
                 return
             }
+            let sanitizedId = String(dedupeIdentifier
+                .replacingOccurrences(of: "/", with: "-")
+                .prefix(200))
+            let identifier = "inapp-local-\(sanitizedId)"
+            let center = UNUserNotificationCenter.current()
+            let pending = await center.pendingNotificationRequests()
+            if pending.contains(where: { $0.identifier == identifier }) {
+                return
+            }
+            center.removePendingNotificationRequests(withIdentifiers: [identifier])
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = message
             content.sound = .default
-            let sanitizedId = String(dedupeIdentifier
-                .replacingOccurrences(of: "/", with: "-")
-                .prefix(200))
             let request = UNNotificationRequest(
-                identifier: "holiday-local-\(sanitizedId)",
+                identifier: identifier,
                 content: content,
                 trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
             )
             do {
-                try await UNUserNotificationCenter.current().add(request)
+                try await center.add(request)
             } catch {
-                print("🔥🔥🔥 DEBUG: Local holiday notification error: \(error.localizedDescription)")
+                print("🔥🔥🔥 DEBUG: Local in-app notification error: \(error.localizedDescription)")
             }
         }
     }
@@ -1290,6 +1308,8 @@ class NotificationService: ObservableObject {
     }
 
     private func triggerLocalAlertIfNeeded(for notification: AppNotification) {
+        // Firestore notifications are delivered via FCM; scheduling a local copy caused duplicate banners.
+        guard usesLocalMirrorOnly(notification.type) else { return }
         loadPersistedLocalAlertDedupKeysIfNeeded()
         guard !notification.isRead else { return }
         // Synthetic approve/decline is in-app fallback only (derived from holiday bookings). OS banners for
@@ -1307,7 +1327,12 @@ class NotificationService: ObservableObject {
         let key = notificationDedupKey(for: notification)
         guard !seenLocalAlertNotificationKeys.contains(key) else { return }
         recordLocalAlertDedupKey(key)
-        scheduleLocalHolidayRequestAlert(title: notification.title, message: notification.message, dedupeIdentifier: key)
+        scheduleLocalInAppMirrorAlert(title: notification.title, message: notification.message, dedupeIdentifier: key)
+    }
+
+    /// Types that should never get an extra UNUserNotificationCenter banner (remote push handles delivery).
+    private func usesLocalMirrorOnly(_ type: AppNotification.NotificationType) -> Bool {
+        false
     }
 
     private func loadPersistedLocalAlertDedupKeysIfNeeded() {

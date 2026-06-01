@@ -197,6 +197,11 @@ struct Project_PlannerApp: App {
                     .environmentObject(notificationService)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onAppear {
+                if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+                    windowScene.windows.forEach { $0.makeKeyAndVisible() }
+                }
+            }
         }
     }
 }

@@ -617,7 +617,8 @@ struct ManageUserRowView: View {
                         "weeklyReports": user.permissions.weeklyReports,
                         "dailyOverview": user.permissions.dailyOverview,
                         "subContractors": user.permissions.subContractors,
-                        "siteAudit": user.permissions.siteAudit
+                        "siteAudit": user.permissions.siteAudit,
+                        "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory
                     ],
                     "createdAt": Timestamp(date: Date()),
                     "isUsed": false
@@ -2400,6 +2401,18 @@ struct EditUserView: View {
                 isOn: $permissions.qualifications,
                 isDisabled: false
             )
+
+            ManageUserCardDivider()
+
+            ManageUserExpandablePermissionToggleRow(
+                iconName: "building.2.fill",
+                iconBackground: ManageUserProfilePalette.chipAmberBg,
+                iconForeground: ManageUserProfilePalette.chipAmberFg,
+                title: "Wholesalers (order & quote history)",
+                description: "Can view quote and order history in Wholesalers and on project materials. Wholesaler directory editing remains available to all managers.",
+                isOn: $permissions.wholesalersOrderHistory,
+                isDisabled: false
+            )
         }
     }
 
@@ -2736,7 +2749,8 @@ struct EditUserView: View {
                 "weeklyReports": permissions.weeklyReports,
                 "dailyOverview": permissions.dailyOverview,
                 "subContractors": permissions.subContractors,
-                "siteAudit": permissions.siteAudit
+                "siteAudit": permissions.siteAudit,
+                "wholesalersOrderHistory": permissions.wholesalersOrderHistory
             ],
             "createdAt": Timestamp(date: Date()),
             "isUsed": false
@@ -2806,7 +2820,8 @@ struct EditUserView: View {
                         "weeklyReports": user.permissions.weeklyReports,
                         "dailyOverview": user.permissions.dailyOverview,
                         "subContractors": user.permissions.subContractors,
-                        "siteAudit": user.permissions.siteAudit
+                        "siteAudit": user.permissions.siteAudit,
+                        "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory
                     ],
                     "createdAt": Timestamp(date: Date()),
                     "isUsed": false

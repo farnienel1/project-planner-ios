@@ -210,7 +210,7 @@ struct OperativeMaterialsPanel: View {
     }
 
     private var canViewQuoteOrderHistory: Bool {
-        !userStore.isOperativeMode()
+        userStore.canViewWholesalerOrderHistory()
     }
 
     var body: some View {
@@ -288,10 +288,8 @@ struct OperativeMaterialsPanel: View {
                 .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingHistory) {
-            MaterialsOrderHistorySheet(
-                date: selectedDate,
-                materials: dayMaterials
-            )
+            MaterialsOrderHistorySheet(project: project, selectedDate: selectedDate)
+                .environmentObject(firebaseBackend)
         }
         .alert("Could Not Delete Material", isPresented: $showingDeleteErrorAlert) {
             Button("OK", role: .cancel) { }
@@ -347,71 +345,330 @@ enum MaterialsWeekHelpers {
 
 struct MaterialsOrderHistorySheet: View {
     @Environment(\.dismiss) private var dismiss
-    let date: Date
-    let materials: [MaterialItem]
-    @State private var expandedItemIds: Set<UUID> = []
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
 
-    private var historyItems: [MaterialItem] {
-        materials
-            .filter { $0.status != .draft }
-            .sorted { ($0.lastSentAt ?? .distantPast) > ($1.lastSentAt ?? .distantPast) }
+    let project: Project
+    let selectedDate: Date
+    @State private var records: [MaterialSendRecord] = []
+    @State private var expandedRecordIds: Set<UUID> = []
+    @State private var isLoading = true
+    @State private var loadErrorMessage: String?
+
+    private var dayRecords: [MaterialSendRecord] {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: selectedDate)
+        return records
+            .filter { calendar.isDate($0.historyDay(calendar: calendar), inSameDayAs: day) }
+            .sorted { $0.sentAt > $1.sentAt }
+    }
+
+    private var dayTitle: String {
+        let f = DateFormatter()
+        f.dateFormat = "EEEE d MMM"
+        return f.string(from: selectedDate)
     }
 
     var body: some View {
         NavigationStack {
-            List {
-                if historyItems.isEmpty {
-                    Text("No quote or order history for this day.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(historyItems) { item in
-                        DisclosureGroup(
-                            isExpanded: Binding(
-                                get: { expandedItemIds.contains(item.id) },
-                                set: { isExpanded in
-                                    if isExpanded { expandedItemIds.insert(item.id) }
-                                    else { expandedItemIds.remove(item.id) }
-                                }
-                            )
-                        ) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(item.material)
-                                    .font(.system(size: 13, weight: .medium))
-                                Text("\(item.quantity) \(item.unit.quantityLabel(for: item.quantity))")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                                if let brand = item.brand, !brand.isEmpty {
-                                    Text("Manufacturer: \(brand)")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                }
-                                if let code = item.productCode, !code.isEmpty {
-                                    Text("Code: \(code)")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .padding(.vertical, 4)
-                        } label: {
-                            HStack {
-                                Text(item.lastSentAt?.formatted(date: .abbreviated, time: .shortened) ?? "Sent")
-                                    .font(.system(size: 12, weight: .medium))
-                                Spacer()
-                                MaterialsStatusPill(status: item.status)
-                            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Sends on \(dayTitle)")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if isLoading {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 40)
+                    } else if let loadErrorMessage {
+                        VStack(spacing: 8) {
+                            Text("Could not load history")
+                                .font(.system(size: 15, weight: .semibold))
+                            Text(loadErrorMessage)
+                                .font(.system(size: 13))
+                                .foregroundStyle(MaterialsOrderingTheme.muted)
+                                .multilineTextAlignment(.center)
+                        }
+                    } else if dayRecords.isEmpty {
+                        VStack(spacing: 8) {
+                            Text("No quotes or orders for this materials day")
+                                .font(.system(size: 15, weight: .semibold))
+                            Text("When you send a quote or order for materials on \(dayTitle), it appears here. The day strip above the list is the materials day, not the day you tapped send.")
+                                .font(.system(size: 13))
+                                .foregroundStyle(MaterialsOrderingTheme.muted)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 32)
+                        .padding(.horizontal, 8)
+                    } else {
+                        ForEach(dayRecords) { record in
+                            historyTimelineCard(record)
                         }
                     }
                 }
+                .padding(16)
             }
-            .navigationTitle("Quote/Order History")
+            .background(MaterialsOrderingTheme.pageBackground)
+            .navigationTitle("Quote & order history")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
             }
+            .task { await loadHistory() }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("materialSendHistoryDidChange"))) { _ in
+                Task { await loadHistory() }
+            }
         }
         .presentationDetents([.medium, .large])
+    }
+
+    private func loadHistory() async {
+        await MainActor.run {
+            isLoading = true
+            loadErrorMessage = nil
+        }
+        guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            await MainActor.run {
+                isLoading = false
+                loadErrorMessage = "No organisation selected."
+            }
+            return
+        }
+        do {
+            var loaded = try await firebaseBackend.loadMaterialSendRecords(
+                organizationId: organizationId,
+                projectId: project.id
+            )
+            if loaded.isEmpty {
+                let all = try await firebaseBackend.loadAllMaterialSendRecords(organizationId: organizationId)
+                loaded = all.filter { $0.projectId == project.id }
+            }
+            await MainActor.run {
+                records = loaded
+                isLoading = false
+            }
+        } catch {
+            await MainActor.run {
+                isLoading = false
+                records = []
+                loadErrorMessage = error.localizedDescription
+            }
+            print("🔥🔥🔥 DEBUG: loadMaterialSendRecords failed: \(error.localizedDescription)")
+        }
+    }
+
+    @ViewBuilder
+    private func historyTimelineCard(_ record: MaterialSendRecord) -> some View {
+        let isExpanded = expandedRecordIds.contains(record.id)
+        let isQuote = record.requestType == .quote
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                if isExpanded { expandedRecordIds.remove(record.id) }
+                else { expandedRecordIds.insert(record.id) }
+            } label: {
+                HStack(alignment: .top, spacing: 12) {
+                    Circle()
+                        .fill(isQuote ? Color(red: 0.06, green: 0.65, blue: 0.91) : Color(red: 0.98, green: 0.45, blue: 0.09))
+                        .frame(width: 10, height: 10)
+                        .padding(.top, 5)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(isQuote ? "QUOTE" : "ORDER")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(isQuote ? Color(red: 0.06, green: 0.65, blue: 0.91) : Color(red: 0.086, green: 0.639, blue: 0.29))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(isQuote ? Color(red: 0.88, green: 0.96, blue: 1) : Color(red: 0.882, green: 0.969, blue: 0.929))
+                                .clipShape(Capsule())
+                            Spacer()
+                            Text(record.sentAt.formatted(date: .omitted, time: .shortened))
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(MaterialsOrderingTheme.muted)
+                        }
+                        Text("\(record.itemCountLabel) · sent by \(record.sentBy)")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(MaterialsOrderingTheme.ink)
+                        Text(recipientSummary(record))
+                            .font(.system(size: 12))
+                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                            .lineLimit(isExpanded ? nil : 2)
+                            .multilineTextAlignment(.leading)
+                        if !isExpanded, !record.lines.isEmpty {
+                            Text(record.lines.map(\.name).joined(separator: " · "))
+                                .font(.system(size: 12))
+                                .foregroundStyle(MaterialsOrderingTheme.ink)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                        }
+                    }
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                }
+                .padding(14)
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("SENT TO")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                        ForEach(record.recipients, id: \.email) { recipient in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(recipient.name)
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text(recipient.email)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(MaterialsOrderingTheme.muted)
+                                if let firm = recipient.wholesalerName, !firm.isEmpty {
+                                    Text(firm)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(MaterialsOrderingTheme.primary)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(MaterialsOrderingTheme.cardBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("MATERIALS ON THIS \(record.requestTypeLabel.uppercased())")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                        ForEach(record.lines, id: \.materialId) { line in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(line.name)
+                                        .font(.system(size: 13, weight: .medium))
+                                    if let length = line.lengthDisplay, !length.isEmpty {
+                                        Text("Length: \(length)")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                                    }
+                                }
+                                Spacer()
+                                Text("\(line.quantity) \(line.unit.quantityLabel(for: line.quantity))")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(MaterialsOrderingTheme.primary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 14)
+            }
+        }
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(MaterialsOrderingTheme.border, lineWidth: 0.5)
+        )
+    }
+
+    private func recipientSummary(_ record: MaterialSendRecord) -> String {
+        let names = record.recipients.map { recipient in
+            if let firm = recipient.wholesalerName, !firm.isEmpty {
+                return "\(recipient.name) (\(firm))"
+            }
+            return recipient.name
+        }
+        if names.isEmpty { return "No recipients recorded" }
+        if names.count <= 2 { return "To: " + names.joined(separator: ", ") }
+        return "To: \(names.prefix(2).joined(separator: ", ")) +\(names.count - 2) more"
+    }
+}
+
+/// Split row: Length (optional) + Unit M/MM on one line.
+struct MaterialsLengthInputRow: View {
+    @Binding var lengthValue: String
+    @Binding var lengthUnit: MaterialLengthUnit?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("LENGTH (OPTIONAL)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(MaterialsOrderingTheme.muted)
+                TextField("e.g. 3", text: $lengthValue)
+                    .keyboardType(.decimalPad)
+                    .font(.system(size: 14, weight: .medium))
+                    .padding(10)
+                    .background(MaterialsOrderingTheme.cardBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 11))
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("UNIT (OPTIONAL)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(MaterialsOrderingTheme.muted)
+                Picker("Length unit", selection: Binding(
+                    get: { lengthUnit ?? .metres },
+                    set: { newValue in
+                        lengthUnit = lengthValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : newValue
+                    }
+                )) {
+                    ForEach(MaterialLengthUnit.allCases, id: \.self) { u in
+                        Text(u.displayName).tag(u)
+                    }
+                }
+                .pickerStyle(.menu)
+                .padding(10)
+                .frame(maxWidth: .infinity)
+                .background(MaterialsOrderingTheme.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 11))
+                .onChange(of: lengthValue) { _, newValue in
+                    if newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        lengthUnit = nil
+                    } else if lengthUnit == nil {
+                        lengthUnit = .metres
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct MaterialsQuantityTypeRow: View {
+    @Binding var quantity: Int
+    @Binding var unit: MaterialUnit
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("QUANTITY")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(MaterialsOrderingTheme.muted)
+                TextField("1", value: $quantity, format: .number)
+                    .keyboardType(.numberPad)
+                    .font(.system(size: 14, weight: .medium))
+                    .padding(10)
+                    .background(MaterialsOrderingTheme.cardBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 11))
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(MaterialUnit.typePickerTitle.uppercased())
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(MaterialsOrderingTheme.muted)
+                Picker(MaterialUnit.typePickerTitle, selection: $unit) {
+                    ForEach(MaterialUnit.allCases, id: \.self) { u in
+                        Text(u.rawValue).tag(u)
+                    }
+                }
+                .pickerStyle(.menu)
+                .padding(10)
+                .frame(maxWidth: .infinity)
+                .background(MaterialsOrderingTheme.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 11))
+            }
+        }
     }
 }
 

@@ -12,6 +12,7 @@ struct MaterialsSendListSheet: View {
 
     let project: Project
     let materials: [MaterialItem]
+    var materialsDay: Date?
     @Binding var isPresented: Bool
 
     @State private var wholesalers: [Wholesaler] = []
@@ -32,12 +33,16 @@ struct MaterialsSendListSheet: View {
     @State private var pendingRequestType: MaterialOrderRequest.RequestType?
     @State private var resendDialog: ResendDialogState?
     @State private var sendConfirmation: SendConfirmationState?
+    @State private var expandedWholesalerIds: Set<UUID> = []
 
     struct ResendDialogState: Identifiable {
         let id = UUID()
         let requestType: MaterialOrderRequest.RequestType
-        let alreadySent: [MaterialItem]
+        let alreadyQuoted: [MaterialItem]
+        let alreadyOrdered: [MaterialItem]
         let fresh: [MaterialItem]
+
+        var alreadySent: [MaterialItem] { alreadyQuoted + alreadyOrdered }
     }
 
     struct SendConfirmationState: Identifiable {
@@ -72,9 +77,6 @@ struct MaterialsSendListSheet: View {
             .task {
                 await loadWholesalers()
                 selectedMaterialIds = Set(materials.map(\.id))
-                if let first = wholesalers.first?.contacts.first {
-                    selectedContactIds = [first.id]
-                }
             }
             .alert("Multiple wholesalers", isPresented: $showingMultipleWholesalerAlert) {
                 Button("OK", role: .cancel) {}
@@ -89,7 +91,7 @@ struct MaterialsSendListSheet: View {
                     onCancel: { resendDialog = nil }
                 )
             }
-            .fullScreenCover(item: $sendConfirmation) { conf in
+            .sheet(item: $sendConfirmation) { conf in
                 MaterialsSendConfirmationView(
                     project: project,
                     confirmation: conf,
@@ -102,6 +104,7 @@ struct MaterialsSendListSheet: View {
                         NotificationCenter.default.post(name: NSNotification.Name("reloadMaterials"), object: nil)
                     }
                 )
+                .presentationDetents([.medium, .large])
             }
         }
     }
@@ -205,8 +208,8 @@ struct MaterialsSendListSheet: View {
                 .foregroundStyle(MaterialsOrderingTheme.muted)
             VStack(spacing: 0) {
                 ForEach(wholesalers) { wholesaler in
-                    ForEach(wholesaler.contacts) { contact in
-                        wholesalerRow(wholesaler: wholesaler, contact: contact)
+                    wholesalerGroupRow(wholesaler: wholesaler)
+                    if wholesaler.id != wholesalers.last?.id {
                         Divider()
                     }
                 }
@@ -216,21 +219,64 @@ struct MaterialsSendListSheet: View {
         }
     }
 
-    private func wholesalerRow(wholesaler: Wholesaler, contact: WholesalerContact) -> some View {
+    private func wholesalerGroupRow(wholesaler: Wholesaler) -> some View {
+        let expanded = expandedWholesalerIds.contains(wholesaler.id)
+        let selectedInGroup = wholesaler.contacts.filter { selectedContactIds.contains($0.id) }.count
+        return VStack(spacing: 0) {
+            Button {
+                if expanded { expandedWholesalerIds.remove(wholesaler.id) }
+                else { expandedWholesalerIds.insert(wholesaler.id) }
+            } label: {
+                HStack(spacing: 10) {
+                    Text(String(wholesaler.name.prefix(2)).uppercased())
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(MaterialsOrderingTheme.primaryGradient)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(wholesaler.name)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(MaterialsOrderingTheme.ink)
+                        Text("\(wholesaler.contacts.count) contact\(wholesaler.contacts.count == 1 ? "" : "s")")
+                            .font(.system(size: 10))
+                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                    }
+                    Spacer()
+                    if selectedInGroup > 0 {
+                        Text("\(selectedInGroup) selected")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(MaterialsOrderingTheme.primary)
+                    }
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                }
+                .padding(.vertical, 11)
+                .padding(.horizontal, 12)
+            }
+            .buttonStyle(.plain)
+            if expanded {
+                ForEach(wholesaler.contacts) { contact in
+                    wholesalerContactRow(wholesaler: wholesaler, contact: contact)
+                    if contact.id != wholesaler.contacts.last?.id {
+                        Divider().padding(.leading, 50)
+                    }
+                }
+            }
+        }
+    }
+
+    private func wholesalerContactRow(wholesaler: Wholesaler, contact: WholesalerContact) -> some View {
         let selected = selectedContactIds.contains(contact.id)
         return Button {
             if selected { selectedContactIds.remove(contact.id) }
             else { selectedContactIds.insert(contact.id) }
         } label: {
             HStack(spacing: 10) {
-                Text(String(wholesaler.name.prefix(2)).uppercased())
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white)
-                    .frame(width: 28, height: 28)
-                    .background(MaterialsOrderingTheme.primaryGradient)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                Color.clear.frame(width: 28, height: 28)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(wholesaler.name)
+                    Text(contact.name)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(MaterialsOrderingTheme.ink)
                     Text(contact.email)
@@ -244,6 +290,7 @@ struct MaterialsSendListSheet: View {
             }
             .padding(.vertical, 9)
             .padding(.horizontal, 12)
+            .padding(.leading, 4)
         }
         .buttonStyle(.plain)
     }
@@ -347,10 +394,19 @@ struct MaterialsSendListSheet: View {
             }
         }
         let selected = materials.filter { selectedMaterialIds.contains($0.id) }
-        let alreadySent = selected.filter { $0.status.isSent }
-        let fresh = selected.filter { !$0.status.isSent }
-        if !alreadySent.isEmpty {
-            resendDialog = ResendDialogState(requestType: type, alreadySent: alreadySent, fresh: fresh)
+        let alreadyQuoted = selected.filter { $0.status == .sentForQuote }
+        let alreadyOrdered = selected.filter { $0.status == .ordered }
+        let fresh = selected.filter { $0.status == .draft }
+        let needsDialog = type == .quote
+            ? !alreadyQuoted.isEmpty
+            : (!alreadyQuoted.isEmpty || !alreadyOrdered.isEmpty)
+        if needsDialog {
+            resendDialog = ResendDialogState(
+                requestType: type,
+                alreadyQuoted: alreadyQuoted,
+                alreadyOrdered: alreadyOrdered,
+                fresh: fresh
+            )
         } else {
             proceedSend(type: type, materialIds: selected.map(\.id))
         }
@@ -375,13 +431,36 @@ struct MaterialsSendListSheet: View {
         if !orgName.isEmpty { senderSignature += "\n\(orgName)" }
 
         let request = MaterialOrderRequest(
+            projectId: project.id,
             projectNumber: project.jobNumber,
             projectName: project.siteName,
             siteAddress: project.siteAddress,
             materials: items,
             requestType: type,
             sentBy: senderSignature,
-            recipientContacts: contacts
+            recipientContacts: contacts,
+            senderName: userName,
+            senderEmail: userEmail,
+            senderPhone: userPhone?.isEmpty == false ? userPhone : nil,
+            senderCompany: orgName,
+            companyLogoURL: firebaseBackend.currentOrganization?.companyLogoURL
+        )
+        let recipientSnapshots = buildRecipientSnapshots(for: contacts)
+        let calendar = Calendar.current
+        let dayForHistory: Date = {
+            if let materialsDay {
+                return calendar.startOfDay(for: materialsDay)
+            }
+            let days = items.map { calendar.startOfDay(for: $0.date) }
+            return days.min() ?? calendar.startOfDay(for: Date())
+        }()
+        let sendRecord = MaterialSendRecord(
+            projectId: project.id,
+            requestType: type,
+            materialsDate: dayForHistory,
+            sentBy: userName,
+            recipients: recipientSnapshots,
+            lines: items.map(\.sendLineSnapshot)
         )
 
         Task {
@@ -391,6 +470,11 @@ struct MaterialsSendListSheet: View {
             }
             do {
                 try await firebaseBackend.sendMaterialRequest(request, organizationId: organizationId)
+                do {
+                    try await firebaseBackend.saveMaterialSendRecord(sendRecord, organizationId: organizationId)
+                } catch {
+                    print("🔥🔥🔥 DEBUG: saveMaterialSendRecord failed (email was sent): \(error.localizedDescription)")
+                }
                 await MainActor.run {
                     isSending = false
                     sendConfirmation = SendConfirmationState(
@@ -398,10 +482,27 @@ struct MaterialsSendListSheet: View {
                         itemCount: items.count,
                         recipientCount: contacts.count
                     )
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("materialSendHistoryDidChange"),
+                        object: nil
+                    )
                 }
             } catch {
                 await MainActor.run { isSending = false }
             }
+        }
+    }
+
+    private func buildRecipientSnapshots(for contacts: [WholesalerContact]) -> [MaterialSendRecipientSnapshot] {
+        contacts.map { contact in
+            let wholesalerName = wholesalers.first { wholesaler in
+                wholesaler.contacts.contains(where: { $0.id == contact.id })
+            }?.name
+            return MaterialSendRecipientSnapshot(
+                name: contact.name,
+                email: contact.email,
+                wholesalerName: wholesalerName
+            )
         }
     }
 }
@@ -415,9 +516,7 @@ private struct MaterialsResendIncludeExcludeSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                Text(dialog.requestType == .quote
-                     ? "Materials on this list have already been sent for quote"
-                     : "Materials on this list have already been ordered")
+                Text(resendHeadline)
                     .font(.headline)
                 Text("Would you like to include these items again?")
                     .font(.subheadline)
@@ -456,6 +555,16 @@ private struct MaterialsResendIncludeExcludeSheet: View {
             }
         }
         .presentationDetents([.medium])
+    }
+
+    private var resendHeadline: String {
+        if dialog.requestType == .quote {
+            return "Materials on this list have already been sent for quote"
+        }
+        if !dialog.alreadyOrdered.isEmpty {
+            return "Materials on this list have already been ordered"
+        }
+        return "Materials on this list have already been quoted for"
     }
 }
 

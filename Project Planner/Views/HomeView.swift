@@ -176,7 +176,7 @@ struct HomeView: View {
                 .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingWholesalers) {
-            WholesalersView()
+            WholesalersView(presentedAsSheet: true)
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         }
