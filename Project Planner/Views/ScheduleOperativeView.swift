@@ -84,7 +84,8 @@ struct ScheduleOperativeView: View {
     }
     
     var body: some View {
-        NavigationView {
+        AnyView(
+            NavigationView {
             ZStack(alignment: .top) {
                 ProjectWorksRevampColors.canvas
                     .ignoresSafeArea()
@@ -232,7 +233,8 @@ struct ScheduleOperativeView: View {
                     applyPrefillFromEditingGroup(gid)
                 }
             }
-        }
+            }
+        )
     }
     
     // MARK: - Project Header Card

@@ -25,6 +25,13 @@ enum StaffTradeType: String, CaseIterable, Identifiable, Codable, Sendable {
     case installer = "Installer"
     case commissioningEngineer = "Commissioning Engineer"
     case programmer = "Programmer"
+    case scaffolder = "Scaffolder"
+    case brickBlock = "Brick & Block"
+    case dryliner = "Dryliner"
+    case painterDecorator = "Painter & Decorator"
+    case demolitionOperative = "Demolition Operative"
+    case steelFixer = "Steel Fixer"
+    case plantOperator = "Plant Operator"
     case other = "Other"
 
     var id: String { rawValue }

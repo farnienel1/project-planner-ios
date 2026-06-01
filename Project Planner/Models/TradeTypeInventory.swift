@@ -21,6 +21,13 @@ enum TradeTypeInventory {
         "Installer",
         "Commissioning Engineer",
         "Programmer",
+        "Scaffolder",
+        "Brick & Block",
+        "Dryliner",
+        "Painter & Decorator",
+        "Demolition Operative",
+        "Steel Fixer",
+        "Plant Operator",
     ]
 
     static func knownTrades(extra: [String] = []) -> [String] {
@@ -46,7 +53,7 @@ enum TradeTypeInventory {
             }
     }
 
-    private static func uniqueSorted(from values: [String]) -> [String] {
+    nonisolated private static func uniqueSorted(from values: [String]) -> [String] {
         var seen = Set<String>()
         return values
             .map(normalized)
@@ -55,7 +62,7 @@ enum TradeTypeInventory {
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
-    private static func normalized(_ value: String) -> String {
+    nonisolated private static func normalized(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

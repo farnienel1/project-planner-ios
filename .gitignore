@@ -1,0 +1,16 @@
+# Local tooling and editor state
+.cursor/
+Project Planner.xcodeproj/xcuserdata/
+Project Planner.xcodeproj/project.xcworkspace/
+
+# Local backup/export artifacts
+Project Planner 2026-05-14 07-58-10/
+*.zip
+
+# Duplicate scratch files created by Finder copies
+* 2.swift
+* 2.entitlements
+* 2.rules
+
+# Local static-site cache
+website/.netlify/

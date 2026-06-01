@@ -47,13 +47,14 @@ extension View {
 struct FilledButtonStyle: ButtonStyle {
     enum Tone { case teal, blue }
     var tone: Tone = .teal
+    var fixedWidth: CGFloat? = nil
 
     func makeBody(configuration: Configuration) -> some View {
         let gradientColors: [Color] = tone == .teal
             ? [Color(hex: "#19c4b3"), Color(hex: "#0fae9e")]
             : [Color(hex: "#3f86ff"), Color(hex: "#2563eb")]
         let shadowColor = tone == .teal ? HS.teal : HS.blue2
-        return configuration.label
+        let content = configuration.label
             .font(.system(size: 16, weight: .bold))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
@@ -62,6 +63,15 @@ struct FilledButtonStyle: ButtonStyle {
             .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
             .shadow(color: shadowColor.opacity(0.32), radius: 11, x: 0, y: 8)
             .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+        if let fixedWidth {
+            return AnyView(
+                content
+                    .frame(width: fixedWidth)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(10)
+            )
+        }
+        return AnyView(content)
     }
 }
 

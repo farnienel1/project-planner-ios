@@ -1015,7 +1015,7 @@ struct ProjectDetailView: View {
     @ViewBuilder
     private func projectDetailBookingEditSheet(for target: DailyOverviewEditTarget) -> some View {
         switch target {
-        case .operative(let booking, let project, let personName):
+        case .operative(let booking, _, let personName):
             OperativeCustomHoursSheet(
                 policy: payrollTimePolicy,
                 title: "Edit booking",
@@ -1037,7 +1037,7 @@ struct ProjectDetailView: View {
                 },
                 onCancel: { bookingEditTarget = nil }
             )
-        case .manager(let booking, let locationTitle, let personName):
+        case .manager(let booking, _, let personName):
             OperativeCustomHoursSheet(
                 policy: payrollTimePolicy,
                 title: "Edit booking",

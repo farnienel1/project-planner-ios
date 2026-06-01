@@ -414,3 +414,43 @@ struct MaterialsOrderHistorySheet: View {
         .presentationDetents([.medium, .large])
     }
 }
+
+struct MaterialsQuantityBadge: View {
+    let quantity: Int
+    let unit: MaterialUnit
+
+    var body: some View {
+        Text("\(quantity) \(unit.quantityLabel(for: quantity))")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(MaterialsOrderingTheme.ink)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(MaterialsOrderingTheme.primaryTint)
+            .clipShape(Capsule())
+    }
+}
+
+struct MaterialsStatusPill: View {
+    let status: MaterialWorkflowStatus
+
+    var body: some View {
+        Text(status.displayLabel.uppercased())
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(palette.foreground)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(palette.background)
+            .clipShape(Capsule())
+    }
+
+    private var palette: (foreground: Color, background: Color) {
+        switch status {
+        case .draft:
+            return (MaterialsOrderingTheme.muted, MaterialsOrderingTheme.pageBackground)
+        case .sentForQuote:
+            return (.white, MaterialsOrderingTheme.primary)
+        case .ordered:
+            return (.white, MaterialsOrderingTheme.success)
+        }
+    }
+}

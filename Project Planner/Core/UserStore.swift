@@ -1510,8 +1510,13 @@ class UserStore: ObservableObject {
                 guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
                 var updatedUser = organizationUsers[index]
                 guard updatedUser.permissions.operativeMode || updatedUser.role == .operative || updatedUser.permissions.manager || updatedUser.role == .manager else { return false }
+                let normalizedManagerId = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let normalizedManagerId, !normalizedManagerId.isEmpty, normalizedManagerId == updatedUser.id {
+                    errorMessage = "A manager cannot be their own line manager."
+                    return false
+                }
 
-                updatedUser.assignedManagerUserId = assignedManagerUserId
+                updatedUser.assignedManagerUserId = normalizedManagerId?.isEmpty == false ? normalizedManagerId : nil
                 updatedUser.dayRate = dayRate
 
                 do {

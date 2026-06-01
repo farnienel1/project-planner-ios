@@ -148,7 +148,8 @@ struct CreateProjectView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        AnyView(
+            NavigationStack {
             ZStack {
                 ProjectWorksRevampColors.canvas.ignoresSafeArea()
                 ScrollView {
@@ -253,7 +254,8 @@ struct CreateProjectView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
             }
-        }
+            }
+        )
     }
 
     private var heroCard: some View {
