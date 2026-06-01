@@ -142,6 +142,22 @@ class LocalNotificationService {
         }
     }
 
+    /// Removes every pending material cut-off request (current + legacy identifiers).
+    func removeAllMaterialCutOffReminders() async {
+        let center = UNUserNotificationCenter.current()
+        let pending = await center.pendingNotificationRequests()
+        let ids = Set(
+            materialCutOffWeekdayIdentifiers()
+            + pending.map(\.identifier).filter { id in
+                let lower = id.lowercased()
+                return id.hasPrefix(Self.dailyMaterialCutoffIdentifierPrefix)
+                    || (lower.contains("material") && (lower.contains("cut") || lower.contains("order")))
+            }
+        )
+        guard !ids.isEmpty else { return }
+        center.removePendingNotificationRequests(withIdentifiers: Array(ids))
+    }
+
     func scheduleDailyMaterialCutOffReminder(
         hour: Int = 16,
         minute: Int = 0,
@@ -155,7 +171,7 @@ class LocalNotificationService {
         }
 
         let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: materialCutOffWeekdayIdentifiers())
+        await removeAllMaterialCutOffReminders()
 
         let content = UNMutableNotificationContent()
         content.title = "Material order cut off"
@@ -184,8 +200,7 @@ class LocalNotificationService {
     }
 
     func removeDailyMaterialCutOffReminder() {
-        UNUserNotificationCenter.current()
-            .removePendingNotificationRequests(withIdentifiers: materialCutOffWeekdayIdentifiers())
+        Task { await removeAllMaterialCutOffReminders() }
     }
 
     private func materialReminderWeekdays(includeSaturday: Bool, includeSunday: Bool) -> [Int] {

@@ -49,6 +49,7 @@ struct MaterialItem: Identifiable, Codable, Hashable {
     var productCode: String?
     var size: String?
     var length: String?
+    var lengthUnit: MaterialLengthUnit?
     var category: String?
     var websiteURL: String?
     var notes: String?
@@ -74,6 +75,7 @@ struct MaterialItem: Identifiable, Codable, Hashable {
         productCode: String? = nil,
         size: String? = nil,
         length: String? = nil,
+        lengthUnit: MaterialLengthUnit? = nil,
         sizeOrLength: String? = nil,
         category: String? = nil,
         websiteURL: String? = nil,
@@ -99,6 +101,7 @@ struct MaterialItem: Identifiable, Codable, Hashable {
         self.productCode = productCode
         self.size = size
         self.length = length ?? sizeOrLength
+        self.lengthUnit = lengthUnit
         self.category = category
         self.websiteURL = websiteURL
         self.notes = notes
@@ -110,7 +113,7 @@ struct MaterialItem: Identifiable, Codable, Hashable {
         let brandPart = brand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let codePart = productCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let sizePart = size?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let lengthPart = length?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let lengthPart = formattedLengthSpecification
         let categoryPart = category?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var parts: [String] = []
         if !brandPart.isEmpty { parts.append(brandPart) }
@@ -128,6 +131,24 @@ struct MaterialItem: Identifiable, Codable, Hashable {
             return "Custom item · no catalogue match"
         }
         return ""
+    }
+
+    /// Combined length value + unit for lists, emails, and catalogue hints (e.g. `3 m`, `150 mm`).
+    var formattedLengthSpecification: String {
+        MaterialLengthSpecification.format(value: length, unit: lengthUnit)
+    }
+
+    var sendLineSnapshot: MaterialSendLineSnapshot {
+        let lengthDisplay = formattedLengthSpecification
+        return MaterialSendLineSnapshot(
+            materialId: id,
+            name: material,
+            quantity: quantity,
+            unit: unit,
+            brand: brand,
+            productCode: productCode,
+            lengthDisplay: lengthDisplay.isEmpty ? nil : lengthDisplay
+        )
     }
 }
 
@@ -157,6 +178,7 @@ struct MaterialCatalogItem: Identifiable, Codable, Hashable {
     var defaultUnit: MaterialUnit
     var size: String?
     var length: String?
+    var lengthUnit: MaterialLengthUnit?
     var category: String?
     var createdAt: Date
     var createdByUserId: String
@@ -170,6 +192,7 @@ struct MaterialCatalogItem: Identifiable, Codable, Hashable {
         defaultUnit: MaterialUnit,
         size: String? = nil,
         length: String? = nil,
+        lengthUnit: MaterialLengthUnit? = nil,
         sizeOrLength: String? = nil,
         category: String? = nil,
         createdAt: Date = Date(),
@@ -183,6 +206,7 @@ struct MaterialCatalogItem: Identifiable, Codable, Hashable {
         self.defaultUnit = defaultUnit
         self.size = size
         self.length = length ?? sizeOrLength
+        self.lengthUnit = lengthUnit
         self.category = category
         self.createdAt = createdAt
         self.createdByUserId = createdByUserId
@@ -191,13 +215,17 @@ struct MaterialCatalogItem: Identifiable, Codable, Hashable {
 
     var sizeOrLengthLabel: String? {
         let sizeTrimmed = size?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let lengthTrimmed = length?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let lengthTrimmed = formattedLengthSpecification
         if !sizeTrimmed.isEmpty && !lengthTrimmed.isEmpty {
             return "Size: \(sizeTrimmed) · Length: \(lengthTrimmed)"
         }
         if !sizeTrimmed.isEmpty { return "Size: \(sizeTrimmed)" }
         if !lengthTrimmed.isEmpty { return "Length: \(lengthTrimmed)" }
         return nil
+    }
+
+    var formattedLengthSpecification: String {
+        MaterialLengthSpecification.format(value: length, unit: lengthUnit)
     }
 }
 
@@ -217,16 +245,52 @@ extension MaterialCatalogItem {
     }
 }
 
-// MARK: - Material Unit
+// MARK: - Material length unit (metres / millimetres)
+
+enum MaterialLengthUnit: String, CaseIterable, Codable {
+    case metres = "M"
+    case millimetres = "MM"
+
+    var displayName: String { rawValue }
+
+    var emailSuffix: String {
+        switch self {
+        case .metres: return "m"
+        case .millimetres: return "mm"
+        }
+    }
+}
+
+enum MaterialLengthSpecification {
+    static func format(value: String?, unit: MaterialLengthUnit?) -> String {
+        let trimmedValue = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedValue.isEmpty else { return "" }
+        guard let unit else { return trimmedValue }
+        return "\(trimmedValue) \(unit.emailSuffix)"
+    }
+
+    static func parseUnit(from raw: String?) -> MaterialLengthUnit? {
+        switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
+        case "M", "METRE", "METRES", "METER", "METERS": return .metres
+        case "MM", "MILLIMETRE", "MILLIMETRES", "MILLIMETER", "MILLIMETERS": return .millimetres
+        default: return nil
+        }
+    }
+}
+
+// MARK: - Material quantity type (was “Unit” in the UI)
 
 enum MaterialUnit: String, CaseIterable, Codable {
     case number = "Number"
     case box = "Box"
     case length = "Length"
-    
-    var displayName: String {
-        rawValue
-    }
+    case drum = "Drum"
+    case pallet = "Pallet"
+
+    var displayName: String { rawValue }
+
+    /// Label for quantity pickers (renamed from Unit → Type in the materials UI).
+    static let typePickerTitle = "Type"
 
     func quantityLabel(for quantity: Int) -> String {
         switch self {
@@ -236,7 +300,94 @@ enum MaterialUnit: String, CaseIterable, Codable {
             return quantity == 1 ? "Box" : "Boxes"
         case .length:
             return quantity == 1 ? "Length" : "Lengths"
+        case .drum:
+            return quantity == 1 ? "Drum" : "Drums"
+        case .pallet:
+            return quantity == 1 ? "Pallet" : "Pallets"
         }
+    }
+}
+
+// MARK: - Material send history (quote / order batches)
+
+struct MaterialSendRecipientSnapshot: Codable, Hashable {
+    var name: String
+    var email: String
+    var wholesalerName: String?
+}
+
+struct MaterialSendLineSnapshot: Codable, Hashable {
+    var materialId: UUID
+    var name: String
+    var quantity: Int
+    var unit: MaterialUnit
+    var brand: String?
+    var productCode: String?
+    var lengthDisplay: String?
+}
+
+struct MaterialSendRecord: Identifiable, Codable, Hashable {
+    let id: UUID
+    var projectId: UUID
+    var requestType: MaterialOrderRequest.RequestType
+    var sentAt: Date
+    /// Calendar day the materials were scheduled for (matches materials list day strip).
+    var materialsDate: Date?
+    var sentBy: String
+    var recipients: [MaterialSendRecipientSnapshot]
+    var lines: [MaterialSendLineSnapshot]
+
+    init(
+        id: UUID = UUID(),
+        projectId: UUID,
+        requestType: MaterialOrderRequest.RequestType,
+        sentAt: Date = Date(),
+        materialsDate: Date? = nil,
+        sentBy: String,
+        recipients: [MaterialSendRecipientSnapshot],
+        lines: [MaterialSendLineSnapshot]
+    ) {
+        self.id = id
+        self.projectId = projectId
+        self.requestType = requestType
+        self.sentAt = sentAt
+        self.materialsDate = materialsDate
+        self.sentBy = sentBy
+        self.recipients = recipients
+        self.lines = lines
+    }
+
+    /// Day used for per-day history (materials delivery day, not necessarily send timestamp).
+    func historyDay(calendar: Calendar = .current) -> Date {
+        let raw = materialsDate ?? sentAt
+        return calendar.startOfDay(for: raw)
+    }
+
+    /// Whether this send is tied to a wholesaler (name on recipient or contact email match).
+    func involves(wholesaler: Wholesaler) -> Bool {
+        let wholesalerEmails = Set(
+            wholesaler.contacts
+                .map { $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+        return recipients.contains { recipient in
+            if let name = recipient.wholesalerName?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !name.isEmpty,
+               name.caseInsensitiveCompare(wholesaler.name) == .orderedSame {
+                return true
+            }
+            let email = recipient.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            return wholesalerEmails.contains(email)
+        }
+    }
+
+    var requestTypeLabel: String {
+        requestType == .quote ? "Quote" : "Order"
+    }
+
+    var itemCountLabel: String {
+        let n = lines.count
+        return n == 1 ? "1 item" : "\(n) items"
     }
 }
 
@@ -246,6 +397,9 @@ struct Wholesaler: Identifiable, Codable, Hashable {
     let id: UUID
     var name: String
     var address: String?
+    var trade: String?
+    var accountNumber: String?
+    var primaryContactId: UUID?
     var contacts: [WholesalerContact]
     var createdAt: Date
     var updatedAt: Date
@@ -254,6 +408,9 @@ struct Wholesaler: Identifiable, Codable, Hashable {
         id: UUID = UUID(),
         name: String,
         address: String? = nil,
+        trade: String? = nil,
+        accountNumber: String? = nil,
+        primaryContactId: UUID? = nil,
         contacts: [WholesalerContact] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -261,9 +418,47 @@ struct Wholesaler: Identifiable, Codable, Hashable {
         self.id = id
         self.name = name
         self.address = address
+        self.trade = trade
+        self.accountNumber = accountNumber
+        self.primaryContactId = primaryContactId
         self.contacts = contacts
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    var primaryContact: WholesalerContact? {
+        if let primaryContactId,
+           let match = contacts.first(where: { $0.id == primaryContactId }) {
+            return match
+        }
+        return contacts.first
+    }
+
+    var cityFromAddress: String? {
+        WholesalerFormatting.city(from: address)
+    }
+}
+
+enum WholesalerFormatting {
+    static func city(from address: String?) -> String? {
+        let trimmed = address?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        let parts = trimmed.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if parts.count >= 2, let city = parts.dropLast().last, !city.isEmpty {
+            return city
+        }
+        if let first = parts.first { return String(first) }
+        return nil
+    }
+
+    static func monogram(for name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "?" }
+        let words = trimmed.split(separator: " ")
+        if words.count >= 2 {
+            return "\(words[0].prefix(1))\(words[1].prefix(1))".uppercased()
+        }
+        return String(trimmed.prefix(2)).uppercased()
     }
 }
 
@@ -273,17 +468,20 @@ struct WholesalerContact: Identifiable, Codable, Hashable {
     let id: UUID
     var name: String
     var email: String
+    var isPrimary: Bool
     var createdAt: Date
     
     init(
         id: UUID = UUID(),
         name: String,
         email: String,
+        isPrimary: Bool = false,
         createdAt: Date = Date()
     ) {
         self.id = id
         self.name = name
         self.email = email
+        self.isPrimary = isPrimary
         self.createdAt = createdAt
     }
 }
@@ -291,6 +489,7 @@ struct WholesalerContact: Identifiable, Codable, Hashable {
 // MARK: - Material Order/Quote Request
 
 struct MaterialOrderRequest: Codable {
+    var projectId: UUID
     var projectNumber: String
     var projectName: String
     var siteAddress: String
@@ -299,6 +498,11 @@ struct MaterialOrderRequest: Codable {
     var sentBy: String
     var sentAt: Date
     var recipientContacts: [WholesalerContact]
+    var senderName: String
+    var senderEmail: String
+    var senderPhone: String?
+    var senderCompany: String
+    var companyLogoURL: String?
     
     enum RequestType: String, Codable {
         case quote = "Quote"
@@ -306,6 +510,7 @@ struct MaterialOrderRequest: Codable {
     }
     
     init(
+        projectId: UUID,
         projectNumber: String,
         projectName: String,
         siteAddress: String,
@@ -313,8 +518,14 @@ struct MaterialOrderRequest: Codable {
         requestType: RequestType,
         sentBy: String,
         sentAt: Date = Date(),
-        recipientContacts: [WholesalerContact]
+        recipientContacts: [WholesalerContact],
+        senderName: String,
+        senderEmail: String,
+        senderPhone: String? = nil,
+        senderCompany: String = "",
+        companyLogoURL: String? = nil
     ) {
+        self.projectId = projectId
         self.projectNumber = projectNumber
         self.projectName = projectName
         self.siteAddress = siteAddress
@@ -323,6 +534,11 @@ struct MaterialOrderRequest: Codable {
         self.sentBy = sentBy
         self.sentAt = sentAt
         self.recipientContacts = recipientContacts
+        self.senderName = senderName
+        self.senderEmail = senderEmail
+        self.senderPhone = senderPhone
+        self.senderCompany = senderCompany
+        self.companyLogoURL = companyLogoURL
     }
 }
 

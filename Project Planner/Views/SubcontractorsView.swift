@@ -5,12 +5,27 @@ struct SubcontractorsView: View {
     @EnvironmentObject var userStore: UserStore
     @State private var showingAdd = false
     @State private var searchText = ""
+    @State private var selectedTradeFilter: String?
+
+    private var availableTradeFilters: [String] {
+        Array(
+            Set(
+                subcontractorStore.subcontractors
+                    .map { $0.subcontractorType.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            )
+        )
+        .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 summaryHero
                 searchBar
+                if !availableTradeFilters.isEmpty {
+                    tradeFilterRow
+                }
                 if filteredSubcontractors.isEmpty {
                     emptyState
                 } else {
@@ -67,11 +82,47 @@ struct SubcontractorsView: View {
     private var filteredSubcontractors: [Subcontractor] {
         subcontractorStore.subcontractors
             .filter { sub in
+                if let selectedTradeFilter,
+                   sub.subcontractorType.caseInsensitiveCompare(selectedTradeFilter) != .orderedSame {
+                    return false
+                }
                 let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !q.isEmpty else { return true }
                 return sub.name.localizedCaseInsensitiveContains(q) || sub.subcontractorType.localizedCaseInsensitiveContains(q)
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var tradeFilterRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                tradeFilterChip(label: "All", isSelected: selectedTradeFilter == nil) {
+                    selectedTradeFilter = nil
+                }
+                ForEach(availableTradeFilters, id: \.self) { trade in
+                    tradeFilterChip(label: trade, isSelected: selectedTradeFilter == trade) {
+                        selectedTradeFilter = trade
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func tradeFilterChip(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isSelected ? .white : Color(red: 0.278, green: 0.333, blue: 0.412))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(isSelected ? (label == "All" ? Color(red: 0.325, green: 0.29, blue: 0.72) : tradeChipColors(for: label).foreground) : Color.white)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule().stroke(Color(.systemGray5), lineWidth: isSelected ? 0 : 0.8)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     private var summaryHero: some View {
@@ -141,7 +192,7 @@ struct SubcontractorsView: View {
                     .frame(width: 40, height: 40)
                     .background(
                         LinearGradient(
-                            colors: [Color(red: 0.325, green: 0.29, blue: 0.72), Color(red: 0.50, green: 0.47, blue: 0.87)],
+                            colors: tradeChipColors(for: subcontractor.subcontractorType).gradient,
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -155,10 +206,10 @@ struct SubcontractorsView: View {
                     HStack(spacing: 6) {
                         Text(subcontractor.subcontractorType)
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Color(red: 0.52, green: 0.31, blue: 0.04))
+                            .foregroundStyle(tradeChipColors(for: subcontractor.subcontractorType).foreground)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
-                            .background(Color(red: 0.98, green: 0.93, blue: 0.85))
+                            .background(tradeChipColors(for: subcontractor.subcontractorType).background)
                             .clipShape(Capsule())
                         Text("\(subcontractor.contacts.count) Operative\(subcontractor.contacts.count == 1 ? "" : "s")")
                             .font(.system(size: 10))
@@ -184,6 +235,12 @@ struct SubcontractorsView: View {
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
+                            if !contact.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text(contact.email)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                            }
                             Spacer(minLength: 0)
                         }
                     }
@@ -223,6 +280,57 @@ struct SubcontractorsView: View {
         let parts = name.split(separator: " ").prefix(2)
         let result = parts.compactMap { $0.first }.map { String($0) }.joined()
         return result.isEmpty ? "SC" : result
+    }
+
+    private func tradeChipColors(for trade: String) -> (foreground: Color, background: Color, gradient: [Color]) {
+        let key = trade.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch key {
+        case "electrical", "electrician":
+            return (
+                Color(red: 0.09, green: 0.37, blue: 0.65),
+                Color(red: 0.90, green: 0.94, blue: 0.99),
+                [Color(red: 0.09, green: 0.37, blue: 0.65), Color(red: 0.15, green: 0.55, blue: 0.92)]
+            )
+        case "plumbing", "plumbing & hvac", "hvac":
+            return (
+                Color(red: 0.06, green: 0.43, blue: 0.34),
+                Color(red: 0.88, green: 0.97, blue: 0.93),
+                [Color(red: 0.06, green: 0.43, blue: 0.34), Color(red: 0.12, green: 0.62, blue: 0.48)]
+            )
+        case "carpentry", "carpenter":
+            return (
+                Color(red: 0.55, green: 0.32, blue: 0.08),
+                Color(red: 0.99, green: 0.93, blue: 0.85),
+                [Color(red: 0.71, green: 0.33, blue: 0.04), Color(red: 0.85, green: 0.47, blue: 0.10)]
+            )
+        case "drylining", "dryliner":
+            return (
+                Color(red: 0.45, green: 0.28, blue: 0.58),
+                Color(red: 0.95, green: 0.91, blue: 0.98),
+                [Color(red: 0.45, green: 0.28, blue: 0.58), Color(red: 0.58, green: 0.38, blue: 0.72)]
+            )
+        case "bricklaying", "bricklayer":
+            return (
+                Color(red: 0.60, green: 0.21, blue: 0.34),
+                Color(red: 0.99, green: 0.91, blue: 0.94),
+                [Color(red: 0.60, green: 0.21, blue: 0.34), Color(red: 0.78, green: 0.30, blue: 0.42)]
+            )
+        case "mechanical", "ac engineer", "ventilation":
+            return (
+                Color(red: 0.05, green: 0.52, blue: 0.55),
+                Color(red: 0.88, green: 0.97, blue: 0.98),
+                [Color(red: 0.05, green: 0.52, blue: 0.55), Color(red: 0.10, green: 0.68, blue: 0.72)]
+            )
+        default:
+            let hash = abs(key.hashValue)
+            let palette: [(Color, Color, [Color])] = [
+                (Color(red: 0.33, green: 0.29, blue: 0.72), Color(red: 0.92, green: 0.91, blue: 0.98), [Color(red: 0.33, green: 0.29, blue: 0.72), Color(red: 0.50, green: 0.47, blue: 0.87)]),
+                (Color(red: 0.09, green: 0.37, blue: 0.65), Color(red: 0.90, green: 0.94, blue: 0.99), [Color(red: 0.09, green: 0.37, blue: 0.65), Color(red: 0.20, green: 0.50, blue: 0.80)]),
+                (Color(red: 0.55, green: 0.32, blue: 0.08), Color(red: 0.99, green: 0.93, blue: 0.85), [Color(red: 0.71, green: 0.33, blue: 0.04), Color(red: 0.85, green: 0.47, blue: 0.10)])
+            ]
+            let pick = palette[hash % palette.count]
+            return (pick.0, pick.1, pick.2)
+        }
     }
 }
 

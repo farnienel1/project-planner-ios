@@ -217,13 +217,35 @@ struct SendToWholesalerView: View {
         }
         
         let request = MaterialOrderRequest(
+            projectId: project.id,
             projectNumber: project.jobNumber,
             projectName: project.siteName,
             siteAddress: project.siteAddress,
             materials: selectedMaterialItems,
             requestType: requestType,
             sentBy: senderSignature,
-            recipientContacts: selectedContactObjects
+            recipientContacts: selectedContactObjects,
+            senderName: userName,
+            senderEmail: userEmail,
+            senderPhone: userPhone?.isEmpty == false ? userPhone : nil,
+            senderCompany: orgName,
+            companyLogoURL: firebaseBackend.currentOrganization?.companyLogoURL
+        )
+        let recipientSnapshots = selectedContactObjects.map { contact in
+            let wholesalerName = wholesalers.first { $0.contacts.contains(where: { $0.id == contact.id }) }?.name
+            return MaterialSendRecipientSnapshot(name: contact.name, email: contact.email, wholesalerName: wholesalerName)
+        }
+        let calendar = Calendar.current
+        let materialsDay = selectedMaterialItems
+            .map { calendar.startOfDay(for: $0.date) }
+            .min() ?? calendar.startOfDay(for: Date())
+        let sendRecord = MaterialSendRecord(
+            projectId: project.id,
+            requestType: requestType,
+            materialsDate: materialsDay,
+            sentBy: userName,
+            recipients: recipientSnapshots,
+            lines: selectedMaterialItems.map(\.sendLineSnapshot)
         )
         
         Task {
@@ -236,6 +258,15 @@ struct SendToWholesalerView: View {
             
             do {
                 try await firebaseBackend.sendMaterialRequest(request, organizationId: organizationId)
+                do {
+                    try await firebaseBackend.saveMaterialSendRecord(sendRecord, organizationId: organizationId)
+                } catch {
+                    print("🔥🔥🔥 DEBUG: saveMaterialSendRecord failed (email was sent): \(error.localizedDescription)")
+                }
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("materialSendHistoryDidChange"),
+                    object: nil
+                )
                 await MainActor.run {
                     isSending = false
                     isPresented = false

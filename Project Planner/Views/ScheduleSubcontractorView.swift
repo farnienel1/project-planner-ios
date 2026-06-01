@@ -441,11 +441,24 @@ struct ScheduleSubcontractorView: View {
             selectedSubcontractorId = nil
             useGeneralAttendance = true
             selectedContactIds.removeAll()
+            selectedDates.removeAll()
+            dateTimeSlots.removeAll()
+            quickSelectDays = nil
         } else {
             selectedSubcontractorId = id
             useGeneralAttendance = true
             selectedContactIds.removeAll()
+            defaultSelectTodayOnCalendar()
         }
+    }
+
+    private func defaultSelectTodayOnCalendar() {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        selectedDates = [today]
+        dateTimeSlots = [slotKey(for: today): .fullDay]
+        quickSelectDays = nil
+        currentMonth = today
     }
 
     private func initials(for name: String) -> String {
@@ -546,12 +559,14 @@ struct ScheduleSubcontractorView: View {
             for date in selectedDates {
                 let key = slotKey(for: date)
                 let slot = dateTimeSlots[key] ?? .fullDay
+                let contactIds: [UUID] = useGeneralAttendance ? [] : Array(selectedContactIds)
                 let booking = SubcontractorBooking(
                     subcontractorId: selectedSubcontractorId,
                     projectId: project.id,
                     date: date,
                     timeSlot: slot,
-                    bookedBy: "Project Planner"
+                    bookedBy: "Project Planner",
+                    bookedContactIds: contactIds
                 )
                 await subcontractorStore.saveBooking(booking)
             }

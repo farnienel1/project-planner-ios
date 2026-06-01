@@ -574,90 +574,96 @@ private struct MyTasksRedesignTaskCard: View {
     @EnvironmentObject var notificationService: NotificationService
 
     @State private var showingTaskDetail = false
+    @State private var showingCarryOut = false
 
     private var resolvedTask: ProjectTask {
         taskStore.tasks.first(where: { $0.id == task.id }) ?? task
     }
 
+    private var canCarryOut: Bool {
+        guard !resolvedTask.isCompleted else { return false }
+        if userStore.hasAdminAccess() { return true }
+        return resolvedTask.isAssignedToUser(
+            userEmail: userStore.currentUser?.email,
+            operatives: operativeStore.allOperatives,
+            managers: operativeStore.allManagers,
+            isOperativeMode: userStore.isOperativeMode()
+        )
+    }
+
     var body: some View {
-        Button {
-            showingTaskDetail = true
-        } label: {
-            HStack(alignment: .top, spacing: 12) {
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(accentStripColor)
-                    .frame(width: 4)
-                    .padding(.vertical, 2)
+        HStack(alignment: .top, spacing: 12) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(accentStripColor)
+                .frame(width: 4)
+                .padding(.vertical, 2)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .top, spacing: 8) {
-                        Text(resolvedTask.title)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(MyTasksScreenPalette.ink)
-                            .multilineTextAlignment(.leading)
-                        Spacer(minLength: 0)
-                        statusPill
-                    }
+            VStack(alignment: .leading, spacing: 8) {
+                Button { showingTaskDetail = true } label: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .top, spacing: 8) {
+                            Text(resolvedTask.title)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(MyTasksScreenPalette.ink)
+                                .multilineTextAlignment(.leading)
+                            Spacer(minLength: 0)
+                            statusPill
+                        }
 
-                    HStack(spacing: 5) {
-                        Image(systemName: projectLineIcon)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255))
-                        Text(projectLineText)
-                            .font(.system(size: 11))
-                            .foregroundStyle(MyTasksScreenPalette.muted)
-                    }
-
-                    HStack {
                         HStack(spacing: 5) {
-                            Image(systemName: "checklist")
+                            Image(systemName: projectLineIcon)
                                 .font(.system(size: 12))
                                 .foregroundStyle(Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255))
-                            Text(checklistSummary)
+                            Text(projectLineText)
                                 .font(.system(size: 11))
                                 .foregroundStyle(MyTasksScreenPalette.muted)
                         }
-                        Spacer()
-                        HStack(spacing: 5) {
-                            Image(systemName: "calendar")
-                                .font(.system(size: 12))
-                                .foregroundStyle(dueColor)
-                            Text(dueText)
-                                .font(.system(size: 11, weight: dueWeight))
-                                .foregroundStyle(dueColor)
-                        }
-                    }
 
-                    if checklistProgress > 0 {
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                Capsule()
-                                    .fill(MyTasksScreenPalette.border)
-                                    .frame(height: 4)
-                                Capsule()
-                                    .fill(progressBarFill)
-                                    .frame(width: geo.size.width * checklistProgress, height: 4)
+                        HStack {
+                            Spacer()
+                            HStack(spacing: 5) {
+                                Image(systemName: "calendar")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(dueColor)
+                                Text(dueText)
+                                    .font(.system(size: 11, weight: dueWeight))
+                                    .foregroundStyle(dueColor)
                             }
                         }
-                        .frame(height: 4)
-                    }
-
-                    HStack {
-                        assigneeInitialsRow
-                        Spacer()
-                        priorityPill
                     }
                 }
+                .buttonStyle(.plain)
+
+                checklistRow
+
+                if checklistProgress > 0 {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule()
+                                .fill(MyTasksScreenPalette.border)
+                                .frame(height: 4)
+                            Capsule()
+                                .fill(progressBarFill)
+                                .frame(width: geo.size.width * checklistProgress, height: 4)
+                        }
+                    }
+                    .frame(height: 4)
+                }
+
+                HStack {
+                    assigneeInitialsRow
+                    Spacer()
+                    priorityPill
+                }
             }
-            .padding(14)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(MyTasksScreenPalette.border, lineWidth: 0.5)
-            )
         }
-        .buttonStyle(.plain)
+        .padding(14)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(MyTasksScreenPalette.border, lineWidth: 0.5)
+        )
         .sheet(isPresented: $showingTaskDetail) {
             CompletedTaskDetailView(task: resolvedTask)
                 .environmentObject(taskStore)
@@ -666,6 +672,67 @@ private struct MyTasksRedesignTaskCard: View {
                 .environmentObject(projectStore)
                 .environmentObject(firebaseBackend)
                 .environmentObject(notificationService)
+        }
+        .sheet(isPresented: $showingCarryOut) {
+            TaskCompletionPopupView(
+                task: resolvedTask,
+                isPresented: $showingCarryOut,
+                onComplete: { completedBy, images, files, notes in
+                    Task { await applyTaskCompletion(completedBy: completedBy, images: images, files: files, notes: notes) }
+                }
+            )
+            .environmentObject(firebaseBackend)
+            .environmentObject(userStore)
+            .environmentObject(taskStore)
+            .environmentObject(projectStore)
+        }
+    }
+
+    private func applyTaskCompletion(completedBy: String, images: [String], files: [String], notes: String?) async {
+        var updatedTask = resolvedTask
+        updatedTask.completedItemIds = Array(Set(updatedTask.effectiveItems.map(\.id)))
+        updatedTask.status = .completed
+        updatedTask.completedBy = completedBy
+        updatedTask.completedAt = Date()
+        updatedTask.completionImages = images
+        updatedTask.completionFiles = files
+        updatedTask.completionNotes = notes
+        updatedTask.updatedAt = Date()
+        await taskStore.updateTask(updatedTask)
+        if let creatorId = userStore.currentUser?.id {
+            await notificationService.notifyTaskCompleted(
+                taskId: updatedTask.id,
+                taskTitle: updatedTask.title,
+                completedBy: completedBy,
+                assignedToUserId: creatorId
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var checklistRow: some View {
+        let label = HStack(spacing: 5) {
+            Image(systemName: "checklist")
+                .font(.system(size: 12))
+                .foregroundStyle(canCarryOut ? MyTasksScreenPalette.blue : Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255))
+            Text(checklistSummary)
+                .font(.system(size: 11, weight: canCarryOut ? .semibold : .regular))
+                .foregroundStyle(canCarryOut ? MyTasksScreenPalette.blue : MyTasksScreenPalette.muted)
+            Spacer()
+            if canCarryOut {
+                Text("Carry out")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(MyTasksScreenPalette.blue)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(MyTasksScreenPalette.blue)
+            }
+        }
+        if canCarryOut {
+            Button { showingCarryOut = true } label: { label }
+                .buttonStyle(.plain)
+        } else {
+            label
         }
     }
 

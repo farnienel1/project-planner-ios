@@ -386,8 +386,8 @@ struct MaterialCatalogueRootView: View {
                             .background(Color(red: 0.949, green: 0.953, blue: 0.961))
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
-                    if let length = item.length?.trimmingCharacters(in: .whitespacesAndNewlines), !length.isEmpty {
-                        Text("Length: \(length)")
+                    if !item.formattedLengthSpecification.isEmpty {
+                        Text("Length: \(item.formattedLengthSpecification)")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(MaterialsOrderingTheme.muted)
                             .padding(.horizontal, 6)
@@ -451,6 +451,7 @@ private struct MaterialCatalogueEditorSheet: View {
     @State private var unit: MaterialUnit = .number
     @State private var sizeValue = ""
     @State private var lengthValue = ""
+    @State private var lengthUnit: MaterialLengthUnit?
     @State private var category = ""
     @State private var showingDuplicateAlert = false
     @State private var duplicateMatch: MaterialCatalogItem?
@@ -491,7 +492,7 @@ private struct MaterialCatalogueEditorSheet: View {
                             category = selected
                         }
                     }
-                    Text("DEFAULT QUANTITY UNIT")
+                    Text("DEFAULT TYPE")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(MaterialsOrderingTheme.muted)
                     HStack(spacing: 6) {
@@ -517,7 +518,7 @@ private struct MaterialCatalogueEditorSheet: View {
                         }
                     }
                     textFieldRow(label: "Size", text: $sizeValue, required: false, placeholder: "Optional")
-                    textFieldRow(label: "Length", text: $lengthValue, required: false, placeholder: "Optional")
+                    MaterialsLengthInputRow(lengthValue: $lengthValue, lengthUnit: $lengthUnit)
                 }
                 .padding(16)
             }
@@ -543,6 +544,7 @@ private struct MaterialCatalogueEditorSheet: View {
                     unit = item.defaultUnit
                     sizeValue = item.size ?? ""
                     lengthValue = item.length ?? item.sizeOrLength ?? ""
+                    lengthUnit = item.lengthUnit
                     category = item.category ?? "Other"
                 }
             }
@@ -573,8 +575,10 @@ private struct MaterialCatalogueEditorSheet: View {
     private func unitHint(_ unit: MaterialUnit) -> String {
         switch unit {
         case .number: return "Each / piece"
-        case .length: return "3m / 6m"
+        case .length: return "Metres / runs"
         case .box: return "Pack of 100"
+        case .drum: return "Cable drum"
+        case .pallet: return "Pallet load"
         }
     }
 
@@ -604,6 +608,7 @@ private struct MaterialCatalogueEditorSheet: View {
             defaultUnit: unit,
             size: size.isEmpty ? nil : size,
             length: length.isEmpty ? nil : length,
+            lengthUnit: length.isEmpty ? nil : lengthUnit,
             category: cat.isEmpty ? "Other" : cat,
             createdAt: {
                 if case .edit(let existing) = mode { return existing.createdAt }
@@ -904,7 +909,7 @@ struct MaterialCatalogueBulkImportView: View {
         HStack(alignment: .top, spacing: 9) {
             Image(systemName: "info.circle.fill")
                 .foregroundStyle(MaterialsOrderingTheme.primary)
-            Text("Add many materials at once. Columns: Name, Category, Manufacturer/Brand, Product Code, Default Unit (Length, Box or Number), Size, Length. Duplicate checks use material name.")
+            Text("Add many materials at once. Columns: Name, Category, Manufacturer/Brand, Product Code, Default Type (Length, Drum, Box, Pallet or Number), Size, Length, Length Unit (M or MM). Duplicate checks use material name.")
                 .font(.system(size: 11))
                 .foregroundStyle(MaterialsOrderingTheme.primary)
         }

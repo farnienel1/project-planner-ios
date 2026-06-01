@@ -17,6 +17,7 @@ private struct MaterialAutocompleteSuggestion: Identifiable {
     let unit: MaterialUnit
     let size: String?
     let length: String?
+    let lengthUnit: MaterialLengthUnit?
     let category: String?
     let catalogueItem: MaterialCatalogItem?
 }
@@ -44,6 +45,7 @@ struct MaterialsAddWithCatalogueSheet: View {
     @State private var customProductCode = ""
     @State private var sizeValue = ""
     @State private var lengthValue = ""
+    @State private var lengthUnit: MaterialLengthUnit?
     @State private var customCategory = "Other"
     @State private var websiteURL = ""
     @State private var showingDuplicateAlert = false
@@ -96,6 +98,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                     unit: item.defaultUnit,
                     size: item.size,
                     length: item.length ?? item.sizeOrLength,
+                    lengthUnit: item.lengthUnit,
                     category: item.category,
                     catalogueItem: item
                 ))
@@ -122,6 +125,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                     unit: item.unit,
                     size: item.size,
                     length: item.length ?? item.sizeOrLength,
+                    lengthUnit: item.lengthUnit,
                     category: item.category,
                     catalogueItem: nil
                 ))
@@ -178,6 +182,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                     customProductCode = existing.productCode ?? ""
                     sizeValue = existing.size ?? ""
                     lengthValue = existing.length ?? existing.sizeOrLength ?? ""
+                    lengthUnit = existing.lengthUnit
                     let existingCategory = existing.category?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     customCategory = existingCategory.isEmpty ? "Other" : existingCategory
                     websiteURL = existing.websiteURL ?? ""
@@ -351,7 +356,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                             Text(highlighted(suggestion.name))
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(MaterialsOrderingTheme.ink)
-                            Text("\(suggestion.brand) · \(suggestion.productCode ?? "—") · \(suggestion.unit.rawValue)\(suggestion.size?.isEmpty == false ? " · Size: \(suggestion.size!)" : "")\(suggestion.length?.isEmpty == false ? " · Length: \(suggestion.length!)" : "")")
+                            Text(autocompleteSubtitle(for: suggestion))
                                 .font(.system(size: 10))
                                 .foregroundStyle(MaterialsOrderingTheme.muted)
                                 .lineLimit(1)
@@ -476,10 +481,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                 .padding(10)
                 .background(MaterialsOrderingTheme.cardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
-            TextField("Length (Optional)", text: $lengthValue)
-                .padding(10)
-                .background(MaterialsOrderingTheme.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+            MaterialsLengthInputRow(lengthValue: $lengthValue, lengthUnit: $lengthUnit)
             TextField("Product website URL (Optional)", text: $websiteURL)
                 .textInputAutocapitalization(.never)
                 .keyboardType(.URL)
@@ -490,34 +492,19 @@ struct MaterialsAddWithCatalogueSheet: View {
     }
 
     private var quantityUnitRow: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("QUANTITY")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(MaterialsOrderingTheme.muted)
-                TextField("1", value: $quantity, format: .number)
-                    .keyboardType(.numberPad)
-                    .font(.system(size: 14, weight: .medium))
-                    .padding(10)
-                    .background(MaterialsOrderingTheme.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 11))
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Text("UNIT")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(MaterialsOrderingTheme.muted)
-                Picker("Unit", selection: $unit) {
-                    ForEach(MaterialUnit.allCases, id: \.self) { u in
-                        Text(u.rawValue).tag(u)
-                    }
-                }
-                .pickerStyle(.menu)
-                .padding(10)
-                .frame(maxWidth: .infinity)
-                .background(MaterialsOrderingTheme.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 11))
-            }
-        }
+        MaterialsQuantityTypeRow(quantity: $quantity, unit: $unit)
+    }
+
+    private func autocompleteSubtitle(for suggestion: MaterialAutocompleteSuggestion) -> String {
+        let lengthSpec = MaterialLengthSpecification.format(value: suggestion.length, unit: suggestion.lengthUnit)
+        var parts = [
+            suggestion.brand,
+            suggestion.productCode ?? "—",
+            suggestion.unit.rawValue
+        ]
+        if let size = suggestion.size, !size.isEmpty { parts.append("Size: \(size)") }
+        if !lengthSpec.isEmpty { parts.append("Length: \(lengthSpec)") }
+        return parts.joined(separator: " · ")
     }
 
     private var dateRow: some View {
@@ -572,6 +559,7 @@ struct MaterialsAddWithCatalogueSheet: View {
         customProductCode = suggestion.productCode ?? ""
         sizeValue = suggestion.size ?? ""
         lengthValue = suggestion.length ?? ""
+        lengthUnit = suggestion.lengthUnit
         customCategory = suggestion.category ?? "Other"
         unit = suggestion.unit
         quantity = 1
@@ -584,6 +572,7 @@ struct MaterialsAddWithCatalogueSheet: View {
         let trimmedCustomCode = customProductCode.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSize = sizeValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedLength = lengthValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedLengthUnit: MaterialLengthUnit? = trimmedLength.isEmpty ? nil : lengthUnit
         let trimmedWebsiteURL = websiteURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let shouldOverrideMatched = selectedCatalogue != nil && editMatchedLineItemDetails
         if !force, existingMaterial == nil,
@@ -626,6 +615,9 @@ struct MaterialsAddWithCatalogueSheet: View {
             length: shouldOverrideMatched
                 ? (trimmedLength.isEmpty ? (selectedCatalogue?.length ?? selectedCatalogue?.sizeOrLength) : trimmedLength)
                 : ((selectedCatalogue?.length ?? selectedCatalogue?.sizeOrLength) ?? (trimmedLength.isEmpty ? nil : trimmedLength)),
+            lengthUnit: shouldOverrideMatched
+                ? resolvedLengthUnit ?? selectedCatalogue?.lengthUnit
+                : (selectedCatalogue?.lengthUnit ?? resolvedLengthUnit),
             category: resolvedCategory,
             websiteURL: trimmedWebsiteURL.isEmpty ? nil : trimmedWebsiteURL,
             notes: notes.isEmpty ? nil : notes
@@ -647,6 +639,9 @@ struct MaterialsAddWithCatalogueSheet: View {
         item.length = shouldOverrideMatched
             ? (trimmedLength.isEmpty ? (selectedCatalogue?.length ?? selectedCatalogue?.sizeOrLength) : trimmedLength)
             : ((selectedCatalogue?.length ?? selectedCatalogue?.sizeOrLength) ?? (trimmedLength.isEmpty ? nil : trimmedLength))
+        item.lengthUnit = shouldOverrideMatched
+            ? resolvedLengthUnit ?? selectedCatalogue?.lengthUnit
+            : (selectedCatalogue?.lengthUnit ?? resolvedLengthUnit)
         item.category = resolvedCategory
         item.websiteURL = trimmedWebsiteURL.isEmpty ? nil : trimmedWebsiteURL
         item.notes = notes.isEmpty ? nil : notes

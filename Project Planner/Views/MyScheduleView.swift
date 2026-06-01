@@ -1409,6 +1409,7 @@ struct ManagerScheduleContentView: View {
         let isSelected = calendar.isDate(date, inSameDayAs: selectedDate ?? .distantPast)
         let isMultiSelected = selectedDates.contains(calendar.startOfDay(for: date))
         let hasBooking = !managerScheduleStore.myBookings(on: date).isEmpty
+        let hasAnnualLeave = annualLeaveDisplayLabel(on: date) != nil
         return Button(action: { selectedDate = date }) {
             VStack(spacing: 4) {
                 Text(dayLabel(date))
@@ -1417,11 +1418,19 @@ struct ManagerScheduleContentView: View {
                 Text("\(calendar.component(.day, from: date))")
                     .font(.system(size: 22, weight: isSelected ? .bold : .regular))
                     .foregroundStyle(isSelected ? Color.white : ProjectWorksRevampColors.ink)
-                if hasBooking {
-                    Circle()
-                        .fill(isSelected ? Color.white : ProjectWorksRevampColors.blue)
-                        .frame(width: 6, height: 6)
+                HStack(spacing: 3) {
+                    if hasAnnualLeave {
+                        Circle()
+                            .fill(isSelected ? Color.white : Color.orange)
+                            .frame(width: 6, height: 6)
+                    }
+                    if hasBooking {
+                        Circle()
+                            .fill(isSelected ? Color.white.opacity(hasAnnualLeave ? 0.85 : 1) : ProjectWorksRevampColors.blue)
+                            .frame(width: 6, height: 6)
+                    }
                 }
+                .frame(height: 6)
             }
             .frame(width: 48, height: 64)
             .background(isSelected ? ProjectWorksRevampColors.blue : Color.white)

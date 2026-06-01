@@ -1671,10 +1671,12 @@ struct ProjectBookingCard: View {
         for b in subcontractorBookingsThisProjectDay {
             let mirror = b.payrollMirrorBooking()
             let sub = mirror.scheduleCoverageSubtitle(policy: p)
-            let baseName = subcontractorStore.subcontractors.first(where: { $0.id == b.subcontractorId })?.name ?? "Subcontractor"
+            let firm = subcontractorStore.subcontractors.first(where: { $0.id == b.subcontractorId })
+            let baseName = firm?.name ?? "Subcontractor"
             let row = ProjectDayPersonRow(
                 id: "sub-\(b.id.uuidString)",
-                name: "\(baseName) · Sub",
+                name: baseName,
+                bookedOperativeNames: b.bookedOperativeNames(subcontractor: firm),
                 subtitle: sub.text,
                 subtitleOvertime: sub.emphasizedOvertime,
                 pillText: mirror.scheduleCoveragePillHours(policy: p),
@@ -1764,6 +1766,14 @@ struct ProjectBookingCard: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                     .lineLimit(1)
+                if !row.bookedOperativeNames.isEmpty {
+                    ForEach(row.bookedOperativeNames, id: \.self) { opName in
+                        Text(opName)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .lineLimit(1)
+                    }
+                }
                 Text(row.subtitle)
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(row.subtitleOvertime ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen)
@@ -1839,6 +1849,7 @@ struct ProjectBookingCard: View {
 private struct ProjectDayPersonRow: Identifiable {
     let id: String
     let name: String
+    var bookedOperativeNames: [String] = []
     let subtitle: String
     let subtitleOvertime: Bool
     let pillText: String

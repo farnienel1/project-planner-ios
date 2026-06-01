@@ -78,6 +78,8 @@ struct SubcontractorBooking: Identifiable, Codable, Hashable {
     var isBreakRemoved: Bool
     var bookedBy: String
     var status: BookingStatus
+    /// Specific subcontractor contacts (operatives) on site; empty = firm-wide / general attendance.
+    var bookedContactIds: [UUID]
     var createdAt: Date
     var updatedAt: Date
     
@@ -92,6 +94,7 @@ struct SubcontractorBooking: Identifiable, Codable, Hashable {
         isBreakRemoved: Bool = false,
         bookedBy: String,
         status: BookingStatus = .confirmed,
+        bookedContactIds: [UUID] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -105,8 +108,18 @@ struct SubcontractorBooking: Identifiable, Codable, Hashable {
         self.isBreakRemoved = isBreakRemoved
         self.bookedBy = bookedBy
         self.status = status
+        self.bookedContactIds = bookedContactIds
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+}
+
+extension SubcontractorBooking {
+    func bookedOperativeNames(subcontractor: Subcontractor?) -> [String] {
+        guard let subcontractor, !bookedContactIds.isEmpty else { return [] }
+        return bookedContactIds.compactMap { id in
+            subcontractor.contacts.first(where: { $0.id == id })?.name
+        }
     }
 }
 

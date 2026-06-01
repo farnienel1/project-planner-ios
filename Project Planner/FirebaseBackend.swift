@@ -69,6 +69,8 @@ class FirebaseBackend: ObservableObject {
     @Published var currentOrganization: Organization?
     @Published var userRole: UserRole = .basic
     @Published var shouldShowSetupFlow = false
+    /// Set after the root shell has kicked off the first org-wide store load (prevents duplicate parallel reloads on launch).
+    @Published var hasBootstrappedOrgDataLoad = false
     var isNewOrganization = false
     
     /// Lazy so `FirebaseBackend` can be constructed before `application(_:didFinishLaunchingWithOptions:)` calls `FirebaseApp.configure()`.
@@ -262,6 +264,7 @@ class FirebaseBackend: ObservableObject {
                     self.currentOrganization = nil
                     self.userRole = .basic
                     self.shouldShowSetupFlow = false
+                    self.hasBootstrappedOrgDataLoad = false
                     self.isNewOrganization = false
                     self.clearLocalOrganizationCache()
                     NotificationCenter.default.post(name: .userDidSignOut, object: nil)
@@ -543,7 +546,8 @@ class FirebaseBackend: ObservableObject {
             weeklyReports: permissionsMap["weeklyReports"] as? Bool ?? false,
             dailyOverview: permissionsMap["dailyOverview"] as? Bool ?? true,
             subContractors: permissionsMap["subContractors"] as? Bool ?? false,
-            siteAudit: permissionsMap["siteAudit"] as? Bool ?? true
+            siteAudit: permissionsMap["siteAudit"] as? Bool ?? true,
+            wholesalersOrderHistory: permissionsMap["wholesalersOrderHistory"] as? Bool ?? true
         )
         let invitedBy = currentUser?.uid ?? ""
         let invitationId = UUID().uuidString
@@ -567,7 +571,8 @@ class FirebaseBackend: ObservableObject {
                 "weeklyReports": permissions.weeklyReports,
                 "dailyOverview": permissions.dailyOverview,
                 "subContractors": permissions.subContractors,
-                "siteAudit": permissions.siteAudit
+                "siteAudit": permissions.siteAudit,
+                "wholesalersOrderHistory": permissions.wholesalersOrderHistory
             ],
             "createdAt": Timestamp(date: Date()),
             "isUsed": false
@@ -3178,7 +3183,8 @@ class FirebaseBackend: ObservableObject {
             weeklyReports: data["weeklyReports"] as? Bool ?? false,
             dailyOverview: data["dailyOverview"] as? Bool ?? true,
             subContractors: data["subContractors"] as? Bool ?? false,
-            siteAudit: data["siteAudit"] as? Bool ?? true
+            siteAudit: data["siteAudit"] as? Bool ?? true,
+            wholesalersOrderHistory: data["wholesalersOrderHistory"] as? Bool ?? true
         )
         let policyAccepted = data["policyAccepted"] as? Bool ?? false
         let policyAcceptedAt = (data["policyAcceptedAt"] as? Timestamp)?.dateValue()
@@ -3591,6 +3597,7 @@ class FirebaseBackend: ObservableObject {
             "dailyOverview": user.permissions.dailyOverview,
             "subContractors": user.permissions.subContractors,
             "siteAudit": user.permissions.siteAudit,
+            "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory,
             "isSuperAdmin": isSuperAdminToSave,
             "policyAccepted": user.policyAccepted,
             "employmentType": user.employmentType.rawValue,
@@ -4222,7 +4229,8 @@ class FirebaseBackend: ObservableObject {
                 "weeklyReports": permissions.weeklyReports,
                 "dailyOverview": permissions.dailyOverview,
                 "subContractors": permissions.subContractors,
-                "siteAudit": permissions.siteAudit
+                "siteAudit": permissions.siteAudit,
+                "wholesalersOrderHistory": permissions.wholesalersOrderHistory
             ],
             "createdAt": Timestamp(date: Date()),
             "isUsed": false
@@ -4432,6 +4440,7 @@ class FirebaseBackend: ObservableObject {
                     "dailyOverview": newUser.permissions.dailyOverview,
                     "subContractors": newUser.permissions.subContractors,
                     "siteAudit": newUser.permissions.siteAudit,
+                    "wholesalersOrderHistory": newUser.permissions.wholesalersOrderHistory,
                     "isSuperAdmin": newUser.isSuperAdmin
                 ]
                 if let mobileNumber = newUser.mobileNumber {
@@ -4502,7 +4511,8 @@ class FirebaseBackend: ObservableObject {
                     "weeklyReports": permissions.weeklyReports,
                     "dailyOverview": permissions.dailyOverview,
                     "subContractors": permissions.subContractors,
-                    "siteAudit": permissions.siteAudit
+                    "siteAudit": permissions.siteAudit,
+                    "wholesalersOrderHistory": permissions.wholesalersOrderHistory
                 ]
                 
                 if permissions.operativeMode, let mid = assignedManagerUserId, !mid.isEmpty {
@@ -6042,6 +6052,7 @@ extension FirebaseBackend {
             length: (data["length"] as? String)
                 ?? (data["sizeOrLength"] as? String)
                 ?? (data["packSize"] as? Int).map(String.init),
+            lengthUnit: (data["lengthUnit"] as? String).flatMap(MaterialLengthUnit.init(rawValue:)),
             category: data["category"] as? String,
             websiteURL: data["websiteURL"] as? String,
             notes: data["notes"] as? String,
@@ -6108,6 +6119,9 @@ extension FirebaseBackend {
             data["length"] = length
             // Backward compatibility for older app versions.
             data["sizeOrLength"] = length
+        }
+        if let lengthUnit = material.lengthUnit {
+            data["lengthUnit"] = lengthUnit.rawValue
         }
         if let category = material.category?.trimmingCharacters(in: .whitespacesAndNewlines), !category.isEmpty {
             data["category"] = category
@@ -6312,6 +6326,7 @@ extension FirebaseBackend {
             defaultUnit: material.unit,
             size: material.size,
             length: material.length,
+            lengthUnit: material.lengthUnit,
             category: normalizedMaterialCategory(material.category),
             createdByUserId: currentUser?.uid ?? material.addedByUserId ?? "unknown",
             createdByName: creatorName
@@ -6346,6 +6361,7 @@ extension FirebaseBackend {
                 defaultUnit: material.unit,
                 size: material.size,
                 length: material.length,
+                lengthUnit: material.lengthUnit,
                 category: normalizedMaterialCategory(material.category),
                 createdByUserId: currentUser?.uid ?? material.addedByUserId ?? "unknown",
                 createdByName: creatorName
@@ -6716,26 +6732,40 @@ extension FirebaseBackend {
     
     func saveWholesaler(_ wholesaler: Wholesaler, organizationId: String) async throws {
         let contactsData = wholesaler.contacts.map { contact in
-            [
+            let row: [String: Any] = [
                 "id": contact.id.uuidString,
                 "name": contact.name,
                 "email": contact.email,
-                "createdAt": Timestamp(date: contact.createdAt)
+                "createdAt": Timestamp(date: contact.createdAt),
+                "isPrimary": contact.isPrimary
             ]
+            return row
         }
         
-        let data: [String: Any] = [
+        var data: [String: Any] = [
             "id": wholesaler.id.uuidString,
             "name": wholesaler.name,
             "contacts": contactsData,
             "createdAt": Timestamp(date: wholesaler.createdAt),
             "updatedAt": Timestamp(date: wholesaler.updatedAt)
         ]
+        if let address = wholesaler.address?.trimmingCharacters(in: .whitespacesAndNewlines), !address.isEmpty {
+            data["address"] = address
+        }
+        if let trade = wholesaler.trade?.trimmingCharacters(in: .whitespacesAndNewlines), !trade.isEmpty {
+            data["trade"] = trade
+        }
+        if let accountNumber = wholesaler.accountNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !accountNumber.isEmpty {
+            data["accountNumber"] = accountNumber
+        }
+        if let primaryContactId = wholesaler.primaryContactId {
+            data["primaryContactId"] = primaryContactId.uuidString
+        }
         
         try await db.collection("organizations").document(organizationId)
             .collection("wholesalers")
             .document(wholesaler.id.uuidString)
-            .setData(data)
+            .setData(data, merge: true)
     }
 
     func deleteWholesaler(wholesalerId: UUID, organizationId: String) async throws {
@@ -6775,16 +6805,31 @@ extension FirebaseBackend {
                         id: contactId,
                         name: contactName,
                         email: contactEmail,
+                        isPrimary: contactData["isPrimary"] as? Bool ?? false,
                         createdAt: contactCreatedAt
                     )
                     contacts.append(contact)
                 }
             }
+            let primaryId = (data["primaryContactId"] as? String).flatMap(UUID.init(uuidString:))
+            var normalizedContacts = contacts
+            if let primaryId,
+               let idx = normalizedContacts.firstIndex(where: { $0.id == primaryId }) {
+                for i in normalizedContacts.indices {
+                    normalizedContacts[i].isPrimary = i == idx
+                }
+            } else if !normalizedContacts.isEmpty, !normalizedContacts.contains(where: \.isPrimary) {
+                normalizedContacts[0].isPrimary = true
+            }
             
             let wholesaler = Wholesaler(
                 id: id,
                 name: name,
-                contacts: contacts,
+                address: data["address"] as? String,
+                trade: data["trade"] as? String,
+                accountNumber: data["accountNumber"] as? String,
+                primaryContactId: primaryId ?? normalizedContacts.first(where: \.isPrimary)?.id,
+                contacts: normalizedContacts,
                 createdAt: createdAt,
                 updatedAt: updatedAt
             )
@@ -6819,7 +6864,8 @@ extension FirebaseBackend {
                     "id": contact.id.uuidString,
                     "name": contact.name,
                     "email": contact.email,
-                    "createdAt": Timestamp(date: contact.createdAt)
+                    "createdAt": Timestamp(date: contact.createdAt),
+                    "isPrimary": contact.isPrimary
                 ]
             }
         } else {
@@ -6828,7 +6874,8 @@ extension FirebaseBackend {
                 "id": contact.id.uuidString,
                 "name": contact.name,
                 "email": contact.email,
-                "createdAt": Timestamp(date: contact.createdAt)
+                "createdAt": Timestamp(date: contact.createdAt),
+                "isPrimary": contact.isPrimary
             ])
         }
         
@@ -6942,6 +6989,9 @@ extension FirebaseBackend {
         if let workEndTime = booking.workEndTime, !workEndTime.isEmpty {
             data["workEndTime"] = workEndTime
         }
+        if !booking.bookedContactIds.isEmpty {
+            data["bookedContactIds"] = booking.bookedContactIds.map(\.uuidString)
+        }
         
         try await db.collection("organizations").document(organizationId)
             .collection("subcontractorBookings")
@@ -6974,6 +7024,8 @@ extension FirebaseBackend {
             let workStartTime = data["workStartTime"] as? String
             let workEndTime = data["workEndTime"] as? String
             let isBreakRemoved = data["isBreakRemoved"] as? Bool ?? false
+            let bookedContactIds = (data["bookedContactIds"] as? [String])?
+                .compactMap(UUID.init(uuidString:)) ?? []
             
             loaded.append(
                 SubcontractorBooking(
@@ -6987,6 +7039,7 @@ extension FirebaseBackend {
                     isBreakRemoved: isBreakRemoved,
                     bookedBy: bookedBy,
                     status: status,
+                    bookedContactIds: bookedContactIds,
                     createdAt: createdAt,
                     updatedAt: updatedAt
                 )
@@ -7131,6 +7184,9 @@ extension FirebaseBackend {
             // Backward compatibility for older app versions.
             data["sizeOrLength"] = length
         }
+        if let lengthUnit = item.lengthUnit {
+            data["lengthUnit"] = lengthUnit.rawValue
+        }
         data["category"] = normalizedMaterialCategory(item.category)
         return data
     }
@@ -7157,6 +7213,7 @@ extension FirebaseBackend {
             length: (data["length"] as? String)
                 ?? (data["sizeOrLength"] as? String)
                 ?? (data["packSize"] as? Int).map(String.init),
+            lengthUnit: (data["lengthUnit"] as? String).flatMap(MaterialLengthUnit.init(rawValue:)),
             category: normalizedMaterialCategory(data["category"] as? String),
             createdAt: createdAt,
             createdByUserId: createdByUserId,
@@ -7176,27 +7233,42 @@ extension FirebaseBackend {
     // MARK: - Email Service
     
     func sendMaterialRequest(_ request: MaterialOrderRequest, organizationId: String) async throws {
-        // Build email content
-        let requestTypeText = request.requestType == .quote ? "quote" : "order"
         let isQuote = request.requestType == .quote
-        
-        // Reply-To and CC use sender's email; signature is already in request.sentBy (Name, phone, email, company)
-        let senderEmail = currentUser?.email ?? "info@projectplanner.us"
-        let senderName = request.sentBy.split(separator: "\n").first.map(String.init) ?? "Project Planner"
-        
+        let senderEmail = request.senderEmail.isEmpty
+            ? (currentUser?.email ?? "info@projectplanner.us")
+            : request.senderEmail
+        let senderName = request.senderName.isEmpty
+            ? (request.sentBy.split(separator: "\n").first.map(String.init) ?? "Project Planner")
+            : request.senderName
+        let company = request.senderCompany.isEmpty
+            ? (currentOrganization?.name ?? "")
+            : request.senderCompany
+        let logoURL = request.companyLogoURL ?? currentOrganization?.companyLogoURL
+
         for contact in request.recipientContacts {
-            let emailBody = buildMaterialRequestEmail(
-                contactName: contact.name,
-                isQuote: isQuote,
-                projectNumber: request.projectNumber,
-                projectName: request.projectName,
-                siteAddress: request.siteAddress,
+            let supplierFirst = contact.name.split(separator: " ").first.map(String.init) ?? contact.name
+            let emailContext = MaterialRequestEmailBuilder.Context(
+                supplierName: supplierFirst,
+                userName: senderName,
+                userEmail: senderEmail,
+                userPhone: request.senderPhone,
+                userCompany: company,
+                jobNumber: request.projectNumber,
+                siteName: request.projectName,
+                deliveryAddress: request.siteAddress,
+                requestedDate: nil,
+                quoteNeededBy: nil,
+                companyLogoURL: logoURL,
                 materials: request.materials,
-                sentBy: request.sentBy
+                sentAt: request.sentAt
             )
-            
-            let subject = "Material \(requestTypeText) Request - \(request.projectNumber)"
-            
+            let emailBody = isQuote
+                ? MaterialRequestEmailBuilder.buildQuoteEmail(context: emailContext)
+                : MaterialRequestEmailBuilder.buildOrderEmail(context: emailContext)
+            let subject = isQuote
+                ? MaterialRequestEmailBuilder.quoteSubject(jobNumber: request.projectNumber, company: company)
+                : MaterialRequestEmailBuilder.orderSubject(jobNumber: request.projectNumber, company: company)
+
             let emailService = ResendEmailService()
             let success = await emailService.sendEmail(
                 to: contact.email,
@@ -7204,7 +7276,7 @@ extension FirebaseBackend {
                 htmlContent: emailBody,
                 cc: senderEmail,
                 replyTo: senderEmail,
-                fromName: senderName
+                fromName: "\(senderName) (via Project Planner)"
             )
             
             if success {
@@ -7223,83 +7295,121 @@ extension FirebaseBackend {
             organizationId: organizationId
         )
     }
-    
-    private func buildMaterialRequestEmail(
-        contactName: String,
-        isQuote: Bool,
-        projectNumber: String,
-        projectName: String,
-        siteAddress: String,
-        materials: [MaterialItem],
-        sentBy: String
-    ) -> String {
-        let firstName = contactName.split(separator: " ").first.map(String.init) ?? contactName
-        let jobNumberSection = "<p><strong>Job Number:</strong> \(projectNumber)</p>"
-        
-        let introParagraph: String
-        let middleSection: String
-        if isQuote {
-            introParagraph = "<p>Hi \(firstName), please can I have a quote for the below items.</p>"
-            middleSection = jobNumberSection
-        } else {
-            introParagraph = "<p>Hi \(firstName), please can I place an order for the below items to the following address.</p>"
-            middleSection = """
-            \(jobNumberSection)
-            
-            <p><strong>Address:</strong><br>
-            \(siteAddress)</p>
-            """
+
+    // MARK: - Material send history
+
+    func saveMaterialSendRecord(_ record: MaterialSendRecord, organizationId: String) async throws {
+        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
+        var data: [String: Any] = [
+            "id": record.id.uuidString,
+            "projectId": record.projectId.uuidString,
+            "requestType": record.requestType.rawValue,
+            "sentAt": Timestamp(date: record.sentAt),
+            "sentBy": record.sentBy,
+            "recipients": record.recipients.map {
+                var row: [String: Any] = [
+                    "name": $0.name,
+                    "email": $0.email
+                ]
+                if let wholesalerName = $0.wholesalerName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !wholesalerName.isEmpty {
+                    row["wholesalerName"] = wholesalerName
+                }
+                return row
+            },
+            "lines": record.lines.map { line in
+                var row: [String: Any] = [
+                    "materialId": line.materialId.uuidString,
+                    "name": line.name,
+                    "quantity": line.quantity,
+                    "unit": line.unit.rawValue
+                ]
+                if let brand = line.brand { row["brand"] = brand }
+                if let code = line.productCode { row["productCode"] = code }
+                if let lengthDisplay = line.lengthDisplay { row["lengthDisplay"] = lengthDisplay }
+                return row
+            }
+        ]
+        if let materialsDate = record.materialsDate {
+            data["materialsDate"] = Timestamp(date: materialsDate)
         }
-        
-        var emailHTML = """
-        <html>
-        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <div style="line-height: 1.6; color: #333;">
-                \(introParagraph)
-                
-                \(middleSection)
-                
-                <p><strong>Material List:</strong></p>
-                <ol style="padding-left: 20px;">
-        """
-        
-        for material in materials {
-            var lineParts: [String] = []
-            lineParts.append("<strong>\(material.material)</strong>")
-            lineParts.append("\(material.quantity) \(material.unit.quantityLabel(for: material.quantity))")
-            if let brand = material.brand?.trimmingCharacters(in: .whitespacesAndNewlines), !brand.isEmpty {
-                lineParts.append("Manufacturer: \(brand)")
-            }
-            if let code = material.productCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
-                lineParts.append("Code: \(code)")
-            }
-            if let size = material.size?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty {
-                lineParts.append("Size: \(size)")
-            }
-            if let length = material.length?.trimmingCharacters(in: .whitespacesAndNewlines), !length.isEmpty {
-                lineParts.append("Length: \(length)")
-            }
-            if let website = material.websiteURL?.trimmingCharacters(in: .whitespacesAndNewlines), !website.isEmpty {
-                lineParts.append("Link: <a href=\"\(website)\">\(website)</a>")
-            }
-            emailHTML += "<li>\(lineParts.joined(separator: " · "))</li>\n"
-        }
-        
-        let formattedSignature = sentBy.replacingOccurrences(of: "\n", with: "<br>")
-        
-        emailHTML += """
-                </ol>
-                
-                <p>Kind Regards,<br>
-                \(formattedSignature)</p>
-            </div>
-        </body>
-        </html>
-        """
-        
-        return emailHTML
+        try await db.collection("organizations").document(orgId)
+            .collection("materialSendRecords")
+            .document(record.id.uuidString)
+            .setData(data)
     }
 
+    func loadAllMaterialSendRecords(organizationId: String) async throws -> [MaterialSendRecord] {
+        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
+        let snapshot = try await db.collection("organizations").document(orgId)
+            .collection("materialSendRecords")
+            .getDocuments(source: .server)
+        return snapshot.documents.compactMap { materialSendRecordFromFirestore($0.data()) }
+            .sorted { $0.sentAt > $1.sentAt }
+    }
+
+    func loadMaterialSendRecords(organizationId: String, projectId: UUID) async throws -> [MaterialSendRecord] {
+        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
+        let snapshot = try await db.collection("organizations").document(orgId)
+            .collection("materialSendRecords")
+            .whereField("projectId", isEqualTo: projectId.uuidString)
+            .getDocuments(source: .server)
+        return snapshot.documents.compactMap { materialSendRecordFromFirestore($0.data()) }
+            .sorted { $0.sentAt > $1.sentAt }
+    }
+
+    private func materialSendRecordFromFirestore(_ data: [String: Any]) -> MaterialSendRecord? {
+        guard let idString = data["id"] as? String,
+              let id = UUID(uuidString: idString),
+              let projectIdString = data["projectId"] as? String,
+              let projectId = UUID(uuidString: projectIdString),
+              let requestTypeRaw = data["requestType"] as? String,
+              let requestType = MaterialOrderRequest.RequestType(rawValue: requestTypeRaw),
+              let sentAt = (data["sentAt"] as? Timestamp)?.dateValue(),
+              let sentBy = data["sentBy"] as? String else {
+            return nil
+        }
+        let materialsDate = (data["materialsDate"] as? Timestamp)?.dateValue()
+        let recipientsRaw = data["recipients"] as? [[String: Any]] ?? []
+        let recipients = recipientsRaw.compactMap { row -> MaterialSendRecipientSnapshot? in
+            guard let name = row["name"] as? String,
+                  let email = row["email"] as? String else { return nil }
+            return MaterialSendRecipientSnapshot(
+                name: name,
+                email: email,
+                wholesalerName: row["wholesalerName"] as? String
+            )
+        }
+        let linesRaw = data["lines"] as? [[String: Any]] ?? []
+        let lines = linesRaw.compactMap { row -> MaterialSendLineSnapshot? in
+            guard let materialIdString = row["materialId"] as? String,
+                  let materialId = UUID(uuidString: materialIdString),
+                  let name = row["name"] as? String,
+                  let quantity = materialQuantityFromFirestore(row["quantity"]),
+                  let unitRaw = row["unit"] as? String,
+                  let unit = MaterialUnit(rawValue: unitRaw) else { return nil }
+            return MaterialSendLineSnapshot(
+                materialId: materialId,
+                name: name,
+                quantity: quantity,
+                unit: unit,
+                brand: row["brand"] as? String,
+                productCode: row["productCode"] as? String,
+                lengthDisplay: row["lengthDisplay"] as? String
+            )
+        }
+        return MaterialSendRecord(
+            id: id,
+            projectId: projectId,
+            requestType: requestType,
+            sentAt: sentAt,
+            materialsDate: materialsDate,
+            sentBy: sentBy,
+            recipients: recipients,
+            lines: lines.isEmpty ? [] : lines
+        )
+    }
+    
     // MARK: - Health & Safety (Project / Small Works)
 
     // MARK: - Timesheets (Operative + Manager sign-off state)

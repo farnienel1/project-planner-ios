@@ -284,8 +284,10 @@ enum HomeQuickActionRegistry {
             return !userStore.isOperativeMode() && userStore.canManageQualifications()
         case HomeQuickActionID.staffMyQualifications.rawValue:
             return userStore.isOperativeMode()
-        case HomeQuickActionID.staffJobTypes.rawValue, HomeQuickActionID.staffWholesalers.rawValue:
+        case HomeQuickActionID.staffJobTypes.rawValue:
             return !userStore.isOperativeMode() && userStore.hasAdminAccess()
+        case HomeQuickActionID.staffWholesalers.rawValue:
+            return userStore.canAccessWholesalers()
         case HomeQuickActionID.staffMaterialCatalogue.rawValue:
             return userStore.canManageMaterialCatalogue()
         case HomeQuickActionID.staffAddUser.rawValue, HomeQuickActionID.staffManageUsersSheet.rawValue:

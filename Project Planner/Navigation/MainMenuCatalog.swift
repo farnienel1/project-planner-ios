@@ -254,7 +254,7 @@ enum MainMenuCatalog {
                 icon: "building.2.fill",
                 iconBackground: Color(red: 0.98, green: 0.933, blue: 0.855),
                 iconTint: ProjectWorksRevampColors.upcomingAmber,
-                isEligible: { u, _, _ in u.hasAdminAccess() },
+                isEligible: { u, _, _ in u.canAccessWholesalers() },
                 action: .openSurface(.wholesalers)
             ),
             MainMenuRowSpec(

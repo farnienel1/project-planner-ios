@@ -34,6 +34,7 @@ struct ContentView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var taskStore: ProjectTaskStore
     @EnvironmentObject var holidayStore: HolidayStore
@@ -66,7 +67,8 @@ struct ContentView: View {
         if !userStore.isOperativeMode() { keys.append("6") }
         if userStore.canViewProjects() { keys.append(contentsOf: ["1", "2"]) }
         if userStore.canViewOperatives() { keys.append("3") }
-        if userStore.hasAdminAccess() { keys.append(contentsOf: ["4", "7"]) }
+        if userStore.hasAdminAccess() { keys.append("4") }
+        if userStore.canAccessWholesalers() { keys.append("7") }
         if userStore.canManageSubcontractors() { keys.append("9") }
         let preset = userStore.roleTestingPreset.map(\.rawValue) ?? "none"
         let al = userStore.isAnnualLeaveFeatureEnabled() ? "1" : "0"
@@ -146,10 +148,9 @@ struct ContentView: View {
                 }
             }
             
-            // Load all data after a brief delay to ensure Firebase connection is established
+            // Org-wide Firebase loads run once from ProjectPlannerRootView (avoid duplicate parallel reloads that freeze the shell).
             Task {
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second delay
-                await performInitialDataLoadIfNeeded()
+                await userStore.loadCurrentUser()
             }
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         }
@@ -326,22 +327,6 @@ struct ContentView: View {
         }
     }
     
-    private func loadInitialData() async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await projectStore.loadData() }
-            group.addTask { await operativeStore.loadData() }
-            group.addTask { await bookingStore.loadData() }
-            group.addTask { await userStore.loadCurrentUser() }
-            group.addTask { await appSettings.loadSettings() }
-            group.addTask { await taskStore.loadData() }
-            group.addTask { await holidayStore.loadData() }
-            group.addTask { await subcontractorStore.loadData() }
-        }
-        await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
-        await notificationService.refreshDailyMaterialCutOffReminder()
-        await notificationService.refreshQualificationExpiryReminders()
-    }
-
     private func performInitialDataLoadIfNeeded(force: Bool = false) async {
         guard firebaseBackend.isAuthenticated else { return }
         guard !isInitialDataLoading else { return }
@@ -354,7 +339,26 @@ struct ContentView: View {
         isInitialDataLoading = true
         defer { isInitialDataLoading = false }
 
-        await loadInitialData()
+        if force || !firebaseBackend.hasBootstrappedOrgDataLoad {
+            await PlannerStoreWiring.bootstrapOrgDataIfNeeded(
+                firebaseBackend: firebaseBackend,
+                projectStore: projectStore,
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                subcontractorStore: subcontractorStore,
+                taskStore: taskStore,
+                holidayStore: holidayStore,
+                notificationService: notificationService
+            )
+        }
+
+        await userStore.loadCurrentUser()
+        appSettings.loadSettings()
+        await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
+        await notificationService.refreshDailyMaterialCutOffReminder()
+        await notificationService.refreshQualificationExpiryReminders()
+
         if let organizationId {
             lastLoadedOrganizationId = organizationId
         }
@@ -363,7 +367,9 @@ struct ContentView: View {
     /// Single visible root (no `TabView`). Hiding the system tab bar + `TabView` left the main area blank on recent iOS SDKs; we already use a custom bottom bar.
     @ViewBuilder
     private var mainTabContent: some View {
-        Group {
+        ZStack {
+            Color(.systemGroupedBackground).ignoresSafeArea()
+            Group {
             switch selectedTab {
             case 0:
                 NavigationStack {
@@ -406,8 +412,10 @@ struct ContentView: View {
                     NavigationStack { HomeView() }
                 }
             case 7:
-                if userStore.hasAdminAccess() {
-                    NavigationStack { WholesalersView() }
+                if userStore.canAccessWholesalers() {
+                    WholesalersView()
+                        .environmentObject(userStore)
+                        .environmentObject(firebaseBackend)
                 } else {
                     NavigationStack { HomeView() }
                 }
@@ -434,6 +442,8 @@ struct ContentView: View {
             default:
                 NavigationStack { HomeView() }
             }
+            }
+            .id("main-tab-\(selectedTab)")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Avoid `.id(tabViewIdentity)` here: when the profile loads, permissions change and rebuilding the entire
@@ -692,7 +702,7 @@ extension ContentView {
         case 3: return userStore.canViewOperatives()
         case 4: return userStore.hasAdminAccess()
         case 6: return !userStore.isOperativeMode()
-        case 7: return userStore.hasAdminAccess()
+        case 7: return userStore.canAccessWholesalers()
         case 9: return userStore.canManageSubcontractors()
         default: return false
         }
@@ -790,7 +800,7 @@ extension ContentView {
             items.append(TabButtonConfig(tag: 4, title: "Managers", icon: "person.badge.key.fill", multilineTitle: false, requiresPermission: true))
         }
         
-        if userStore.hasAdminAccess() {
+        if userStore.canAccessWholesalers() {
             items.append(TabButtonConfig(tag: 7, title: "Wholesalers", icon: "building.2.fill", multilineTitle: false, requiresPermission: true))
             if userStore.canManageSubcontractors() {
                 items.append(TabButtonConfig(tag: 9, title: "Sub Contractors", icon: "person.2.badge.gearshape.fill", multilineTitle: true, requiresPermission: true))

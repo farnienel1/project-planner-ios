@@ -1265,6 +1265,7 @@ struct ProjectDetailView: View {
     private func schedulingSubcontractorBookingRow(booking: SubcontractorBooking) -> some View {
         let sub = subcontractorStore.subcontractors.first { $0.id == booking.subcontractorId }
         let name = sub?.name ?? "Subcontractor"
+        let operativeNames = booking.bookedOperativeNames(subcontractor: sub)
         let initials = PlannerUIInitials.from(name)
         let hrs = subcontractorApproximateHours(booking)
         let ot = booking.payrollMirrorBooking().overtimeHoursBeyondPaidStandard(policy: payrollTimePolicy)
@@ -1273,10 +1274,20 @@ struct ProjectDetailView: View {
         } label: {
             HStack(spacing: 8) {
                 schedulingAvatar(initials: initials, accent: schedulingSubcontractorGradient)
-                Text(name)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .lineLimit(1)
+                    if !operativeNames.isEmpty {
+                        ForEach(operativeNames, id: \.self) { opName in
+                            Text(opName)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .lineLimit(1)
+                        }
+                    }
+                }
                 Spacer(minLength: 4)
                 Text(subcontractorScheduleLabel(booking))
                     .font(.system(size: 11))
@@ -5069,7 +5080,7 @@ struct CompletedTaskDetailView: View {
                     sectionLabel("Details")
                     detailsCard
                     checklistHeader
-                    readOnlyChecklistCard
+                    checklistCarryOutButton
                     attachmentsSection
                     if displayTask.isCompleted {
                         completionSummarySection
@@ -5116,25 +5127,11 @@ struct CompletedTaskDetailView: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if canCarryOut {
-                    HStack(spacing: 8) {
-                        Button {
-                            // Placeholder — messaging not wired
-                        } label: {
-                            Image(systemName: "bubble.left")
-                                .font(.system(size: 17))
-                                .foregroundStyle(CompleteTaskUXPalette.ink)
-                                .frame(width: 44, height: 44)
-                                .background(Color(red: 247 / 255, green: 248 / 255, blue: 250 / 255))
-                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: 0.5))
-                        }
-                        .buttonStyle(.plain)
-                        carryOutLabelButton
-                    }
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 12)
-                    .background(Color.white)
-                    .overlay(Rectangle().frame(height: 0.5).foregroundStyle(CompleteTaskUXPalette.border), alignment: .top)
+                    carryOutLabelButton
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 12)
+                        .background(Color.white)
+                        .overlay(Rectangle().frame(height: 0.5).foregroundStyle(CompleteTaskUXPalette.border), alignment: .top)
                 }
             }
             .sheet(isPresented: $showingCarryOut) {
@@ -5394,6 +5391,28 @@ struct CompletedTaskDetailView: View {
                 .foregroundStyle(CompleteTaskUXPalette.blue)
         }
         .padding(.leading, 4)
+    }
+
+    @ViewBuilder
+    private var checklistCarryOutButton: some View {
+        if canCarryOut {
+            Button { showingCarryOut = true } label: {
+                readOnlyChecklistCard
+                    .overlay(alignment: .bottomTrailing) {
+                        HStack(spacing: 4) {
+                            Text("Carry out tasks")
+                                .font(.system(size: 11, weight: .semibold))
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .bold))
+                        }
+                        .foregroundStyle(CompleteTaskUXPalette.blue)
+                        .padding(14)
+                    }
+            }
+            .buttonStyle(.plain)
+        } else {
+            readOnlyChecklistCard
+        }
     }
 
     private var readOnlyChecklistCard: some View {

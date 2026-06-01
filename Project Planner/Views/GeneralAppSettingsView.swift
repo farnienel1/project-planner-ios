@@ -98,7 +98,11 @@ struct MyScheduleGeneralOptionsView: View {
     }
     
     private func deleteCustomItems(at offsets: IndexSet) {
+        let removed = offsets.map { appSettings.settings.myScheduleOptions.customItems[$0] }
         appSettings.settings.myScheduleOptions.customItems.remove(atOffsets: offsets)
+        for name in removed {
+            appSettings.settings.myScheduleOptions.customItemEnabled.removeValue(forKey: name)
+        }
         Task { await appSettings.updateMyScheduleOptions(appSettings.settings.myScheduleOptions) }
     }
 }

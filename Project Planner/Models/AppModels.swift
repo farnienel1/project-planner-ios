@@ -151,6 +151,8 @@ struct UserPermissions: Codable, Hashable {
     var dailyOverview: Bool // Managers can access Daily Overview
     var subContractors: Bool // Managers can add/manage sub contractors
     var siteAudit: Bool // Operative can access site audits
+    /// Managers: view quote/order history in Wholesalers and on project materials.
+    var wholesalersOrderHistory: Bool
     
     init(
         adminAccess: Bool = false,
@@ -166,7 +168,8 @@ struct UserPermissions: Codable, Hashable {
         weeklyReports: Bool = false,
         dailyOverview: Bool = true,
         subContractors: Bool = false,
-        siteAudit: Bool = true
+        siteAudit: Bool = true,
+        wholesalersOrderHistory: Bool = true
     ) {
         self.adminAccess = adminAccess
         self.manager = manager
@@ -182,6 +185,7 @@ struct UserPermissions: Codable, Hashable {
         self.dailyOverview = dailyOverview
         self.subContractors = subContractors
         self.siteAudit = siteAudit
+        self.wholesalersOrderHistory = wholesalersOrderHistory
     }
 
     enum CodingKeys: String, CodingKey {
@@ -199,6 +203,7 @@ struct UserPermissions: Codable, Hashable {
         case dailyOverview
         case subContractors
         case siteAudit
+        case wholesalersOrderHistory
     }
 
     init(from decoder: Decoder) throws {
@@ -217,6 +222,7 @@ struct UserPermissions: Codable, Hashable {
         dailyOverview = try c.decodeIfPresent(Bool.self, forKey: .dailyOverview) ?? true
         subContractors = try c.decodeIfPresent(Bool.self, forKey: .subContractors) ?? false
         siteAudit = try c.decodeIfPresent(Bool.self, forKey: .siteAudit) ?? true
+        wholesalersOrderHistory = try c.decodeIfPresent(Bool.self, forKey: .wholesalersOrderHistory) ?? true
     }
 
     func encode(to encoder: Encoder) throws {
@@ -235,6 +241,7 @@ struct UserPermissions: Codable, Hashable {
         try c.encode(dailyOverview, forKey: .dailyOverview)
         try c.encode(subContractors, forKey: .subContractors)
         try c.encode(siteAudit, forKey: .siteAudit)
+        try c.encode(wholesalersOrderHistory, forKey: .wholesalersOrderHistory)
     }
 }
 

@@ -61,7 +61,7 @@ struct EditMaterialView: View {
                         }
                     }
                     
-                    Picker("Unit", selection: $unit) {
+                    Picker(MaterialUnit.typePickerTitle, selection: $unit) {
                         ForEach(MaterialUnit.allCases, id: \.self) { unit in
                             Text(unit.displayName).tag(unit)
                         }
