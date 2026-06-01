@@ -21,6 +21,13 @@ enum TradeTypeInventory {
         "Installer",
         "Commissioning Engineer",
         "Programmer",
+        "Scaffolder",
+        "Brick & Block",
+        "Dryliner",
+        "Painter & Decorator",
+        "Demolition Operative",
+        "Steel Fixer",
+        "Plant Operator",
     ]
 
     static func knownTrades(extra: [String] = []) -> [String] {

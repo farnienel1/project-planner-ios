@@ -5,6 +5,7 @@
 
 import SwiftUI
 import UIKit
+import PencilKit
 import FirebaseFirestore
 import PhotosUI
 
@@ -407,8 +408,11 @@ private struct TimesheetDraft: Codable {
     var priceWorkEntries: [TimesheetPriceWorkEntry] = []
     var managerNote: String = ""
     var operativeSignedAt: Date?
+    var operativeSignedByName: String?
+    var operativeSignatureImageBase64: String?
     var managerSignedAt: Date?
     var managerSignedByName: String?
+    var managerSignatureImageBase64: String?
     var exportedAt: Date?
 
     var additionalTotal: Double {
@@ -474,8 +478,11 @@ private enum TimesheetDraftStore {
         [
             "managerNote": draft.managerNote,
             "operativeSignedAt": draft.operativeSignedAt.map(Timestamp.init(date:)) as Any,
+            "operativeSignedByName": draft.operativeSignedByName ?? "",
+            "operativeSignatureImageBase64": draft.operativeSignatureImageBase64 ?? "",
             "managerSignedAt": draft.managerSignedAt.map(Timestamp.init(date:)) as Any,
             "managerSignedByName": draft.managerSignedByName ?? "",
+            "managerSignatureImageBase64": draft.managerSignatureImageBase64 ?? "",
             "exportedAt": draft.exportedAt.map(Timestamp.init(date:)) as Any,
             "expenseEntries": draft.expenseEntries.map { e in
                 [
@@ -507,9 +514,15 @@ private enum TimesheetDraftStore {
         var output = TimesheetDraft()
         output.managerNote = map["managerNote"] as? String ?? ""
         output.operativeSignedAt = (map["operativeSignedAt"] as? Timestamp)?.dateValue()
+        let operativeSignedBy = (map["operativeSignedByName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        output.operativeSignedByName = operativeSignedBy.isEmpty ? nil : operativeSignedBy
+        let operativeSignature = (map["operativeSignatureImageBase64"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        output.operativeSignatureImageBase64 = operativeSignature.isEmpty ? nil : operativeSignature
         output.managerSignedAt = (map["managerSignedAt"] as? Timestamp)?.dateValue()
         let signedBy = (map["managerSignedByName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         output.managerSignedByName = signedBy.isEmpty ? nil : signedBy
+        let managerSignature = (map["managerSignatureImageBase64"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        output.managerSignatureImageBase64 = managerSignature.isEmpty ? nil : managerSignature
         output.exportedAt = (map["exportedAt"] as? Timestamp)?.dateValue()
 
         output.expenseEntries = ((map["expenseEntries"] as? [[String: Any]]) ?? []).compactMap { row in
@@ -824,8 +837,11 @@ private struct MyTimesheetView: View {
                             hoursAmount: workAmount,
                             priceWorkAmount: draft.priceWorkEntries.reduce(0) { $0 + $1.amount },
                             expensesAmount: draft.expenseEntries.reduce(0) { $0 + $1.amount },
-                            onApprove: {
-                                markTimesheetSigned()
+                            signerName: userStore.displayUser?.fullName.isEmpty == false
+                                ? (userStore.displayUser?.fullName ?? "Operative")
+                                : (userStore.displayUser?.email ?? "Operative"),
+                            onApprove: { signatureImageData in
+                                markTimesheetSigned(signatureImageData: signatureImageData)
                             }
                         )
                     } label: {
@@ -839,10 +855,27 @@ private struct MyTimesheetView: View {
                     }
                     .buttonStyle(.plain)
                 } else {
-                    Text("Signed on \(draft.operativeSignedAt?.formatted(date: .abbreviated, time: .shortened) ?? "")")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.green)
-                        .frame(maxWidth: .infinity, alignment: .center)
+                    VStack(spacing: 8) {
+                        if let base64 = draft.operativeSignatureImageBase64,
+                           let data = Data(base64Encoded: base64),
+                           let image = UIImage(data: data) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(height: 88)
+                                .frame(maxWidth: .infinity)
+                                .background(Color(.systemBackground))
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(Color(.separator), lineWidth: 0.8)
+                                )
+                        }
+                        Text("Signed by \(draft.operativeSignedByName ?? "Operative") on \(draft.operativeSignedAt?.formatted(date: .abbreviated, time: .shortened) ?? "")")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.green)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
                 }
 
                 if draft.operativeSignedAt != nil && draft.managerSignedAt != nil {
@@ -1011,8 +1044,12 @@ private struct MyTimesheetView: View {
         Task { await refreshDraftFromCloud() }
     }
 
-    private func markTimesheetSigned() {
+    private func markTimesheetSigned(signatureImageData: Data) {
         draft.operativeSignedAt = Date()
+        draft.operativeSignedByName = userStore.displayUser?.fullName.isEmpty == false
+            ? userStore.displayUser?.fullName
+            : userStore.displayUser?.email
+        draft.operativeSignatureImageBase64 = signatureImageData.base64EncodedString()
         saveDraft()
         guard let current = userStore.displayUser else { return }
         guard let managerId = current.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !managerId.isEmpty else { return }
@@ -1663,6 +1700,7 @@ private struct OperativeTimesheetReviewView: View {
     let settings: OrganizationInvoicingSettings
     let week: WeekRange
     @State private var draft = TimesheetDraft()
+    @State private var showingManagerSignSheet = false
 
     var body: some View {
         ScrollView {
@@ -1728,7 +1766,22 @@ private struct OperativeTimesheetReviewView: View {
                     Text("Signatures")
                         .font(.headline)
                     if let signedAt = draft.operativeSignedAt {
-                        Text("Operative: \(signedAt.formatted(date: .abbreviated, time: .shortened))")
+                        if let base64 = draft.operativeSignatureImageBase64,
+                           let data = Data(base64Encoded: base64),
+                           let image = UIImage(data: data) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(height: 82)
+                                .frame(maxWidth: .infinity)
+                                .background(Color(.systemBackground))
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .stroke(Color(.separator), lineWidth: 0.8)
+                                )
+                        }
+                        Text("Operative: \(draft.operativeSignedByName ?? (operative.fullName.isEmpty ? operative.email : operative.fullName)) · \(signedAt.formatted(date: .abbreviated, time: .shortened))")
                             .font(.footnote)
                             .foregroundStyle(.green)
                     } else {
@@ -1736,10 +1789,31 @@ private struct OperativeTimesheetReviewView: View {
                             .font(.footnote)
                             .foregroundStyle(.orange)
                     }
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(style: StrokeStyle(lineWidth: 1, dash: [5]))
-                        .frame(height: 82)
-                        .overlay(Text("F. Manager").font(.system(size: 30, weight: .regular, design: .serif)).italic().foregroundStyle(.primary.opacity(0.8)))
+                    if let managerSignedAt = draft.managerSignedAt {
+                        if let base64 = draft.managerSignatureImageBase64,
+                           let data = Data(base64Encoded: base64),
+                           let image = UIImage(data: data) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(height: 82)
+                                .frame(maxWidth: .infinity)
+                                .background(Color(.systemBackground))
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .stroke(Color(.separator), lineWidth: 0.8)
+                                )
+                        }
+                        Text("Manager approved: \(draft.managerSignedByName ?? "Manager") · \(managerSignedAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.green)
+                    } else {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(style: StrokeStyle(lineWidth: 1, dash: [5]))
+                            .frame(height: 82)
+                            .overlay(Text("Manager signature").font(.system(size: 22, weight: .regular, design: .serif)).italic().foregroundStyle(.primary.opacity(0.7)))
+                    }
                 }
                 .padding(14)
                 .background(Color(.systemBackground))
@@ -1747,19 +1821,7 @@ private struct OperativeTimesheetReviewView: View {
 
                 if draft.managerSignedAt == nil {
                     Button {
-                        draft.managerSignedAt = Date()
-                        draft.managerSignedByName = userStore.displayUser?.fullName.isEmpty == false
-                            ? userStore.displayUser?.fullName
-                            : userStore.displayUser?.email
-                        saveDraft()
-                        let signer = draft.managerSignedByName ?? "Line manager"
-                        Task {
-                            await notificationService.notifyTimesheetSignedByManager(
-                                targetUserId: operative.id,
-                                signedByName: signer,
-                                weekStart: week.start
-                            )
-                        }
+                        showingManagerSignSheet = true
                     } label: {
                         Label("Sign off & finalise", systemImage: "checkmark")
                             .frame(maxWidth: .infinity)
@@ -1771,10 +1833,6 @@ private struct OperativeTimesheetReviewView: View {
                     .buttonStyle(.plain)
                     .disabled(draft.operativeSignedAt == nil)
                     .opacity(draft.operativeSignedAt == nil ? 0.5 : 1)
-                } else {
-                    Text("Manager approved: \(draft.managerSignedAt?.formatted(date: .abbreviated, time: .shortened) ?? "") by \(draft.managerSignedByName ?? "Manager")")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.green)
                 }
             }
             .padding(16)
@@ -1785,6 +1843,32 @@ private struct OperativeTimesheetReviewView: View {
         .onAppear {
             draft = TimesheetDraftStore.load(userId: operative.id, weekStart: week.start)
             Task { await refreshDraftFromCloud() }
+        }
+        .sheet(isPresented: $showingManagerSignSheet) {
+            NavigationStack {
+                ManagerTimesheetSignOffView(
+                    signerName: userStore.displayUser?.fullName.isEmpty == false
+                        ? (userStore.displayUser?.fullName ?? "Line manager")
+                        : (userStore.displayUser?.email ?? "Line manager")
+                ) { signatureImageData in
+                    draft.managerSignedAt = Date()
+                    draft.managerSignedByName = userStore.displayUser?.fullName.isEmpty == false
+                        ? userStore.displayUser?.fullName
+                        : userStore.displayUser?.email
+                    draft.managerSignatureImageBase64 = signatureImageData.base64EncodedString()
+                    saveDraft()
+                    let signer = draft.managerSignedByName ?? "Line manager"
+                    Task {
+                        await notificationService.notifyTimesheetSignedByManager(
+                            targetUserId: operative.id,
+                            signedByName: signer,
+                            weekStart: week.start
+                        )
+                    }
+                    showingManagerSignSheet = false
+                }
+            }
+            .presentationDetents([.large])
         }
     }
 
@@ -2018,7 +2102,9 @@ private struct SignTimesheetView: View {
     let hoursAmount: Double
     let priceWorkAmount: Double
     let expensesAmount: Double
-    let onApprove: () -> Void
+    let signerName: String
+    let onApprove: (Data) -> Void
+    @State private var signatureImageData: Data?
 
     var total: Double { hoursAmount + priceWorkAmount + expensesAmount }
 
@@ -2052,10 +2138,11 @@ private struct SignTimesheetView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Your signature")
                         .font(.headline)
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(style: StrokeStyle(lineWidth: 1.2, dash: [5]))
-                        .frame(height: 96)
-                        .overlay(Text("Operative").font(.system(size: 32, design: .serif)).italic())
+                    Text("Signing as \(signerName)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TimesheetSignaturePad(imageData: $signatureImageData)
+                        .frame(height: 120)
                     Text("Sign above · tap to clear")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -2076,7 +2163,8 @@ private struct SignTimesheetView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                 Button {
-                    onApprove()
+                    guard let signatureImageData else { return }
+                    onApprove(signatureImageData)
                     dismiss()
                 } label: {
                     Label("Approve timesheet & send to manager", systemImage: "checkmark")
@@ -2087,6 +2175,8 @@ private struct SignTimesheetView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .disabled(signatureImageData == nil)
+                .opacity(signatureImageData == nil ? 0.5 : 1)
             }
             .padding(16)
         }
@@ -2101,6 +2191,53 @@ private struct SignTimesheetView: View {
             Text(key).foregroundStyle(.secondary)
             Spacer()
             Text(value).fontWeight(.semibold)
+        }
+    }
+}
+
+private struct ManagerTimesheetSignOffView: View {
+    @Environment(\.dismiss) private var dismiss
+    let signerName: String
+    let onApprove: (Data) -> Void
+    @State private var signatureImageData: Data?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Manager sign-off")
+                    .font(.title3.weight(.bold))
+                Text("Sign as \(signerName) to finalise this timesheet.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                TimesheetSignaturePad(imageData: $signatureImageData)
+                    .frame(height: 140)
+
+                Button {
+                    guard let signatureImageData else { return }
+                    onApprove(signatureImageData)
+                    dismiss()
+                } label: {
+                    Label("Sign off & finalise", systemImage: "checkmark")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .foregroundStyle(.white)
+                        .background(Color.green)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(signatureImageData == nil)
+                .opacity(signatureImageData == nil ? 0.5 : 1)
+            }
+            .padding(16)
+        }
+        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .navigationTitle("Sign Off")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
         }
     }
 }
@@ -2727,6 +2864,75 @@ private struct InvoiceLineItem {
     let paidHours: Double
     let dayRate: Double
     let amount: Double
+}
+
+private struct TimesheetSignaturePad: View {
+    @Binding var imageData: Data?
+    @State private var canvas = PKCanvasView()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Signature")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Clear") {
+                    canvas.drawing = PKDrawing()
+                    imageData = nil
+                }
+                .font(.system(size: 12, weight: .semibold))
+            }
+            TimesheetCanvasRepresentable(canvas: $canvas) { exportSignaturePNG() }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(style: StrokeStyle(lineWidth: 1.2, dash: [5]))
+                        .foregroundStyle(Color(.separator))
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .padding(12)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func exportSignaturePNG() {
+        let bounds = canvas.drawing.bounds
+        guard !bounds.isEmpty else {
+            imageData = nil
+            return
+        }
+        imageData = canvas.drawing.image(from: bounds, scale: UIScreen.main.scale).pngData()
+    }
+}
+
+private struct TimesheetCanvasRepresentable: UIViewRepresentable {
+    @Binding var canvas: PKCanvasView
+    let onChange: () -> Void
+
+    func makeUIView(context: Context) -> PKCanvasView {
+        canvas.drawingPolicy = .anyInput
+        canvas.tool = PKInkingTool(.pen, color: UIColor(red: 0.086, green: 0.125, blue: 0.18, alpha: 1), width: 3)
+        canvas.delegate = context.coordinator
+        canvas.backgroundColor = UIColor(red: 0.98, green: 0.985, blue: 0.992, alpha: 1)
+        return canvas
+    }
+
+    func updateUIView(_ uiView: PKCanvasView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onChange: onChange)
+    }
+
+    final class Coordinator: NSObject, PKCanvasViewDelegate {
+        let onChange: () -> Void
+        init(onChange: @escaping () -> Void) {
+            self.onChange = onChange
+        }
+        func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+            onChange()
+        }
+    }
 }
 
 private struct InvoicingShareSheet: UIViewControllerRepresentable {

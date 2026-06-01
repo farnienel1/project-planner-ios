@@ -792,9 +792,7 @@ private struct WarningsScheduleIndex {
 
         func managerPaidTotal(_ userId: String) -> Double {
             let key = "\(userId)-\(dayKeySuffix)"
-            let dayMgr = (managerBookingsByDayKey[key] ?? []).filter {
-                $0.isProjectLikeLocation
-            }
+            let dayMgr = managerBookingsByDayKey[key] ?? []
             return dayMgr.reduce(0.0) { sum, booking in
                 sum + booking.paidHours
             }

@@ -1047,7 +1047,7 @@ struct EditUserView: View {
         let origTradeP = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let origTradeC = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let tradeChanged = dayRateEligible && (trimmedTradeP != origTradeP || trimmedTradeC != origTradeC)
-        let operativeProfileChanged = permissions.operativeMode && (
+        let operativeProfileChanged = (permissions.operativeMode || permissions.manager) && (
             (selectedAssignedManagerUserId ?? "") != (user.assignedManagerUserId ?? "") ||
             parseDayRate(dayRateText) != user.dayRate
         )
@@ -1082,6 +1082,7 @@ struct EditUserView: View {
     private var lineManagerCandidates: [AppUser] {
         userStore.organizationUsers
             .filter { candidate in
+                candidate.id != user.id &&
                 !candidate.permissions.operativeMode &&
                 (candidate.isSuperAdmin || candidate.permissions.adminAccess || candidate.permissions.manager) &&
                 candidate.isActive &&
@@ -2553,6 +2554,13 @@ struct EditUserView: View {
                 await MainActor.run {
                     isUpdating = false
                     saveErrorMessage = "Line manager is required for managers and operatives."
+                }
+                return
+            }
+            if lineManagerId == subjectUser.id {
+                await MainActor.run {
+                    isUpdating = false
+                    saveErrorMessage = "A manager cannot be their own line manager."
                 }
                 return
             }

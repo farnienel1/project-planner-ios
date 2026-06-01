@@ -48,6 +48,11 @@ struct MaterialsView: View {
             }
         }
         .task {
+            await MainActor.run {
+                let today = Calendar.current.startOfDay(for: Date())
+                selectedDate = today
+                currentWeek = today
+            }
             await loadMaterials(isInitial: true)
             await attachMaterialsListener()
         }
@@ -139,7 +144,9 @@ struct MaterialsView: View {
                         print("     - \(material.material) for date: \(material.date)")
                     }
                 }
-                syncWeekSelectionToLoadedMaterialsIfNothingForCurrentDay()
+                if !isInitial {
+                    syncWeekSelectionToLoadedMaterialsIfNothingForCurrentDay()
+                }
                 queueMaterialsRetentionNoticeIfNeeded()
                 if isInitial {
                     isLoading = false

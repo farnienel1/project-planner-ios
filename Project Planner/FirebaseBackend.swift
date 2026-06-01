@@ -2170,6 +2170,51 @@ class FirebaseBackend: ObservableObject {
         let downloadURL = try await storageRef.downloadURL()
         return downloadURL.absoluteString
     }
+
+    func uploadHealthSafetyFile(
+        _ localFileURL: URL,
+        organizationId: String,
+        projectId: UUID,
+        category: String,
+        fileName: String
+    ) async throws -> String {
+        guard let userId = currentUser?.uid else {
+            throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
+        }
+
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let safeCategory = category
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "/", with: "_")
+        let safeFileName = fileName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "/", with: "_")
+        let path = "organizations/\(organizationId)/healthSafety/\(projectId.uuidString)/\(safeCategory)/\(userId)_\(timestamp)_\(safeFileName)"
+        let storageRef = storage.reference().child(path)
+
+        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+            storageRef.putFile(from: localFileURL, metadata: nil) { metadata, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else if let metadata = metadata {
+                    continuation.resume(returning: metadata)
+                } else {
+                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+                }
+            }
+        }
+
+        do {
+            let downloadURL = try await storageRef.downloadURL()
+            return downloadURL.absoluteString
+        } catch {
+            print("⚠️ [HealthSafety] Uploaded file but could not fetch download URL: \(error.localizedDescription)")
+            return "gs://\(storageRef.bucket)/\(storageRef.fullPath)"
+        }
+    }
     
     func uploadTaskImage(_ image: UIImage, taskId: UUID, organizationId: String, imageName: String) async throws -> String {
         guard let userId = currentUser?.uid,
@@ -2355,6 +2400,16 @@ class FirebaseBackend: ObservableObject {
     #else
     func uploadTaskFile(_ fileURL: URL, taskId: UUID, organizationId: String, fileName: String) async throws -> String {
         throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: "FirebaseStorage is not available. Please add FirebaseStorage to your project dependencies via Xcode: File > Add Package Dependencies > https://github.com/firebase/firebase-ios-sdk"])
+    }
+
+    func uploadHealthSafetyFile(
+        _ localFileURL: URL,
+        organizationId: String,
+        projectId: UUID,
+        category: String,
+        fileName: String
+    ) async throws -> String {
+        throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: "FirebaseStorage is not available."])
     }
     
     func uploadTaskImage(_ image: UIImage, taskId: UUID, organizationId: String, imageName: String) async throws -> String {
@@ -7351,6 +7406,7 @@ extension FirebaseBackend {
             "weekCommencing": Timestamp(date: issue.weekCommencing),
             "issuedByUserId": issue.issuedByUserId,
             "issuedAt": Timestamp(date: issue.issuedAt),
+            "publishAt": issue.publishAt.map(Timestamp.init(date:)) as Any,
             "recipientUserIds": issue.recipientUserIds,
             "status": issue.status.rawValue
         ]
@@ -7376,7 +7432,11 @@ extension FirebaseBackend {
             "trade": doc.trade,
             "version": doc.version,
             "status": doc.status,
-            "uploadedAt": Timestamp(date: doc.uploadedAt)
+            "uploadedAt": Timestamp(date: doc.uploadedAt),
+            "fileURL": doc.fileURL ?? "",
+            "fileName": doc.fileName ?? "",
+            "reviewDate": doc.reviewDate.map(Timestamp.init(date:)) as Any,
+            "attachedDocTitles": doc.attachedDocTitles
         ]
     }
 
@@ -7386,7 +7446,10 @@ extension FirebaseBackend {
             "title": doc.title,
             "trade": doc.trade ?? "",
             "category": doc.category,
-            "uploadedAt": Timestamp(date: doc.uploadedAt)
+            "uploadedAt": Timestamp(date: doc.uploadedAt),
+            "fileURL": doc.fileURL ?? "",
+            "fileName": doc.fileName ?? "",
+            "issuableToClient": doc.issuableToClient
         ]
     }
 
@@ -7426,6 +7489,7 @@ extension FirebaseBackend {
             weekCommencing: (map["weekCommencing"] as? Timestamp)?.dateValue() ?? Date(),
             issuedByUserId: (map["issuedByUserId"] as? String) ?? "",
             issuedAt: (map["issuedAt"] as? Timestamp)?.dateValue() ?? Date(),
+            publishAt: (map["publishAt"] as? Timestamp)?.dateValue(),
             recipientUserIds: map["recipientUserIds"] as? [String] ?? [],
             status: HSToolboxIssueStatus(rawValue: statusRaw) ?? .awaiting
         )
@@ -7449,25 +7513,36 @@ extension FirebaseBackend {
 
     private func parseHSRams(_ map: [String: Any]) -> HSRamsDocument? {
         guard let id = map["id"] as? String, !id.isEmpty else { return nil }
+        let fileURL = (map["fileURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileName = (map["fileName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return HSRamsDocument(
             id: id,
             title: (map["title"] as? String) ?? "Untitled RAMS",
             trade: (map["trade"] as? String) ?? "General",
             version: map["version"] as? Int ?? 1,
             status: (map["status"] as? String) ?? "live",
-            uploadedAt: (map["uploadedAt"] as? Timestamp)?.dateValue() ?? Date()
+            uploadedAt: (map["uploadedAt"] as? Timestamp)?.dateValue() ?? Date(),
+            fileURL: fileURL?.isEmpty == false ? fileURL : nil,
+            fileName: fileName?.isEmpty == false ? fileName : nil,
+            reviewDate: (map["reviewDate"] as? Timestamp)?.dateValue(),
+            attachedDocTitles: map["attachedDocTitles"] as? [String] ?? []
         )
     }
 
     private func parseHSOtherDoc(_ map: [String: Any]) -> HSOtherDocument? {
         guard let id = map["id"] as? String, !id.isEmpty else { return nil }
         let trade = (map["trade"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileURL = (map["fileURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileName = (map["fileName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return HSOtherDocument(
             id: id,
             title: (map["title"] as? String) ?? "Untitled H&S doc",
             trade: trade?.isEmpty == false ? trade : nil,
             category: (map["category"] as? String) ?? "trade",
-            uploadedAt: (map["uploadedAt"] as? Timestamp)?.dateValue() ?? Date()
+            uploadedAt: (map["uploadedAt"] as? Timestamp)?.dateValue() ?? Date(),
+            fileURL: fileURL?.isEmpty == false ? fileURL : nil,
+            fileName: fileName?.isEmpty == false ? fileName : nil,
+            issuableToClient: map["issuableToClient"] as? Bool ?? false
         )
     }
 

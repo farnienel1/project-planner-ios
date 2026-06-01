@@ -304,13 +304,12 @@ struct DailyOverviewView: View {
         return bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
     }
 
-    private func managerProjectPaidHours(_ userId: String) -> Double {
+    private func managerScheduledPaidHours(_ userId: String) -> Double {
         let policy = payrollTimePolicy
         let bookings: [ManagerSiteBooking] = managerScheduleStore.managerSiteBookings.filter { booking in
             let sameDay = Calendar.current.isDate(booking.date, inSameDayAs: overviewDate)
             let sameUser = booking.userId == userId
-            let isProjectLocation = booking.locationType == ManagerLocationType.project || booking.locationType == ManagerLocationType.smallWork
-            return sameDay && sameUser && isProjectLocation
+            return sameDay && sameUser
         }
         return bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
     }
@@ -320,14 +319,14 @@ struct DailyOverviewView: View {
             let linkedOperative = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
             if hasApprovedHoliday(userId: user.id, operativeId: linkedOperative?.id) { return nil }
             guard let operativeId = linkedOperative?.id else {
-                let paid = managerProjectPaidHours(user.id)
+                let paid = managerScheduledPaidHours(user.id)
                 let required = max(payrollTimePolicy.standardPaidHours, 0)
                 guard paid < required else { return nil }
                 let missing = max(0, required - paid)
                 let display = user.fullName.isEmpty ? user.email : user.fullName
                 return "\(display) (missing \(ScheduleCoverageFormat.hours(missing))h)"
             }
-            let paid = operativePaidHours(operativeId) + managerProjectPaidHours(user.id)
+            let paid = operativePaidHours(operativeId) + managerScheduledPaidHours(user.id)
             let required = max(payrollTimePolicy.standardPaidHours, 0)
             guard paid < required else { return nil }
             let missing = max(0, required - paid)
@@ -341,7 +340,7 @@ struct DailyOverviewView: View {
         managerUsers.compactMap { user in
             let linkedOperative = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
             if hasApprovedHoliday(userId: user.id, operativeId: linkedOperative?.id) { return nil }
-            let paid = managerProjectPaidHours(user.id) + (linkedOperative.map { operativePaidHours($0.id) } ?? 0)
+            let paid = managerScheduledPaidHours(user.id) + (linkedOperative.map { operativePaidHours($0.id) } ?? 0)
             let required = max(payrollTimePolicy.standardPaidHours, 0)
             guard paid < required else { return nil }
             let missing = max(0, required - paid)

@@ -48,6 +48,8 @@ struct HSToolboxIssue: Identifiable, Codable, Hashable {
     var weekCommencing: Date
     var issuedByUserId: String
     var issuedAt: Date
+    /// If set, this issue remains scheduled and hidden until this date/time.
+    var publishAt: Date?
     var recipientUserIds: [String]
     var status: HSToolboxIssueStatus
 }
@@ -75,6 +77,10 @@ struct HSRamsDocument: Identifiable, Codable, Hashable {
     var version: Int
     var status: String
     var uploadedAt: Date
+    var fileURL: String?
+    var fileName: String?
+    var reviewDate: Date?
+    var attachedDocTitles: [String]
 }
 
 struct HSOtherDocument: Identifiable, Codable, Hashable {
@@ -83,6 +89,9 @@ struct HSOtherDocument: Identifiable, Codable, Hashable {
     var trade: String?
     var category: String
     var uploadedAt: Date
+    var fileURL: String?
+    var fileName: String?
+    var issuableToClient: Bool
 }
 
 struct HSProjectSafetyData: Codable, Hashable {
