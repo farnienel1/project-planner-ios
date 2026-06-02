@@ -26,6 +26,7 @@ struct MaterialsAddWithCatalogueSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var smartCache: SmartCacheService
 
     let project: Project
     let initialDate: Date
@@ -586,7 +587,7 @@ struct MaterialsAddWithCatalogueSheet: View {
             return
         }
 
-        guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        guard let organizationId = MaterialOfflineService.resolvedOrganizationId(firebaseBackend: firebaseBackend) else { return }
         isSaving = true
         defer { isSaving = false }
 
@@ -652,7 +653,12 @@ struct MaterialsAddWithCatalogueSheet: View {
         }
 
         do {
-            try await firebaseBackend.saveMaterialItem(item, organizationId: organizationId)
+            _ = try await MaterialOfflineService.saveMaterial(
+                item,
+                organizationId: organizationId,
+                firebaseBackend: firebaseBackend,
+                isOnline: smartCache.isOnline
+            )
             NotificationCenter.default.post(
                 name: NSNotification.Name("reloadMaterials"),
                 object: nil,

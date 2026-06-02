@@ -30,12 +30,15 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     var clashLookaheadDays: Int
     /// When true, Sat/Sun count for unbooked labour warnings only.
     var includeWeekendsForUnbookedLabour: Bool
+    /// Org user ids omitted from unbooked-labour warnings (e.g. PAYE staff).
+    var excludedUserIdsFromUnbookedWarnings: [String]
 
     static let `default` = OrgWarningDetectionSettings(
         detectClashes: true,
         clashLookaheadMode: .endOfWorkingWeek,
         clashLookaheadDays: 28,
-        includeWeekendsForUnbookedLabour: false
+        includeWeekendsForUnbookedLabour: false,
+        excludedUserIdsFromUnbookedWarnings: []
     )
 
     enum CodingKeys: String, CodingKey {
@@ -43,18 +46,21 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         case clashLookaheadMode
         case clashLookaheadDays
         case includeWeekendsForUnbookedLabour
+        case excludedUserIdsFromUnbookedWarnings
     }
 
     init(
         detectClashes: Bool = true,
         clashLookaheadMode: WarningClashLookaheadMode = .endOfWorkingWeek,
         clashLookaheadDays: Int = 28,
-        includeWeekendsForUnbookedLabour: Bool = false
+        includeWeekendsForUnbookedLabour: Bool = false,
+        excludedUserIdsFromUnbookedWarnings: [String] = []
     ) {
         self.detectClashes = detectClashes
         self.clashLookaheadMode = clashLookaheadMode
         self.clashLookaheadDays = clashLookaheadDays
         self.includeWeekendsForUnbookedLabour = includeWeekendsForUnbookedLabour
+        self.excludedUserIdsFromUnbookedWarnings = excludedUserIdsFromUnbookedWarnings
     }
 
     init(from decoder: Decoder) throws {
@@ -63,6 +69,7 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         clashLookaheadMode = try c.decodeIfPresent(WarningClashLookaheadMode.self, forKey: .clashLookaheadMode) ?? .endOfWorkingWeek
         clashLookaheadDays = try c.decodeIfPresent(Int.self, forKey: .clashLookaheadDays) ?? 28
         includeWeekendsForUnbookedLabour = try c.decodeIfPresent(Bool.self, forKey: .includeWeekendsForUnbookedLabour) ?? false
+        excludedUserIdsFromUnbookedWarnings = try c.decodeIfPresent([String].self, forKey: .excludedUserIdsFromUnbookedWarnings) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -71,6 +78,7 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         try c.encode(clashLookaheadMode, forKey: .clashLookaheadMode)
         try c.encode(clashLookaheadDays, forKey: .clashLookaheadDays)
         try c.encode(includeWeekendsForUnbookedLabour, forKey: .includeWeekendsForUnbookedLabour)
+        try c.encode(excludedUserIdsFromUnbookedWarnings, forKey: .excludedUserIdsFromUnbookedWarnings)
     }
 
     /// How far ahead (from `today`) warnings should scan for clashes, unbooked labour, and materials.
@@ -107,6 +115,14 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter.string(from: end)
+    }
+
+    /// Inclusive number of calendar days from today through the detection end date.
+    func detectionHorizonDayCount(from today: Date = Date(), calendar: Calendar = .current) -> Int {
+        let start = calendar.startOfDay(for: today)
+        let end = coverageEnd(from: today, calendar: calendar)
+        let days = calendar.dateComponents([.day], from: start, to: end).day ?? 0
+        return max(1, days + 1)
     }
 
     // MARK: - Private
@@ -147,6 +163,9 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         if let v = data["includeWeekendsForUnbookedLabour"] as? Bool {
             s.includeWeekendsForUnbookedLabour = v
         }
+        if let ids = data["excludedUserIdsFromUnbookedWarnings"] as? [String] {
+            s.excludedUserIdsFromUnbookedWarnings = ids
+        }
         return s
     }
 
@@ -156,6 +175,7 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
             "clashLookaheadMode": clashLookaheadMode.rawValue,
             "clashLookaheadDays": clashLookaheadDays,
             "includeWeekendsForUnbookedLabour": includeWeekendsForUnbookedLabour,
+            "excludedUserIdsFromUnbookedWarnings": excludedUserIdsFromUnbookedWarnings,
         ]
     }
 }

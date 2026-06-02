@@ -11,6 +11,7 @@ struct SendToWholesalerView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var smartCache: SmartCacheService
     
     let project: Project
     let materials: [MaterialItem]
@@ -249,7 +250,7 @@ struct SendToWholesalerView: View {
         )
         
         Task {
-            guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            guard let organizationId = MaterialOfflineService.resolvedOrganizationId(firebaseBackend: firebaseBackend) else {
                 await MainActor.run {
                     isSending = false
                 }
@@ -257,11 +258,15 @@ struct SendToWholesalerView: View {
             }
             
             do {
-                try await firebaseBackend.sendMaterialRequest(request, organizationId: organizationId)
-                do {
-                    try await firebaseBackend.saveMaterialSendRecord(sendRecord, organizationId: organizationId)
-                } catch {
-                    print("🔥🔥🔥 DEBUG: saveMaterialSendRecord failed (email was sent): \(error.localizedDescription)")
+                let result = try await MaterialOfflineService.sendMaterialRequest(
+                    request,
+                    sendRecord: sendRecord,
+                    organizationId: organizationId,
+                    firebaseBackend: firebaseBackend,
+                    isOnline: smartCache.isOnline
+                )
+                if result == .queuedForSync {
+                    print("🔥🔥🔥 DEBUG: Material request queued for offline sync")
                 }
                 NotificationCenter.default.post(
                     name: NSNotification.Name("materialSendHistoryDidChange"),

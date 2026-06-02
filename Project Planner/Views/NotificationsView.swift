@@ -9,81 +9,63 @@ import SwiftUI
 
 struct NotificationsView: View {
     @EnvironmentObject var notificationService: NotificationService
-    @EnvironmentObject var userStore: UserStore
-    @EnvironmentObject var projectStore: ProjectStore
-    @EnvironmentObject var operativeStore: OperativeStore
-    @EnvironmentObject var bookingStore: BookingStore
-    @EnvironmentObject var taskStore: ProjectTaskStore
-    
     @Environment(\.dismiss) private var dismiss
-    
+
     @State private var filterOption: FilterOption = .newest
     @State private var showingFilterOptions = false
-    
+
     enum FilterOption: String, CaseIterable {
         case newest = "Newest"
         case oldest = "Oldest"
         case date = "Date"
-        
-        var displayName: String {
-            return self.rawValue
-        }
+
+        var displayName: String { rawValue }
     }
-    
+
     var filteredNotifications: [AppNotification] {
         let sorted: [AppNotification]
-        
         switch filterOption {
         case .newest:
             sorted = notificationService.notifications.sorted { $0.createdAt > $1.createdAt }
         case .oldest:
             sorted = notificationService.notifications.sorted { $0.createdAt < $1.createdAt }
         case .date:
-            // Group by date, then sort newest first within each date
             let grouped = Dictionary(grouping: notificationService.notifications) { notification in
                 Calendar.current.startOfDay(for: notification.createdAt)
             }
-            sorted = grouped.values.flatMap { $0 }
-                .sorted { $0.createdAt > $1.createdAt }
+            sorted = grouped.values.flatMap { $0 }.sorted { $0.createdAt > $1.createdAt }
         }
-        
-        // Limit to latest 100
         return Array(sorted.prefix(100))
     }
-    
+
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack(spacing: 0) {
-                // Filter Button
                 HStack {
                     Spacer()
-                    Button(action: {
+                    Button {
                         showingFilterOptions = true
-                    }) {
-                        HStack {
-                            Image(systemName: "line.3.horizontal.decrease.circle")
-                            Text("Filter")
-                        }
-                        .font(.subheadline)
-                        .foregroundColor(.blue)
+                    } label: {
+                        Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+                            .font(.subheadline)
+                            .foregroundStyle(.blue)
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
                 .background(Color(.systemGroupedBackground))
-                
+
                 if filteredNotifications.isEmpty {
                     ScrollView {
                         VStack(spacing: 16) {
                             Image(systemName: "bell.slash")
                                 .font(.system(size: 60))
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
                             Text("No Notifications")
-                                .font(.title2)
-                                .fontWeight(.semibold)
+                                .font(.title2.weight(.semibold))
                             Text("You're all caught up!")
                                 .font(.subheadline)
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, minHeight: 320)
                         .padding(.top, 80)
@@ -95,9 +77,7 @@ struct NotificationsView: View {
                     List {
                         ForEach(filteredNotifications) { notification in
                             NotificationRowView(notification: notification)
-                                .onTapGesture {
-                                    handleNotificationTap(notification)
-                                }
+                                .listRowSeparator(.visible)
                         }
                     }
                     .listStyle(.plain)
@@ -109,122 +89,18 @@ struct NotificationsView: View {
             .navigationTitle("Notifications")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
                 }
             }
             .confirmationDialog("Filter Notifications", isPresented: $showingFilterOptions, titleVisibility: .visible) {
                 ForEach(FilterOption.allCases, id: \.self) { option in
-                    Button(option.displayName) {
-                        filterOption = option
-                    }
+                    Button(option.displayName) { filterOption = option }
                 }
                 Button("Cancel", role: .cancel) {}
             }
-            .onAppear {
-                Task {
-                    await notificationService.loadNotifications()
-                }
-            }
-        }
-    }
-    
-    private func handleNotificationTap(_ notification: AppNotification) {
-        Task {
-            // Mark as read
-            await notificationService.markAsRead(notification)
-            
-            // Navigate based on notification type
-            await MainActor.run {
-                switch notification.type {
-                case .bookingCreated:
-                    if let bookingId = notification.relatedId {
-                        // Navigate to booking or project
-                        NotificationCenter.default.post(
-                            name: NSNotification.Name("navigateToBooking"),
-                            object: nil,
-                            userInfo: ["bookingId": bookingId.uuidString]
-                        )
-                    }
-                case .taskCreated, .taskCompleted:
-                    if let taskId = notification.relatedId {
-                        // Navigate to task
-                        NotificationCenter.default.post(
-                            name: NSNotification.Name("navigateToTask"),
-                            object: nil,
-                            userInfo: ["taskId": taskId.uuidString]
-                        )
-                    }
-                case .operativeCreated:
-                    if notification.relatedId != nil {
-                        // Navigate to operatives tab
-                        NotificationCenter.default.post(
-                            name: NSNotification.Name("selectTab"),
-                            object: nil,
-                            userInfo: ["tab": 3]
-                        )
-                    }
-                case .managerCreated:
-                    if notification.relatedId != nil {
-                        // Navigate to managers tab
-                        NotificationCenter.default.post(
-                            name: NSNotification.Name("selectTab"),
-                            object: nil,
-                            userInfo: ["tab": 4]
-                        )
-                    }
-                case .clientCreated:
-                    // Navigate to clients (if available)
-                    NotificationCenter.default.post(
-                        name: NSNotification.Name("navigateToClients"),
-                        object: nil
-                    )
-                case .projectCreated:
-                    NotificationCenter.default.post(
-                        name: NSNotification.Name("selectTab"),
-                        object: nil,
-                        userInfo: ["tab": 1]
-                    )
-                case .smallWorksCreated:
-                    NotificationCenter.default.post(
-                        name: NSNotification.Name("selectTab"),
-                        object: nil,
-                        userInfo: ["tab": 2]
-                    )
-                case .bookingClash, .warningRemoved:
-                    NotificationCenter.default.post(
-                        name: NSNotification.Name("navigateToWarnings"),
-                        object: nil
-                    )
-                case .holidayRequestSubmitted, .holidayRequestApproved, .holidayRequestDeclined:
-                    NotificationCenter.default.post(
-                        name: NSNotification.Name("openTasksDetail"),
-                        object: nil
-                    )
-                case .timesheetPendingManagerSignoff:
-                    NotificationCenter.default.post(
-                        name: NSNotification.Name("navigateToTimesheetReview"),
-                        object: nil,
-                        userInfo: [
-                            "targetUserId": notification.deepLinkUserId ?? "",
-                            "weekStart": notification.deepLinkWeekStart ?? Date()
-                        ]
-                    )
-                case .timesheetSignedByManager:
-                    NotificationCenter.default.post(
-                        name: NSNotification.Name("mainMenuOpenSurface"),
-                        object: nil,
-                        userInfo: [
-                            "route": MainMenuSurfaceRoute.invoicing.rawValue,
-                            "targetUserId": notification.deepLinkUserId ?? "",
-                            "weekStart": notification.deepLinkWeekStart ?? Date()
-                        ]
-                    )
-                }
-                
-                dismiss()
+            .task {
+                await notificationService.markAllAsRead()
             }
         }
     }
@@ -232,34 +108,32 @@ struct NotificationsView: View {
 
 struct NotificationRowView: View {
     let notification: AppNotification
-    @EnvironmentObject var notificationService: NotificationService
 
     @State private var isMessageExpanded = false
 
-    /// Rough threshold for two lines of subheadline text in the list row.
     private var messageExceedsPreview: Bool {
         let message = notification.message
-        return message.count > 96 || message.contains("\n")
+        return message.count > 180 || message.contains("\n")
     }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: iconForType(notification.type))
                 .font(.title3)
-                .foregroundColor(colorForType(notification.type))
+                .foregroundStyle(colorForType(notification.type))
                 .frame(width: 30)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(notification.title)
                     .font(.headline)
-                    .foregroundColor(.primary)
+                    .foregroundStyle(.primary)
 
                 Text(notification.message)
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)
-                    .lineLimit(isMessageExpanded ? nil : 2)
-                    .fixedSize(horizontal: false, vertical: isMessageExpanded)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(isMessageExpanded ? nil : 6)
 
                 if messageExceedsPreview {
                     Button(isMessageExpanded ? "Show less" : "Show more") {
@@ -268,27 +142,18 @@ struct NotificationRowView: View {
                         }
                     }
                     .font(.caption.weight(.medium))
-                    .foregroundColor(.blue)
+                    .foregroundStyle(.blue)
                     .buttonStyle(.plain)
                 }
 
-                Text(notification.createdAt, style: .relative)
+                Text(notification.createdAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Spacer()
-
-            if !notification.isRead {
-                Circle()
-                    .fill(Color.blue)
-                    .frame(width: 8, height: 8)
+                    .foregroundStyle(.tertiary)
             }
         }
         .padding(.vertical, 8)
-        .contentShape(Rectangle())
     }
-    
+
     private func iconForType(_ type: AppNotification.NotificationType) -> String {
         switch type {
         case .bookingCreated: return "calendar.badge.plus"
@@ -333,10 +198,4 @@ struct NotificationRowView: View {
 #Preview {
     NotificationsView()
         .environmentObject(NotificationService())
-        .environmentObject(UserStore())
-        .environmentObject(ProjectStore())
-        .environmentObject(OperativeStore())
-        .environmentObject(BookingStore())
-        .environmentObject(ProjectTaskStore())
 }
-

@@ -36,8 +36,13 @@ class NotificationService: ObservableObject {
     private var lastProcessedNotificationAt: Date?
     private static let persistedLocalAlertDedupKey = "NotificationService.localAlertDedupKeysV2"
     private static let persistedLastProcessedAtKey = "NotificationService.lastProcessedNotificationAtV1"
+    private static let dismissedSyntheticPrefix = "NotificationService.dismissedSynthetic."
     private static let maxPersistedDedupKeys = 400
     private var materialCutoffRefreshTask: Task<Void, Never>?
+    /// Locally read ids waiting for Firestore listener to catch up (keeps badge cleared after mark-all-read).
+    private var pendingReadNotificationIds: Set<UUID> = []
+    private var dismissedSyntheticNotificationIds: Set<UUID> = []
+    private var dismissedSyntheticLoadedForUserId: String?
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         self.firebaseBackend = backend
@@ -648,6 +653,38 @@ class NotificationService: ObservableObject {
         await saveNotification(notification)
     }
 
+    /// Sent when a manager/admin books approved annual leave on behalf of a team member.
+    func notifyAnnualLeaveBookingConfirmation(
+        userId: String,
+        bookingId: UUID,
+        bookedByName: String,
+        startDate: Date,
+        endDate: Date,
+        timeSlot: HolidayTimeSlot
+    ) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let targetId = resolvedRecipientUserId(userId)
+        let dateRange: String
+        if Calendar.current.isDate(startDate, inSameDayAs: endDate) {
+            dateRange = startDate.formatted(date: .abbreviated, time: .omitted)
+        } else {
+            dateRange = "\(startDate.formatted(date: .abbreviated, time: .omitted)) – \(endDate.formatted(date: .abbreviated, time: .omitted))"
+        }
+        let dedupeId = syntheticNotificationId(from: "annualLeaveBooked|\(bookingId.uuidString)|\(targetId)")
+        let notification = AppNotification(
+            id: dedupeId,
+            organizationId: organizationId,
+            type: .holidayRequestApproved,
+            title: "Annual Leave Booking Confirmation",
+            message: "\(bookedByName) booked your annual leave for \(dateRange) (\(timeSlot.rawValue)). Tap to view your annual leave.",
+            userId: targetId,
+            relatedId: bookingId,
+            requiresPermission: nil
+        )
+        await saveNotification(notification)
+    }
+
     /// Sent when a user signs their timesheet and it now needs the line manager's counter-signature.
     func notifyTimesheetPendingManagerSignoff(
         signedByUser: AppUser,
@@ -753,7 +790,7 @@ class NotificationService: ObservableObject {
         print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] targetedToCurrent=\(targetedToCurrent) broadcasts=\(broadcastCount) filteredVisible=\(filteredNotifications.count)")
         
         await MainActor.run {
-            self.notifications = merged
+            self.notifications = self.applyLocalReadState(to: merged)
             self.unreadCount = self.notifications.filter { !$0.isRead }.count
             // Catch-up path: if app was closed/backgrounded and new notifications arrived,
             // alert once for notifications newer than the last processed timestamp.
@@ -770,11 +807,13 @@ class NotificationService: ObservableObject {
     }
     
     func markAsRead(_ notification: AppNotification) async {
+        pendingReadNotificationIds.insert(notification.id)
+        if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
+            notifications[index].isRead = true
+            unreadCount = notifications.filter { !$0.isRead }.count
+        }
         if notification.requiresPermission == "syntheticAnnualLeave" {
-            if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
-                notifications[index].isRead = true
-                unreadCount = notifications.filter { !$0.isRead }.count
-            }
+            dismissSyntheticNotification(notification.id)
             return
         }
         guard let firebaseBackend = firebaseBackend,
@@ -795,21 +834,30 @@ class NotificationService: ObservableObject {
         }
     }
 
+    /// Clears the home-screen badge immediately when the user opens the inbox. Firestore persistence runs separately.
+    func prepareInboxPresentation() {
+        loadDismissedSyntheticIdsIfNeeded()
+        pendingReadNotificationIds = Set(notifications.map(\.id))
+        notifications = notifications.map { notification in
+            var updated = notification
+            updated.isRead = true
+            if notification.requiresPermission == "syntheticAnnualLeave" {
+                dismissedSyntheticNotificationIds.insert(notification.id)
+            }
+            return updated
+        }
+        persistDismissedSyntheticIds()
+        unreadCount = 0
+    }
+
     /// Mark all notifications as read. Call when the user opens the notification list so the badge clears.
     func markAllAsRead() async {
+        prepareInboxPresentation()
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
             return
         }
-        let unread = notifications.filter { !$0.isRead }
-        guard !unread.isEmpty else { return }
-        for notification in unread {
-            if notification.requiresPermission == "syntheticAnnualLeave" {
-                if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
-                    notifications[index].isRead = true
-                }
-                continue
-            }
+        for notification in notifications where notification.requiresPermission != "syntheticAnnualLeave" {
             var updated = notification
             updated.isRead = true
             do {
@@ -929,8 +977,9 @@ class NotificationService: ObservableObject {
                     .filter { self.shouldShowNotification($0, for: currentUser) }
 
                 Task { @MainActor in
-                    self.notifications = merged
-                    self.unreadCount = merged.filter { !$0.isRead }.count
+                    let reconciled = self.applyLocalReadState(to: merged)
+                    self.notifications = reconciled
+                    self.unreadCount = reconciled.filter { !$0.isRead }.count
                     if !self.didPrimeNotificationStream {
                         self.primeLocalAlertDedup(with: merged)
                         self.didPrimeNotificationStream = true
@@ -1421,7 +1470,7 @@ class NotificationService: ObservableObject {
                     message: isCancellation ? "\(requester) requested annual leave cancellation." : "\(requester) requested annual leave.",
                     userId: user.id,
                     relatedId: request.id,
-                    isRead: false,
+                    isRead: isSyntheticDismissed(syntheticNotificationId(from: key)),
                     createdAt: request.updatedAt,
                     requiresPermission: "syntheticAnnualLeave"
                 )
@@ -1440,7 +1489,7 @@ class NotificationService: ObservableObject {
                 message: booking.status == .approved ? "Your annual leave request was approved." : "Your annual leave request was declined.",
                 userId: user.id,
                 relatedId: booking.id,
-                isRead: false,
+                isRead: isSyntheticDismissed(syntheticNotificationId(from: key)),
                 createdAt: booking.updatedAt,
                 requiresPermission: "syntheticAnnualLeave"
             )
@@ -1472,6 +1521,51 @@ class NotificationService: ObservableObject {
             return "\(operative.firstName) \(operative.lastName)"
         }
         return "Operative"
+    }
+
+    private func applyLocalReadState(to items: [AppNotification]) -> [AppNotification] {
+        loadDismissedSyntheticIdsIfNeeded()
+        return items.map { notification in
+            var updated = notification
+            if pendingReadNotificationIds.contains(notification.id) {
+                updated.isRead = true
+            }
+            if notification.requiresPermission == "syntheticAnnualLeave",
+               isSyntheticDismissed(notification.id) {
+                updated.isRead = true
+            }
+            return updated
+        }
+    }
+
+    private func dismissSyntheticNotification(_ id: UUID) {
+        loadDismissedSyntheticIdsIfNeeded()
+        dismissedSyntheticNotificationIds.insert(id)
+        persistDismissedSyntheticIds()
+    }
+
+    private func isSyntheticDismissed(_ id: UUID) -> Bool {
+        loadDismissedSyntheticIdsIfNeeded()
+        return dismissedSyntheticNotificationIds.contains(id)
+    }
+
+    private func loadDismissedSyntheticIdsIfNeeded() {
+        guard let userId = userStore?.currentUser?.id else { return }
+        if dismissedSyntheticLoadedForUserId == userId { return }
+        dismissedSyntheticLoadedForUserId = userId
+        let key = Self.dismissedSyntheticPrefix + userId
+        if let stored = UserDefaults.standard.stringArray(forKey: key) {
+            dismissedSyntheticNotificationIds = Set(stored.compactMap(UUID.init(uuidString:)))
+        } else {
+            dismissedSyntheticNotificationIds = []
+        }
+    }
+
+    private func persistDismissedSyntheticIds() {
+        guard let userId = userStore?.currentUser?.id else { return }
+        let key = Self.dismissedSyntheticPrefix + userId
+        let values = dismissedSyntheticNotificationIds.map(\.uuidString)
+        UserDefaults.standard.set(Array(values.prefix(500)), forKey: key)
     }
 }
 

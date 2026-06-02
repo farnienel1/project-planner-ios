@@ -70,6 +70,12 @@ class BookingStore: ObservableObject {
     func setSmartCache(_ smartCache: SmartCacheService) {
         self.smartCache = smartCache
         self.isOffline = !smartCache.isOnline
+        smartCache.$isOnline
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] online in
+                self?.isOffline = !online
+            }
+            .store(in: &cancellables)
     }
     
     // MARK: - Data Loading
@@ -102,6 +108,7 @@ class BookingStore: ObservableObject {
                     // Load bookings from Firebase
                     let firebaseBookings = try await firebaseBackend.loadBookings(organizationId: organizationId)
                     self.bookings = firebaseBookings
+                    self.smartCache?.cacheBookings(firebaseBookings)
                     
                     print("🔥🔥🔥 DEBUG: Loaded \(firebaseBookings.count) bookings from Firebase")
                     
@@ -380,53 +387,74 @@ class BookingStore: ObservableObject {
         do {
             // Save to local storage
             try await persistenceService.saveBookingData(bookings: bookings)
-            
-            // CRITICAL: Wait for organization to load before saving to Firebase
-            // This ensures we never save locally when Firebase is available but org isn't ready
+            smartCache?.cacheBookings(bookings)
+
+            let bookingsToSave: [Booking]
+            if let ids = syncingBookingIds, !ids.isEmpty {
+                bookingsToSave = bookings.filter { ids.contains($0.id) }
+            } else {
+                bookingsToSave = bookings
+            }
+
+            guard !bookingsToSave.isEmpty else {
+                ScheduleChangeNotifier.postBookingStoreDidChange()
+                return
+            }
+
             let organizationId = await DataPersistenceManager.shared.waitForOrganization(
                 firebaseBackend: firebaseBackend,
-                maxWaitSeconds: 10
-            )
-            
-            if let organizationId = organizationId,
-               let firebaseBackend = firebaseBackend {
-                
-                print("🔥🔥🔥 DEBUG: Saving bookings to Firebase for organization: \(organizationId)")
-                
-                let bookingsToSave: [Booking]
-                if let ids = syncingBookingIds, !ids.isEmpty {
-                    bookingsToSave = bookings.filter { ids.contains($0.id) }
+                maxWaitSeconds: smartCache?.isOnline == false ? 1 : 10
+            ) ?? firebaseBackend?.resolvedOrganizationIdForOfflineWrites()
+
+            if smartCache?.isOnline == false {
+                if let organizationId {
+                    for booking in bookingsToSave {
+                        OfflineOutboxStore.shared.enqueueSaveBooking(booking, organizationId: organizationId)
+                    }
+                    print("🔥🔥🔥 DEBUG: Queued \(bookingsToSave.count) bookings for offline sync")
                 } else {
-                    bookingsToSave = bookings
+                    errorMessage = "Saved locally. Organization not available to queue cloud sync yet."
                 }
+                ScheduleChangeNotifier.postBookingStoreDidChange()
+                return
+            }
+
+            if let organizationId,
+               let firebaseBackend = firebaseBackend {
+
+                print("🔥🔥🔥 DEBUG: Saving bookings to Firebase for organization: \(organizationId)")
+
                 var failedCount = 0
                 for booking in bookingsToSave {
                     do {
                         try await firebaseBackend.saveBooking(booking, organizationId: organizationId)
                     } catch {
                         failedCount += 1
+                        if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true),
+                           let orgId = firebaseBackend.resolvedOrganizationIdForOfflineWrites() {
+                            OfflineOutboxStore.shared.enqueueSaveBooking(booking, organizationId: orgId)
+                        }
                         print("🔥🔥🔥 DEBUG: Error saving booking \(booking.id.uuidString): \(error)")
                     }
                 }
-                
+
                 if failedCount > 0 {
-                    errorMessage = "Some bookings could not be synced to cloud (\(failedCount))."
+                    if OfflineOutboxStore.shared.pendingCount > 0 {
+                        errorMessage = "Some bookings saved locally and will sync when you're back online."
+                    } else {
+                        errorMessage = "Some bookings could not be synced to cloud (\(failedCount))."
+                    }
                     print("🔥🔥🔥 DEBUG: Saved \(bookingsToSave.count - failedCount)/\(bookingsToSave.count) bookings to Firebase")
                 } else {
+                    errorMessage = nil
                     print("🔥🔥🔥 DEBUG: Successfully saved \(bookingsToSave.count) bookings to Firebase")
                 }
             } else {
                 print("🔥🔥🔥 DEBUG: Saved \(bookings.count) bookings locally (Firebase not available or not authenticated)")
-                print("🔥🔥🔥 DEBUG: Firebase backend: \(firebaseBackend != nil)")
-                print("🔥🔥🔥 DEBUG: Authenticated: \(firebaseBackend?.isAuthenticated ?? false)")
-                print("🔥🔥🔥 DEBUG: Organization: \(firebaseBackend?.currentOrganization?.name ?? "nil")")
-                
-                // If Firebase is available but organization isn't loaded yet, wait and retry
-                if let firebaseBackend = firebaseBackend,
-                   firebaseBackend.isAuthenticated,
-                   firebaseBackend.currentOrganization == nil {
-                    print("🔥🔥🔥 DEBUG: ⚠️ Organization not loaded yet - will retry save when organization loads")
-                    // Organization load will trigger reload via notification, which will save
+                if let organizationId = firebaseBackend?.resolvedOrganizationIdForOfflineWrites() {
+                    for booking in bookingsToSave {
+                        OfflineOutboxStore.shared.enqueueSaveBooking(booking, organizationId: organizationId)
+                    }
                 }
             }
         } catch {

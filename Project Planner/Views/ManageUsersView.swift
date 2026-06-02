@@ -758,7 +758,7 @@ struct EditUserView: View {
         self._permissions = State(initialValue: user.permissions)
         self._isActive = State(initialValue: user.isActive)
         self._selectedAssignedManagerUserId = State(initialValue: user.assignedManagerUserId)
-        self._dayRateText = State(initialValue: user.dayRate.map { String(format: "%.2f", $0) } ?? "")
+        self._dayRateText = State(initialValue: Self.formatPayrollRateText(dayRate: user.dayRate, hourlyRate: user.hourlyRate))
         self._tradePresetRaw = State(initialValue: user.tradeTypePreset ?? "")
         self._tradeCustomText = State(initialValue: user.tradeTypeCustom ?? "")
         self._editFirstName = State(initialValue: user.firstName)
@@ -2581,12 +2581,14 @@ struct EditUserView: View {
         if canEditPermissionsMatrix && operativeProfileChanged {
             let parsedDayRate = parseDayRate(dayRateText)
             let effectiveForHistory: Date? = operativeDayRateChanged ? (dayRateEffectiveAt ?? calendarStartOfDay(Date())) : nil
+            let rateToPersist = operativeDayRateChanged ? parsedDayRate : subjectUser.dayRate
             operativeDetailsSuccess = await userStore.updateOperativeProfileFields(
                 for: subjectUser,
                 assignedManagerUserId: selectedAssignedManagerUserId,
-                dayRate: permissions.operativeMode ? parsedDayRate : subjectUser.dayRate,
+                dayRate: permissions.operativeMode ? rateToPersist : subjectUser.dayRate,
                 operativeStore: operativeStore,
-                dayRateEffectiveAt: effectiveForHistory
+                dayRateEffectiveAt: effectiveForHistory,
+                updateDayRate: operativeDayRateChanged
             )
         }
 
@@ -2661,6 +2663,12 @@ struct EditUserView: View {
                 saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."
             }
         }
+    }
+
+    private static func formatPayrollRateText(dayRate: Double?, hourlyRate: Double?) -> String {
+        if let dayRate, dayRate > 0 { return String(format: "%.2f", dayRate) }
+        if let hourlyRate, hourlyRate > 0 { return String(format: "%.2f", hourlyRate) }
+        return ""
     }
 
     private func parseDayRate(_ input: String) -> Double? {

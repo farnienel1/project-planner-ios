@@ -72,6 +72,95 @@ enum ManagerScheduleInterval {
         if (a == .morning && b == .afternoon) || (a == .afternoon && b == .morning) { return false }
         return true
     }
+
+    /// Merges touching/overlapping minute intervals for one calendar day.
+    static func mergeIntervals(_ intervals: [(Int, Int)]) -> [(Int, Int)] {
+        guard !intervals.isEmpty else { return [] }
+        let sorted = intervals.sorted { $0.0 < $1.0 }
+        var merged: [(Int, Int)] = []
+        for iv in sorted {
+            if let last = merged.last, iv.0 <= last.1 {
+                merged[merged.count - 1] = (last.0, max(last.1, iv.1))
+            } else {
+                merged.append(iv)
+            }
+        }
+        return merged
+    }
+
+    /// Paid hours for all manager bookings on one day — deducts break once across contiguous blocks.
+    static func combinedPaidBookedHours(
+        for bookings: [ManagerSiteBooking],
+        policy: OrgPayrollTimePolicy
+    ) -> Double {
+        guard !bookings.isEmpty else { return 0 }
+        if bookings.contains(where: { $0.timeSlot == .fullDay && ($0.workStartTime ?? "").isEmpty && ($0.workEndTime ?? "").isEmpty }) {
+            return max(policy.standardPaidHours, 0)
+        }
+
+        var intervals: [(Int, Int)] = []
+        intervals.reserveCapacity(bookings.count)
+        for booking in bookings {
+            if let iv = clashInterval(for: booking, policy: policy) {
+                intervals.append(iv)
+            }
+        }
+        guard !intervals.isEmpty else {
+            return bookings.reduce(0) { $0 + $1.paidBookedHours(policy: policy) }
+        }
+
+        let merged = mergeIntervals(intervals)
+        if let ws = parseMinutes(policy.standardDayStart),
+           let we = parseMinutes(policy.standardDayEnd),
+           we > ws {
+            let unionStart = merged.map(\.0).min() ?? ws
+            let unionEnd = merged.map(\.1).max() ?? we
+            if unionStart <= ws && unionEnd >= we {
+                return max(policy.standardPaidHours, 0)
+            }
+        }
+
+        let totalMinutes = merged.reduce(0) { $0 + max(0, $1.1 - $1.0) }
+        var wallHours = Double(totalMinutes) / 60.0
+        if !bookings.contains(where: \.isBreakRemoved) {
+            wallHours = max(0, wallHours - policy.standardUnpaidBreakHours)
+        }
+        return wallHours
+    }
+
+    /// Snapshot-friendly variant for warnings computation (uses precomputed clash intervals).
+    static func combinedPaidHoursFromIntervals(
+        intervals: [(Int, Int)],
+        anyBreakRemoved: Bool,
+        includesLegacyFullDay: Bool,
+        standardPaidHours: Double,
+        standardDayStart: String,
+        standardDayEnd: String,
+        standardUnpaidBreakHours: Double
+    ) -> Double {
+        if includesLegacyFullDay {
+            return max(standardPaidHours, 0)
+        }
+        guard !intervals.isEmpty else { return 0 }
+
+        let merged = mergeIntervals(intervals)
+        if let ws = parseMinutes(standardDayStart),
+           let we = parseMinutes(standardDayEnd),
+           we > ws {
+            let unionStart = merged.map(\.0).min() ?? ws
+            let unionEnd = merged.map(\.1).max() ?? we
+            if unionStart <= ws && unionEnd >= we {
+                return max(standardPaidHours, 0)
+            }
+        }
+
+        let totalMinutes = merged.reduce(0) { $0 + max(0, $1.1 - $1.0) }
+        var wallHours = Double(totalMinutes) / 60.0
+        if !anyBreakRemoved {
+            wallHours = max(0, wallHours - standardUnpaidBreakHours)
+        }
+        return wallHours
+    }
 }
 
 extension ManagerSiteBooking {

@@ -46,6 +46,9 @@ enum PlannerStoreWiring {
         bookingStore.setSmartCache(smartCache)
 
         managerScheduleStore.setFirebaseBackend(firebaseBackend)
+        managerScheduleStore.setSmartCache(smartCache)
+
+        smartCache.setFirebaseBackend(firebaseBackend)
 
         userStore.setFirebaseBackend(firebaseBackend)
         userStore.setSmartCache(smartCache)
@@ -162,7 +165,10 @@ struct ProjectPlannerRootView: View {
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
         } else {
-            ContentView()
+            VStack(spacing: 0) {
+                OfflineStatusBanner()
+                ContentView()
+            }
                 .environmentObject(firebaseBackend)
                 .environmentObject(smartCache)
                 .environmentObject(projectStore)

@@ -555,6 +555,14 @@ class OperativeStore: ObservableObject {
     // MARK: - Qualifications Operations
     
     func addQualification(_ qualification: Qualification) async {
+        let normalized = qualification.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return }
+        if qualifications.contains(where: {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalized
+        }) {
+            print("🔥🔥🔥 DEBUG: Skipping duplicate qualification name: \(qualification.name)")
+            return
+        }
         qualifications.append(qualification)
         _ = await saveDataWithRetry(description: "adding qualification \(qualification.name)")
     }

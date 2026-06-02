@@ -12,6 +12,7 @@ import FirebaseFirestore
 struct MaterialsView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var smartCache: SmartCacheService
     
     let project: Project
     
@@ -133,10 +134,15 @@ struct MaterialsView: View {
         print("📦 [MaterialsView] Loading materials for project: \(project.id) (org: \(organizationId)) initial=\(isInitial)")
         do {
             let loadedMaterials = try await firebaseBackend.loadMaterialItems(organizationId: organizationId, projectId: project.id)
+            let merged = MaterialOfflineService.mergedMaterials(
+                organizationId: organizationId,
+                projectId: project.id,
+                remote: loadedMaterials
+            )
             await MainActor.run {
-                materials = loadedMaterials
+                materials = merged
                 print("✅ [MaterialsView] Loaded \(loadedMaterials.count) materials and updated @State")
-                if loadedMaterials.isEmpty {
+                if merged.isEmpty {
                     print("   ⚠️ WARNING: No materials found in Firebase for this project!")
                 } else {
                     print("   Materials loaded:")
@@ -178,7 +184,11 @@ struct MaterialsView: View {
                 // always apply non-empty and server snapshots here. Do not skip cache updates when `materials`
                 // is non-empty: that blocked newly saved rows from ever appearing if a cached full snapshot
                 // arrived after the initial load (common right after "Submit All" while other days already had lines).
-                materials = updated
+                materials = MaterialOfflineService.mergedMaterials(
+                    organizationId: orgId,
+                    projectId: project.id,
+                    remote: updated
+                )
             }
         }
     }
@@ -189,6 +199,7 @@ struct MaterialsView: View {
 private struct OperativeMaterialsView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var smartCache: SmartCacheService
     
     let project: Project
     @Binding var selectedDate: Date
@@ -356,10 +367,16 @@ private struct OperativeMaterialsView: View {
     }
 
     private func deleteMaterial(_ material: MaterialItem) {
-        guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        guard let organizationId = MaterialOfflineService.resolvedOrganizationId(firebaseBackend: firebaseBackend) else { return }
         Task {
             do {
-                try await firebaseBackend.deleteMaterialItem(material.id, organizationId: organizationId)
+                _ = try await MaterialOfflineService.deleteMaterial(
+                    material.id,
+                    projectId: project.id,
+                    organizationId: organizationId,
+                    firebaseBackend: firebaseBackend,
+                    isOnline: smartCache.isOnline
+                )
                 await MainActor.run {
                     if let idx = materials.firstIndex(where: { $0.id == material.id }) {
                         materials.remove(at: idx)
@@ -534,6 +551,7 @@ struct AddMaterialView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var smartCache: SmartCacheService
     
     let project: Project
     let date: Date
@@ -647,7 +665,7 @@ struct AddMaterialView: View {
         let calendar = Calendar.current
         
         Task {
-            guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            guard let organizationId = MaterialOfflineService.resolvedOrganizationId(firebaseBackend: firebaseBackend) else {
                 await MainActor.run {
                     isSaving = false
                 }
@@ -679,7 +697,12 @@ struct AddMaterialView: View {
                 )
                 
                 do {
-                    try await firebaseBackend.saveMaterialItem(material, organizationId: organizationId)
+                    _ = try await MaterialOfflineService.saveMaterial(
+                        material,
+                        organizationId: organizationId,
+                        firebaseBackend: firebaseBackend,
+                        isOnline: smartCache.isOnline
+                    )
                     savedCount += 1
                     print("✅ Material saved: \(material.material) for date: \(normalizedDate)")
                 } catch {
@@ -691,7 +714,9 @@ struct AddMaterialView: View {
             }
             
             // Per job: keep ~1 year of past “needed” dates for this project only; older rows for this project are removed.
-            try? await firebaseBackend.cleanupOldMaterials(organizationId: organizationId, projectId: project.id, keepDays: 365)
+            if smartCache.isOnline {
+                try? await firebaseBackend.cleanupOldMaterials(organizationId: organizationId, projectId: project.id, keepDays: 365)
+            }
             
             await MainActor.run {
                 isSaving = false

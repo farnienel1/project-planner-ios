@@ -8,6 +8,7 @@ import SwiftUI
 struct AdminManagerMaterialsView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var smartCache: SmartCacheService
 
     let project: Project
     @Binding var selectedDate: Date
@@ -184,10 +185,16 @@ struct AdminManagerMaterialsView: View {
     }
 
     private func deleteMaterial(_ material: MaterialItem) {
-        guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        guard let organizationId = MaterialOfflineService.resolvedOrganizationId(firebaseBackend: firebaseBackend) else { return }
         Task {
             do {
-                try await firebaseBackend.deleteMaterialItem(material.id, organizationId: organizationId)
+                _ = try await MaterialOfflineService.deleteMaterial(
+                    material.id,
+                    projectId: project.id,
+                    organizationId: organizationId,
+                    firebaseBackend: firebaseBackend,
+                    isOnline: smartCache.isOnline
+                )
                 await MainActor.run {
                     materials.removeAll { $0.id == material.id }
                 }

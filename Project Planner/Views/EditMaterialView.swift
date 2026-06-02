@@ -12,6 +12,7 @@ struct EditMaterialView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var smartCache: SmartCacheService
     
     let material: MaterialItem
     @Binding var isPresented: Bool
@@ -149,7 +150,7 @@ struct EditMaterialView: View {
         updatedMaterial.editedAt = Date()
         
         Task {
-            guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            guard let organizationId = MaterialOfflineService.resolvedOrganizationId(firebaseBackend: firebaseBackend) else {
                 await MainActor.run {
                     isSaving = false
                 }
@@ -157,7 +158,12 @@ struct EditMaterialView: View {
             }
             
             do {
-                try await firebaseBackend.saveMaterialItem(updatedMaterial, organizationId: organizationId)
+                _ = try await MaterialOfflineService.saveMaterial(
+                    updatedMaterial,
+                    organizationId: organizationId,
+                    firebaseBackend: firebaseBackend,
+                    isOnline: smartCache.isOnline
+                )
                 print("✅ Material updated: \(updatedMaterial.material) for date: \(normalizedDate)")
                 
                 await MainActor.run {
