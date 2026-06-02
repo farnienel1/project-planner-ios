@@ -637,20 +637,27 @@ struct WeeklyReportView: View {
     }
 
     /// Uses day-rate history keyed by user id; compares **calendar days** so a change effective “tomorrow” does not apply to today’s bookings.
+    private func resolvedPayrollRate(user: AppUser?, operative: Operative?, on date: Date) -> ResolvedPayrollRate {
+        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let standardDayHours = max(policy.standardPaidHours, 8)
+        return PayrollRateResolver.resolveForTimesheetDay(
+            user: user,
+            operative: operative,
+            on: date,
+            history: dayRateHistoryCollection,
+            standardDayHours: standardDayHours
+        )
+    }
+
     private func dayRateForUserOnDay(userId: String, fallback: Double?, date: Date) -> Double? {
-        let history = (dayRateHistoryCollection.byUserId[userId] ?? []).sorted(by: { $0.effectiveAt < $1.effectiveAt })
-        let day = calendarDayStart(date)
-        let rateFromHistory = history.last(where: { calendarDayStart($0.effectiveAt) <= day })?.dayRate
-        return rateFromHistory ?? fallback
+        let user = userStore.organizationUsers.first(where: { $0.id == userId })
+        let resolved = resolvedPayrollRate(user: user, operative: nil, on: date)
+        return resolved.reportRateValue() ?? fallback
     }
 
     private func dayRateForOperativeBooking(user: AppUser?, operative: Operative, on date: Date) -> Double? {
-        let merged = dayRateHistoryCollection.mergedEntries(userId: user?.id, operativeId: operative.id)
-        let day = calendarDayStart(date)
-        let history = merged.sorted(by: { $0.effectiveAt < $1.effectiveAt })
-        let rateFromHistory = history.last(where: { calendarDayStart($0.effectiveAt) <= day })?.dayRate
-        let fallback = operative.dayRate ?? user?.dayRate
-        return rateFromHistory ?? fallback ?? user?.dayRate ?? operative.dayRate
+        let resolved = resolvedPayrollRate(user: user, operative: operative, on: date)
+        return resolved.reportRateValue()
     }
 
     private func overlappingDays(for booking: HolidayBooking, calendar: Calendar) -> Double {
@@ -724,9 +731,9 @@ struct WeeklyReportView: View {
         struct Acc {
             var name: String
             var role: String
-            var rate: Double?
-            var normalDays: Double = 0
-            var otDays: Double = 0
+            var resolved: ResolvedPayrollRate
+            var normalHours: Double = 0
+            var otHours: Double = 0
             var otMultiplier: Double
         }
         var byKey: [String: Acc] = [:]
@@ -743,17 +750,18 @@ struct WeeklyReportView: View {
             let linkedUser = linkedAppUser(for: operative)
             let role = reportRoleLabel(for: linkedUser, fallback: "Operative")
             let name = (linkedUser?.fullName.isEmpty == false) ? (linkedUser?.fullName ?? operative.name) : operative.name
-            let rate = dayRateForOperativeBooking(user: linkedUser, operative: operative, on: booking.date)
+            let resolved = resolvedPayrollRate(user: linkedUser, operative: operative, on: booking.date)
             let paid = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
-            let normalDays = max(0, paid - otHours) / standard
-            let otDays = max(0, otHours) / standard
+            let normalHours = max(0, paid - otHours)
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
-            let rateKey = rate.map { String(format: "%.4f", $0) } ?? "no-rate"
+            let rateKey = resolved.basis == .hourly
+                ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
+                : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
             let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))"
-            var acc = byKey[key] ?? Acc(name: name, role: role, rate: rate, otMultiplier: otMultiplier)
-            acc.normalDays += normalDays
-            acc.otDays += otDays
+            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier)
+            acc.normalHours += normalHours
+            acc.otHours += otHours
             byKey[key] = acc
         }
 
@@ -767,17 +775,22 @@ struct WeeklyReportView: View {
             guard let manager = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { continue }
             let role = reportRoleLabel(for: manager, fallback: "Manager")
             let name = manager.fullName.isEmpty ? manager.email : manager.fullName
-            let rate = dayRateForUserOnDay(userId: manager.id, fallback: manager.dayRate, date: booking.date)
+            let linkedOperative = operativeStore.allOperatives.first {
+                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                    == manager.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            let resolved = resolvedPayrollRate(user: manager, operative: linkedOperative, on: booking.date)
             let paid = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
-            let normalDays = max(0, paid - otHours) / standard
-            let otDays = max(0, otHours) / standard
+            let normalHours = max(0, paid - otHours)
             let otMultiplier = policy.weekdayOutsideStandardMultiplier
-            let rateKey = rate.map { String(format: "%.4f", $0) } ?? "no-rate"
+            let rateKey = resolved.basis == .hourly
+                ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
+                : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
             let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))"
-            var acc = byKey[key] ?? Acc(name: name, role: role, rate: rate, otMultiplier: otMultiplier)
-            acc.normalDays += normalDays
-            acc.otDays += otDays
+            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier)
+            acc.normalHours += normalHours
+            acc.otHours += otHours
             byKey[key] = acc
         }
 
@@ -787,34 +800,50 @@ struct WeeklyReportView: View {
             guard let first = entries.first else { continue }
             var lines: [PayrollRateLine] = []
             var total = 0.0
-            for entry in entries.sorted(by: { ($0.rate ?? -1) < ($1.rate ?? -1) }) {
-                if entry.normalDays > 0.0001 {
-                    let pay = entry.rate.map { $0 * entry.normalDays }
+            for entry in entries.sorted(by: {
+                ($0.resolved.reportRateValue() ?? -1) < ($1.resolved.reportRateValue() ?? -1)
+            }) {
+                if entry.normalHours > 0.0001 {
+                    let pay = entry.resolved.payForHours(entry.normalHours, standardDayHours: standard)
+                    let days = entry.normalHours / standard
+                    let rateLabel = entry.resolved.basis == .hourly ? "Normal (hourly)" : "Normal"
                     lines.append(
                         PayrollRateLine(
-                            rateTypeLabel: "Normal",
-                            days: entry.normalDays,
-                            rate: entry.rate,
+                            rateTypeLabel: rateLabel,
+                            days: days,
+                            rate: entry.resolved.reportRateValue(),
                             pay: pay
                         )
                     )
-                    total += pay ?? 0
+                    total += pay
                 }
-                if entry.otDays > 0.0001 {
-                    let otRate = entry.rate.map { $0 * entry.otMultiplier }
-                    let otPay = entry.rate.map { $0 * entry.otMultiplier * entry.otDays }
+                if entry.otHours > 0.0001 {
+                    let otPay = entry.resolved.payForHours(
+                        entry.otHours,
+                        standardDayHours: standard,
+                        otMultiplier: entry.otMultiplier
+                    )
+                    let otDays = entry.otHours / standard
+                    let otRate: Double?
+                    switch entry.resolved.basis {
+                    case .dayRate:
+                        otRate = entry.resolved.dayRate.map { $0 * entry.otMultiplier }
+                    case .hourly:
+                        otRate = entry.resolved.hourlyRate.map { $0 * entry.otMultiplier }
+                    }
                     let label = abs(entry.otMultiplier - entry.otMultiplier.rounded()) < 0.001
                         ? "OT x\(Int(entry.otMultiplier.rounded()))"
                         : String(format: "OT x%.1f", entry.otMultiplier)
+                    let otLabel = entry.resolved.basis == .hourly ? "\(label) (hourly)" : label
                     lines.append(
                         PayrollRateLine(
-                            rateTypeLabel: label,
-                            days: entry.otDays,
+                            rateTypeLabel: otLabel,
+                            days: otDays,
                             rate: otRate,
                             pay: otPay
                         )
                     )
-                    total += otPay ?? 0
+                    total += otPay
                 }
             }
             summaries.append(PayrollPersonSummary(name: first.name, role: first.role, lines: lines, totalPay: total))

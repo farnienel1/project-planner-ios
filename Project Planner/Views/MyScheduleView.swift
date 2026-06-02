@@ -2191,8 +2191,16 @@ fileprivate struct ManagerSelfBookingEntryView: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
                 )
-                .onChange(of: startTime) { _, _ in selectedSlot = .customHours }
-                .onChange(of: endTime) { _, _ in selectedSlot = .customHours }
+                .onChange(of: startTime) { _, newValue in
+                    selectedSlot = .customHours
+                    let rounded = BookingHMTimePickerSupport.roundDateToQuarterHour(newValue)
+                    if rounded != newValue { startTime = rounded }
+                }
+                .onChange(of: endTime) { _, newValue in
+                    selectedSlot = .customHours
+                    let rounded = BookingHMTimePickerSupport.roundDateToQuarterHour(newValue)
+                    if rounded != newValue { endTime = rounded }
+                }
 
                 if let errorMessage {
                     Text(errorMessage)

@@ -669,6 +669,16 @@ class FirebaseBackend: ObservableObject {
     
     /// Load organizationId from local storage
     @MainActor
+    func resolvedOrganizationIdForOfflineWrites() -> String? {
+        if let live = currentOrganization?.firestoreDocumentId,
+           !live.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return live
+        }
+        return loadOrganizationIdLocally()
+    }
+
+    /// Load organizationId from local storage
+    @MainActor
     private func loadOrganizationIdLocally() -> String? {
         return UserDefaults.standard.string(forKey: organizationIdKey)
     }
@@ -3651,13 +3661,8 @@ class FirebaseBackend: ObservableObject {
             } else if hasHourly {
                 userData["hourlyRate"] = hr!
                 userData["dayRate"] = FieldValue.delete()
-            } else {
-                userData["dayRate"] = FieldValue.delete()
-                userData["hourlyRate"] = FieldValue.delete()
             }
-        } else {
-            userData["dayRate"] = FieldValue.delete()
-            userData["hourlyRate"] = FieldValue.delete()
+            // When neither rate is set, omit both fields so merge preserves existing saved rates.
         }
         
         if user.permissions.operativeMode || user.permissions.manager {
@@ -3798,7 +3803,12 @@ class FirebaseBackend: ObservableObject {
 
     /// Patch-only update for operative profile metadata managed from Manage Users.
     /// Writes only targeted fields to avoid rules rejecting unrelated user fields.
-    func updateOperativeProfileMetadata(userId: String, assignedManagerUserId: String?, dayRate: Double?) async throws {
+    func updateOperativeProfileMetadata(
+        userId: String,
+        assignedManagerUserId: String?,
+        dayRate: Double?,
+        updateDayRate: Bool = true
+    ) async throws {
         var payload: [String: Any] = [
             "updatedAt": Timestamp(date: Date())
         ]
@@ -3808,10 +3818,12 @@ class FirebaseBackend: ObservableObject {
         } else {
             payload["assignedManagerUserId"] = FieldValue.delete()
         }
-        if let dayRate {
-            payload["dayRate"] = dayRate
-        } else {
-            payload["dayRate"] = FieldValue.delete()
+        if updateDayRate {
+            if let dayRate {
+                payload["dayRate"] = dayRate
+            } else {
+                payload["dayRate"] = FieldValue.delete()
+            }
         }
         try await db.collection("users").document(userId).updateData(payload)
     }

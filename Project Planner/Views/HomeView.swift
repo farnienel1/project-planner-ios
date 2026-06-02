@@ -97,11 +97,6 @@ struct HomeView: View {
         .sheet(isPresented: $showingNotifications) {
             NotificationsView()
                 .environmentObject(notificationService)
-                .environmentObject(userStore)
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(bookingStore)
-                .environmentObject(taskStore)
         }
         .task {
             // Defer slightly so Home can render before task work.
@@ -189,7 +184,7 @@ struct HomeView: View {
             showingManageUsers = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openTasksDetail"))) { _ in
-            showingTasksDetail = true
+            presentTasksDetail()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToWarnings"))) { _ in
             Task { await openWarningsDetail() }
@@ -279,6 +274,13 @@ struct HomeView: View {
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
                 .environmentObject(operativeStore)
+                .environmentObject(projectStore)
+                .environmentObject(bookingStore)
+                .environmentObject(taskStore)
+                .environmentObject(holidayStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(appSettings)
+                .environmentObject(notificationService)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openOrgSitesMapFromMore"))) { _ in
             showingOrgSitesMap = true
@@ -304,7 +306,7 @@ struct HomeView: View {
                 }
             case .addUser: showingAddUser = true
             case .manageUsers: showingManageUsers = true
-            case .tasksDetail: showingTasksDetail = true
+            case .tasksDetail: presentTasksDetail()
             case .generalAppSettings: showingGeneralAppSettings = true
             case .orgSitesMap: showingOrgSitesMap = true
             case .siteAudit: showingSiteAudit = true
@@ -621,6 +623,22 @@ struct HomeView: View {
         .task(id: homeDataRefreshTrigger) {
             await refreshHomeDerivedData()
         }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
+            guard userStore.hasAdminAccess() else { return }
+            Task {
+                await WarningsRefreshHelper.refreshSharedWarnings(
+                    operativeStore: operativeStore,
+                    bookingStore: bookingStore,
+                    projectStore: projectStore,
+                    userStore: userStore,
+                    managerScheduleStore: managerScheduleStore,
+                    holidayStore: holidayStore,
+                    firebaseBackend: firebaseBackend,
+                    appSettings: appSettings
+                )
+                homeWarningCount = WarningsService.shared.warningCount
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .warningsDidRecompute)) { notification in
             if let count = notification.userInfo?["count"] as? Int {
                 homeWarningCount = count
@@ -652,29 +670,29 @@ struct HomeView: View {
             Spacer()
             HStack(spacing: 8) {
                 Button {
-                    Task {
-                        await notificationService.markAllAsRead()
-                        showingNotifications = true
-                    }
+                    notificationService.prepareInboxPresentation()
+                    showingNotifications = true
                 } label: {
                     ZStack(alignment: .topTrailing) {
                         Image(systemName: "bell.fill")
-                            .font(.system(size: 17))
+                            .font(.system(size: 18))
                             .foregroundStyle(homeInk)
-                            .frame(width: 38, height: 38)
+                            .frame(width: 44, height: 44)
                             .background(Color.white)
                             .clipShape(Circle())
                             .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
                         if notificationService.unreadCount > 0 {
                             Circle()
                                 .fill(Color(red: 0.89, green: 0.29, blue: 0.29))
-                                .frame(width: 8, height: 8)
+                                .frame(width: 9, height: 9)
                                 .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
-                                .offset(x: 2, y: -2)
+                                .offset(x: 3, y: -3)
                         }
                     }
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Notifications")
+                .accessibilityHint("Opens your notification list")
                 Button {
                     showingHomeProfileCard = true
                 } label: {
@@ -809,7 +827,7 @@ struct HomeView: View {
                 title: "Tasks",
                 value: "\(assignedTasksCount) pending"
             ) {
-                DispatchQueue.main.async { showingTasksDetail = true }
+                presentTasksDetail()
             }
             .frame(maxWidth: .infinity)
         }
@@ -854,6 +872,7 @@ struct HomeView: View {
             )
         }
         .buttonStyle(.plain)
+        .contentShape(Rectangle())
     }
 
     private var quickActionStorageKey: String {
@@ -1037,7 +1056,7 @@ struct HomeView: View {
         case HomeQuickActionID.staffGeneralAppSettings.rawValue:
             showingGeneralAppSettings = true
         case HomeQuickActionID.staffTasks.rawValue:
-            showingTasksDetail = true
+            presentTasksDetail()
         case HomeQuickActionID.staffInvoicing.rawValue:
             showingInvoicing = true
         default:
@@ -1058,7 +1077,7 @@ struct HomeView: View {
                     .foregroundStyle(tint)
             }
             Text(title)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(homeInk)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
@@ -1303,10 +1322,20 @@ struct HomeView: View {
         )
     }
 
+    private func presentTasksDetail() {
+        showingWarningsDetail = false
+        showingTasksDetail = true
+    }
+
+    private func presentWarningsDetail() {
+        showingTasksDetail = false
+        showingWarningsDetail = true
+    }
+
     /// Rebuild Up Next + warning count off the main thread; Home does not observe `WarningsService` (avoids full-tree redraws).
     private func refreshHomeDerivedData() async {
         guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
-        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        try? await Task.sleep(nanoseconds: 400_000_000)
         guard !Task.isCancelled else { return }
         guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
 
@@ -1360,9 +1389,20 @@ struct HomeView: View {
 
     private func openWarningsDetail() async {
         if userStore.hasAdminAccess() {
-            await refreshHomeDerivedData()
+            await WarningsRefreshHelper.refreshSharedWarnings(
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                projectStore: projectStore,
+                userStore: userStore,
+                managerScheduleStore: managerScheduleStore,
+                holidayStore: holidayStore,
+                firebaseBackend: firebaseBackend,
+                appSettings: appSettings,
+                force: true
+            )
+            homeWarningCount = WarningsService.shared.warningCount
         }
-        showingWarningsDetail = true
+        presentWarningsDetail()
     }
     
     private var assignedTasksCount: Int {
@@ -1823,6 +1863,13 @@ private struct HomeProfileCardSheet: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var taskStore: ProjectTaskStore
+    @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject var notificationService: NotificationService
 
     private var user: AppUser? { userStore.displayUser }
 
@@ -1853,8 +1900,17 @@ private struct HomeProfileCardSheet: View {
 
     private var dayRateText: String {
         guard let user else { return "£0.00" }
-        let rate = user.dayRate ?? operative?.dayRate ?? 0
-        return String(format: "£%.2f", rate)
+        let resolved = PayrollRateResolver.resolve(
+            user: user,
+            operative: operative,
+            on: Date(),
+            history: .empty,
+            standardDayHours: 8
+        )
+        if let label = resolved.displayRateLabel() {
+            return label.replacingOccurrences(of: "/day", with: "").replacingOccurrences(of: "/hr", with: " per hour")
+        }
+        return "Not set"
     }
 
     var body: some View {
@@ -1903,6 +1959,24 @@ private struct HomeProfileCardSheet: View {
             .navigationTitle("My Profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink {
+                        SettingsView()
+                            .environmentObject(firebaseBackend)
+                            .environmentObject(projectStore)
+                            .environmentObject(operativeStore)
+                            .environmentObject(bookingStore)
+                            .environmentObject(taskStore)
+                            .environmentObject(appSettings)
+                            .environmentObject(userStore)
+                            .environmentObject(notificationService)
+                            .environmentObject(holidayStore)
+                            .environmentObject(managerScheduleStore)
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                    }
+                    .accessibilityLabel("Settings")
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }

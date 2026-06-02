@@ -230,11 +230,13 @@ class WarningsService: ObservableObject {
         guard warning.requiresWeeklyReportApproval else { return }
         resolutionStore.approve(warning.resolutionKey)
         refreshActiveFromGenerated()
+        WarningsRefreshHelper.postWarningsCountDidChange()
     }
 
     func dismissWarning(_ warning: Warning) {
         resolutionStore.dismiss(warning.resolutionKey)
         refreshActiveFromGenerated()
+        WarningsRefreshHelper.postWarningsCountDidChange()
     }
 
     private func refreshActiveFromGenerated() {

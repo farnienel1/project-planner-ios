@@ -237,19 +237,6 @@ struct ProjectDetailView: View {
                 .environmentObject(operativeStore)
                 .preference(key: HideBottomMenuKey.self, value: true)
         }
-        .confirmationDialog("Open in Maps", isPresented: $showingMapOptions, titleVisibility: .visible) {
-            Button("Open in Google Maps") {
-                openInGoogleMaps()
-            }
-            Button("Open in Apple Maps") {
-                openInAppleMaps()
-            }
-            Button("Cancel", role: .cancel) {
-                showingMapOptions = false
-            }
-        } message: {
-            Text("Choose how you'd like to open the location")
-        }
         .onAppear {
             geocodeAddress()
             loadWeekBookings(force: true)
@@ -1356,15 +1343,28 @@ struct ProjectDetailView: View {
                         .font(.subheadline)
                         .foregroundColor(.primary)
                     
-                    Button(action: { showingMapOptions = true }) {
-                        Text("Open in Maps")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(Color.theme.primary)
-                            .cornerRadius(8)
+                    HStack(spacing: 10) {
+                        Button(action: openInAppleMaps) {
+                            Label("Apple Maps", systemImage: "map.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(Color.theme.primary)
+                                .cornerRadius(8)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: openInGoogleMaps) {
+                            Label("Google Maps", systemImage: "globe")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(Color.theme.primary)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(Color(.systemGray6))
+                                .cornerRadius(8)
+                        }
+                        .buttonStyle(.plain)
                     }
                     
                     // Map view

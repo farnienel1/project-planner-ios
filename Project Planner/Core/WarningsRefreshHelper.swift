@@ -18,17 +18,29 @@ enum WarningsRefreshHelper {
         managerScheduleStore: ManagerScheduleStore,
         holidayStore: HolidayStore,
         firebaseBackend: FirebaseBackend,
-        appSettings: AppSettingsStore
+        appSettings: AppSettingsStore,
+        force: Bool = false
     ) async {
         guard userStore.hasAdminAccess() else { return }
-        if bookingStore.isLoading || managerScheduleStore.isLoading || operativeStore.isLoading || holidayStore.isLoading {
-            return
+
+        if managerScheduleStore.managerSiteBookings.isEmpty {
+            managerScheduleStore.loadData(force: true)
+            try? await Task.sleep(nanoseconds: 350_000_000)
         }
-        let now = Date()
-        if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < minRefreshInterval {
-            return
+
+        if !force {
+            if bookingStore.isLoading || operativeStore.isLoading || holidayStore.isLoading {
+                return
+            }
+            let now = Date()
+            if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < minRefreshInterval {
+                return
+            }
+            lastRefreshAt = now
+        } else {
+            lastRefreshAt = Date()
         }
-        lastRefreshAt = now
+
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
@@ -43,6 +55,7 @@ enum WarningsRefreshHelper {
         let projects = projectStore.projects
         let projectsTomorrow = projects.filter { tomorrowIds.contains($0.id) }
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
         let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
 
         await WarningsService.shared.updateWarningsAsync(
@@ -53,11 +66,17 @@ enum WarningsRefreshHelper {
             managerSiteBookings: managerScheduleStore.managerSiteBookings,
             holidayBookings: holidayStore.bookings,
             payrollTimePolicy: policy,
+            warningDetection: warningDetection,
             materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
             materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
             materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsTomorrow
         )
+        postWarningsCountDidChange()
+    }
+
+    @MainActor
+    static func postWarningsCountDidChange() {
         NotificationCenter.default.post(
             name: .warningsDidRecompute,
             object: nil,
@@ -65,4 +84,3 @@ enum WarningsRefreshHelper {
         )
     }
 }
-

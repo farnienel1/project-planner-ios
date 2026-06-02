@@ -235,9 +235,10 @@ struct InvoicingView: View {
     private var managerLandingCards: some View {
         let _ = landingVersion
         let directReports = usersForManagerReview
-        let awaiting = directReports.filter { TimesheetDraftStore.load(userId: $0.id, weekStart: WeekRange.current().start).operativeSignedAt != nil && TimesheetDraftStore.load(userId: $0.id, weekStart: WeekRange.current().start).managerSignedAt == nil }.count
-        let signed = directReports.filter { TimesheetDraftStore.load(userId: $0.id, weekStart: WeekRange.current().start).managerSignedAt != nil && TimesheetDraftStore.load(userId: $0.id, weekStart: WeekRange.current().start).exportedAt == nil }.count
-        let exported = directReports.filter { TimesheetDraftStore.load(userId: $0.id, weekStart: WeekRange.current().start).exportedAt != nil }.count
+        let openWeek = WeekRange.current(settings: settings)
+        let awaiting = directReports.filter { TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start).operativeSignedAt != nil && TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start).managerSignedAt == nil }.count
+        let signed = directReports.filter { TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start).managerSignedAt != nil && TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start).exportedAt == nil }.count
+        let exported = directReports.filter { TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start).exportedAt != nil }.count
 
         VStack(spacing: 12) {
             if canShowMyTimesheets {
@@ -343,20 +344,20 @@ struct InvoicingView: View {
         if isAdminViewer {
             return userStore.organizationUsers.filter {
                 $0.isActive &&
-                $0.employmentType(on: Date()) == .selfEmployed &&
+                TimesheetPayrollPolicy.shouldAppearInOperativeTimesheetRoster(user: $0, week: WeekRange.current(settings: settings), settings: settings) &&
                 ($0.permissions.operativeMode || $0.permissions.manager || $0.permissions.adminAccess || $0.role == .manager || $0.role == .admin)
             }
         }
         return userStore.organizationUsers.filter {
             $0.isActive &&
-            $0.employmentType(on: Date()) == .selfEmployed &&
+            TimesheetPayrollPolicy.shouldAppearInOperativeTimesheetRoster(user: $0, week: WeekRange.current(settings: settings), settings: settings) &&
             ($0.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == currentUser.id
         }
     }
 
     private func syncLandingDraftsFromCloud() async {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let weekStart = WeekRange.current().start
+        let weekStart = WeekRange.current(settings: settings).start
         let ids = Set(usersForManagerReview.map(\.id) + (userStore.displayUser.map { [$0.id] } ?? []))
         for userId in ids {
             _ = await TimesheetDraftStore.refreshFromCloud(
@@ -568,36 +569,6 @@ private enum TimesheetDraftStore {
     }
 }
 
-private struct WeekRange {
-    let start: Date
-    let end: Date
-    let title: String
-
-    static func current() -> WeekRange {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let start = today.startOfISOWeek ?? today
-        let end = cal.date(byAdding: .day, value: 6, to: start) ?? start
-        let title = "\(start.formatted(date: .abbreviated, time: .omitted)) - \(end.formatted(date: .abbreviated, time: .omitted))"
-        return WeekRange(start: start, end: end, title: title)
-    }
-
-    static func from(start: Date) -> WeekRange {
-        let cal = Calendar.current
-        let normalized = cal.startOfDay(for: start)
-        let weekStart = normalized.startOfISOWeek ?? normalized
-        let end = cal.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
-        let title = "\(weekStart.formatted(date: .abbreviated, time: .omitted)) - \(end.formatted(date: .abbreviated, time: .omitted))"
-        return WeekRange(start: weekStart, end: end, title: title)
-    }
-
-    func offset(byWeeks weeks: Int) -> WeekRange {
-        let cal = Calendar.current
-        let shifted = cal.date(byAdding: .day, value: 7 * weeks, to: start) ?? start
-        return .from(start: shifted)
-    }
-}
-
 private struct MyTimesheetView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
@@ -609,11 +580,16 @@ private struct MyTimesheetView: View {
 
     let settings: OrganizationInvoicingSettings
 
-    @State private var week = WeekRange.current()
+    @State private var week: WeekRange
     @State private var draft = TimesheetDraft()
     @State private var showAddExpense = false
     @State private var showAddPriceWork = false
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
+
+    init(settings: OrganizationInvoicingSettings) {
+        self.settings = settings
+        _week = State(initialValue: TimesheetPayrollPolicy.timesheetWeekRange(for: settings))
+    }
 
     private var currentUserId: String {
         userStore.displayUser?.id ?? "unknown"
@@ -664,12 +640,14 @@ private struct MyTimesheetView: View {
             let day = cal.startOfDay(for: booking.date)
             guard day >= week.start && day <= week.end else { continue }
             let paid = booking.paidBookedHours(policy: policy)
-            let rate = dayRateForBookingDay(
+            let resolved = PayrollRateResolver.resolveForTimesheetDay(
                 user: currentUser,
-                matchedOperative: matchedOperatives.first(where: { $0.id == booking.operativeId }),
-                day: day
+                operative: matchedOperatives.first(where: { $0.id == booking.operativeId }),
+                on: day,
+                history: dayRateHistoryCollection,
+                standardDayHours: standardDayHours
             )
-            let amount = rate * (paid / standardDayHours)
+            let amount = resolved.payForHours(paid, standardDayHours: standardDayHours)
             rows.append(
                 InvoiceLineItem(
                     date: day,
@@ -677,7 +655,9 @@ private struct MyTimesheetView: View {
                     projectName: projectLabel(for: booking.projectId).siteName,
                     details: booking.scheduleLabel(policy: policy),
                     paidHours: paid,
-                    dayRate: rate,
+                    payrollBasis: resolved.basis,
+                    dayRate: resolved.dayRate ?? 0,
+                    hourlyRate: resolved.hourlyRate,
                     amount: amount
                 )
             )
@@ -685,21 +665,31 @@ private struct MyTimesheetView: View {
 
         for booking in managerScheduleStore.managerSiteBookings {
             guard booking.userId == currentUser.id else { continue }
-            guard booking.locationType == .project || booking.locationType == .smallWork else { continue }
-            guard let locationId = booking.locationId else { continue }
             let day = cal.startOfDay(for: booking.date)
             guard day >= week.start && day <= week.end else { continue }
             let paid = booking.paidBookedHours(policy: policy)
-            let rate = dayRateForUserDay(user: currentUser, day: day)
-            let amount = rate * (paid / standardDayHours)
+            let resolved = PayrollRateResolver.resolveForTimesheetDay(
+                user: currentUser,
+                operative: operativeStore.allOperatives.first {
+                    $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        == currentUser.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                },
+                on: day,
+                history: dayRateHistoryCollection,
+                standardDayHours: standardDayHours
+            )
+            let labels = managerBookingLabels(for: booking)
+            let amount = resolved.payForHours(paid, standardDayHours: standardDayHours)
             rows.append(
                 InvoiceLineItem(
                     date: day,
-                    jobNumber: projectLabel(for: locationId).jobNumber,
-                    projectName: projectLabel(for: locationId).siteName,
+                    jobNumber: labels.jobNumber,
+                    projectName: labels.siteName,
                     details: booking.scheduleLabel(policy: policy),
                     paidHours: paid,
-                    dayRate: rate,
+                    payrollBasis: resolved.basis,
+                    dayRate: resolved.dayRate ?? 0,
+                    hourlyRate: resolved.hourlyRate,
                     amount: amount
                 )
             )
@@ -711,10 +701,20 @@ private struct MyTimesheetView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                Text(week.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
                 sectionHeader("This period")
 
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(invoiceRows.enumerated()), id: \.offset) { index, row in
+                    if invoiceRows.isEmpty {
+                        Text("No bookings found for this payment period yet. Hours from site, office, site survey and other schedule entries will appear here automatically.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(14)
+                    } else {
+                        ForEach(Array(invoiceRows.enumerated()), id: \.offset) { index, row in
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(row.date.formatted(date: .abbreviated, time: .omitted))
@@ -725,6 +725,9 @@ private struct MyTimesheetView: View {
                                 Text(row.details)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                Text(timesheetHoursRateLine(for: row))
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(row.hasPayrollRate ? Color.primary : Color.orange)
                             }
                             Spacer()
                             Text(String(format: "£%.2f", row.amount))
@@ -734,12 +737,34 @@ private struct MyTimesheetView: View {
                         .padding(.vertical, 10)
                         if index < invoiceRows.count - 1 { Divider().padding(.horizontal, 14) }
                     }
+                    }
                     HStack {
                         Text("Hours subtotal")
                             .font(.headline)
                         Spacer()
                         Text(String(format: "£%.2f", workAmount))
                             .font(.headline)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 10)
+                    if draft.additionalTotal > 0 {
+                        HStack {
+                            Text("Extras (price work & expenses)")
+                                .font(.subheadline)
+                            Spacer()
+                            Text(String(format: "£%.2f", draft.additionalTotal))
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.top, 6)
+                    }
+                    Divider().padding(.horizontal, 14)
+                    HStack {
+                        Text("Total")
+                            .font(.headline)
+                        Spacer()
+                        Text(String(format: "£%.2f", grandTotal))
+                            .font(.title3.weight(.bold))
                     }
                     .padding(14)
                 }
@@ -1106,25 +1131,39 @@ private struct MyTimesheetView: View {
         await MainActor.run { dayRateHistoryCollection = history }
     }
 
-    private func dayRateForUserDay(user: AppUser, day: Date) -> Double {
-        guard user.employmentType(on: day) == .selfEmployed else { return 0 }
-        let dayStart = Calendar.current.startOfDay(for: day)
-        let history = (dayRateHistoryCollection.byUserId[user.id] ?? []).sorted(by: { $0.effectiveAt < $1.effectiveAt })
-        let fromHistory = history.last(where: { Calendar.current.startOfDay(for: $0.effectiveAt) <= dayStart })?.dayRate
-        return fromHistory ?? user.dayRate ?? 0
+    private func timesheetHoursRateLine(for row: InvoiceLineItem) -> String {
+        let hours = formatTimesheetHours(row.paidHours)
+        if let rateLabel = row.resolvedPayrollRate.displayRateLabel() {
+            return "\(hours)h · \(rateLabel)"
+        }
+        return "\(hours)h · rate not set"
     }
 
-    private func dayRateForBookingDay(user: AppUser, matchedOperative: Operative?, day: Date) -> Double {
-        guard user.employmentType(on: day) == .selfEmployed else { return 0 }
-        let dayStart = Calendar.current.startOfDay(for: day)
-        if let matchedOperative {
-            let merged = dayRateHistoryCollection
-                .mergedEntries(userId: user.id, operativeId: matchedOperative.id)
-                .sorted(by: { $0.effectiveAt < $1.effectiveAt })
-            let fromHistory = merged.last(where: { Calendar.current.startOfDay(for: $0.effectiveAt) <= dayStart })?.dayRate
-            return fromHistory ?? matchedOperative.dayRate ?? user.dayRate ?? 0
+    private func formatTimesheetHours(_ value: Double) -> String {
+        let rounded = (value * 2).rounded() / 2
+        if abs(rounded - rounded.rounded()) < 0.01 {
+            return String(format: "%.0f", rounded)
         }
-        return dayRateForUserDay(user: user, day: day)
+        return String(format: "%.1f", rounded)
+    }
+
+    private func managerBookingLabels(for booking: ManagerSiteBooking) -> (jobNumber: String, siteName: String) {
+        switch booking.locationType {
+        case .project, .smallWork:
+            if let locationId = booking.locationId {
+                return projectLabel(for: locationId)
+            }
+            return ("—", "Site")
+        case .office:
+            return ("—", "Office")
+        case .workingFromHome:
+            return ("—", "Working from home")
+        case .siteSurvey:
+            return ("—", "Site survey")
+        case .custom:
+            let name = booking.customLocationName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return ("—", name.isEmpty ? "Custom location" : name)
+        }
     }
 }
 
@@ -1141,6 +1180,7 @@ private struct PreviousTimesheetsView: View {
     @State private var runs: [PreviousTimesheetRun] = []
     @State private var selectedRunId: String = ""
     @State private var isLoading = false
+    @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
 
     private var selectedRun: PreviousTimesheetRun? {
         runs.first(where: { $0.id == selectedRunId }) ?? runs.first
@@ -1231,7 +1271,16 @@ private struct PreviousTimesheetsView: View {
         .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
         .navigationTitle("Previous Timesheets")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await loadRuns() }
+        .task {
+            await loadDayRateHistory()
+            await loadRuns()
+        }
+    }
+
+    private func loadDayRateHistory() async {
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
+        await MainActor.run { dayRateHistoryCollection = history }
     }
 
     @ViewBuilder
@@ -1320,7 +1369,7 @@ private struct PreviousTimesheetsView: View {
             }
         }
         if output.isEmpty {
-            let current = WeekRange.current()
+            let current = WeekRange.current(settings: settings)
             for offset in 1...16 {
                 let week = current.offset(byWeeks: -offset)
                 let local = TimesheetDraftStore.load(userId: userId, weekStart: week.start)
@@ -1365,7 +1414,6 @@ private struct PreviousTimesheetsView: View {
                 == currentUser.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         }
         let ids = Set(userOperatives.map(\.id))
-        let dayRate = userOperatives.first?.dayRate ?? currentUser.dayRate ?? 0
         var hours = 0.0
         var otHours = 0.0
         var base = 0.0
@@ -1374,14 +1422,50 @@ private struct PreviousTimesheetsView: View {
             guard ids.contains(booking.operativeId) else { continue }
             let day = cal.startOfDay(for: booking.date)
             guard day >= week.start && day <= week.end else { continue }
+            let operative = userOperatives.first(where: { $0.id == booking.operativeId })
+            let resolved = PayrollRateResolver.resolveForTimesheetDay(
+                user: currentUser,
+                operative: operative,
+                on: day,
+                history: dayRateHistoryCollection,
+                standardDayHours: standardDayHours
+            )
             let paid = booking.paidBookedHours(policy: policy)
             let ot = max(0, booking.overtimeHoursBeyondPaidStandard(policy: policy))
             let normal = max(0, paid - ot)
             hours += paid
             otHours += ot
-            base += dayRate * (normal / standardDayHours)
+            base += resolved.payForHours(normal, standardDayHours: standardDayHours)
             if ot > 0 {
-                otAmount += dayRate * ((ot / standardDayHours) * booking.effectiveWeekdayOtMultiplier(policy: policy))
+                otAmount += resolved.payForHours(
+                    ot,
+                    standardDayHours: standardDayHours,
+                    otMultiplier: booking.effectiveWeekdayOtMultiplier(policy: policy)
+                )
+            }
+        }
+        for booking in managerScheduleStore.managerSiteBookings where booking.userId == currentUser.id {
+            let day = cal.startOfDay(for: booking.date)
+            guard day >= week.start && day <= week.end else { continue }
+            let resolved = PayrollRateResolver.resolveForTimesheetDay(
+                user: currentUser,
+                operative: userOperatives.first,
+                on: day,
+                history: dayRateHistoryCollection,
+                standardDayHours: standardDayHours
+            )
+            let paid = booking.paidBookedHours(policy: policy)
+            let ot = max(0, booking.overtimeHoursBeyondPaidStandard(policy: policy))
+            let normal = max(0, paid - ot)
+            hours += paid
+            otHours += ot
+            base += resolved.payForHours(normal, standardDayHours: standardDayHours)
+            if ot > 0 {
+                otAmount += resolved.payForHours(
+                    ot,
+                    standardDayHours: standardDayHours,
+                    otMultiplier: policy.weekdayOutsideStandardMultiplier
+                )
             }
         }
         return (hours, otHours, base, otAmount)
@@ -1422,9 +1506,9 @@ private struct OperativeTimesheetsView: View {
         return u.isSuperAdmin || u.permissions.adminAccess || u.role == .admin
     }
 
-    init(settings: OrganizationInvoicingSettings, week: WeekRange = .current()) {
+    init(settings: OrganizationInvoicingSettings, week: WeekRange? = nil) {
         self.settings = settings
-        self.week = week
+        self.week = week ?? TimesheetPayrollPolicy.timesheetWeekRange(for: settings)
     }
 
     private var directReports: [AppUser] {
@@ -1433,7 +1517,7 @@ private struct OperativeTimesheetsView: View {
             return userStore.organizationUsers
                 .filter { user in
                     user.isActive
-                    && user.employmentType(on: Date()) == .selfEmployed
+                    && TimesheetPayrollPolicy.shouldAppearInOperativeTimesheetRoster(user: user, week: week, settings: settings)
                     && (user.permissions.operativeMode || user.permissions.manager || user.permissions.adminAccess || user.role == .manager || user.role == .admin)
                 }
                 .sorted(by: { $0.fullName < $1.fullName })
@@ -1441,7 +1525,7 @@ private struct OperativeTimesheetsView: View {
         return userStore.organizationUsers
             .filter { user in
                 user.isActive
-                && user.employmentType(on: Date()) == .selfEmployed
+                && TimesheetPayrollPolicy.shouldAppearInOperativeTimesheetRoster(user: user, week: week, settings: settings)
                 && (user.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == currentUser.id
             }
             .sorted(by: { $0.fullName < $1.fullName })
@@ -1701,6 +1785,7 @@ private struct OperativeTimesheetReviewView: View {
     let week: WeekRange
     @State private var draft = TimesheetDraft()
     @State private var showingManagerSignSheet = false
+    @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
 
     var body: some View {
         ScrollView {
@@ -1844,6 +1929,7 @@ private struct OperativeTimesheetReviewView: View {
             draft = TimesheetDraftStore.load(userId: operative.id, weekStart: week.start)
             Task { await refreshDraftFromCloud() }
         }
+        .task { await loadDayRateHistory() }
         .sheet(isPresented: $showingManagerSignSheet) {
             NavigationStack {
                 ManagerTimesheetSignOffView(
@@ -1930,37 +2016,48 @@ private struct OperativeTimesheetReviewView: View {
         await MainActor.run { draft = remote }
     }
 
+    private func loadDayRateHistory() async {
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
+        await MainActor.run { dayRateHistoryCollection = history }
+    }
+
     private var hoursSummary: (hours: Double, shifts: Int, amount: Double, overtimeAmount: Double) {
         let cal = Calendar.current
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let standardDayHours = max(policy.standardPaidHours, 0.01)
-        let operativeIds = Set(
-            operativeStore.allOperatives
-                .filter { $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == operative.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-                .map(\.id)
-        )
+        let matchedOperatives = operativeStore.allOperatives.filter {
+            $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                == operative.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        let operativeIds = Set(matchedOperatives.map(\.id))
 
         var totalHours = 0.0
         var shifts = 0
         var baseAmount = 0.0
         var overtimeAmount = 0.0
-        let dayRate = operativeStore.allOperatives.first {
-            $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == operative.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        }?.dayRate ?? operative.dayRate ?? 0
 
         for booking in bookingStore.bookings where booking.status != .cancelled {
             guard operativeIds.contains(booking.operativeId) else { continue }
             let day = cal.startOfDay(for: booking.date)
             guard day >= week.start && day <= week.end else { continue }
+            let matchedOperative = matchedOperatives.first(where: { $0.id == booking.operativeId })
+            let resolved = PayrollRateResolver.resolveForTimesheetDay(
+                user: operative,
+                operative: matchedOperative,
+                on: day,
+                history: dayRateHistoryCollection,
+                standardDayHours: standardDayHours
+            )
             shifts += 1
             let paid = booking.paidBookedHours(policy: policy)
             let ot = booking.overtimeHoursBeyondPaidStandard(policy: policy)
             let normal = max(0, paid - ot)
             totalHours += paid
-            baseAmount += dayRate * (normal / standardDayHours)
+            baseAmount += resolved.payForHours(normal, standardDayHours: standardDayHours)
             if ot > 0 {
                 let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
-                overtimeAmount += dayRate * ((ot / standardDayHours) * otMultiplier)
+                overtimeAmount += resolved.payForHours(ot, standardDayHours: standardDayHours, otMultiplier: otMultiplier)
             }
         }
 
@@ -2041,6 +2138,7 @@ private struct TimesheetMoneyEntrySheet: View {
                 }
             }
             .navigationTitle(mode == .expense ? "Add Expense" : "Add Price Work")
+            .navigationBarBackButtonHidden(true)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -2583,14 +2681,18 @@ private struct GenerateInvoiceView: View {
 
         for booking in operativeBookings {
             guard let operative = userOperatives.first(where: { $0.id == booking.operativeId }) else { continue }
-            let rate = dayRateForOperativeBooking(user: currentUser, operative: operative, on: booking.date)
+            let resolved = PayrollRateResolver.resolveForTimesheetDay(
+                user: currentUser,
+                operative: operative,
+                on: booking.date,
+                history: dayRateHistoryCollection,
+                standardDayHours: standardDayHours
+            )
             let paidHours = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
             let normalHours = max(0, paidHours - otHours)
-            let normalDays = normalHours / standardDayHours
-            let otDays = max(0, otHours) / standardDayHours
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
-            let normalAmount = (rate ?? 0) * normalDays
+            let normalAmount = resolved.payForHours(normalHours, standardDayHours: standardDayHours)
 
             rows.append(
                 InvoiceLineItem(
@@ -2599,14 +2701,26 @@ private struct GenerateInvoiceView: View {
                     projectName: projectLabel(for: booking.projectId).siteName,
                     details: booking.scheduleLabel(policy: policy),
                     paidHours: normalHours,
-                    dayRate: rate ?? 0,
+                    payrollBasis: resolved.basis,
+                    dayRate: resolved.dayRate ?? 0,
+                    hourlyRate: resolved.hourlyRate,
                     amount: normalAmount
                 )
             )
 
             if otHours > 0.05 {
-                let otAmount = (rate ?? 0) * (otDays * otMultiplier)
-                let otExtra = (rate ?? 0) * (otDays * max(0, otMultiplier - 1))
+                let otAmount = resolved.payForHours(otHours, standardDayHours: standardDayHours, otMultiplier: otMultiplier)
+                let otExtra = otAmount - resolved.payForHours(otHours, standardDayHours: standardDayHours)
+                let otDisplayRate: Double
+                let otDisplayHourly: Double?
+                switch resolved.basis {
+                case .dayRate:
+                    otDisplayRate = (resolved.dayRate ?? 0) * otMultiplier
+                    otDisplayHourly = resolved.hourlyRate
+                case .hourly:
+                    otDisplayRate = 0
+                    otDisplayHourly = (resolved.hourlyRate ?? 0) * otMultiplier
+                }
                 rows.append(
                     InvoiceLineItem(
                         date: cal.startOfDay(for: booking.date),
@@ -2614,7 +2728,9 @@ private struct GenerateInvoiceView: View {
                         projectName: "\(projectLabel(for: booking.projectId).siteName) (Overtime)",
                         details: "OT \(formatHours(otHours))h × \(formatMultiplier(otMultiplier)) · extra \(formatCurrency(otExtra))",
                         paidHours: otHours,
-                        dayRate: (rate ?? 0) * otMultiplier,
+                        payrollBasis: resolved.basis,
+                        dayRate: otDisplayRate,
+                        hourlyRate: otDisplayHourly,
                         amount: otAmount
                     )
                 )
@@ -2631,14 +2747,18 @@ private struct GenerateInvoiceView: View {
 
         for booking in managerBookings {
             guard let locationId = booking.locationId else { continue }
-            let rate = dayRateForUserOnDay(userId: currentUser.id, fallback: currentUser.dayRate, date: booking.date)
+            let resolved = PayrollRateResolver.resolveForTimesheetDay(
+                user: currentUser,
+                operative: userOperatives.first,
+                on: booking.date,
+                history: dayRateHistoryCollection,
+                standardDayHours: standardDayHours
+            )
             let paidHours = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
             let normalHours = max(0, paidHours - otHours)
-            let normalDays = normalHours / standardDayHours
-            let otDays = max(0, otHours) / standardDayHours
             let otMultiplier = policy.weekdayOutsideStandardMultiplier
-            let normalAmount = (rate ?? 0) * normalDays
+            let normalAmount = resolved.payForHours(normalHours, standardDayHours: standardDayHours)
 
             rows.append(
                 InvoiceLineItem(
@@ -2647,14 +2767,26 @@ private struct GenerateInvoiceView: View {
                     projectName: projectLabel(for: locationId).siteName,
                     details: booking.scheduleLabel(policy: policy),
                     paidHours: normalHours,
-                    dayRate: rate ?? 0,
+                    payrollBasis: resolved.basis,
+                    dayRate: resolved.dayRate ?? 0,
+                    hourlyRate: resolved.hourlyRate,
                     amount: normalAmount
                 )
             )
 
             if otHours > 0.05 {
-                let otAmount = (rate ?? 0) * (otDays * otMultiplier)
-                let otExtra = (rate ?? 0) * (otDays * max(0, otMultiplier - 1))
+                let otAmount = resolved.payForHours(otHours, standardDayHours: standardDayHours, otMultiplier: otMultiplier)
+                let otExtra = otAmount - resolved.payForHours(otHours, standardDayHours: standardDayHours)
+                let otDisplayRate: Double
+                let otDisplayHourly: Double?
+                switch resolved.basis {
+                case .dayRate:
+                    otDisplayRate = (resolved.dayRate ?? 0) * otMultiplier
+                    otDisplayHourly = resolved.hourlyRate
+                case .hourly:
+                    otDisplayRate = 0
+                    otDisplayHourly = (resolved.hourlyRate ?? 0) * otMultiplier
+                }
                 rows.append(
                     InvoiceLineItem(
                         date: cal.startOfDay(for: booking.date),
@@ -2662,7 +2794,9 @@ private struct GenerateInvoiceView: View {
                         projectName: "\(projectLabel(for: locationId).siteName) (Overtime)",
                         details: "OT \(formatHours(otHours))h × \(formatMultiplier(otMultiplier)) · extra \(formatCurrency(otExtra))",
                         paidHours: otHours,
-                        dayRate: (rate ?? 0) * otMultiplier,
+                        payrollBasis: resolved.basis,
+                        dayRate: otDisplayRate,
+                        hourlyRate: otDisplayHourly,
                         amount: otAmount
                     )
                 )
@@ -2710,23 +2844,6 @@ private struct GenerateInvoiceView: View {
         }
 
         return Array(Set(notes)).sorted()
-    }
-
-    private func dayRateForUserOnDay(userId: String, fallback: Double?, date: Date) -> Double? {
-        let day = calendarDayStart(date)
-        let history = (dayRateHistoryCollection.byUserId[userId] ?? []).sorted(by: { $0.effectiveAt < $1.effectiveAt })
-        let rateFromHistory = history.last(where: { calendarDayStart($0.effectiveAt) <= day })?.dayRate
-        return rateFromHistory ?? fallback
-    }
-
-    private func dayRateForOperativeBooking(user: AppUser, operative: Operative, on date: Date) -> Double? {
-        let day = calendarDayStart(date)
-        let merged = dayRateHistoryCollection
-            .mergedEntries(userId: user.id, operativeId: operative.id)
-            .sorted(by: { $0.effectiveAt < $1.effectiveAt })
-        let rateFromHistory = merged.last(where: { calendarDayStart($0.effectiveAt) <= day })?.dayRate
-        let fallback = operative.dayRate ?? user.dayRate
-        return rateFromHistory ?? fallback ?? user.dayRate ?? operative.dayRate
     }
 
     private func calendarDayStart(_ date: Date, in calendar: Calendar = .current) -> Date {
@@ -2798,33 +2915,14 @@ private struct GenerateInvoiceView: View {
     }
 
     private func recurringInvoicePeriod() -> InvoicePeriodOption? {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        guard let startOfCurrentWeek = today.startOfISOWeek else { return nil }
-
-        let startOffset = settings.recurringRunStartDay.isoWeekOffset
-        let endOffset = settings.recurringRunEndDay.isoWeekOffset
-
-        guard let baseWeekStart = cal.date(byAdding: .day, value: -7, to: startOfCurrentWeek),
-              var startDate = cal.date(byAdding: .day, value: startOffset, to: baseWeekStart),
-              var endDate = cal.date(byAdding: .day, value: endOffset, to: baseWeekStart) else {
-            return nil
-        }
-        if endOffset < startOffset {
-            endDate = cal.date(byAdding: .day, value: 7, to: endDate) ?? endDate
-        }
-        while endDate >= today {
-            startDate = cal.date(byAdding: .day, value: -7, to: startDate) ?? startDate
-            endDate = cal.date(byAdding: .day, value: -7, to: endDate) ?? endDate
-        }
-
+        let period = TimesheetPayrollPolicy.timesheetWeekRange(for: settings)
         let label = "Previous recurring arrears period"
         return InvoicePeriodOption(
-            id: "recurring-\(Int(startDate.timeIntervalSince1970))",
+            id: "recurring-\(Int(period.start.timeIntervalSince1970))",
             title: label,
-            dateRangeText: "\(startDate.formatted(date: .abbreviated, time: .omitted)) to \(endDate.formatted(date: .abbreviated, time: .omitted))",
-            startDate: cal.startOfDay(for: startDate),
-            endDate: cal.startOfDay(for: endDate)
+            dateRangeText: "\(period.start.formatted(date: .abbreviated, time: .omitted)) to \(period.end.formatted(date: .abbreviated, time: .omitted))",
+            startDate: period.start,
+            endDate: period.end
         )
     }
 
@@ -2862,8 +2960,18 @@ private struct InvoiceLineItem {
     let projectName: String
     let details: String
     let paidHours: Double
+    let payrollBasis: PayrollRateBasis
     let dayRate: Double
+    let hourlyRate: Double?
     let amount: Double
+
+    var resolvedPayrollRate: ResolvedPayrollRate {
+        ResolvedPayrollRate(basis: payrollBasis, dayRate: dayRate > 0 ? dayRate : nil, hourlyRate: hourlyRate)
+    }
+
+    var hasPayrollRate: Bool {
+        resolvedPayrollRate.hasRate
+    }
 }
 
 private struct TimesheetSignaturePad: View {
@@ -3182,29 +3290,6 @@ private enum InvoicePDFBuilder {
             return String(format: "%.0f", rounded)
         }
         return String(format: "%.1f", rounded)
-    }
-}
-
-private extension RecurringPaymentDay {
-    var isoWeekOffset: Int {
-        switch self {
-        case .monday: return 0
-        case .tuesday: return 1
-        case .wednesday: return 2
-        case .thursday: return 3
-        case .friday: return 4
-        case .saturday: return 5
-        case .sunday: return 6
-        }
-    }
-}
-
-private extension Date {
-    var startOfISOWeek: Date? {
-        var cal = Calendar(identifier: .iso8601)
-        cal.timeZone = .current
-        let components = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: self)
-        return cal.date(from: components).map { Calendar.current.startOfDay(for: $0) }
     }
 }
 

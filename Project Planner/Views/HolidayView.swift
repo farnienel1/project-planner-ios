@@ -188,27 +188,69 @@ struct HolidayView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 20) {
-                            if let msg = holidayStore.errorMessage, !msg.isEmpty {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Some holiday data could not be synced.")
-                                        .font(.subheadline)
-                                        .fontWeight(.semibold)
-                                    Text(msg)
-                                        .font(.footnote)
-                                        .foregroundColor(.secondary)
-                                    Button("Retry") {
-                                        Task { await holidayStore.loadData() }
+                    NavigationStack {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 20) {
+                                if let msg = holidayStore.errorMessage, !msg.isEmpty {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Some holiday data could not be synced.")
+                                            .font(.subheadline)
+                                            .fontWeight(.semibold)
+                                        Text(msg)
+                                            .font(.footnote)
+                                            .foregroundColor(.secondary)
+                                        Button("Retry") {
+                                            Task { await holidayStore.loadData() }
+                                        }
+                                        .buttonStyle(.bordered)
                                     }
-                                    .buttonStyle(.bordered)
+                                    .padding(12)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color(.secondarySystemBackground))
+                                    .cornerRadius(10)
                                 }
-                                .padding(12)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color(.secondarySystemBackground))
-                                .cornerRadius(10)
-                            }
-                            if isRequestMode || canApproveRequests {
+
+                                if userStore.canAccessOperativeAnnualLeaveDirectory() {
+                                    NavigationLink {
+                                        OperativeAnnualLeaveDirectoryView()
+                                            .environmentObject(userStore)
+                                            .environmentObject(operativeStore)
+                                            .environmentObject(holidayStore)
+                                            .environmentObject(firebaseBackend)
+                                            .environmentObject(notificationService)
+                                    } label: {
+                                        HStack(spacing: 10) {
+                                            Image(systemName: "person.3.fill")
+                                                .font(.body.weight(.semibold))
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("Operative annual leave")
+                                                    .font(.subheadline.weight(.semibold))
+                                                Text("View and book leave for your team")
+                                                    .font(.caption)
+                                                    .foregroundStyle(HolidayChrome.muted)
+                                            }
+                                            Spacer(minLength: 0)
+                                            Image(systemName: "chevron.right")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(HolidayChrome.muted)
+                                        }
+                                        .foregroundStyle(HolidayChrome.ink)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 12)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .fill(Color.white)
+                                                .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .stroke(HolidayChrome.border, lineWidth: 1)
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+
+                                if isRequestMode || canApproveRequests {
                                 Picker("Section", selection: $activeSection) {
                                     Text(isRequestMode ? "Request" : "Book").tag(HolidaySection.calendar)
                                     Text("My holiday").tag(HolidaySection.myHoliday)
@@ -271,6 +313,7 @@ struct HolidayView: View {
                         }
                         await holidayStore.loadData()
                         await notificationService.loadNotifications()
+                    }
                     }
                 }
             }

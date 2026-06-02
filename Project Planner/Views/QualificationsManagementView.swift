@@ -174,9 +174,18 @@ struct AddQualificationView: View {
         isLoading = true
         errorMessage = nil
         
+        let trimmedName = qualificationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if operativeStore.qualifications.contains(where: {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(trimmedName) == .orderedSame
+        }) {
+            errorMessage = "A qualification with this name already exists."
+            isLoading = false
+            return
+        }
+
         let qualification = Qualification(
-            name: qualificationName.trimmingCharacters(in: .whitespacesAndNewlines),
-            hasEndDate: false, // Expiration is only set when assigning to operatives
+            name: trimmedName,
+            hasEndDate: false,
             endDate: nil
         )
         

@@ -61,13 +61,41 @@ struct OrganisationWarningsSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text("Warnings scan from today through \(draft.detectionHorizonEndLabel()). Unbooked labour uses this window.")
+                Text("Warnings scan \(draft.detectionHorizonDayCount()) day\(draft.detectionHorizonDayCount() == 1 ? "" : "s") from today through \(draft.detectionHorizonEndLabel()). Unbooked labour uses this window.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
                 Text("Detection period")
             } footer: {
-                Text("Applies to clashes, unbooked labour, and material cut-off checks. Choose “Set number of days” and increase the stepper to see more future unbooked days.")
+                Text("Applies to clashes, unbooked labour, and material cut-off checks. Changing the look-ahead updates warnings immediately — extending shows more future days; reducing removes warnings beyond the new end date.")
+            }
+
+            Section {
+                NavigationLink {
+                    WarningExcludedUsersPickerView(
+                        selectedUserIds: $draft.excludedUserIdsFromUnbookedWarnings,
+                        onSave: saveExcludedUsers
+                    )
+                    .environmentObject(userStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(bookingStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(holidayStore)
+                    .environmentObject(appSettings)
+                } label: {
+                    HStack {
+                        Text("Excluded users")
+                        Spacer()
+                        Text("\(draft.excludedUserIdsFromUnbookedWarnings.count)")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Exclude users from the warnings")
+            } footer: {
+                Text("Use this feature to remove certain users such as PAYE staff from the warnings page so they will not show up when not booked in. It shouldn't be used for users/sub-contractors/operatives that are working elsewhere temporarily. They should be marked as inactive via Manage Users.")
             }
 
             Section {
@@ -171,7 +199,8 @@ struct OrganisationWarningsSettingsView: View {
                 managerScheduleStore: managerScheduleStore,
                 holidayStore: holidayStore,
                 firebaseBackend: firebaseBackend,
-                appSettings: appSettings
+                appSettings: appSettings,
+                force: true
             )
             if let onSaved {
                 await MainActor.run {
@@ -182,6 +211,134 @@ struct OrganisationWarningsSettingsView: View {
             }
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func saveExcludedUsers() async {
+        guard !isSaving else { return }
+        isSaving = true
+        errorMessage = nil
+        defer { isSaving = false }
+        do {
+            try await firebaseBackend.updateOrganizationWarningDetectionSettings(draft)
+            await WarningsRefreshHelper.refreshSharedWarnings(
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                projectStore: projectStore,
+                userStore: userStore,
+                managerScheduleStore: managerScheduleStore,
+                holidayStore: holidayStore,
+                firebaseBackend: firebaseBackend,
+                appSettings: appSettings,
+                force: true
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Excluded users picker
+
+private struct WarningExcludedUsersPickerView: View {
+    @Binding var selectedUserIds: [String]
+    let onSave: () async -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var operativeStore: OperativeStore
+
+    @State private var searchText = ""
+    @State private var isSaving = false
+    @State private var saveSucceeded = false
+
+    private var eligibleUsers: [AppUser] {
+        userStore.organizationUsers
+            .filter(\.isActive)
+            .sorted { lhs, rhs in
+                lhs.fullName.localizedCaseInsensitiveCompare(rhs.fullName) == .orderedAscending
+            }
+    }
+
+    private var filteredUsers: [AppUser] {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return eligibleUsers }
+        return eligibleUsers.filter {
+            $0.fullName.localizedCaseInsensitiveContains(q) ||
+            $0.email.localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    var body: some View {
+        List {
+            if eligibleUsers.isEmpty {
+                Text("No active manager or admin users to exclude.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(filteredUsers) { user in
+                    Button {
+                        toggle(user.id)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(user.fullName.isEmpty ? user.email : user.fullName)
+                                    .foregroundStyle(.primary)
+                                Text(user.email)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if selectedUserIds.contains(user.id) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                            } else {
+                                Image(systemName: "circle")
+                                    .foregroundStyle(Color(.systemGray3))
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .navigationTitle("Excluded users")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, prompt: "Search users")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Save") {
+                    Task {
+                        isSaving = true
+                        saveSucceeded = false
+                        await onSave()
+                        isSaving = false
+                        saveSucceeded = true
+                    }
+                }
+                .fontWeight(.semibold)
+                .disabled(isSaving)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if saveSucceeded {
+                Text("Excluded users saved. Warnings updated.")
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(ProjectWorksRevampColors.activeGreen)
+                    .clipShape(Capsule())
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+    }
+
+    private func toggle(_ userId: String) {
+        if let idx = selectedUserIds.firstIndex(of: userId) {
+            selectedUserIds.remove(at: idx)
+        } else {
+            selectedUserIds.append(userId)
         }
     }
 }

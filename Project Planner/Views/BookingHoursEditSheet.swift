@@ -10,7 +10,7 @@ import SwiftUI
 // MARK: - Time helpers
 
 enum BookingHMTimePickerSupport {
-    static let minuteChoices = [0, 30]
+    static let minuteChoices = [0, 15, 30, 45]
     static let hourRange = 0...23
     static let dayMinutes = 24 * 60
 
@@ -31,10 +31,17 @@ enum BookingHMTimePickerSupport {
         hour * 60 + minute
     }
 
-    static func clampToHalfHour(_ hhmm: String, fallbackHour: Int, fallbackMinute: Int) -> (hour: Int, minute: Int) {
+    static func clampToQuarterHour(_ hhmm: String, fallbackHour: Int, fallbackMinute: Int) -> (hour: Int, minute: Int) {
         if let p = parse(hhmm) { return p }
         let m = minuteChoices.min(by: { abs($0 - fallbackMinute) < abs($1 - fallbackMinute) }) ?? 0
         return (fallbackHour, m)
+    }
+
+    static func roundDateToQuarterHour(_ date: Date, calendar: Calendar = .current) -> Date {
+        let hour = calendar.component(.hour, from: date)
+        let minute = calendar.component(.minute, from: date)
+        let rounded = minuteChoices.min(by: { abs($0 - minute) < abs($1 - minute) }) ?? 0
+        return calendar.date(bySettingHour: hour, minute: rounded, second: 0, of: date) ?? date
     }
 }
 
@@ -362,15 +369,15 @@ struct OperativeCustomHoursSheet: View {
             let s = ic.workStartTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let e = ic.workEndTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !s.isEmpty, !e.isEmpty {
-                startHM = BookingHMTimePickerSupport.clampToHalfHour(s, fallbackHour: 8, fallbackMinute: 0)
-                endHM = BookingHMTimePickerSupport.clampToHalfHour(e, fallbackHour: 16, fallbackMinute: 30)
+                startHM = BookingHMTimePickerSupport.clampToQuarterHour(s, fallbackHour: 8, fallbackMinute: 0)
+                endHM = BookingHMTimePickerSupport.clampToQuarterHour(e, fallbackHour: 16, fallbackMinute: 30)
             } else {
-                startHM = BookingHMTimePickerSupport.clampToHalfHour(
+                startHM = BookingHMTimePickerSupport.clampToQuarterHour(
                     policy.standardDayStart,
                     fallbackHour: 8,
                     fallbackMinute: 0
                 )
-                endHM = BookingHMTimePickerSupport.clampToHalfHour(
+                endHM = BookingHMTimePickerSupport.clampToQuarterHour(
                     policy.standardDayEnd,
                     fallbackHour: 16,
                     fallbackMinute: 30
@@ -381,12 +388,12 @@ struct OperativeCustomHoursSheet: View {
                 otm = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
             }
         } else {
-            startHM = BookingHMTimePickerSupport.clampToHalfHour(
+            startHM = BookingHMTimePickerSupport.clampToQuarterHour(
                 policy.standardDayStart,
                 fallbackHour: 8,
                 fallbackMinute: 0
             )
-            endHM = BookingHMTimePickerSupport.clampToHalfHour(
+            endHM = BookingHMTimePickerSupport.clampToQuarterHour(
                 policy.standardDayEnd,
                 fallbackHour: 16,
                 fallbackMinute: 30

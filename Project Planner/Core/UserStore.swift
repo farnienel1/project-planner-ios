@@ -525,10 +525,12 @@ class UserStore: ObservableObject {
         canAccessTimesheetsSurface()
     }
 
-    /// Self-employed users can submit their own timesheets.
+    /// Self-employed users can submit their own timesheets. PAYE users keep access until the open pay run is paid
+    /// when that period still includes self-employed days (e.g. after switching from self-employed to PAYE).
     func canAccessMyTimesheets() -> Bool {
         guard let user = displayUser else { return false }
-        return user.employmentType(on: Date()) == .selfEmployed
+        let settings = firebaseBackend?.currentOrganization?.settings.invoicing ?? .default
+        return TimesheetPayrollPolicy.canAccessMyTimesheets(user: user, settings: settings)
     }
 
     /// Operative timesheets visibility:
@@ -632,6 +634,14 @@ class UserStore: ObservableObject {
         guard let u = displayUser else { return false }
         if u.permissions.operativeMode { return false }
         if u.isSuperAdmin || u.permissions.adminAccess { return false }
+        return u.permissions.manager && u.permissions.operatives
+    }
+
+    /// Admins and managers with operative management can open the team annual leave directory.
+    func canAccessOperativeAnnualLeaveDirectory() -> Bool {
+        if isOperativeMode() { return false }
+        if hasAdminAccess() { return true }
+        guard let u = displayUser else { return false }
         return u.permissions.manager && u.permissions.operatives
     }
     
@@ -1541,7 +1551,9 @@ class UserStore: ObservableObject {
             }
             organizationUsers[index] = updated
             if var cu = currentUser, cu.id == userId {
-                cu.employmentType = employmentType
+                cu.employmentType = updated.employmentType
+                cu.employmentTypeTransitionFrom = updated.employmentTypeTransitionFrom
+                cu.employmentTypeEffectiveAt = updated.employmentTypeEffectiveAt
                 currentUser = cu
             }
             return true
@@ -1558,7 +1570,8 @@ class UserStore: ObservableObject {
                 assignedManagerUserId: String?,
                 dayRate: Double?,
                 operativeStore: OperativeStore?,
-                dayRateEffectiveAt: Date? = nil
+                dayRateEffectiveAt: Date? = nil,
+                updateDayRate: Bool = true
              ) async -> Bool {
                 guard let firebaseBackend = firebaseBackend else { return false }
                 guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
@@ -1579,9 +1592,10 @@ class UserStore: ObservableObject {
                     try await firebaseBackend.updateOperativeProfileMetadata(
                         userId: updatedUser.id,
                         assignedManagerUserId: assignedManagerUserId,
-                        dayRate: dayRate
+                        dayRate: dayRate,
+                        updateDayRate: updateDayRate
                     )
-                    if dayRateChanged,
+                    if updateDayRate && dayRateChanged,
                        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
                         let emailNorm = updatedUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
                         let linkedOperativeId = operativeStore?.operatives.first(where: {

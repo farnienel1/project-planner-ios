@@ -80,6 +80,116 @@ struct ContentView: View {
     }
     
     var body: some View {
+        contentShellWithSheets
+    }
+
+    @ViewBuilder
+    private var contentShellWithSheets: some View {
+        contentShellWithRouting
+            .sheet(isPresented: $showingHolidaySheet) {
+                HolidayView(showRequests: holidaySheetShowRequests, presentedAsSheet: true)
+                    .environmentObject(holidayStore)
+                    .environmentObject(userStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(notificationService)
+                    .environmentObject(appSettings)
+            }
+            .sheet(isPresented: $showMoreMenuSheet) {
+                MainMenuMoreSheet()
+                    .environmentObject(userStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(operativeStore)
+            }
+            .overlay(alignment: .top) {
+                if showingBookingToast, let bookingToastText {
+                    HStack(spacing: 10) {
+                        Image(systemName: "calendar.badge.plus")
+                            .foregroundStyle(.white)
+                        Text(bookingToastText)
+                            .font(.subheadline)
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(Color.green.opacity(0.95))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .shadow(color: .black.opacity(0.2), radius: 6, x: 0, y: 3)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var contentShellWithRouting: some View {
+        contentShellCore
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("goBackToPreviousTab"))) { _ in
+                selectTab(0)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("selectTab"))) { notification in
+                DispatchQueue.main.async {
+                    showMoreMenuSheet = false
+                    if let userInfo = notification.userInfo,
+                       let tab = userInfo["tab"] as? Int {
+                        selectTab(tab)
+                    }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .mainMenuEditTabBar)) { _ in
+                showMoreMenuSheet = false
+                DispatchQueue.main.async {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+                        isReorderingTabs = true
+                    }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .mainMenuOpenSurface)) { notification in
+                if relayingMainMenuSurface {
+                    relayingMainMenuSurface = false
+                    return
+                }
+                guard selectedTab != 0 else { return }
+                let payload = notification.userInfo
+                showMoreMenuSheet = false
+                selectTab(0)
+                relayingMainMenuSurface = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    NotificationCenter.default.post(name: .mainMenuOpenSurface, object: nil, userInfo: payload)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToTimesheetReview"))) { notification in
+                let payload = notification.userInfo
+                selectTab(0)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    NotificationCenter.default.post(
+                        name: .mainMenuOpenSurface,
+                        object: nil,
+                        userInfo: [
+                            "route": MainMenuSurfaceRoute.invoicing.rawValue,
+                            "targetUserId": payload?["targetUserId"] as? String ?? "",
+                            "weekStart": payload?["weekStart"] as? Date ?? Date()
+                        ]
+                    )
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openHoliday"))) { notification in
+                DispatchQueue.main.async {
+                    guard userStore.isAnnualLeaveFeatureEnabled() else { return }
+                    holidaySheetShowRequests = (notification.userInfo?["showRequests"] as? Bool) ?? false
+                    showingHolidaySheet = true
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .qualificationExpiryScheduleRefresh)) { _ in
+                Task { await notificationService.refreshQualificationExpiryReminders() }
+            }
+    }
+
+    @ViewBuilder
+    private var contentShellCore: some View {
         VStack(spacing: 0) {
             if userStore.roleTestingPreset != nil, let preset = userStore.roleTestingPreset {
                 roleTestingBanner(preset: preset)
@@ -100,10 +210,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: selectedTab) { oldValue, newValue in
-            // Always reset to home when home tab is selected
             if newValue == 0 {
-                // Home tab selected - ensure we're on home
-                // Clear previous tab to prevent navigation issues
                 previousTab = nil
             }
         }
@@ -123,7 +230,6 @@ struct ContentView: View {
         }
         .onAppear {
             syncMovableTabOrderWithCurrentPermissions()
-            // Connect Firebase backend to stores first
             print("🔥🔥🔥 DEBUG: Connecting Firebase backend to stores in ContentView...")
             projectStore.setFirebaseBackend(firebaseBackend)
             operativeStore.setFirebaseBackend(firebaseBackend)
@@ -131,14 +237,10 @@ struct ContentView: View {
             userStore.setFirebaseBackend(firebaseBackend)
             print("🔥🔥🔥 DEBUG: Firebase backend connection complete in ContentView")
             
-            // Normal load should happen automatically via auth state listener
-            // Only trigger recovery if organization is still nil after a delay (meaning normal load failed)
             if firebaseBackend.isAuthenticated && firebaseBackend.currentOrganization == nil {
                 print("🔥🔥🔥 DEBUG: ⚠️ Organization is nil on app appear, waiting for normal load...")
                 Task {
-                    // Wait 2 seconds for normal load to complete
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    // Only recover if still nil after normal load attempt
                     if firebaseBackend.currentOrganization == nil {
                         print("🔥🔥🔥 DEBUG: ⚠️ Organization still nil after normal load, attempting recovery...")
                         if let userId = firebaseBackend.currentUser?.uid {
@@ -148,7 +250,6 @@ struct ContentView: View {
                 }
             }
             
-            // Org-wide Firebase loads run once from ProjectPlannerRootView (avoid duplicate parallel reloads that freeze the shell).
             Task {
                 await userStore.loadCurrentUser()
             }
@@ -156,7 +257,6 @@ struct ContentView: View {
         }
         .task(id: firebaseBackend.isAuthenticated) {
             guard firebaseBackend.isAuthenticated else { return }
-            // Defer first load so startup Firestore traffic and home layout aren’t all fighting the main actor.
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             await notificationService.loadNotifications()
         }
@@ -170,7 +270,6 @@ struct ContentView: View {
             }
         }
         .onChange(of: firebaseBackend.currentOrganization) { oldValue, newValue in
-            // Reload all data when organization changes or is loaded
             let oldOrgId = oldValue?.firestoreDocumentId
             let newOrgId = newValue?.firestoreDocumentId
             if let newOrgId, newOrgId != oldOrgId {
@@ -179,7 +278,6 @@ struct ContentView: View {
                     await performInitialDataLoadIfNeeded(force: true)
                 }
             } else if oldValue != nil && newValue == nil {
-                // Organization was lost - try to recover
                 print("🔥🔥🔥 DEBUG: ⚠️ Organization was lost, attempting recovery...")
                 lastLoadedOrganizationId = nil
                 Task {
@@ -207,69 +305,6 @@ struct ContentView: View {
         .onChange(of: appSettings.settings.notifications.materialOrderCutOff) { _, _ in
             Task { await notificationService.refreshDailyMaterialCutOffReminder() }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("goBackToPreviousTab"))) { _ in
-            // Go back to home tab when back button is pressed from secondary tabs (Operatives/Settings)
-            // Always go to home (tab 0) when coming from secondary tabs
-            selectTab(0)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("selectTab"))) { notification in
-            // Handle tab selection from HomeView navigation tiles
-            // Use async to prevent immediate re-triggering and potential loops
-            DispatchQueue.main.async {
-                showMoreMenuSheet = false
-                if let userInfo = notification.userInfo,
-                   let tab = userInfo["tab"] as? Int {
-                    selectTab(tab)
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .mainMenuEditTabBar)) { _ in
-            showMoreMenuSheet = false
-            DispatchQueue.main.async {
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
-                    isReorderingTabs = true
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .mainMenuOpenSurface)) { notification in
-            if relayingMainMenuSurface {
-                relayingMainMenuSurface = false
-                return
-            }
-            guard selectedTab != 0 else { return }
-            let payload = notification.userInfo
-            showMoreMenuSheet = false
-            selectTab(0)
-            relayingMainMenuSurface = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                NotificationCenter.default.post(name: .mainMenuOpenSurface, object: nil, userInfo: payload)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToTimesheetReview"))) { notification in
-            let payload = notification.userInfo
-            selectTab(0)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                NotificationCenter.default.post(
-                    name: .mainMenuOpenSurface,
-                    object: nil,
-                    userInfo: [
-                        "route": MainMenuSurfaceRoute.invoicing.rawValue,
-                        "targetUserId": payload?["targetUserId"] as? String ?? "",
-                        "weekStart": payload?["weekStart"] as? Date ?? Date()
-                    ]
-                )
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openHoliday"))) { notification in
-            DispatchQueue.main.async {
-                guard userStore.isAnnualLeaveFeatureEnabled() else { return }
-                holidaySheetShowRequests = (notification.userInfo?["showRequests"] as? Bool) ?? false
-                showingHolidaySheet = true
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .qualificationExpiryScheduleRefresh)) { _ in
-            Task { await notificationService.refreshQualificationExpiryReminders() }
-        }
         .onChange(of: isReorderingTabs) { _, newValue in
             if newValue {
                 jiggleTask?.cancel()
@@ -287,42 +322,6 @@ struct ContentView: View {
                 jiggleTask?.cancel()
                 jiggleTask = nil
                 jiggleTabs = false
-            }
-        }
-        .sheet(isPresented: $showingHolidaySheet) {
-            HolidayView(showRequests: holidaySheetShowRequests, presentedAsSheet: true)
-                .environmentObject(holidayStore)
-                .environmentObject(userStore)
-                .environmentObject(operativeStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(notificationService)
-                .environmentObject(appSettings)
-        }
-        .sheet(isPresented: $showMoreMenuSheet) {
-            MainMenuMoreSheet()
-                .environmentObject(userStore)
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-        }
-        .overlay(alignment: .top) {
-            if showingBookingToast, let bookingToastText {
-                HStack(spacing: 10) {
-                    Image(systemName: "calendar.badge.plus")
-                        .foregroundStyle(.white)
-                    Text(bookingToastText)
-                        .font(.subheadline)
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(Color.green.opacity(0.95))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .shadow(color: .black.opacity(0.2), radius: 6, x: 0, y: 3)
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
     }

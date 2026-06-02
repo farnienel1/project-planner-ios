@@ -346,7 +346,8 @@ struct WarningsDetailView: View {
             managerScheduleStore: managerScheduleStore,
             holidayStore: holidayStore,
             firebaseBackend: firebaseBackend,
-            appSettings: appSettings
+            appSettings: appSettings,
+            force: true
         )
     }
 }

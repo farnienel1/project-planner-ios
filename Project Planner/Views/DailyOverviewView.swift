@@ -306,12 +306,11 @@ struct DailyOverviewView: View {
 
     private func managerScheduledPaidHours(_ userId: String) -> Double {
         let policy = payrollTimePolicy
-        let bookings: [ManagerSiteBooking] = managerScheduleStore.managerSiteBookings.filter { booking in
-            let sameDay = Calendar.current.isDate(booking.date, inSameDayAs: overviewDate)
-            let sameUser = booking.userId == userId
-            return sameDay && sameUser
+        let bookings = managerScheduleStore.managerSiteBookings.filter { booking in
+            Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) &&
+            booking.userId == userId
         }
-        return bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
+        return ManagerScheduleInterval.combinedPaidBookedHours(for: bookings, policy: policy)
     }
 
     private var unbookedOperativeNames: [String] {
@@ -1709,10 +1708,10 @@ struct ProjectBookingCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(project.jobNumber)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(smallWorksFlow ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.blue)
                         Text(project.siteName)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.ink)
                         if smallWorksFlow {
                             Text("SMALL WORKS")
@@ -1727,11 +1726,11 @@ struct ProjectBookingCard: View {
                     }
                     HStack(spacing: 4) {
                         Text("\(cardPeopleCount) \(cardPeopleCount == 1 ? "person" : "people") · \(ScheduleCoverageFormat.hours(cardBookedHours))h booked")
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                         if cardOvertimeHours > 0.05 {
                             Text("· +\(ScheduleCoverageFormat.hours(cardOvertimeHours))h OT")
-                                .font(.system(size: 10, weight: .medium))
+                                .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
                         }
                     }
@@ -1754,7 +1753,7 @@ struct ProjectBookingCard: View {
         let isEditable = canEditBookings && (row.operativeBooking != nil || row.managerBooking != nil || row.subcontractorBooking != nil)
         let content = HStack(alignment: .center, spacing: 9) {
             Text(row.initials)
-                .font(.system(size: 9, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Color.white)
                 .frame(width: 26, height: 26)
                 .background(
@@ -1763,25 +1762,25 @@ struct ProjectBookingCard: View {
                 .clipShape(Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.name)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                     .lineLimit(1)
                 if !row.bookedOperativeNames.isEmpty {
                     ForEach(row.bookedOperativeNames, id: \.self) { opName in
                         Text(opName)
-                            .font(.system(size: 9, weight: .medium))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                             .lineLimit(1)
                     }
                 }
                 Text(row.subtitle)
-                    .font(.system(size: 9, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(row.subtitleOvertime ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen)
                     .lineLimit(2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Text(row.pillText)
-                .font(.system(size: 9, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(row.pillOvertime ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)

@@ -9,6 +9,7 @@ struct MaterialsSendListSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var smartCache: SmartCacheService
 
     let project: Project
     let materials: [MaterialItem]
@@ -86,8 +87,9 @@ struct MaterialsSendListSheet: View {
             .sheet(item: $resendDialog) { dialog in
                 MaterialsResendIncludeExcludeSheet(
                     dialog: dialog,
-                    onInclude: { proceedSend(type: dialog.requestType, materialIds: dialog.alreadySent.map(\.id) + dialog.fresh.map(\.id)) },
-                    onExclude: { proceedSend(type: dialog.requestType, materialIds: dialog.fresh.map(\.id)) },
+                    onContinue: { materialIds in
+                        proceedSend(type: dialog.requestType, materialIds: materialIds)
+                    },
                     onCancel: { resendDialog = nil }
                 )
             }
@@ -464,19 +466,32 @@ struct MaterialsSendListSheet: View {
         )
 
         Task {
-            guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            guard let organizationId = MaterialOfflineService.resolvedOrganizationId(firebaseBackend: firebaseBackend) else {
                 await MainActor.run { isSending = false }
                 return
             }
             do {
-                try await firebaseBackend.sendMaterialRequest(request, organizationId: organizationId)
-                do {
-                    try await firebaseBackend.saveMaterialSendRecord(sendRecord, organizationId: organizationId)
-                } catch {
-                    print("🔥🔥🔥 DEBUG: saveMaterialSendRecord failed (email was sent): \(error.localizedDescription)")
-                }
+                let result = try await MaterialOfflineService.sendMaterialRequest(
+                    request,
+                    sendRecord: sendRecord,
+                    organizationId: organizationId,
+                    firebaseBackend: firebaseBackend,
+                    isOnline: smartCache.isOnline
+                )
                 await MainActor.run {
                     isSending = false
+                    if result == .queuedForSync {
+                        sendConfirmation = SendConfirmationState(
+                            requestType: type,
+                            itemCount: items.count,
+                            recipientCount: contacts.count
+                        )
+                        NotificationCenter.default.post(
+                            name: NSNotification.Name("materialSendHistoryDidChange"),
+                            object: nil
+                        )
+                        return
+                    }
                     sendConfirmation = SendConfirmationState(
                         requestType: type,
                         itemCount: items.count,
@@ -509,62 +524,155 @@ struct MaterialsSendListSheet: View {
 
 private struct MaterialsResendIncludeExcludeSheet: View {
     let dialog: MaterialsSendListSheet.ResendDialogState
-    let onInclude: () -> Void
-    let onExclude: () -> Void
+    let onContinue: ([UUID]) -> Void
     let onCancel: () -> Void
+
+    @State private var excludedMaterialIds: Set<UUID> = []
+
+    private var previouslySentMaterials: [MaterialItem] {
+        dialog.alreadyQuoted + dialog.alreadyOrdered
+    }
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(resendHeadline)
-                    .font(.headline)
-                Text("Would you like to include these items again?")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                ForEach(dialog.alreadySent) { item in
-                    Text("• \(item.material) (\(item.status.displayLabel))")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(headline)
+                        .font(.headline)
+                    Text(subheadline)
                         .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    if !dialog.alreadyQuoted.isEmpty {
+                        materialSection(
+                            title: "Already sent for quote",
+                            subtitle: "Tap the red × to exclude an item from this send.",
+                            items: dialog.alreadyQuoted,
+                            tint: MaterialsOrderingTheme.primary
+                        )
+                    }
+
+                    if !dialog.alreadyOrdered.isEmpty {
+                        materialSection(
+                            title: "Already ordered",
+                            subtitle: "Tap the red × to exclude an item from this send.",
+                            items: dialog.alreadyOrdered,
+                            tint: MaterialsOrderingTheme.success
+                        )
+                    }
+
+                    if !dialog.fresh.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("New items")
+                                .font(.subheadline.weight(.semibold))
+                            ForEach(dialog.fresh) { item in
+                                materialRow(item, isExcluded: false, canToggle: false)
+                            }
+                        }
+                    }
                 }
-                Spacer()
-                Button(action: onInclude) {
-                    Text("Include")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(MaterialsOrderingTheme.success)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                Button(action: onExclude) {
-                    Text("Exclude")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(MaterialsOrderingTheme.danger)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                Button("Cancel", action: onCancel)
-                    .frame(maxWidth: .infinity)
+                .padding(20)
             }
-            .padding(20)
+            .navigationTitle("Review materials")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close", action: onCancel)
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Continue") {
+                        onContinue(selectedMaterialIds)
+                    }
+                    .disabled(selectedMaterialIds.isEmpty)
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
-    private var resendHeadline: String {
+    private var selectedMaterialIds: [UUID] {
+        let sentIncluded = previouslySentMaterials
+            .filter { !excludedMaterialIds.contains($0.id) }
+            .map(\.id)
+        return sentIncluded + dialog.fresh.map(\.id)
+    }
+
+    private var headline: String {
+        let hasQuotes = !dialog.alreadyQuoted.isEmpty
+        let hasOrders = !dialog.alreadyOrdered.isEmpty
+        if hasQuotes && hasOrders {
+            return "Some items have been quoted and some have been ordered"
+        }
+        if hasOrders {
+            return "Some items on this list have already been ordered"
+        }
+        return "Some items on this list have already been sent for quote"
+    }
+
+    private var subheadline: String {
         if dialog.requestType == .quote {
-            return "Materials on this list have already been sent for quote"
+            return "Choose which previously sent items to include in this quote request."
         }
-        if !dialog.alreadyOrdered.isEmpty {
-            return "Materials on this list have already been ordered"
+        return "Choose which previously sent items to include in this order."
+    }
+
+    @ViewBuilder
+    private func materialSection(
+        title: String,
+        subtitle: String,
+        items: [MaterialItem],
+        tint: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Circle().fill(tint).frame(width: 8, height: 8)
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+            }
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(items) { item in
+                materialRow(
+                    item,
+                    isExcluded: excludedMaterialIds.contains(item.id),
+                    canToggle: true
+                )
+            }
         }
-        return "Materials on this list have already been quoted for"
+    }
+
+    private func materialRow(_ item: MaterialItem, isExcluded: Bool, canToggle: Bool) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.material)
+                    .font(.subheadline.weight(.medium))
+                    .strikethrough(isExcluded, color: .secondary)
+                    .foregroundStyle(isExcluded ? .secondary : .primary)
+                Text(item.status.displayLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            if canToggle {
+                Button {
+                    if excludedMaterialIds.contains(item.id) {
+                        excludedMaterialIds.remove(item.id)
+                    } else {
+                        excludedMaterialIds.insert(item.id)
+                    }
+                } label: {
+                    Image(systemName: isExcluded ? "plus.circle.fill" : "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(isExcluded ? MaterialsOrderingTheme.primary : .red)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isExcluded ? "Include \(item.material)" : "Exclude \(item.material)")
+            }
+        }
+        .padding(12)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
