@@ -522,9 +522,8 @@ class OperativeStore: ObservableObject {
     func addOrganizationSkill(name: String, trade: String) async {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
-        let tradeOut = trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? OrganizationSkill.defaultTrade
-            : trade.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tradeOut = trade.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tradeOut.isEmpty else { return }
         let (nk, tk) = OrganizationSkill.normalizedPair(name: trimmedName, trade: tradeOut)
         if organizationSkills.contains(where: {
             let p = OrganizationSkill.normalizedPair(name: $0.name, trade: $0.trade)
@@ -541,6 +540,37 @@ class OperativeStore: ObservableObject {
             return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
         _ = await saveDataWithRetry(description: "adding organisation skill \(trimmedName)")
+    }
+
+    @discardableResult
+    func updateOrganizationSkill(id: String, name: String, trade: String) async -> Bool {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tradeOut = trade.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !tradeOut.isEmpty else { return false }
+        guard let index = organizationSkills.firstIndex(where: { $0.id == id }) else { return false }
+
+        let (nk, tk) = OrganizationSkill.normalizedPair(name: trimmedName, trade: tradeOut)
+        if organizationSkills.contains(where: {
+            guard $0.id != id else { return false }
+            let p = OrganizationSkill.normalizedPair(name: $0.name, trade: $0.trade)
+            return p.0 == nk && p.1 == tk
+        }) {
+            return false
+        }
+
+        var updated = organizationSkills[index]
+        updated.name = trimmedName
+        updated.trade = tradeOut
+        updated.updatedAt = Date()
+        organizationSkills[index] = updated
+        organizationSkills.sort {
+            if $0.trade.localizedCaseInsensitiveCompare($1.trade) != .orderedSame {
+                return $0.trade.localizedCaseInsensitiveCompare($1.trade) == .orderedAscending
+            }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        _ = await saveDataWithRetry(description: "updating organisation skill \(trimmedName)")
+        return true
     }
     
     func removeOrganizationSkill(id: String) async {
