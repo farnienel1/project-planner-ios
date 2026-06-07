@@ -467,7 +467,7 @@ struct SmallWorksDetailRowView: View {
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                 Spacer()
-                Text("\(Int(pct * 100))%")
+                Text("\(WorksListProgress.percentDisplay(for: project))%")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(project.status == .completed ? ProjectWorksRevampColors.muted : ProjectWorksRevampColors.ink)
             }

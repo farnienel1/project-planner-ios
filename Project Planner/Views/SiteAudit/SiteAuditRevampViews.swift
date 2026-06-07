@@ -373,6 +373,7 @@ struct SiteAuditItemsStepView: View {
     let authorName: String
     @Binding var items: [SiteAuditDraftItem]
     @Binding var multiSelection: [PhotosPickerItem]
+    var isProcessingPhotos = false
     let onAddItem: () -> Void
     let onEditItem: (SiteAuditDraftItem) -> Void
     let onDelete: (IndexSet) -> Void
@@ -401,15 +402,16 @@ struct SiteAuditItemsStepView: View {
 
                     HStack(spacing: 7) {
                         SiteAuditPrimaryButton(title: "Add item", systemImage: "plus", action: onAddItem)
+                            .disabled(isProcessingPhotos)
                         PhotosPicker(selection: $multiSelection, maxSelectionCount: 20, matching: .images) {
                             HStack(spacing: 5) {
                                 Image(systemName: "photo.on.rectangle.angled")
-                                Text("Multi-add")
+                                Text(isProcessingPhotos ? "Processing…" : "Multi-add")
                             }
                             .font(.system(size: 12, weight: .medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
-                            .foregroundStyle(SiteAuditColors.primary)
+                            .foregroundStyle(isProcessingPhotos ? SiteAuditColors.textDisabled : SiteAuditColors.primary)
                             .background(Color.white)
                             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                             .overlay(
@@ -417,6 +419,17 @@ struct SiteAuditItemsStepView: View {
                                     .strokeBorder(SiteAuditColors.primary, lineWidth: 0.5)
                             )
                         }
+                        .disabled(isProcessingPhotos)
+                    }
+
+                    if isProcessingPhotos {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Preparing photos — this may take a moment for large batches.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(SiteAuditColors.textSecondary)
+                        }
+                        .padding(.vertical, 4)
                     }
 
                     if items.isEmpty {
@@ -601,6 +614,7 @@ struct SiteAuditPreviewStepView: View {
     let onEdit: () -> Void
     let onSubmit: () -> Void
     let isSubmitting: Bool
+    var submitStatusMessage: String = ""
     var submitButtonTitle: String = "Submit & generate PDF"
 
     var body: some View {
@@ -648,10 +662,19 @@ struct SiteAuditPreviewStepView: View {
 
             VStack(spacing: 0) {
                 Divider()
+                if isSubmitting, !submitStatusMessage.isEmpty {
+                    Text(submitStatusMessage)
+                        .font(.system(size: 11))
+                        .foregroundStyle(SiteAuditColors.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                }
                 HStack(spacing: 7) {
                     SiteAuditPrimaryButton(title: "Edit", systemImage: "pencil", style: .outline, action: onEdit)
+                        .disabled(isSubmitting)
                     SiteAuditPrimaryButton(
-                        title: isSubmitting ? "Saving…" : submitButtonTitle,
+                        title: isSubmitting ? "Working…" : submitButtonTitle,
                         systemImage: "arrow.up.circle.fill",
                         disabled: isSubmitting,
                         action: onSubmit

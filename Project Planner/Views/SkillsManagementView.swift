@@ -4,6 +4,7 @@ struct SkillsManagementView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @Environment(\.dismiss) private var dismiss
     @State private var showingAddSkill = false
+    @State private var skillToEdit: OrganizationSkill?
     @State private var tradeFilter: String? = nil
 
     /// When set, each skill row is tappable to add that skill’s id to the set (operative profile editor).
@@ -125,19 +126,28 @@ struct SkillsManagementView: View {
                                         }
                                         .buttonStyle(.plain)
                                     } else {
-                                        HStack(alignment: .top, spacing: 10) {
-                                            Image(systemName: "wrench.fill")
-                                                .foregroundColor(.blue)
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(skill.name)
-                                                    .font(.body)
-                                                Text(skill.trade)
+                                        Button {
+                                            skillToEdit = skill
+                                        } label: {
+                                            HStack(alignment: .top, spacing: 10) {
+                                                Image(systemName: "wrench.fill")
+                                                    .foregroundColor(.blue)
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text(skill.name)
+                                                        .font(.body)
+                                                        .foregroundStyle(.primary)
+                                                    Text(skill.trade)
+                                                        .font(.caption)
+                                                        .foregroundColor(.secondary)
+                                                }
+                                                Spacer()
+                                                Image(systemName: "chevron.right")
                                                     .font(.caption)
-                                                    .foregroundColor(.secondary)
+                                                    .foregroundStyle(.tertiary)
                                             }
-                                            Spacer()
+                                            .padding(.vertical, 4)
                                         }
-                                        .padding(.vertical, 4)
+                                        .buttonStyle(.plain)
                                     }
                                 }
                                 .onDelete { offsets in
@@ -178,7 +188,13 @@ struct SkillsManagementView: View {
             }
             .sheet(isPresented: $showingAddSkill) {
                 NavigationStack {
-                    AddSkillView()
+                    SkillFormView(mode: .add)
+                        .environmentObject(operativeStore)
+                }
+            }
+            .sheet(item: $skillToEdit) { skill in
+                NavigationStack {
+                    SkillFormView(mode: .edit(skill))
                         .environmentObject(operativeStore)
                 }
             }
@@ -195,27 +211,46 @@ struct SkillsManagementView: View {
     }
 }
 
-struct AddSkillView: View {
+struct SkillFormView: View {
+    enum Mode {
+        case add
+        case edit(OrganizationSkill)
+    }
+
     @EnvironmentObject var operativeStore: OperativeStore
     @Environment(\.dismiss) private var dismiss
+    let mode: Mode
+
     @State private var skillName = ""
-    @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
-    @State private var tradeCustomText = ""
+    @State private var tradeText = ""
     @State private var errorMessage: String?
     @State private var isSaving = false
 
-    private var resolvedTradeLabel: String {
-        StaffTradeType.displayLabel(presetRaw: tradePresetRaw, custom: tradeCustomText)
+    private var editingSkill: OrganizationSkill? {
+        if case .edit(let skill) = mode { return skill }
+        return nil
+    }
+
+    private var existingTrades: [String] {
+        operativeStore.organizationSkills.map(\.trade)
+    }
+
+    private var navigationTitle: String {
+        editingSkill == nil ? "New skill" : "Edit skill"
+    }
+
+    private var headline: String {
+        editingSkill == nil ? "Add New Skill" : "Edit Skill"
     }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                Text("Add New Skill")
+                Text(headline)
                     .font(.title2)
                     .fontWeight(.bold)
 
-                Text("Choose the trade this skill belongs to, then enter the skill name. The same skill can exist under different trades.")
+                Text("Enter the trade this skill belongs to, then the skill name. Skills can be assigned to any staff member regardless of their trade.")
                     .font(.body)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -231,11 +266,10 @@ struct AddSkillView: View {
                 .padding(.horizontal)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    StaffTradeTypeFormSection(
-                        presetRaw: $tradePresetRaw,
-                        customText: $tradeCustomText,
-                        title: "Trade",
-                        footnote: "Used to group and filter skills."
+                    SkillTradeSearchField(
+                        trade: $tradeText,
+                        existingTrades: existingTrades,
+                        title: "Trade"
                     )
                 }
                 .padding(.horizontal)
@@ -248,43 +282,51 @@ struct AddSkillView: View {
                 }
 
                 Button(isSaving ? "Saving…" : "Save") {
-                    addSkill()
+                    saveSkill()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(
                     isSaving ||
                     skillName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                    !StaffTradeType.isComplete(presetRaw: tradePresetRaw, custom: tradeCustomText)
+                    tradeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
                 .padding()
             }
             .padding(.vertical)
         }
-        .navigationTitle("New skill")
+        .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
             }
         }
+        .onAppear {
+            if let skill = editingSkill {
+                skillName = skill.name
+                tradeText = skill.trade
+            }
+        }
     }
 
-    private func addSkill() {
+    private func saveSkill() {
         let trimmedSkill = skillName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTrade = tradeText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !trimmedSkill.isEmpty else {
             errorMessage = "Skill name cannot be empty"
             return
         }
 
-        guard StaffTradeType.isComplete(presetRaw: tradePresetRaw, custom: tradeCustomText) else {
-            errorMessage = "Please complete the trade selection."
+        guard !trimmedTrade.isEmpty else {
+            errorMessage = "Trade name cannot be empty"
             return
         }
 
-        let trade = resolvedTradeLabel
-        let (nk, tk) = OrganizationSkill.normalizedPair(name: trimmedSkill, trade: trade)
+        let excludeId = editingSkill?.id
+        let (nk, tk) = OrganizationSkill.normalizedPair(name: trimmedSkill, trade: trimmedTrade)
         if operativeStore.organizationSkills.contains(where: {
+            if let excludeId, $0.id == excludeId { return false }
             let p = OrganizationSkill.normalizedPair(name: $0.name, trade: $0.trade)
             return p.0 == nk && p.1 == tk
         }) {
@@ -295,9 +337,23 @@ struct AddSkillView: View {
         isSaving = true
         errorMessage = nil
         Task { @MainActor in
-            await operativeStore.addOrganizationSkill(name: trimmedSkill, trade: trade)
-            isSaving = false
-            dismiss()
+            if let skill = editingSkill {
+                let ok = await operativeStore.updateOrganizationSkill(
+                    id: skill.id,
+                    name: trimmedSkill,
+                    trade: trimmedTrade
+                )
+                isSaving = false
+                if ok {
+                    dismiss()
+                } else {
+                    errorMessage = "Could not save this skill. Check for duplicates."
+                }
+            } else {
+                await operativeStore.addOrganizationSkill(name: trimmedSkill, trade: trimmedTrade)
+                isSaving = false
+                dismiss()
+            }
         }
     }
 }

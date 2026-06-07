@@ -166,8 +166,7 @@ struct OrgSitesMapView: View {
             Calendar.current.isDate($0.date, inSameDayAs: targetDate)
         }
 
-        let allProjects = (projectStore.projects + projectStore.smallWorks)
-            .filter(\.isLive)
+        let allProjects = ProjectWorksMerge.uniqueWorks(projectStore.projects).filter(\.isLive)
 
         var builtPins: [SiteMapPin] = []
         for project in allProjects {
