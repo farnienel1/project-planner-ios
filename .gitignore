@@ -1,5 +1,6 @@
 # Local tooling and editor state
 .cursor/
+.build/
 Project Planner.xcodeproj/xcuserdata/
 Project Planner.xcodeproj/project.xcworkspace/
 

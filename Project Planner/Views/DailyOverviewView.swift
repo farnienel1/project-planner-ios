@@ -940,7 +940,7 @@ struct DailyOverviewView: View {
 
     private var liveProjectsRevampSection: some View {
         let ids = displayedProjectIds.sorted { id1, id2 in
-            let all = projectStore.projects + projectStore.smallWorks
+            let all = projectStore.projects
             guard let p1 = all.first(where: { $0.id == id1 }), let p2 = all.first(where: { $0.id == id2 }) else { return false }
             return p1.siteName < p2.siteName
         }
@@ -949,8 +949,7 @@ struct DailyOverviewView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     revampSectionHeader(title: "By project", trailing: nil)
                     ForEach(ids, id: \.self) { projectId in
-                        let all = projectStore.projects + projectStore.smallWorks
-                        if let project = all.first(where: { $0.id == projectId }) {
+                        if let project = projectStore.projects.first(where: { $0.id == projectId }) {
                             liveProjectRevampCard(
                                 project: project,
                                 bookings: bookingsByProject[projectId] ?? []
