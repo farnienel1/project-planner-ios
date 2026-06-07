@@ -118,7 +118,8 @@ class SmartCacheService: ObservableObject {
         }
 
         refreshOutboxCounts()
-        guard OfflineOutboxStore.shared.pendingCount > 0 else {
+        guard OfflineOutboxStore.shared.pendingCount > 0 || SiteAuditOfflineStore.shared.pendingCount > 0 else {
+            await SiteAuditOfflineStore.shared.syncPending(firebaseBackend: firebaseBackend)
             NotificationCenter.default.post(name: .syncOfflineChanges, object: nil)
             return
         }
@@ -126,6 +127,7 @@ class SmartCacheService: ObservableObject {
         print("🔥🔥🔥 DEBUG: 🔄 Syncing offline outbox (\(OfflineOutboxStore.shared.pendingCount) entries)")
         _ = await OfflineSyncCoordinator.processOutbox(firebaseBackend: firebaseBackend)
         refreshOutboxCounts()
+        await SiteAuditOfflineStore.shared.syncPending(firebaseBackend: firebaseBackend)
 
         // Legacy fallback: stores still push in-memory state for any data not yet in the outbox.
         NotificationCenter.default.post(name: .syncOfflineChanges, object: nil)

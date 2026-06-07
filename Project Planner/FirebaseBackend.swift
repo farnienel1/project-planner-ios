@@ -102,6 +102,9 @@ class FirebaseBackend: ObservableObject {
     /// De-duplicates `organizationDidLoad` broadcasts for the same org within a short window.
     private var lastOrganizationDidLoadBroadcastOrgId: String?
     private var lastOrganizationDidLoadBroadcastAt: Date?
+    private var organizationDocumentListener: ListenerRegistration?
+    /// True when `organizations/{orgId}.settings.myScheduleOptions` exists in Firestore.
+    private(set) var organizationHasFirestoreMyScheduleOptions = false
 
     /// Ensures org id is non-empty and org document is readable before subcollection reads.
     private func ensureReadableOrganization(_ organizationId: String) async throws -> String {
@@ -146,17 +149,59 @@ class FirebaseBackend: ObservableObject {
         }
         lastOrganizationDidLoadBroadcastOrgId = orgId
         lastOrganizationDidLoadBroadcastAt = now
+        startOrganizationDocumentListener(organizationId: orgId)
         NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
+    }
+
+    private func stopOrganizationDocumentListener() {
+        organizationDocumentListener?.remove()
+        organizationDocumentListener = nil
+    }
+
+    private func startOrganizationDocumentListener(organizationId: String) {
+        stopOrganizationDocumentListener()
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty else { return }
+        organizationDocumentListener = db.collection("organizations").document(orgId)
+            .addSnapshotListener { [weak self] snapshot, error in
+                if let error {
+                    print("🔥🔥🔥 DEBUG: organization listener error: \(error.localizedDescription)")
+                    return
+                }
+                guard let self, let snapshot, snapshot.exists, let data = snapshot.data() else { return }
+                Task { @MainActor in
+                    self.applyOrganizationDocumentMyScheduleOptions(from: data)
+                }
+            }
+    }
+
+    @MainActor
+    private func applyOrganizationDocumentMyScheduleOptions(from data: [String: Any]) {
+        guard var org = currentOrganization else { return }
+        guard let settingsDict = data["settings"] as? [String: Any],
+              let raw = settingsDict["myScheduleOptions"] as? [String: Any] else {
+            return
+        }
+        let options = MyScheduleOptions.fromFirestore(raw)
+        let previous = org.settings.myScheduleOptions
+        guard previous != options else { return }
+        org.settings.myScheduleOptions = options
+        organizationHasFirestoreMyScheduleOptions = true
+        currentOrganization = org
+        storeOrganizationLocally(org)
+        NotificationCenter.default.post(name: .organizationMyScheduleOptionsDidChange, object: nil)
     }
 
     @MainActor
     private func setCurrentOrganizationFromRecovery(orgId: String, orgData: [String: Any], fallbackRole: String = "member") {
         let resolvedName = (orgData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let orgSettings = Self.organizationSettingsFromOrgDocument(orgData)
+        organizationHasFirestoreMyScheduleOptions = Self.organizationHasMyScheduleOptionsInDocument(orgData)
         let organization = Organization(
             id: UUID(uuidString: orgId) ?? UUID(),
             firestoreDocumentId: orgId,
             name: (resolvedName?.isEmpty == false) ? resolvedName! : "Recovered Organization",
-            settings: OrganizationSettings(),
+            settings: orgSettings,
             officeAddressLine1: orgData["officeAddressLine1"] as? String,
             officeCity: orgData["officeCity"] as? String,
             officePostcode: orgData["officePostcode"] as? String,
@@ -261,6 +306,8 @@ class FirebaseBackend: ObservableObject {
                     NotificationCenter.default.post(name: .userDidSignIn, object: user.email)
                 } else {
                     print("Firebase user signed out.")
+                    self.stopOrganizationDocumentListener()
+                    self.organizationHasFirestoreMyScheduleOptions = false
                     self.currentOrganization = nil
                     self.userRole = .basic
                     self.shouldShowSetupFlow = false
@@ -746,7 +793,16 @@ class FirebaseBackend: ObservableObject {
         if let annualLeaveDefaultsDict = data["annualLeaveDefaults"] as? [String: Any] {
             settings.annualLeaveDefaults = organizationAnnualLeaveDefaultsFromFirestore(annualLeaveDefaultsDict)
         }
+        if let settingsDict = data["settings"] as? [String: Any],
+           let raw = settingsDict["myScheduleOptions"] as? [String: Any] {
+            settings.myScheduleOptions = MyScheduleOptions.fromFirestore(raw)
+        }
         return settings
+    }
+
+    private static func organizationHasMyScheduleOptionsInDocument(_ data: [String: Any]) -> Bool {
+        guard let settingsDict = data["settings"] as? [String: Any] else { return false }
+        return settingsDict["myScheduleOptions"] != nil
     }
 
     private static func organizationAnnualLeaveDefaultsFromFirestore(_ data: [String: Any]) -> OrganizationAnnualLeaveDefaults {
@@ -1025,6 +1081,7 @@ class FirebaseBackend: ObservableObject {
             print("🔥🔥🔥 DEBUG: ✅ Organization name: \(organizationName), creatorUserId: \(creatorUserId ?? "nil")")
             
             let orgSettings = Self.organizationSettingsFromOrgDocument(data)
+            organizationHasFirestoreMyScheduleOptions = Self.organizationHasMyScheduleOptionsInDocument(data)
             let organization = Organization(
                 id: UUID(uuidString: organizationId) ?? UUID(),
                 firestoreDocumentId: organizationId,
@@ -2266,8 +2323,11 @@ class FirebaseBackend: ObservableObject {
 
     /// Site audit photos (not task attachments). Keeps Storage paths aligned with Firestore `siteAudits` for clearer rules later.
     func uploadSiteAuditImage(_ image: UIImage, auditId: UUID, organizationId: String, imageName: String) async throws -> String {
-        guard let userId = currentUser?.uid,
-              let imageData = image.jpegData(compressionQuality: 0.8) else {
+        guard let userId = currentUser?.uid else {
+            throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
+        }
+        let uploadImage = SiteAuditMediaProcessor.preparedForUpload(image)
+        guard let imageData = uploadImage.jpegData(compressionQuality: 0.72) else {
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Failed to process image"])
         }
         let timestamp = Int(Date().timeIntervalSince1970)
@@ -3503,6 +3563,78 @@ class FirebaseBackend: ObservableObject {
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
+    }
+
+    /// Admin: org-wide My Schedule booking options (`organizations/{orgId}.settings.myScheduleOptions`).
+    func updateOrganizationMyScheduleOptions(_ options: MyScheduleOptions) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
+            )
+        }
+        try await db.collection("organizations").document(orgId).updateData(
+            [
+                "settings.myScheduleOptions": options.asFirestoreDictionary(),
+                "updatedAt": Timestamp(date: Date()),
+            ]
+        )
+        guard var org = currentOrganization else { return }
+        org.settings.myScheduleOptions = options
+        org.updatedAt = Date()
+        organizationHasFirestoreMyScheduleOptions = true
+        currentOrganization = org
+        storeOrganizationLocally(org)
+    }
+
+    /// Loads per-user notification preferences from `users/{userId}.notificationPreferences`.
+    func loadUserNotificationPreferences(userId: String) async throws -> NotificationSettings? {
+        let doc = try await db.collection("users").document(userId).getDocument(source: .server)
+        guard doc.exists, let data = doc.data(),
+              let raw = data["notificationPreferences"] as? [String: Any] else {
+            return nil
+        }
+        return notificationSettingsFromFirestore(raw)
+    }
+
+    /// Saves material cut-off notification fields to `users/{userId}.notificationPreferences`.
+    func saveUserNotificationPreferences(_ settings: NotificationSettings, userId: String) async throws {
+        try await db.collection("users").document(userId).setData(
+            [
+                "notificationPreferences": notificationSettingsToFirestore(settings),
+                "updatedAt": Timestamp(date: Date()),
+            ],
+            merge: true
+        )
+    }
+
+    private func notificationSettingsFromFirestore(_ data: [String: Any]) -> NotificationSettings {
+        NotificationSettings(
+            bookingConflicts: data["bookingConflicts"] as? Bool ?? true,
+            projectDeadlines: data["projectDeadlines"] as? Bool ?? true,
+            operativeAvailability: data["operativeAvailability"] as? Bool ?? false,
+            dailyReports: data["dailyReports"] as? Bool ?? false,
+            materialOrderCutOff: data["materialOrderCutOff"] as? Bool ?? true,
+            materialCutOffHour: (data["materialCutOffHour"] as? NSNumber)?.intValue ?? (data["materialCutOffHour"] as? Int) ?? 16,
+            materialCutOffMinute: (data["materialCutOffMinute"] as? NSNumber)?.intValue ?? (data["materialCutOffMinute"] as? Int) ?? 0,
+            materialCutOffOnSaturday: data["materialCutOffOnSaturday"] as? Bool ?? false,
+            materialCutOffOnSunday: data["materialCutOffOnSunday"] as? Bool ?? false
+        )
+    }
+
+    private func notificationSettingsToFirestore(_ settings: NotificationSettings) -> [String: Any] {
+        [
+            "bookingConflicts": settings.bookingConflicts,
+            "projectDeadlines": settings.projectDeadlines,
+            "operativeAvailability": settings.operativeAvailability,
+            "dailyReports": settings.dailyReports,
+            "materialOrderCutOff": settings.materialOrderCutOff,
+            "materialCutOffHour": settings.materialCutOffHour,
+            "materialCutOffMinute": settings.materialCutOffMinute,
+            "materialCutOffOnSaturday": settings.materialCutOffOnSaturday,
+            "materialCutOffOnSunday": settings.materialCutOffOnSunday,
+        ]
     }
     
     /// Super admin: update organisation display name, office location, country, and optional cached map center.

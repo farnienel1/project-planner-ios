@@ -106,15 +106,11 @@ enum SiteAuditWorksBrowserKind: String, Identifiable {
 private struct SiteAuditProjectAccess {
     /// `ProjectStore.smallWorks` is a subset of `projects` — never concatenate the two.
     static func uniqueById(_ projects: [Project]) -> [Project] {
-        var seen = Set<UUID>()
-        var result: [Project] = []
-        result.reserveCapacity(projects.count)
-        for project in projects {
-            if seen.insert(project.id).inserted {
-                result.append(project)
-            }
-        }
-        return result
+        ProjectWorksMerge.uniqueById(projects)
+    }
+
+    static func uniqueWorks(_ projects: [Project]) -> [Project] {
+        ProjectWorksMerge.uniqueWorks(projects)
     }
 
     static func visibleWorks(
@@ -123,7 +119,7 @@ private struct SiteAuditProjectAccess {
         bookingStore: BookingStore,
         operativeStore: OperativeStore
     ) -> [Project] {
-        let all = uniqueById(projectStore.projects)
+        let all = uniqueWorks(projectStore.projects)
         if !userStore.canViewSiteAudit() {
             return []
         }
@@ -410,6 +406,7 @@ struct SiteAuditProjectAuditsView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var smartCache: SmartCacheService
 
     @State private var audits: [SiteAudit] = []
     @State private var selectedTypeTab = "All"
@@ -459,6 +456,13 @@ struct SiteAuditProjectAuditsView: View {
     }
 
     private func loadAudits() async {
+        guard smartCache.isOnline else {
+            await MainActor.run {
+                audits = []
+                isLoading = false
+            }
+            return
+        }
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         isLoading = true
         defer { isLoading = false }
@@ -478,6 +482,7 @@ struct SiteAuditProjectHubView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var smartCache: SmartCacheService
 
     @State private var audits: [SiteAudit] = []
     @State private var selectedTypeTab = "All"
@@ -519,6 +524,13 @@ struct SiteAuditProjectHubView: View {
     }
 
     private func loadAudits() async {
+        guard smartCache.isOnline else {
+            await MainActor.run {
+                audits = []
+                isLoading = false
+            }
+            return
+        }
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         isLoading = true
         defer { isLoading = false }
@@ -537,6 +549,7 @@ struct SiteAuditCreateFlowView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var smartCache: SmartCacheService
 
     /// When set, the flow starts on this project and optionally locks the picker.
     var initialProject: Project? = nil
@@ -558,6 +571,8 @@ struct SiteAuditCreateFlowView: View {
     @State private var editingItem: SiteAuditDraftItem?
     @State private var multiSelection: [PhotosPickerItem] = []
     @State private var isSubmitting = false
+    @State private var submitStatusMessage = ""
+    @State private var isProcessingPhotos = false
     @State private var errorMessage: String?
 
     @State private var showingSubmitSuccess = false
@@ -565,6 +580,7 @@ struct SiteAuditCreateFlowView: View {
     /// When true, operatives can see this audit in the app; when false, only admins/managers (not in operative mode).
     @State private var operativeAccessVisibleToOperatives = true
     @State private var didBootstrapExisting = false
+    @State private var savedOffline = false
 
     private var isEditing: Bool { existingAudit != nil }
 
@@ -573,11 +589,13 @@ struct SiteAuditCreateFlowView: View {
     }
 
     private var visibleProjectsForPicker: [Project] {
-        SiteAuditProjectAccess.visibleWorks(
-            userStore: userStore,
-            projectStore: projectStore,
-            bookingStore: bookingStore,
-            operativeStore: operativeStore
+        SiteAuditProjectAccess.uniqueWorks(
+            SiteAuditProjectAccess.visibleWorks(
+                userStore: userStore,
+                projectStore: projectStore,
+                bookingStore: bookingStore,
+                operativeStore: operativeStore
+            )
         )
     }
 
@@ -656,6 +674,7 @@ struct SiteAuditCreateFlowView: View {
                         pdfURL: submitSuccessPDFURL,
                         itemCount: items.count,
                         isUpdate: isEditing,
+                        savedOffline: savedOffline,
                         onDone: {
                             showingSubmitSuccess = false
                             submitSuccessPDFURL = nil
@@ -717,6 +736,7 @@ struct SiteAuditCreateFlowView: View {
                 authorName: authorName,
                 items: $items,
                 multiSelection: $multiSelection,
+                isProcessingPhotos: isProcessingPhotos,
                 onAddItem: { editingItem = SiteAuditDraftItem(assignee: authorName) },
                 onEditItem: { editingItem = $0 },
                 onDelete: { items.remove(atOffsets: $0) }
@@ -741,6 +761,7 @@ struct SiteAuditCreateFlowView: View {
                 onEdit: { step = 2 },
                 onSubmit: { submitAudit() },
                 isSubmitting: isSubmitting,
+                submitStatusMessage: submitStatusMessage,
                 submitButtonTitle: isEditing ? "Update & generate PDF" : "Submit & generate PDF"
             )
         }
@@ -783,28 +804,43 @@ struct SiteAuditCreateFlowView: View {
                   let (data, _) = try? await URLSession.shared.data(from: url),
                   let image = UIImage(data: data),
                   let idx = updated.firstIndex(where: { $0.id == item.id }) else { continue }
-            updated[idx].image = SiteAuditMediaProcessor.normalizedForDisplay(image)
+            let normalized = await Task.detached(priority: .utility) {
+                SiteAuditMediaProcessor.normalizedForDisplay(image)
+            }.value
+            updated[idx].image = normalized
         }
         await MainActor.run { items = updated }
     }
 
     private func addMultiPhotos(from selection: [PhotosPickerItem]) async {
-        for entry in selection {
-            if let data = try? await entry.loadTransferable(type: Data.self),
-               let image = UIImage(data: data) {
-                let captured = Date()
-                let normalized = SiteAuditMediaProcessor.normalizedForDisplay(image)
-                let stamped = SiteAuditMediaProcessor.addTimestampWatermark(to: normalized, at: captured)
-                await MainActor.run {
-                    items.append(SiteAuditDraftItem(
-                        title: "Photo item",
-                        image: stamped,
-                        capturedAt: captured
-                    ))
-                }
+        await MainActor.run {
+            isProcessingPhotos = true
+            submitStatusMessage = "Processing \(selection.count) photo\(selection.count == 1 ? "" : "s")…"
+        }
+        var newItems: [SiteAuditDraftItem] = []
+        newItems.reserveCapacity(selection.count)
+        for (index, entry) in selection.enumerated() {
+            guard let data = try? await entry.loadTransferable(type: Data.self) else { continue }
+            let captured = Date()
+            let stamped = await Task.detached(priority: .userInitiated) {
+                SiteAuditMediaProcessor.draftImage(from: data, capturedAt: captured)
+            }.value
+            guard let stamped else { continue }
+            newItems.append(SiteAuditDraftItem(
+                title: "Photo item",
+                image: stamped,
+                capturedAt: captured
+            ))
+            await MainActor.run {
+                submitStatusMessage = "Processed \(index + 1) of \(selection.count) photos…"
             }
         }
-        await MainActor.run { multiSelection = [] }
+        await MainActor.run {
+            items.append(contentsOf: newItems)
+            multiSelection = []
+            isProcessingPhotos = false
+            submitStatusMessage = ""
+        }
     }
 
     private func submitAudit() {
@@ -826,18 +862,54 @@ struct SiteAuditCreateFlowView: View {
         let visibilityChoice = operativeAccessVisibleToOperatives
         let existingItemsById = Dictionary(uniqueKeysWithValues: (existingAudit?.items ?? []).map { ($0.id, $0) })
 
-        Task { @MainActor in
-            let orgId = await firebaseBackend.resolveOrganizationIdForFirebaseWrites(
-                preferredFallback: firebaseBackend.currentOrganization?.firestoreDocumentId
-            )
+        Task {
+            let cachedOrgId = firebaseBackend.currentOrganization?.firestoreDocumentId
+            let orgId: String?
+            if smartCache.isOnline {
+                orgId = await firebaseBackend.resolveOrganizationIdForFirebaseWrites(preferredFallback: cachedOrgId)
+                    ?? cachedOrgId
+            } else {
+                orgId = cachedOrgId
+            }
             guard let orgId, !orgId.isEmpty else {
-                isSubmitting = false
-                errorMessage = "Could not resolve your organization. Open Settings, tap Force Reload Data, wait until projects load, then try again."
+                await MainActor.run {
+                    isSubmitting = false
+                    submitStatusMessage = ""
+                    errorMessage = "Could not resolve your organization. Open Settings, tap Force Reload Data, wait until projects load, then try again."
+                }
+                return
+            }
+
+            if !smartCache.isOnline && !isEditing {
+                await finishOfflineSubmit(
+                    auditId: auditId,
+                    organizationId: orgId,
+                    project: project,
+                    drafts: drafts,
+                    type: type,
+                    author: author,
+                    date: date,
+                    title: title,
+                    visibilityChoice: visibilityChoice,
+                    createdAt: createdAt,
+                    createdByUserId: createdByUserId
+                )
                 return
             }
 
             var savedItems: [SiteAuditItem] = []
             var uploadFailures = 0
+            let uploadCount = drafts.filter { draft in
+                guard draft.image != nil else { return false }
+                if isEditing,
+                   let priorURL = existingItemsById[draft.id]?.imageURL,
+                   !priorURL.isEmpty,
+                   draft.capturedAt == existingItemsById[draft.id]?.imageCapturedAt {
+                    return false
+                }
+                return true
+            }.count
+            var uploadIndex = 0
             for draft in drafts {
                 var remoteURL: String?
                 if let image = draft.image {
@@ -849,12 +921,19 @@ struct SiteAuditCreateFlowView: View {
                     if imageUnchanged {
                         remoteURL = priorURL
                     } else {
+                        uploadIndex += 1
+                        let currentUpload = uploadIndex
+                        await MainActor.run {
+                            submitStatusMessage = uploadCount > 0
+                                ? "Uploading photo \(currentUpload) of \(uploadCount)…"
+                                : "Uploading photos…"
+                        }
                         do {
                             remoteURL = try await firebaseBackend.uploadSiteAuditImage(
                                 image,
                                 auditId: auditId,
                                 organizationId: orgId,
-                                imageName: "site_audit_item_\(UUID().uuidString)"
+                                imageName: "site_audit_item_\(draft.id.uuidString)"
                             )
                         } catch {
                             uploadFailures += 1
@@ -898,31 +977,149 @@ struct SiteAuditCreateFlowView: View {
             )
 
             do {
+                await MainActor.run { submitStatusMessage = "Saving audit…" }
                 try await firebaseBackend.saveSiteAudit(audit, organizationId: orgId)
+                await MainActor.run { submitStatusMessage = "Generating PDF…" }
                 let logoImage = await loadOrganizationLogoImage()
-                let pdfURL = SiteAuditPDFBuilder.makePDF(
+                let orgName = await MainActor.run { firebaseBackend.currentOrganization?.name }
+                let pdfURL = await SiteAuditPDFBuilder.makePDFAsync(
                     audit: audit,
                     localItems: drafts,
-                    organizationName: firebaseBackend.currentOrganization?.name,
+                    organizationName: orgName,
                     logoImage: logoImage,
                     clientName: project.client.name,
                     siteAddress: project.siteAddress
                 )
-                submitSuccessPDFURL = pdfURL
-                isSubmitting = false
-                showingSubmitSuccess = true
-                if uploadFailures > 0 {
-                    errorMessage = "Saved successfully. \(uploadFailures) photo\(uploadFailures == 1 ? "" : "s") could not be uploaded to cloud storage, but they are included in this PDF."
-                } else {
-                    errorMessage = nil
+                await MainActor.run {
+                    isSubmitting = false
+                    submitStatusMessage = ""
+                    if let pdfURL {
+                        submitSuccessPDFURL = pdfURL
+                        showingSubmitSuccess = true
+                        if uploadFailures > 0 {
+                            errorMessage = "Saved successfully. \(uploadFailures) photo\(uploadFailures == 1 ? "" : "s") could not be uploaded to cloud storage, but they are included in this PDF."
+                        } else {
+                            errorMessage = nil
+                        }
+                    } else {
+                        errorMessage = "Audit saved, but PDF generation failed. Try opening the audit again to regenerate the PDF."
+                    }
                 }
             } catch {
-                isSubmitting = false
-                errorMessage = isEditing
-                    ? "Update failed: \(error.localizedDescription)"
-                    : "Submit failed: \(error.localizedDescription)"
+                if !smartCache.isOnline || isOfflineNetworkError(error) {
+                    if !isEditing {
+                        await finishOfflineSubmit(
+                            auditId: auditId,
+                            organizationId: orgId,
+                            project: project,
+                            drafts: drafts,
+                            type: type,
+                            author: author,
+                            date: date,
+                            title: title,
+                            visibilityChoice: visibilityChoice,
+                            createdAt: createdAt,
+                            createdByUserId: createdByUserId
+                        )
+                        return
+                    }
+                }
+                await MainActor.run {
+                    isSubmitting = false
+                    submitStatusMessage = ""
+                    errorMessage = isEditing
+                        ? "Update failed: \(error.localizedDescription)"
+                        : "Submit failed: \(error.localizedDescription)"
+                }
             }
         }
+    }
+
+    private func finishOfflineSubmit(
+        auditId: UUID,
+        organizationId: String,
+        project: Project,
+        drafts: [SiteAuditDraftItem],
+        type: SiteAuditType,
+        author: String,
+        date: Date,
+        title: String,
+        visibilityChoice: Bool,
+        createdAt: Date,
+        createdByUserId: String
+    ) async {
+        let visibilityToOperatives: Bool = {
+            if userStore.isOperativeMode() { return true }
+            if userStore.canManageSiteAuditOperativeVisibility() { return visibilityChoice }
+            return true
+        }()
+        let savedItems = drafts.map { draft in
+            SiteAuditItem(
+                id: draft.id,
+                title: draft.title,
+                location: draft.location,
+                assignee: draft.assignee,
+                comments: draft.comments,
+                annotations: draft.annotations,
+                imageURL: nil,
+                imageCapturedAt: draft.capturedAt,
+                createdAt: draft.createdAt
+            )
+        }
+        let audit = SiteAudit(
+            id: auditId,
+            projectId: project.id,
+            projectJobNumber: project.jobNumber,
+            projectName: project.siteName,
+            type: type,
+            customTitle: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            authorName: author,
+            date: date,
+            items: savedItems,
+            createdAt: createdAt,
+            createdByUserId: createdByUserId,
+            visibleToOperatives: visibilityToOperatives
+        )
+        do {
+            try SiteAuditOfflineStore.shared.enqueue(
+                audit: audit,
+                organizationId: organizationId,
+                draftItems: drafts
+            )
+            let pdfURL = await SiteAuditPDFBuilder.makePDFAsync(
+                audit: audit,
+                localItems: drafts,
+                organizationName: firebaseBackend.currentOrganization?.name,
+                logoImage: nil,
+                clientName: project.client.name,
+                siteAddress: project.siteAddress
+            )
+            await MainActor.run {
+                isSubmitting = false
+                submitStatusMessage = ""
+                savedOffline = true
+                submitSuccessPDFURL = pdfURL
+                showingSubmitSuccess = true
+                errorMessage = nil
+            }
+        } catch {
+            await MainActor.run {
+                isSubmitting = false
+                submitStatusMessage = ""
+                errorMessage = "Could not save offline: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func isOfflineNetworkError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorNotConnectedToInternet {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            return underlying.domain == NSURLErrorDomain && underlying.code == NSURLErrorNotConnectedToInternet
+        }
+        return false
     }
 
     private func loadOrganizationLogoImage() async -> UIImage? {
@@ -946,12 +1143,19 @@ private struct SiteAuditSubmitSuccessView: View {
     let pdfURL: URL?
     let itemCount: Int
     var isUpdate = false
+    var savedOffline = false
     let onDone: () -> Void
 
     @State private var showShareSheet = false
 
-    private var headline: String { isUpdate ? "Audit updated" : "Audit submitted" }
-    private var subtitle: String { isUpdate ? "Changes saved · PDF ready" : "Saved to cloud · PDF ready" }
+    private var headline: String {
+        if savedOffline { return "Saved offline" }
+        return isUpdate ? "Audit updated" : "Audit submitted"
+    }
+    private var subtitle: String {
+        if savedOffline { return "Will sync when you're back online · PDF ready" }
+        return isUpdate ? "Changes saved · PDF ready" : "Saved to cloud · PDF ready"
+    }
     private var navigationTitle: String { isUpdate ? "Audit updated" : "Audit submitted" }
 
     private var shareActivityItems: [Any] {
@@ -1519,8 +1723,11 @@ struct SiteAuditDetailView: View {
         for item in displayAudit.items {
             var image: UIImage?
             if let urlString = item.imageURL, let url = URL(string: urlString),
-               let (data, _) = try? await URLSession.shared.data(from: url) {
-                image = UIImage(data: data)
+               let (data, _) = try? await URLSession.shared.data(from: url),
+               let loaded = UIImage(data: data) {
+                image = await Task.detached(priority: .utility) {
+                    SiteAuditMediaProcessor.normalizedForDisplay(loaded)
+                }.value
             }
             drafts.append(SiteAuditDraftItem(
                 id: item.id,
@@ -1534,14 +1741,19 @@ struct SiteAuditDetailView: View {
                 createdAt: item.createdAt
             ))
         }
-        pdfURL = SiteAuditPDFBuilder.makePDF(
-            audit: displayAudit,
+        let audit = displayAudit
+        let orgName = firebaseBackend.currentOrganization?.name
+        let client = clientProject?.client.name
+        let address = clientProject?.siteAddress
+        let generated = await SiteAuditPDFBuilder.makePDFAsync(
+            audit: audit,
             localItems: drafts,
-            organizationName: firebaseBackend.currentOrganization?.name,
+            organizationName: orgName,
             logoImage: logo,
-            clientName: clientProject?.client.name,
-            siteAddress: clientProject?.siteAddress
+            clientName: client,
+            siteAddress: address
         )
+        await MainActor.run { pdfURL = generated }
     }
 
     private func loadLogo() async -> UIImage? {
@@ -1550,42 +1762,6 @@ struct SiteAuditDetailView: View {
               url.scheme?.hasPrefix("http") == true,
               let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
         return UIImage(data: data)
-    }
-}
-
-private enum SiteAuditMediaProcessor {
-    /// Downscales very large library photos so layouts and PDF generation stay predictable.
-    static func normalizedForDisplay(_ image: UIImage, maxPixelDimension: CGFloat = 1600) -> UIImage {
-        let width = image.size.width
-        let height = image.size.height
-        let longest = max(width, height)
-        guard longest > maxPixelDimension else { return image }
-        let scale = maxPixelDimension / longest
-        let newSize = CGSize(width: width * scale, height: height * scale)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        return UIGraphicsImageRenderer(size: newSize, format: format).image { _ in
-            image.draw(in: CGRect(origin: .zero, size: newSize))
-        }
-    }
-
-    static func addTimestampWatermark(to image: UIImage, at date: Date) -> UIImage {
-        let renderer = UIGraphicsImageRenderer(size: image.size)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "dd MMM yyyy HH:mm:ss"
-        let text = formatter.string(from: date)
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: UIFont.boldSystemFont(ofSize: max(20, image.size.width / 30)),
-            .foregroundColor: UIColor.white
-        ]
-        let textSize = text.size(withAttributes: attributes)
-        return renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: image.size))
-            let box = CGRect(x: 20, y: image.size.height - textSize.height - 30, width: textSize.width + 20, height: textSize.height + 10)
-            UIColor.black.withAlphaComponent(0.25).setFill()
-            UIBezierPath(roundedRect: box, cornerRadius: 8).fill()
-            text.draw(at: CGPoint(x: 30, y: image.size.height - textSize.height - 25), withAttributes: attributes)
-        }
     }
 }
 

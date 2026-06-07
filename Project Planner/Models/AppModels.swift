@@ -601,6 +601,8 @@ struct OrganizationSettings: Codable, Hashable {
     var invoicing: OrganizationInvoicingSettings
     /// Defaults used only for newly invited manager/operative users.
     var annualLeaveDefaults: OrganizationAnnualLeaveDefaults
+    /// Org-wide My Schedule booking options (`organizations/{orgId}.settings.myScheduleOptions`).
+    var myScheduleOptions: MyScheduleOptions
     
     init(
         allowSelfRegistration: Bool = true,
@@ -612,7 +614,8 @@ struct OrganizationSettings: Codable, Hashable {
         payrollTimePolicy: OrgPayrollTimePolicy = .default,
         warningDetection: OrgWarningDetectionSettings = .default,
         invoicing: OrganizationInvoicingSettings = .default,
-        annualLeaveDefaults: OrganizationAnnualLeaveDefaults = .default
+        annualLeaveDefaults: OrganizationAnnualLeaveDefaults = .default,
+        myScheduleOptions: MyScheduleOptions = MyScheduleOptions()
     ) {
         self.allowSelfRegistration = allowSelfRegistration
         self.requireEmailVerification = requireEmailVerification
@@ -624,6 +627,7 @@ struct OrganizationSettings: Codable, Hashable {
         self.warningDetection = warningDetection
         self.invoicing = invoicing
         self.annualLeaveDefaults = annualLeaveDefaults
+        self.myScheduleOptions = myScheduleOptions
     }
 
     enum CodingKeys: String, CodingKey {
@@ -633,6 +637,7 @@ struct OrganizationSettings: Codable, Hashable {
         case warningDetection
         case invoicing
         case annualLeaveDefaults
+        case myScheduleOptions
     }
 
     init(from decoder: Decoder) throws {
@@ -647,6 +652,7 @@ struct OrganizationSettings: Codable, Hashable {
         warningDetection = try c.decodeIfPresent(OrgWarningDetectionSettings.self, forKey: .warningDetection) ?? .default
         invoicing = try c.decodeIfPresent(OrganizationInvoicingSettings.self, forKey: .invoicing) ?? .default
         annualLeaveDefaults = try c.decodeIfPresent(OrganizationAnnualLeaveDefaults.self, forKey: .annualLeaveDefaults) ?? .default
+        myScheduleOptions = try c.decodeIfPresent(MyScheduleOptions.self, forKey: .myScheduleOptions) ?? MyScheduleOptions()
     }
 
     func encode(to encoder: Encoder) throws {
@@ -661,6 +667,7 @@ struct OrganizationSettings: Codable, Hashable {
         try c.encode(warningDetection, forKey: .warningDetection)
         try c.encode(invoicing, forKey: .invoicing)
         try c.encode(annualLeaveDefaults, forKey: .annualLeaveDefaults)
+        try c.encode(myScheduleOptions, forKey: .myScheduleOptions)
     }
 }
 

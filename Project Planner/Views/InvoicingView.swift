@@ -658,7 +658,8 @@ private struct MyTimesheetView: View {
                     payrollBasis: resolved.basis,
                     dayRate: resolved.dayRate ?? 0,
                     hourlyRate: resolved.hourlyRate,
-                    amount: amount
+                    amount: amount,
+                    isPayeDay: currentUser.employmentType(on: day) == .paye
                 )
             )
         }
@@ -690,7 +691,8 @@ private struct MyTimesheetView: View {
                     payrollBasis: resolved.basis,
                     dayRate: resolved.dayRate ?? 0,
                     hourlyRate: resolved.hourlyRate,
-                    amount: amount
+                    amount: amount,
+                    isPayeDay: currentUser.employmentType(on: day) == .paye
                 )
             )
         }
@@ -727,7 +729,7 @@ private struct MyTimesheetView: View {
                                     .foregroundStyle(.secondary)
                                 Text(timesheetHoursRateLine(for: row))
                                     .font(.caption.weight(.medium))
-                                    .foregroundStyle(row.hasPayrollRate ? Color.primary : Color.orange)
+                                    .foregroundStyle(row.shouldHighlightRateInOrange ? Color.orange : Color.primary)
                             }
                             Spacer()
                             Text(String(format: "£%.2f", row.amount))
@@ -1133,10 +1135,7 @@ private struct MyTimesheetView: View {
 
     private func timesheetHoursRateLine(for row: InvoiceLineItem) -> String {
         let hours = formatTimesheetHours(row.paidHours)
-        if let rateLabel = row.resolvedPayrollRate.displayRateLabel() {
-            return "\(hours)h · \(rateLabel)"
-        }
-        return "\(hours)h · rate not set"
+        return "\(hours)h · \(row.timesheetRateAnnotation)"
     }
 
     private func formatTimesheetHours(_ value: Double) -> String {
@@ -1495,11 +1494,16 @@ private struct OperativeTimesheetsView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var notificationService: NotificationService
     let settings: OrganizationInvoicingSettings
     let week: WeekRange
     @State private var selectedTab: ManagerTimesheetListTab = .awaiting
     @State private var refreshVersion = 0
+    @State private var isExporting = false
+    @State private var exportMessage: String?
+    @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
 
     private var isAdminViewer: Bool {
         guard let u = userStore.displayUser else { return false }
@@ -1614,28 +1618,18 @@ private struct OperativeTimesheetsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                 if selectedTab == .signedOff && !filteredReports.isEmpty {
+                    if let exportMessage {
+                        Text(exportMessage)
+                            .font(.caption)
+                            .foregroundStyle(exportMessage.contains("Failed") ? .red : .green)
+                    }
                     Button {
-                        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
-                        for op in filteredReports {
-                            var d = TimesheetDraftStore.load(userId: op.id, weekStart: week.start)
-                            d.exportedAt = Date()
-                            TimesheetDraftStore.save(d, userId: op.id, weekStart: week.start)
-                            if let orgId {
-                                let snapshot = d
-                                Task {
-                                    await TimesheetDraftStore.saveToCloud(
-                                        snapshot,
-                                        userId: op.id,
-                                        weekStart: week.start,
-                                        firebaseBackend: firebaseBackend,
-                                        organizationId: orgId
-                                    )
-                                }
-                            }
-                        }
-                        refreshVersion += 1
+                        Task { await exportSignedTimesheets() }
                     } label: {
-                        Label("Export & email \(filteredReports.count) timesheets", systemImage: "square.and.arrow.up")
+                        Label(
+                            isExporting ? "Sending timesheets…" : "Export & email \(filteredReports.count) timesheets",
+                            systemImage: "envelope.fill"
+                        )
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
                             .foregroundStyle(.white)
@@ -1643,6 +1637,7 @@ private struct OperativeTimesheetsView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .disabled(isExporting)
                 }
             }
             .padding(16)
@@ -1652,6 +1647,7 @@ private struct OperativeTimesheetsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await refreshFromCloud()
+            await loadDayRateHistory()
         }
     }
 
@@ -1710,6 +1706,61 @@ private struct OperativeTimesheetsView: View {
             )
         }
         await MainActor.run { refreshVersion += 1 }
+    }
+
+    private func loadDayRateHistory() async {
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
+        await MainActor.run { dayRateHistoryCollection = history }
+    }
+
+    private func exportSignedTimesheets() async {
+        guard !isExporting else { return }
+        isExporting = true
+        exportMessage = nil
+        defer { isExporting = false }
+
+        let orgName = firebaseBackend.currentOrganization?.name ?? "Organization"
+        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let targets = filteredReports
+        let result = await TimesheetExportHelper.exportAndEmail(
+            operatives: targets,
+            week: week,
+            draftForUser: { TimesheetDraftStore.load(userId: $0.id, weekStart: week.start) },
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            operativeStore: operativeStore,
+            projectStore: projectStore,
+            dayRateHistory: dayRateHistoryCollection,
+            payrollPolicy: policy,
+            organizationName: orgName
+        )
+
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            exportMessage = "Exported \(result.emailed) timesheet\(result.emailed == 1 ? "" : "s"), but could not mark them exported (no organization)."
+            return
+        }
+
+        for op in targets where result.emailedUserIds.contains(op.id) {
+            var d = TimesheetDraftStore.load(userId: op.id, weekStart: week.start)
+            d.exportedAt = Date()
+            TimesheetDraftStore.save(d, userId: op.id, weekStart: week.start)
+            let snapshot = d
+            await TimesheetDraftStore.saveToCloud(
+                snapshot,
+                userId: op.id,
+                weekStart: week.start,
+                firebaseBackend: firebaseBackend,
+                organizationId: orgId
+            )
+        }
+
+        refreshVersion += 1
+        if result.failed.isEmpty {
+            exportMessage = "Emailed \(result.emailed) timesheet\(result.emailed == 1 ? "" : "s") to each user's email address."
+        } else {
+            exportMessage = "Emailed \(result.emailed). Failed for: \(result.failed.joined(separator: ", "))."
+        }
     }
 
     private func operativeSummary(for user: AppUser, draft: TimesheetDraft) -> (hours: Double, overtimeHours: Double, priceWork: Double, expenses: Double) {
@@ -2694,9 +2745,10 @@ private struct GenerateInvoiceView: View {
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
             let normalAmount = resolved.payForHours(normalHours, standardDayHours: standardDayHours)
 
+            let day = cal.startOfDay(for: booking.date)
             rows.append(
                 InvoiceLineItem(
-                    date: cal.startOfDay(for: booking.date),
+                    date: day,
                     jobNumber: projectLabel(for: booking.projectId).jobNumber,
                     projectName: projectLabel(for: booking.projectId).siteName,
                     details: booking.scheduleLabel(policy: policy),
@@ -2704,7 +2756,8 @@ private struct GenerateInvoiceView: View {
                     payrollBasis: resolved.basis,
                     dayRate: resolved.dayRate ?? 0,
                     hourlyRate: resolved.hourlyRate,
-                    amount: normalAmount
+                    amount: normalAmount,
+                    isPayeDay: currentUser.employmentType(on: day) == .paye
                 )
             )
 
@@ -2723,7 +2776,7 @@ private struct GenerateInvoiceView: View {
                 }
                 rows.append(
                     InvoiceLineItem(
-                        date: cal.startOfDay(for: booking.date),
+                        date: day,
                         jobNumber: projectLabel(for: booking.projectId).jobNumber,
                         projectName: "\(projectLabel(for: booking.projectId).siteName) (Overtime)",
                         details: "OT \(formatHours(otHours))h × \(formatMultiplier(otMultiplier)) · extra \(formatCurrency(otExtra))",
@@ -2731,7 +2784,8 @@ private struct GenerateInvoiceView: View {
                         payrollBasis: resolved.basis,
                         dayRate: otDisplayRate,
                         hourlyRate: otDisplayHourly,
-                        amount: otAmount
+                        amount: otAmount,
+                        isPayeDay: currentUser.employmentType(on: day) == .paye
                     )
                 )
             }
@@ -2760,9 +2814,10 @@ private struct GenerateInvoiceView: View {
             let otMultiplier = policy.weekdayOutsideStandardMultiplier
             let normalAmount = resolved.payForHours(normalHours, standardDayHours: standardDayHours)
 
+            let day = cal.startOfDay(for: booking.date)
             rows.append(
                 InvoiceLineItem(
-                    date: cal.startOfDay(for: booking.date),
+                    date: day,
                     jobNumber: projectLabel(for: locationId).jobNumber,
                     projectName: projectLabel(for: locationId).siteName,
                     details: booking.scheduleLabel(policy: policy),
@@ -2770,7 +2825,8 @@ private struct GenerateInvoiceView: View {
                     payrollBasis: resolved.basis,
                     dayRate: resolved.dayRate ?? 0,
                     hourlyRate: resolved.hourlyRate,
-                    amount: normalAmount
+                    amount: normalAmount,
+                    isPayeDay: currentUser.employmentType(on: day) == .paye
                 )
             )
 
@@ -2789,7 +2845,7 @@ private struct GenerateInvoiceView: View {
                 }
                 rows.append(
                     InvoiceLineItem(
-                        date: cal.startOfDay(for: booking.date),
+                        date: day,
                         jobNumber: projectLabel(for: locationId).jobNumber,
                         projectName: "\(projectLabel(for: locationId).siteName) (Overtime)",
                         details: "OT \(formatHours(otHours))h × \(formatMultiplier(otMultiplier)) · extra \(formatCurrency(otExtra))",
@@ -2797,7 +2853,8 @@ private struct GenerateInvoiceView: View {
                         payrollBasis: resolved.basis,
                         dayRate: otDisplayRate,
                         hourlyRate: otDisplayHourly,
-                        amount: otAmount
+                        amount: otAmount,
+                        isPayeDay: currentUser.employmentType(on: day) == .paye
                     )
                 )
             }
@@ -2964,6 +3021,31 @@ private struct InvoiceLineItem {
     let dayRate: Double
     let hourlyRate: Double?
     let amount: Double
+    let isPayeDay: Bool
+
+    init(
+        date: Date,
+        jobNumber: String,
+        projectName: String,
+        details: String,
+        paidHours: Double,
+        payrollBasis: PayrollRateBasis,
+        dayRate: Double,
+        hourlyRate: Double?,
+        amount: Double,
+        isPayeDay: Bool = false
+    ) {
+        self.date = date
+        self.jobNumber = jobNumber
+        self.projectName = projectName
+        self.details = details
+        self.paidHours = paidHours
+        self.payrollBasis = payrollBasis
+        self.dayRate = dayRate
+        self.hourlyRate = hourlyRate
+        self.amount = amount
+        self.isPayeDay = isPayeDay
+    }
 
     var resolvedPayrollRate: ResolvedPayrollRate {
         ResolvedPayrollRate(basis: payrollBasis, dayRate: dayRate > 0 ? dayRate : nil, hourlyRate: hourlyRate)
@@ -2971,6 +3053,16 @@ private struct InvoiceLineItem {
 
     var hasPayrollRate: Bool {
         resolvedPayrollRate.hasRate
+    }
+
+    var timesheetRateAnnotation: String {
+        if isPayeDay { return "PAYE" }
+        if let label = resolvedPayrollRate.displayRateLabel() { return label }
+        return "rate not set"
+    }
+
+    var shouldHighlightRateInOrange: Bool {
+        isPayeDay || !hasPayrollRate
     }
 }
 
@@ -3208,7 +3300,7 @@ private enum InvoicePDFBuilder {
                 in: CGRect(x: middleX, y: y + 7, width: 190, height: 18),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: navy]
             )
-            let detail = "\(item.details) · \(hoursString(item.paidHours))h · \(currency(item.dayRate))/day"
+            let detail = "\(item.details) · \(hoursString(item.paidHours))h · \(item.timesheetRateAnnotation)"
             (detail as NSString).draw(
                 in: CGRect(x: middleX, y: y + 22, width: 190, height: 28),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 9.5), .foregroundColor: slate]
@@ -3290,6 +3382,241 @@ private enum InvoicePDFBuilder {
             return String(format: "%.0f", rounded)
         }
         return String(format: "%.1f", rounded)
+    }
+}
+
+private enum TimesheetExportHelper {
+    struct Result {
+        let emailedUserIds: Set<String>
+        let failed: [String]
+        var emailed: Int { emailedUserIds.count }
+    }
+
+    static func exportAndEmail(
+        operatives: [AppUser],
+        week: WeekRange,
+        draftForUser: (AppUser) -> TimesheetDraft,
+        bookingStore: BookingStore,
+        managerScheduleStore: ManagerScheduleStore,
+        operativeStore: OperativeStore,
+        projectStore: ProjectStore,
+        dayRateHistory: OperativeDayRateHistoryCollection,
+        payrollPolicy: OrgPayrollTimePolicy,
+        organizationName: String
+    ) async -> Result {
+        var emailedUserIds = Set<String>()
+        var failed: [String] = []
+        let resend = ResendEmailService()
+
+        for operative in operatives {
+            let email = operative.email.trimmingCharacters(in: .whitespacesAndNewlines)
+            let userName = operative.fullName.isEmpty ? operative.email : operative.fullName
+            guard !email.isEmpty else {
+                failed.append(userName)
+                continue
+            }
+
+            let rows = buildLineItems(
+                for: operative,
+                week: week,
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                operativeStore: operativeStore,
+                projectStore: projectStore,
+                dayRateHistory: dayRateHistory,
+                payrollPolicy: payrollPolicy
+            )
+            let draft = draftForUser(operative)
+            let workTotal = rows.reduce(0) { $0 + $1.amount }
+            let grandTotal = workTotal + draft.additionalTotal
+
+            let pdfURL = InvoicePDFBuilder.makePDF(
+                context: InvoicePDFBuilder.Context(
+                    organizationName: organizationName,
+                    userName: userName,
+                    generatedAt: Date(),
+                    periodTitle: "Signed timesheet",
+                    periodDateRange: week.title,
+                    lineItems: rows,
+                    totalAmount: grandTotal,
+                    rateChangeNotes: []
+                )
+            )
+            let pdfData = pdfURL.flatMap { try? Data(contentsOf: $0) }
+            let html = timesheetEmailHTML(
+                operativeName: userName,
+                weekTitle: week.title,
+                organizationName: organizationName,
+                rows: rows,
+                extras: draft.additionalTotal,
+                grandTotal: grandTotal
+            )
+
+            let sent = await resend.sendTimesheetExportEmail(
+                to: email,
+                subject: "Your timesheet — \(week.title)",
+                htmlContent: html,
+                pdfAttachment: pdfData,
+                pdfFileName: "Timesheet.pdf",
+                fromName: organizationName
+            )
+            if sent {
+                emailedUserIds.insert(operative.id)
+            } else {
+                failed.append(userName)
+            }
+        }
+
+        return Result(emailedUserIds: emailedUserIds, failed: failed)
+    }
+
+    private static func buildLineItems(
+        for user: AppUser,
+        week: WeekRange,
+        bookingStore: BookingStore,
+        managerScheduleStore: ManagerScheduleStore,
+        operativeStore: OperativeStore,
+        projectStore: ProjectStore,
+        dayRateHistory: OperativeDayRateHistoryCollection,
+        payrollPolicy: OrgPayrollTimePolicy
+    ) -> [InvoiceLineItem] {
+        let cal = Calendar.current
+        let standardDayHours = max(payrollPolicy.standardPaidHours, 0.01)
+        let matchedOperatives = operativeStore.allOperatives.filter {
+            $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                == user.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        let operativeIds = Set(matchedOperatives.map(\.id))
+        var rows: [InvoiceLineItem] = []
+
+        for booking in bookingStore.bookings where booking.status != .cancelled {
+            guard operativeIds.contains(booking.operativeId) else { continue }
+            let day = cal.startOfDay(for: booking.date)
+            guard day >= week.start && day <= week.end else { continue }
+            let paid = booking.paidBookedHours(policy: payrollPolicy)
+            let resolved = PayrollRateResolver.resolveForTimesheetDay(
+                user: user,
+                operative: matchedOperatives.first(where: { $0.id == booking.operativeId }),
+                on: day,
+                history: dayRateHistory,
+                standardDayHours: standardDayHours
+            )
+            rows.append(
+                InvoiceLineItem(
+                    date: day,
+                    jobNumber: projectLabel(for: booking.projectId, projectStore: projectStore).jobNumber,
+                    projectName: projectLabel(for: booking.projectId, projectStore: projectStore).siteName,
+                    details: booking.scheduleLabel(policy: payrollPolicy),
+                    paidHours: paid,
+                    payrollBasis: resolved.basis,
+                    dayRate: resolved.dayRate ?? 0,
+                    hourlyRate: resolved.hourlyRate,
+                    amount: resolved.payForHours(paid, standardDayHours: standardDayHours),
+                    isPayeDay: user.employmentType(on: day) == .paye
+                )
+            )
+        }
+
+        for booking in managerScheduleStore.managerSiteBookings {
+            guard booking.userId == user.id else { continue }
+            let day = cal.startOfDay(for: booking.date)
+            guard day >= week.start && day <= week.end else { continue }
+            let paid = booking.paidBookedHours(policy: payrollPolicy)
+            let resolved = PayrollRateResolver.resolveForTimesheetDay(
+                user: user,
+                operative: matchedOperatives.first,
+                on: day,
+                history: dayRateHistory,
+                standardDayHours: standardDayHours
+            )
+            let labels = managerBookingLabels(for: booking, projectStore: projectStore)
+            rows.append(
+                InvoiceLineItem(
+                    date: day,
+                    jobNumber: labels.jobNumber,
+                    projectName: labels.siteName,
+                    details: booking.scheduleLabel(policy: payrollPolicy),
+                    paidHours: paid,
+                    payrollBasis: resolved.basis,
+                    dayRate: resolved.dayRate ?? 0,
+                    hourlyRate: resolved.hourlyRate,
+                    amount: resolved.payForHours(paid, standardDayHours: standardDayHours),
+                    isPayeDay: user.employmentType(on: day) == .paye
+                )
+            )
+        }
+
+        return rows.sorted { $0.date < $1.date }
+    }
+
+    private static func projectLabel(for id: UUID, projectStore: ProjectStore) -> (jobNumber: String, siteName: String) {
+        if let project = projectStore.projects.first(where: { $0.id == id }) {
+            return (project.jobNumber, project.siteName)
+        }
+        if let project = projectStore.smallWorks.first(where: { $0.id == id }) {
+            return (project.jobNumber, project.siteName)
+        }
+        return ("—", "Unknown Project")
+    }
+
+    private static func managerBookingLabels(for booking: ManagerSiteBooking, projectStore: ProjectStore) -> (jobNumber: String, siteName: String) {
+        switch booking.locationType {
+        case .project, .smallWork:
+            if let locationId = booking.locationId {
+                return projectLabel(for: locationId, projectStore: projectStore)
+            }
+            return ("—", "Site")
+        case .office:
+            return ("—", "Office")
+        case .workingFromHome:
+            return ("—", "Working from home")
+        case .siteSurvey:
+            return ("—", "Site survey")
+        case .custom:
+            let name = booking.customLocationName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return ("—", name.isEmpty ? "Custom location" : name)
+        }
+    }
+
+    private static func timesheetEmailHTML(
+        operativeName: String,
+        weekTitle: String,
+        organizationName: String,
+        rows: [InvoiceLineItem],
+        extras: Double,
+        grandTotal: Double
+    ) -> String {
+        let rowHTML = rows.map { row in
+            """
+            <tr>
+              <td style="padding:8px;border-bottom:1px solid #eee;">\(row.date.formatted(date: .abbreviated, time: .omitted))</td>
+              <td style="padding:8px;border-bottom:1px solid #eee;">\(row.jobNumber) \(row.projectName)</td>
+              <td style="padding:8px;border-bottom:1px solid #eee;">\(row.details)</td>
+              <td style="padding:8px;border-bottom:1px solid #eee;">\(String(format: "%.1f", row.paidHours))h · \(row.timesheetRateAnnotation)</td>
+              <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">£\(String(format: "%.2f", row.amount))</td>
+            </tr>
+            """
+        }.joined()
+
+        return """
+        <html><body style="font-family:Arial,sans-serif;max-width:720px;margin:0 auto;padding:20px;">
+        <h2 style="color:#007AFF;">Signed timesheet</h2>
+        <p>Hello \(operativeName),</p>
+        <p>Your signed timesheet for <strong>\(weekTitle)</strong> from <strong>\(organizationName)</strong> is attached as a PDF when supported. Summary:</p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:#f4f4f5;">
+          <th align="left" style="padding:8px;">Date</th>
+          <th align="left" style="padding:8px;">Project</th>
+          <th align="left" style="padding:8px;">Details</th>
+          <th align="left" style="padding:8px;">Hours</th>
+          <th align="right" style="padding:8px;">Amount</th>
+        </tr></thead>
+        <tbody>\(rowHTML)</tbody>
+        </table>
+        <p style="margin-top:16px;"><strong>Extras:</strong> £\(String(format: "%.2f", extras))<br>
+        <strong>Total:</strong> £\(String(format: "%.2f", grandTotal))</p>
+        </body></html>
+        """
     }
 }
 

@@ -63,6 +63,8 @@ enum PlannerStoreWiring {
         notificationService.setProjectStore(projectStore)
         notificationService.setAppSettingsStore(appSettings)
         notificationService.setHolidayStore(holidayStore)
+
+        appSettings.setFirebaseBackend(firebaseBackend)
     }
 
     /// Single-flight org data load from the root shell (ContentView must not repeat this on appear).

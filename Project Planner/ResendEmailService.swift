@@ -83,8 +83,35 @@ class ResendEmailService: ObservableObject {
             htmlContent: createNotificationEmailBody(title: title, message: message, notificationType: notificationType)
         )
     }
+
+    func sendTimesheetExportEmail(
+        to email: String,
+        subject: String,
+        htmlContent: String,
+        pdfAttachment: Data?,
+        pdfFileName: String,
+        fromName: String?
+    ) async -> Bool {
+        await sendEmail(
+            to: email,
+            subject: subject,
+            htmlContent: htmlContent,
+            fromName: fromName,
+            pdfAttachment: pdfAttachment,
+            pdfFileName: pdfFileName
+        )
+    }
     
-    func sendEmail(to email: String, subject: String, htmlContent: String, cc: String? = nil, replyTo: String? = nil, fromName: String? = nil) async -> Bool {
+    func sendEmail(
+        to email: String,
+        subject: String,
+        htmlContent: String,
+        cc: String? = nil,
+        replyTo: String? = nil,
+        fromName: String? = nil,
+        pdfAttachment: Data? = nil,
+        pdfFileName: String? = nil
+    ) async -> Bool {
         await MainActor.run {
             self.isLoading = true
             self.errorMessage = nil
@@ -97,7 +124,9 @@ class ResendEmailService: ObservableObject {
             htmlContent: htmlContent,
             cc: cc,
             replyTo: replyTo,
-            fromName: fromName
+            fromName: fromName,
+            pdfAttachment: pdfAttachment,
+            pdfFileName: pdfFileName
         )
         if sentViaFunction {
             await MainActor.run { self.isLoading = false }
@@ -114,7 +143,9 @@ class ResendEmailService: ObservableObject {
                 htmlContent: htmlContent,
                 cc: cc,
                 replyTo: replyTo,
-                fromName: fromName
+                fromName: fromName,
+                pdfAttachment: pdfAttachment,
+                pdfFileName: pdfFileName
             )
             await MainActor.run { self.isLoading = false }
             return directSuccess
@@ -132,7 +163,9 @@ class ResendEmailService: ObservableObject {
         htmlContent: String,
         cc: String?,
         replyTo: String?,
-        fromName: String?
+        fromName: String?,
+        pdfAttachment: Data? = nil,
+        pdfFileName: String? = nil
     ) async -> Bool {
         guard let url = URL(string: "https://api.resend.com/emails") else { return false }
         
@@ -151,6 +184,12 @@ class ResendEmailService: ObservableObject {
         ]
         if let cc, !cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             emailData["cc"] = [cc]
+        }
+        if let pdfAttachment, let pdfFileName, !pdfFileName.isEmpty {
+            emailData["attachments"] = [[
+                "filename": pdfFileName,
+                "content": pdfAttachment.base64EncodedString(),
+            ]]
         }
         
         do {
@@ -177,7 +216,9 @@ class ResendEmailService: ObservableObject {
         htmlContent: String,
         cc: String?,
         replyTo: String?,
-        fromName: String?
+        fromName: String?,
+        pdfAttachment: Data? = nil,
+        pdfFileName: String? = nil
     ) async -> Bool {
         guard let projectId = FirebaseApp.app()?.options.projectID,
               let url = URL(string: "https://us-central1-\(projectId).cloudfunctions.net/sendProjectPlannerEmail") else {
@@ -200,6 +241,12 @@ class ResendEmailService: ObservableObject {
         }
         if let fromName, !fromName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             payload["fromName"] = fromName
+        }
+        if let pdfAttachment, let pdfFileName, !pdfFileName.isEmpty {
+            payload["attachments"] = [[
+                "filename": pdfFileName,
+                "content": pdfAttachment.base64EncodedString(),
+            ]]
         }
         
         var request = URLRequest(url: url)

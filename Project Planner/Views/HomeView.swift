@@ -1200,103 +1200,103 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("Up next")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(homeInk)
                 Spacer()
                 Button("See all") { showingMySchedule = true }
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(homeBlue)
             }
-            .padding(.bottom, 10)
+            .padding(.bottom, 12)
 
             let sections = cachedUpNextSections
             if sections.isEmpty {
                 Text("No upcoming bookings on your schedule.")
-                    .font(.system(size: 13))
+                    .font(.system(size: 15))
                     .foregroundStyle(homeMuted)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 10)
             } else {
                 ForEach(sections) { section in
                     Text(section.heading)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(homeInk)
-                        .padding(.top, section.id == sections.first?.id ? 0 : 6)
-                        .padding(.bottom, 6)
+                        .padding(.top, section.id == sections.first?.id ? 0 : 8)
+                        .padding(.bottom, 8)
 
                     ForEach(section.rows) { row in
                         Button {
                             showingMySchedule = true
                         } label: {
-                            HStack(spacing: 12) {
+                            HStack(spacing: 14) {
                                 RoundedRectangle(cornerRadius: 2, style: .continuous)
                                     .fill(row.accentColor)
-                                    .frame(width: 4, height: 36)
-                                VStack(alignment: .leading, spacing: 2) {
+                                    .frame(width: 5, height: 48)
+                                VStack(alignment: .leading, spacing: 4) {
                                     Text(row.title)
-                                        .font(.system(size: 13, weight: .medium))
+                                        .font(.system(size: 16, weight: .semibold))
                                         .foregroundStyle(homeInk)
                                         .lineLimit(2)
                                         .multilineTextAlignment(.leading)
                                     Text(row.subtitle)
-                                        .font(.system(size: 11))
+                                        .font(.system(size: 13))
                                         .foregroundStyle(homeMuted)
                                 }
                                 Spacer(minLength: 0)
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 15, weight: .semibold))
+                                    .font(.system(size: 16, weight: .semibold))
                                     .foregroundStyle(Color(red: 0.77, green: 0.79, blue: 0.82))
                             }
-                            .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+                            .padding(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16))
                             .background(Color.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
                                     .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
                             )
                         }
                         .buttonStyle(.plain)
-                        .padding(.bottom, 10)
+                        .padding(.bottom, 12)
                     }
                 }
             }
         }
-        .padding(.bottom, 8)
+        .padding(.bottom, 10)
     }
 
     private var maintenanceTeaserCompact: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 16) {
             ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(Color(red: 0.98, green: 0.933, blue: 0.855))
-                    .frame(width: 36, height: 36)
+                    .frame(width: 52, height: 52)
                 Image(systemName: "wrench.and.screwdriver.fill")
-                    .font(.system(size: 16))
+                    .font(.system(size: 22))
                     .foregroundStyle(Color(red: 0.522, green: 0.31, blue: 0.043))
             }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
                     Text("Maintenance")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(homeInk)
                     Text("Soon")
-                        .font(.system(size: 9, weight: .medium))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color(red: 0.522, green: 0.31, blue: 0.043))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
                         .background(Color(red: 0.98, green: 0.933, blue: 0.855))
                         .clipShape(Capsule())
                 }
                 Text("Coming in a future update")
-                    .font(.system(size: 11))
+                    .font(.system(size: 14))
                     .foregroundStyle(homeMuted)
             }
             Spacer(minLength: 0)
         }
-        .padding(14)
+        .padding(18)
         .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
         )
     }
