@@ -8,7 +8,7 @@
 import Foundation
 
 enum ManagerScheduleInterval {
-    static func parseMinutes(_ hhmm: String) -> Int? {
+    nonisolated static func parseMinutes(_ hhmm: String) -> Int? {
         let trimmed = hhmm.trimmingCharacters(in: .whitespacesAndNewlines)
         let parts = trimmed.split(separator: ":")
         guard parts.count == 2,
@@ -74,7 +74,7 @@ enum ManagerScheduleInterval {
     }
 
     /// Merges touching/overlapping minute intervals for one calendar day.
-    static func mergeIntervals(_ intervals: [(Int, Int)]) -> [(Int, Int)] {
+    nonisolated static func mergeIntervals(_ intervals: [(Int, Int)]) -> [(Int, Int)] {
         guard !intervals.isEmpty else { return [] }
         let sorted = intervals.sorted { $0.0 < $1.0 }
         var merged: [(Int, Int)] = []
@@ -129,7 +129,7 @@ enum ManagerScheduleInterval {
     }
 
     /// Snapshot-friendly variant for warnings computation (uses precomputed clash intervals).
-    static func combinedPaidHoursFromIntervals(
+    nonisolated static func combinedPaidHoursFromIntervals(
         intervals: [(Int, Int)],
         anyBreakRemoved: Bool,
         includesLegacyFullDay: Bool,

@@ -50,13 +50,19 @@ struct WorksListStatusCounts {
 }
 
 enum WorksListProgress {
-    /// Timeline-based progress for list cards (0…1). Completed jobs show 100%.
+    /// Timeline-based progress for list cards (0…1). Completed or past end date shows 100%.
     static func fraction(for project: Project) -> Double {
         if project.status == .completed { return 1 }
         let total = project.endDate.timeIntervalSince(project.startDate)
         guard total > 0 else { return 0 }
-        let elapsed = Date().timeIntervalSince(project.startDate)
+        let now = Date()
+        if now > project.endDate { return 1 }
+        let elapsed = now.timeIntervalSince(project.startDate)
         return min(max(elapsed / total, 0), 1)
+    }
+
+    static func percentDisplay(for project: Project) -> Int {
+        min(100, Int(fraction(for: project) * 100))
     }
 }
 
