@@ -335,7 +335,7 @@ struct ProjectDetailView: View {
             .padding(.top, 2)
 
             HStack {
-                Text("\(Int(pct * 100))% complete")
+                Text("\(WorksListProgress.percentDisplay(for: project))% complete")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.white.opacity(0.85))
                 Spacer()

@@ -214,7 +214,7 @@ class ProjectStore: ObservableObject {
                             print("🔥🔥🔥 DEBUG: ❌❌❌ ERROR loading small works: \(error.localizedDescription)")
                         }
 
-                        let allItems = firebaseProjects + firebaseSmallWorks
+                        let allItems = ProjectWorksMerge.uniqueWorks(firebaseProjects + firebaseSmallWorks)
                         if projectsLoaded || smallWorksLoaded {
                             if allItems.isEmpty && !existingProjectsBeforeLoad.isEmpty {
                                 self.projects = existingProjectsBeforeLoad

@@ -17,7 +17,34 @@ enum SiteAuditPDFBuilder {
         let siteAddress: String?
     }
 
-    static func makePDF(
+    /// Generates the PDF off the main thread so submit does not freeze with many photos.
+    static func makePDFAsync(
+        audit: SiteAudit,
+        localItems: [SiteAuditDraftItem],
+        organizationName: String?,
+        logoImage: UIImage?,
+        clientName: String? = nil,
+        siteAddress: String? = nil
+    ) async -> URL? {
+        let auditCopy = audit
+        let itemsCopy = localItems
+        let orgName = organizationName
+        let logo = logoImage
+        let client = clientName
+        let address = siteAddress
+        return await Task.detached(priority: .userInitiated) {
+            makePDF(
+                audit: auditCopy,
+                localItems: itemsCopy,
+                organizationName: orgName,
+                logoImage: logo,
+                clientName: client,
+                siteAddress: address
+            )
+        }.value
+    }
+
+    nonisolated static func makePDF(
         audit: SiteAudit,
         localItems: [SiteAuditDraftItem],
         organizationName: String?,
@@ -33,20 +60,35 @@ enum SiteAuditPDFBuilder {
         let margin: CGFloat = 32
         let contentWidth = pageRect.width - margin * 2
 
+        var preparedImages: [UUID: UIImage] = [:]
+        preparedImages.reserveCapacity(audit.items.count)
+        for item in audit.items {
+            guard let raw = localItems.first(where: { $0.id == item.id })?.image else { continue }
+            autoreleasepool {
+                preparedImages[item.id] = SiteAuditMediaProcessor.preparedForPDF(raw)
+            }
+        }
+        let preparedLogo: UIImage? = {
+            guard let logoImage else { return nil }
+            return autoreleasepool { compressedImage(logoImage, maxWidth: 200) }
+        }()
+
         do {
             try renderer.writePDF(to: url) { context in
                 var y: CGFloat = 0
+                var pageNumber = 1
                 context.beginPage()
-                y = drawHeader(ctx: context, pageWidth: pageRect.width, y: 0, audit: audit, orgName: organizationName, logo: logoImage, siteAddress: siteAddress)
+                y = drawHeader(ctx: context, pageWidth: pageRect.width, y: 0, audit: audit, orgName: organizationName, logo: preparedLogo, siteAddress: siteAddress)
                 y = drawMetaGrid(ctx: context, x: margin, y: y, width: contentWidth, audit: audit, clientName: clientName, reference: ref)
                 y = drawSectionHeading(ctx: context, x: margin, y: y + 8, width: contentWidth, itemCount: audit.items.count)
 
                 for (index, item) in audit.items.enumerated() {
-                    let image = localItems[safe: index]?.image ?? localItems.first(where: { $0.id == item.id })?.image
-                    let needed: CGFloat = 200
+                    let image = preparedImages[item.id]
+                    let needed: CGFloat = image != nil ? 200 : 90
                     if y + needed > pageRect.height - 80 {
-                        drawFooter(ctx: context, pageRect: pageRect, margin: margin, orgName: organizationName, reference: ref, page: 1, total: 1)
+                        drawFooter(ctx: context, pageRect: pageRect, margin: margin, orgName: organizationName, reference: ref, page: pageNumber, total: pageNumber)
                         context.beginPage()
+                        pageNumber += 1
                         y = 28
                     }
                     y = drawItemCard(
@@ -61,12 +103,13 @@ enum SiteAuditPDFBuilder {
                 }
 
                 if y + 120 > pageRect.height - 50 {
-                    drawFooter(ctx: context, pageRect: pageRect, margin: margin, orgName: organizationName, reference: ref, page: 1, total: 1)
+                    drawFooter(ctx: context, pageRect: pageRect, margin: margin, orgName: organizationName, reference: ref, page: pageNumber, total: pageNumber)
                     context.beginPage()
+                    pageNumber += 1
                     y = 28
                 }
                 y = drawSignatureBlock(ctx: context, x: margin, y: y + 14, width: contentWidth, author: audit.authorName, date: audit.date)
-                drawFooter(ctx: context, pageRect: pageRect, margin: margin, orgName: organizationName, reference: ref, page: 1, total: 1)
+                drawFooter(ctx: context, pageRect: pageRect, margin: margin, orgName: organizationName, reference: ref, page: pageNumber, total: pageNumber)
             }
             return url
         } catch {
@@ -77,7 +120,7 @@ enum SiteAuditPDFBuilder {
 
     // MARK: - Drawing
 
-    private static func drawHeader(
+    nonisolated private static func drawHeader(
         ctx: UIGraphicsPDFRendererContext,
         pageWidth: CGFloat,
         y: CGFloat,
@@ -168,7 +211,7 @@ enum SiteAuditPDFBuilder {
         return y + headerHeight
     }
 
-    private static func drawMetaGrid(
+    nonisolated private static func drawMetaGrid(
         ctx: UIGraphicsPDFRendererContext,
         x: CGFloat,
         y: CGFloat,
@@ -222,7 +265,7 @@ enum SiteAuditPDFBuilder {
         return y + gridHeight
     }
 
-    private static func metaCellHeight(width: CGFloat, key: String, value: String) -> CGFloat {
+    nonisolated private static func metaCellHeight(width: CGFloat, key: String, value: String) -> CGFloat {
         let keyH: CGFloat = 12
         let valAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 13, weight: .medium)
@@ -240,7 +283,7 @@ enum SiteAuditPDFBuilder {
         return keyH + 4 + ceil(valH)
     }
 
-    private static func drawMetaCell(x: CGFloat, y: CGFloat, width: CGFloat, key: String, value: String) {
+    nonisolated private static func drawMetaCell(x: CGFloat, y: CGFloat, width: CGFloat, key: String, value: String) {
         let keyAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 9, weight: .semibold),
             .foregroundColor: UIColor(red: 0.420, green: 0.447, blue: 0.502, alpha: 1),
@@ -264,7 +307,7 @@ enum SiteAuditPDFBuilder {
         (value as NSString).draw(in: valRect, withAttributes: valAttrs)
     }
 
-    private static func drawSectionHeading(ctx: UIGraphicsPDFRendererContext, x: CGFloat, y: CGFloat, width: CGFloat, itemCount: Int) -> CGFloat {
+    nonisolated private static func drawSectionHeading(ctx: UIGraphicsPDFRendererContext, x: CGFloat, y: CGFloat, width: CGFloat, itemCount: Int) -> CGFloat {
         UIColor(red: 0.094, green: 0.373, blue: 0.647, alpha: 1).setFill()
         ctx.cgContext.fill(CGRect(x: x, y: y, width: 24, height: 3))
         let attrs: [NSAttributedString.Key: Any] = [
@@ -276,7 +319,7 @@ enum SiteAuditPDFBuilder {
         return y + 36
     }
 
-    private static func drawItemCard(
+    nonisolated private static func drawItemCard(
         ctx: UIGraphicsPDFRendererContext,
         x: CGFloat,
         y: CGFloat,
@@ -320,12 +363,12 @@ enum SiteAuditPDFBuilder {
 
         let bodyY = y + headerH + 14
         let photoW: CGFloat = 200
-        if let image, let prepared = compressedImage(image, maxWidth: 900) {
+        if let image {
             let photoRect = CGRect(x: x + 14, y: bodyY, width: photoW, height: 118)
             UIColor(red: 0.969, green: 0.973, blue: 0.980, alpha: 1).setFill()
             UIBezierPath(roundedRect: photoRect, cornerRadius: 4).fill()
             // Photo already carries capture-time watermark from upload; do not stamp again.
-            prepared.draw(in: aspectFitRect(for: prepared.size, in: photoRect))
+            image.draw(in: aspectFitRect(for: image.size, in: photoRect))
             drawDetailColumn(ctx: ctx, x: x + 14 + photoW + 14, y: bodyY, width: width - photoW - 42, item: item)
         } else {
             drawDetailColumn(ctx: ctx, x: x + 14, y: bodyY, width: width - 28, item: item)
@@ -334,7 +377,7 @@ enum SiteAuditPDFBuilder {
         return y + cardHeight + 22
     }
 
-    private static func drawDetailColumn(ctx: UIGraphicsPDFRendererContext, x: CGFloat, y: CGFloat, width: CGFloat, item: SiteAuditItem) {
+    nonisolated private static func drawDetailColumn(ctx: UIGraphicsPDFRendererContext, x: CGFloat, y: CGFloat, width: CGFloat, item: SiteAuditItem) {
         var dy = y
         let rows: [(String, String, Bool)] = [
             ("Location", item.location.isEmpty ? "—" : item.location, false),
@@ -356,7 +399,7 @@ enum SiteAuditPDFBuilder {
         }
     }
 
-    private static func drawDetailRow(x: CGFloat, y: CGFloat, width: CGFloat, key: String, value: String, muted: Bool) -> CGFloat {
+    nonisolated private static func drawDetailRow(x: CGFloat, y: CGFloat, width: CGFloat, key: String, value: String, muted: Bool) -> CGFloat {
         let keyAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 9, weight: .medium),
             .foregroundColor: UIColor(red: 0.420, green: 0.447, blue: 0.502, alpha: 1),
@@ -385,7 +428,7 @@ enum SiteAuditPDFBuilder {
         return y + 12 + max(h, 14) + 4
     }
 
-    private static func drawSignatureBlock(ctx: UIGraphicsPDFRendererContext, x: CGFloat, y: CGFloat, width: CGFloat, author: String, date: Date) -> CGFloat {
+    nonisolated private static func drawSignatureBlock(ctx: UIGraphicsPDFRendererContext, x: CGFloat, y: CGFloat, width: CGFloat, author: String, date: Date) -> CGFloat {
         UIColor(red: 0.043, green: 0.063, blue: 0.125, alpha: 1).setFill()
         ctx.cgContext.fill(CGRect(x: x, y: y, width: width, height: 2))
 
@@ -426,7 +469,7 @@ enum SiteAuditPDFBuilder {
         return y + 88
     }
 
-    private static func drawFooter(
+    nonisolated private static func drawFooter(
         ctx: UIGraphicsPDFRendererContext,
         pageRect: CGRect,
         margin: CGFloat,
@@ -463,7 +506,7 @@ enum SiteAuditPDFBuilder {
 
     // MARK: - Helpers
 
-    private static func drawLogoPlaceholder(in rect: CGRect, orgName: String?) {
+    nonisolated private static func drawLogoPlaceholder(in rect: CGRect, orgName: String?) {
         let path = UIBezierPath(roundedRect: rect, cornerRadius: 12)
         let colors = [UIColor(red: 0.094, green: 0.373, blue: 0.647, alpha: 1).cgColor,
                       UIColor(red: 0.216, green: 0.541, blue: 0.867, alpha: 1).cgColor] as CFArray
@@ -490,20 +533,20 @@ enum SiteAuditPDFBuilder {
         )
     }
 
-    private static func referenceCode(for audit: SiteAudit) -> String {
+    nonisolated private static func referenceCode(for audit: SiteAudit) -> String {
         let job = audit.projectJobNumber.replacingOccurrences(of: " ", with: "")
         let ts = Int(audit.createdAt.timeIntervalSince1970)
         return "SA-\(job)-\(ts)"
     }
 
-    private static func organizationInitials(_ name: String?) -> String {
+    nonisolated private static func organizationInitials(_ name: String?) -> String {
         guard let name, !name.isEmpty else { return "PP" }
         let parts = name.split(separator: " ").prefix(2)
         if parts.isEmpty { return String(name.prefix(2)).uppercased() }
         return parts.map { String($0.prefix(1)).uppercased() }.joined()
     }
 
-    private static func authorSignatureShort(_ name: String) -> String {
+    nonisolated private static func authorSignatureShort(_ name: String) -> String {
         let parts = name.split(separator: " ")
         if parts.count >= 2 {
             return "\(parts[0].prefix(1)). \(parts[1])"
@@ -511,19 +554,19 @@ enum SiteAuditPDFBuilder {
         return name
     }
 
-    private static func pdfDateStamp(_ date: Date) -> String {
+    nonisolated private static func pdfDateStamp(_ date: Date) -> String {
         let f = DateFormatter()
         f.dateFormat = "dMMMyy"
         return f.string(from: date)
     }
 
-    private static func mediumDate(_ date: Date) -> String {
+    nonisolated private static func mediumDate(_ date: Date) -> String {
         let f = DateFormatter()
         f.dateFormat = "d MMM yyyy"
         return f.string(from: date)
     }
 
-    private static func compressedImage(_ image: UIImage, maxWidth: CGFloat) -> UIImage? {
+    nonisolated private static func compressedImage(_ image: UIImage, maxWidth: CGFloat) -> UIImage? {
         let source = image
         let resized: UIImage
         if source.size.width > maxWidth {
@@ -538,7 +581,7 @@ enum SiteAuditPDFBuilder {
         return UIImage(data: data) ?? resized
     }
 
-    private static func aspectFitRect(for imageSize: CGSize, in box: CGRect) -> CGRect {
+    nonisolated private static func aspectFitRect(for imageSize: CGSize, in box: CGRect) -> CGRect {
         guard imageSize.width > 0, imageSize.height > 0 else { return box }
         let scale = min(box.width / imageSize.width, box.height / imageSize.height)
         let fitted = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
