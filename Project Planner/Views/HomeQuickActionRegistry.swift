@@ -52,7 +52,8 @@ enum HomeQuickActionID: String, CaseIterable {
     /// Never offer these on the home screen (picker / persistence strip).
     static let barredFromHome: Set<String> = [
         "account-reset-password",
-        "account-sign-out"
+        "account-sign-out",
+        "staff-holiday"
     ]
 }
 
