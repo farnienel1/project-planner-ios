@@ -15,7 +15,9 @@ private enum HolidayChrome {
     static let border = Color(red: 0.933, green: 0.941, blue: 0.953)
     static let accent = Color(red: 0.094, green: 0.373, blue: 0.647)
     static let taken = Color(red: 0.133, green: 0.545, blue: 0.318)
-    static let pending = Color(red: 0.98, green: 0.62, blue: 0.09)
+    static let pending = Color(red: 0.89, green: 0.22, blue: 0.22)
+    /// Pending request count in summary hero (distinct from calendar request red).
+    static let pendingMetric = Color(red: 0.98, green: 0.62, blue: 0.09)
     /// Approved half-day on the booking calendar (distinct from pending request orange).
     static let halfDayBooked = Color(red: 0.95, green: 0.52, blue: 0.12)
 }
@@ -114,19 +116,22 @@ struct HolidayView: View {
             .sorted { $0.startDate > $1.startDate }
     }
 
-    private enum ApprovedCalendarDayKind {
+    private enum CalendarDayKind {
         case none
-        case fullDay
-        case halfDay(HolidayBooking)
+        case approvedFull
+        case approvedHalf(HolidayBooking)
+        case pendingFull
+        case pendingHalf(HolidayBooking)
     }
 
-    private func approvedCalendarDayKind(for day: Date) -> ApprovedCalendarDayKind {
+    private func calendarDayKind(for day: Date) -> CalendarDayKind {
         let dayStart = calendar.startOfDay(for: day)
         guard let uid = firebaseBackend.currentUser?.uid else { return .none }
         let oid = currentOperative?.id
-        var halfCandidate: HolidayBooking?
+        var pendingHalf: HolidayBooking?
+        var approvedHalf: HolidayBooking?
         for booking in holidayStore.bookings {
-            guard booking.status == .approved, booking.cancellationRequestedAt == nil else { continue }
+            guard booking.status != .rejected else { continue }
             let matchesUser = booking.userId == uid
             let matchesOperative = oid != nil && booking.operativeId == oid
             guard matchesUser || matchesOperative else { continue }
@@ -134,12 +139,20 @@ struct HolidayView: View {
             let end = calendar.startOfDay(for: booking.endDate)
             guard dayStart >= start && dayStart <= end else { continue }
             let singleCalendarDay = calendar.isDate(booking.startDate, inSameDayAs: booking.endDate)
-            if booking.timeSlot == .fullDay || !singleCalendarDay {
-                return .fullDay
+            switch booking.status {
+            case .pending:
+                if booking.timeSlot == .fullDay || !singleCalendarDay { return .pendingFull }
+                pendingHalf = booking
+            case .approved:
+                guard booking.cancellationRequestedAt == nil else { continue }
+                if booking.timeSlot == .fullDay || !singleCalendarDay { return .approvedFull }
+                approvedHalf = booking
+            case .rejected:
+                continue
             }
-            halfCandidate = booking
         }
-        if let b = halfCandidate { return .halfDay(b) }
+        if let b = pendingHalf { return .pendingHalf(b) }
+        if let b = approvedHalf { return .approvedHalf(b) }
         return .none
     }
 
@@ -212,7 +225,7 @@ struct HolidayView: View {
 
                                 if userStore.canAccessOperativeAnnualLeaveDirectory() {
                                     NavigationLink {
-                                        OperativeAnnualLeaveDirectoryView()
+                                        OperativeAnnualLeaveHubView()
                                             .environmentObject(userStore)
                                             .environmentObject(operativeStore)
                                             .environmentObject(holidayStore)
@@ -223,9 +236,9 @@ struct HolidayView: View {
                                             Image(systemName: "person.3.fill")
                                                 .font(.body.weight(.semibold))
                                             VStack(alignment: .leading, spacing: 2) {
-                                                Text("Operative annual leave")
+                                                Text("View and manage operative annual leave")
                                                     .font(.subheadline.weight(.semibold))
-                                                Text("View and book leave for your team")
+                                                Text("Book leave and approve requests for your team")
                                                     .font(.caption)
                                                     .foregroundStyle(HolidayChrome.muted)
                                             }
@@ -502,7 +515,7 @@ struct HolidayView: View {
             }
             HStack(spacing: 0) {
                 heroMetric(title: "Taken", value: summary.takenDays, color: HolidayChrome.taken)
-                heroMetric(title: "Pending", value: summary.pendingDays, color: HolidayChrome.pending)
+                heroMetric(title: "Pending", value: summary.pendingDays, color: HolidayChrome.pendingMetric)
             }
             ProgressView(value: usedPortion, total: 1)
                 .tint(HolidayChrome.accent)
@@ -642,17 +655,18 @@ struct HolidayView: View {
         let isSelected = selectedDates.contains(day)
         let isInMonth = calendar.isDate(date, equalTo: displayedMonth, toGranularity: .month)
         let isToday = calendar.isDateInToday(day)
-        let approvedKind = approvedCalendarDayKind(for: day)
+        let dayKind = calendarDayKind(for: day)
         let approvedFullDayLocksCell: Bool = {
-            if case .fullDay = approvedKind { return true }
+            if case .approvedFull = dayKind { return true }
+            if case .pendingFull = dayKind { return true }
             return false
         }()
 
         return Button {
-            switch approvedKind {
-            case .fullDay:
+            switch dayKind {
+            case .approvedFull, .pendingFull:
                 break
-            case .halfDay(let b):
+            case .approvedHalf(let b), .pendingHalf(let b):
                 halfDayBookingEditor = b
             case .none:
                 let sod = calendar.startOfDay(for: day)
@@ -685,20 +699,33 @@ struct HolidayView: View {
                             HolidayChrome.accent
                         } else if isToday {
                             HolidayChrome.border
-                        } else if case .fullDay = approvedKind {
-                            HolidayChrome.taken.opacity(0.55)
-                        } else if case .halfDay = approvedKind {
-                            HolidayChrome.halfDayBooked.opacity(0.35)
                         } else {
-                            Color.clear
+                            switch dayKind {
+                            case .approvedFull:
+                                HolidayChrome.taken.opacity(0.55)
+                            case .approvedHalf:
+                                HolidayChrome.halfDayBooked.opacity(0.35)
+                            case .pendingFull:
+                                HolidayChrome.pending.opacity(0.88)
+                            case .pendingHalf:
+                                Color.clear
+                            case .none:
+                                Color.clear
+                            }
                         }
                     }
                 )
                 .overlay(
                     Group {
-                        if case .halfDay = approvedKind {
-                            Circle()
-                                .stroke(HolidayChrome.halfDayBooked, lineWidth: 2)
+                        switch dayKind {
+                        case .approvedHalf:
+                            Circle().stroke(HolidayChrome.halfDayBooked, lineWidth: 2)
+                        case .pendingHalf:
+                            Circle().stroke(HolidayChrome.pending, lineWidth: 2)
+                        case .pendingFull:
+                            Circle().stroke(HolidayChrome.pending.opacity(0.35), lineWidth: 1)
+                        default:
+                            EmptyView()
                         }
                     }
                 )
