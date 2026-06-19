@@ -9,6 +9,10 @@ import Foundation
 import Combine
 import UserNotifications
 import FirebaseFirestore
+import CryptoKit
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @MainActor
 class NotificationService: ObservableObject {
@@ -42,7 +46,9 @@ class NotificationService: ObservableObject {
     /// Locally read ids waiting for Firestore listener to catch up (keeps badge cleared after mark-all-read).
     private var pendingReadNotificationIds: Set<UUID> = []
     private var dismissedSyntheticNotificationIds: Set<UUID> = []
+    private var dismissedSyntheticStableKeys: Set<String> = []
     private var dismissedSyntheticLoadedForUserId: String?
+    private static let dismissedSyntheticKeyPrefix = "NotificationService.dismissedSyntheticKey."
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         self.firebaseBackend = backend
@@ -528,12 +534,23 @@ class NotificationService: ObservableObject {
 
     /// `excludeUserIdMatchingRequester` should be the Firebase Auth uid (or app user id) of the person who submitted the request.
     /// They must not receive the "someone requested leave" admin notification or OS banner.
-    func notifyHolidayRequestSubmitted(bookingId: UUID, operativeName: String, startDate: Date, endDate: Date, assignedManagerUserId: String?, excludeUserIdMatchingRequester: String? = nil) async {
+    func notifyHolidayRequestSubmitted(
+        bookingId: UUID,
+        operativeName: String,
+        startDate: Date,
+        endDate: Date,
+        assignedManagerUserId: String?,
+        requesterUserId: String? = nil,
+        excludeUserIdMatchingRequester: String? = nil
+    ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let dateRange = "\(startDate.formatted(date: .abbreviated, time: .omitted)) – \(endDate.formatted(date: .abbreviated, time: .omitted))"
 
-        let recipients = await holidayRequestRecipients(assignedManagerUserId: assignedManagerUserId)
+        let recipients = await holidayRequestRecipients(
+            assignedManagerUserId: assignedManagerUserId,
+            requesterUserId: requesterUserId
+        )
         let filteredRecipients = await filterRecipientsExcludingRequester(recipients, requesterId: excludeUserIdMatchingRequester)
         print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY SUBMIT] bookingId=\(bookingId.uuidString) operative=\(operativeName) assignedManager=\(assignedManagerUserId ?? "nil") resolvedRecipients=\(filteredRecipients)")
         for mid in filteredRecipients {
@@ -712,6 +729,33 @@ class NotificationService: ObservableObject {
         await saveNotification(notification)
     }
 
+    /// Notifies other line managers when one manager has already actioned a shared request.
+    func notifyLineManagerPeerAction(
+        actorName: String,
+        actionSummary: String,
+        peerManagerUserIds: [String],
+        excludingActorUserId: String?,
+        actionVerb: String = "approved"
+    ) async {
+        guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return }
+        let peers = await filterRecipientsExcludingRequester(peerManagerUserIds, requesterId: excludingActorUserId)
+        for peerId in peers {
+            let targetId = await resolvedRecipientUserIdResolvingStaleIds(peerId)
+            let dedupeId = syntheticNotificationId(from: "lmPeer|\(actorName)|\(actionSummary)|\(targetId)|\(actionVerb)")
+            let notification = AppNotification(
+                id: dedupeId,
+                organizationId: organizationId,
+                type: .lineManagerPeerUpdate,
+                title: "Line manager update",
+                message: "\(actorName) \(actionVerb): \(actionSummary)",
+                userId: targetId,
+                relatedId: nil,
+                requiresPermission: nil
+            )
+            await saveNotification(notification)
+        }
+    }
+
     /// Sent when line manager signs off a timesheet.
     func notifyTimesheetSignedByManager(
         targetUserId: String,
@@ -791,7 +835,7 @@ class NotificationService: ObservableObject {
         
         await MainActor.run {
             self.notifications = self.applyLocalReadState(to: merged)
-            self.unreadCount = self.notifications.filter { !$0.isRead }.count
+            self.setUnreadCount(from: self.notifications)
             // Catch-up path: if app was closed/backgrounded and new notifications arrived,
             // alert once for notifications newer than the last processed timestamp.
             if let cutoff = self.lastProcessedNotificationAt {
@@ -810,10 +854,13 @@ class NotificationService: ObservableObject {
         pendingReadNotificationIds.insert(notification.id)
         if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
             notifications[index].isRead = true
-            unreadCount = notifications.filter { !$0.isRead }.count
+            setUnreadCount(from: notifications)
         }
         if notification.requiresPermission == "syntheticAnnualLeave" {
             dismissSyntheticNotification(notification.id)
+            if let stableKey = syntheticStableKey(for: notification) {
+                dismissSyntheticStableKey(stableKey)
+            }
             return
         }
         guard let firebaseBackend = firebaseBackend,
@@ -827,7 +874,7 @@ class NotificationService: ObservableObject {
             
             if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
                 notifications[index] = updatedNotification
-                unreadCount = notifications.filter { !$0.isRead }.count
+                setUnreadCount(from: notifications)
             }
         } catch {
             print("🔥🔥🔥 DEBUG: Error marking notification as read: \(error)")
@@ -843,11 +890,15 @@ class NotificationService: ObservableObject {
             updated.isRead = true
             if notification.requiresPermission == "syntheticAnnualLeave" {
                 dismissedSyntheticNotificationIds.insert(notification.id)
+                if let stableKey = syntheticStableKey(for: notification) {
+                    dismissSyntheticStableKey(stableKey)
+                }
             }
             return updated
         }
         persistDismissedSyntheticIds()
-        unreadCount = 0
+        persistDismissedSyntheticStableKeys()
+        setUnreadCount(0)
     }
 
     /// Mark all notifications as read. Call when the user opens the notification list so the badge clears.
@@ -869,7 +920,7 @@ class NotificationService: ObservableObject {
                 print("🔥🔥🔥 DEBUG: Error marking notification as read: \(error)")
             }
         }
-        unreadCount = notifications.filter { !$0.isRead }.count
+        setUnreadCount(from: notifications)
     }
     
     private func shouldShowNotification(_ notification: AppNotification, for user: AppUser) -> Bool {
@@ -931,10 +982,23 @@ class NotificationService: ObservableObject {
         do {
             try await firebaseBackend.saveNotification(notification, organizationId: organizationId)
             print("🔥🔥🔥 DEBUG: [NOTIFY SAVE OK] id=\(notification.id.uuidString) type=\(notification.type.rawValue) target=\(notification.userId ?? "broadcast") related=\(notification.relatedId?.uuidString ?? "none")")
+            deliverLocalPushIfNeeded(for: notification)
         } catch {
             print("🔥🔥🔥 DEBUG: Error saving notification: \(error)")
             print("🔥🔥🔥 DEBUG: Notification target userId: \(notification.userId ?? "broadcast"), type: \(notification.type.rawValue), relatedId: \(notification.relatedId?.uuidString ?? "none")")
         }
+    }
+
+    /// Schedules an immediate local banner when this device is the intended recipient (mirrors material cut-off delivery).
+    private func deliverLocalPushIfNeeded(for notification: AppNotification) {
+        guard let currentUser = userStore?.currentUser else { return }
+        guard shouldShowNotification(notification, for: currentUser) else { return }
+        if let userId = notification.userId {
+            let target = resolvedRecipientUserId(userId)
+            let me = resolvedRecipientUserId(currentUser.id)
+            guard target == me else { return }
+        }
+        triggerLocalAlertIfNeeded(for: notification)
     }
 
     private func startNotificationsListenerIfNeeded(organizationId: String, userId: String) {
@@ -979,7 +1043,7 @@ class NotificationService: ObservableObject {
                 Task { @MainActor in
                     let reconciled = self.applyLocalReadState(to: merged)
                     self.notifications = reconciled
-                    self.unreadCount = reconciled.filter { !$0.isRead }.count
+                    self.setUnreadCount(from: reconciled)
                     if !self.didPrimeNotificationStream {
                         self.primeLocalAlertDedup(with: merged)
                         self.didPrimeNotificationStream = true
@@ -1040,6 +1104,7 @@ class NotificationService: ObservableObject {
                 let key = notificationDedupKey(for: n)
                 guard !seenLocalAlertNotificationKeys.contains(key) else { break }
                 recordLocalAlertDedupKey(key)
+                scheduleLocalInAppMirrorAlert(title: n.title, message: n.message, dedupeIdentifier: key)
             }
             break
         }
@@ -1120,7 +1185,7 @@ class NotificationService: ObservableObject {
         }
     }
 
-    private func holidayRequestRecipients(assignedManagerUserId: String?, requesterUserId: String? = nil) async -> [String] {
+    private func holidayRequestRecipients(assignedManagerUserId: String?, assignedManagerUserIds: [String]? = nil, requesterUserId: String? = nil) async -> [String] {
         guard let userStore else { return [] }
         if userStore.organizationUsers.isEmpty {
             await userStore.loadOrganizationUsers()
@@ -1143,8 +1208,23 @@ class NotificationService: ObservableObject {
                 }.map(\.id)
                 return uniqueCanonicalUserIds(from: admins)
             }
+            let requesterManagers = requester.lineManagerUserIds
+            if !requesterManagers.isEmpty {
+                var recipients: [String] = []
+                for mid in requesterManagers {
+                    recipients.append(await resolvedRecipientUserIdResolvingStaleIds(mid))
+                }
+                return uniqueCanonicalUserIds(from: recipients)
+            }
         }
 
+        if let mids = assignedManagerUserIds, !mids.isEmpty {
+            var recipients: [String] = []
+            for mid in mids {
+                recipients.append(await resolvedRecipientUserIdResolvingStaleIds(mid))
+            }
+            return uniqueCanonicalUserIds(from: recipients)
+        }
         if let mid = assignedManagerUserId, !mid.isEmpty {
             let canonical = await resolvedRecipientUserIdResolvingStaleIds(mid)
             return [canonical]
@@ -1357,8 +1437,13 @@ class NotificationService: ObservableObject {
     }
 
     private func triggerLocalAlertIfNeeded(for notification: AppNotification) {
-        // Firestore notifications are delivered via FCM; scheduling a local copy caused duplicate banners.
-        guard usesLocalMirrorOnly(notification.type) else { return }
+        guard let currentUser = userStore?.currentUser else { return }
+        guard shouldShowNotification(notification, for: currentUser) else { return }
+        if let userId = notification.userId {
+            let target = resolvedRecipientUserId(userId)
+            let me = resolvedRecipientUserId(currentUser.id)
+            guard target == me else { return }
+        }
         loadPersistedLocalAlertDedupKeysIfNeeded()
         guard !notification.isRead else { return }
         // Synthetic approve/decline is in-app fallback only (derived from holiday bookings). OS banners for
@@ -1377,11 +1462,6 @@ class NotificationService: ObservableObject {
         guard !seenLocalAlertNotificationKeys.contains(key) else { return }
         recordLocalAlertDedupKey(key)
         scheduleLocalInAppMirrorAlert(title: notification.title, message: notification.message, dedupeIdentifier: key)
-    }
-
-    /// Types that should never get an extra UNUserNotificationCenter banner (remote push handles delivery).
-    private func usesLocalMirrorOnly(_ type: AppNotification.NotificationType) -> Bool {
-        false
     }
 
     private func loadPersistedLocalAlertDedupKeysIfNeeded() {
@@ -1437,9 +1517,17 @@ class NotificationService: ObservableObject {
     }
 
     private func syntheticNotificationId(from key: String) -> UUID {
-        let hex = String(format: "%016llx", UInt64(abs(key.hashValue)))
-        let full = (hex + hex)
-        let uuidString = "\(full.prefix(8))-\(full.dropFirst(8).prefix(4))-\(full.dropFirst(12).prefix(4))-\(full.dropFirst(16).prefix(4))-\(full.dropFirst(20).prefix(12))"
+        let digest = SHA256.hash(data: Data(key.utf8))
+        var bytes = Array(digest.prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x40
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        let uuidString = String(
+            format: "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        )
         return UUID(uuidString: uuidString) ?? UUID()
     }
 
@@ -1470,7 +1558,7 @@ class NotificationService: ObservableObject {
                     message: isCancellation ? "\(requester) requested annual leave cancellation." : "\(requester) requested annual leave.",
                     userId: user.id,
                     relatedId: request.id,
-                    isRead: isSyntheticDismissed(syntheticNotificationId(from: key)),
+                    isRead: isSyntheticMarkedRead(id: syntheticNotificationId(from: key), stableKey: key),
                     createdAt: request.updatedAt,
                     requiresPermission: "syntheticAnnualLeave"
                 )
@@ -1489,7 +1577,7 @@ class NotificationService: ObservableObject {
                 message: booking.status == .approved ? "Your annual leave request was approved." : "Your annual leave request was declined.",
                 userId: user.id,
                 relatedId: booking.id,
-                isRead: isSyntheticDismissed(syntheticNotificationId(from: key)),
+                isRead: isSyntheticMarkedRead(id: syntheticNotificationId(from: key), stableKey: key),
                 createdAt: booking.updatedAt,
                 requiresPermission: "syntheticAnnualLeave"
             )
@@ -1530,12 +1618,72 @@ class NotificationService: ObservableObject {
             if pendingReadNotificationIds.contains(notification.id) {
                 updated.isRead = true
             }
-            if notification.requiresPermission == "syntheticAnnualLeave",
-               isSyntheticDismissed(notification.id) {
-                updated.isRead = true
+            if notification.requiresPermission == "syntheticAnnualLeave" {
+                if isSyntheticDismissed(notification.id) {
+                    updated.isRead = true
+                } else if let stableKey = syntheticStableKey(for: notification),
+                          isSyntheticStableKeyDismissed(stableKey) {
+                    updated.isRead = true
+                }
             }
             return updated
         }
+    }
+
+    private func setUnreadCount(_ count: Int) {
+        unreadCount = max(0, count)
+        syncAppIconBadge()
+    }
+
+    private func setUnreadCount(from items: [AppNotification]) {
+        setUnreadCount(items.filter { !$0.isRead }.count)
+    }
+
+    private func syncAppIconBadge() {
+        let count = unreadCount
+        if #available(iOS 16.0, *) {
+            Task {
+                try? await UNUserNotificationCenter.current().setBadgeCount(count)
+            }
+        } else {
+            #if canImport(UIKit)
+            DispatchQueue.main.async {
+                UIApplication.shared.applicationIconBadgeNumber = count
+            }
+            #endif
+        }
+    }
+
+    private func syntheticStableKey(for notification: AppNotification) -> String? {
+        guard notification.requiresPermission == "syntheticAnnualLeave",
+              let relatedId = notification.relatedId else { return nil }
+        let uid = notification.userId ?? ""
+        switch notification.type {
+        case .holidayRequestSubmitted:
+            let isCancellation = notification.title.localizedCaseInsensitiveContains("cancellation")
+            return "annualLeaveRequest|\(relatedId.uuidString)|\(uid)|\(isCancellation)"
+        case .holidayRequestApproved:
+            return "annualLeaveDecision|\(relatedId.uuidString)|\(uid)|approved"
+        case .holidayRequestDeclined:
+            return "annualLeaveDecision|\(relatedId.uuidString)|\(uid)|rejected"
+        default:
+            return nil
+        }
+    }
+
+    private func isSyntheticMarkedRead(id: UUID, stableKey: String) -> Bool {
+        isSyntheticDismissed(id) || isSyntheticStableKeyDismissed(stableKey)
+    }
+
+    private func isSyntheticStableKeyDismissed(_ key: String) -> Bool {
+        loadDismissedSyntheticIdsIfNeeded()
+        return dismissedSyntheticStableKeys.contains(key)
+    }
+
+    private func dismissSyntheticStableKey(_ key: String) {
+        loadDismissedSyntheticIdsIfNeeded()
+        dismissedSyntheticStableKeys.insert(key)
+        persistDismissedSyntheticStableKeys()
     }
 
     private func dismissSyntheticNotification(_ id: UUID) {
@@ -1559,6 +1707,12 @@ class NotificationService: ObservableObject {
         } else {
             dismissedSyntheticNotificationIds = []
         }
+        let stableKey = Self.dismissedSyntheticKeyPrefix + userId
+        if let storedKeys = UserDefaults.standard.stringArray(forKey: stableKey) {
+            dismissedSyntheticStableKeys = Set(storedKeys)
+        } else {
+            dismissedSyntheticStableKeys = []
+        }
     }
 
     private func persistDismissedSyntheticIds() {
@@ -1566,6 +1720,12 @@ class NotificationService: ObservableObject {
         let key = Self.dismissedSyntheticPrefix + userId
         let values = dismissedSyntheticNotificationIds.map(\.uuidString)
         UserDefaults.standard.set(Array(values.prefix(500)), forKey: key)
+    }
+
+    private func persistDismissedSyntheticStableKeys() {
+        guard let userId = userStore?.currentUser?.id else { return }
+        let key = Self.dismissedSyntheticKeyPrefix + userId
+        UserDefaults.standard.set(Array(dismissedSyntheticStableKeys.prefix(500)), forKey: key)
     }
 }
 

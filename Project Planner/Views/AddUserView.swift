@@ -51,6 +51,9 @@ struct AddUserView: View {
     @State private var annualLeaveStartMonth = 1
     @State private var annualLeaveEndMonth = 12
     @State private var annualLeaveCarriesOver = false
+    @State private var timesheetsEnabled = false
+    @State private var vatNumber = ""
+    @State private var utrNumber = ""
     @State private var isCreating = false
     @State private var showSuccess = false
     @State private var errorMessage: String?
@@ -66,67 +69,189 @@ struct AddUserView: View {
     }
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                progressSlider
-                
-                if showSuccess {
-                    successView
-                } else {
-                    stepContent
-                }
-                
-                if let errorMessage = errorMessage {
-                    Text(errorMessage)
-                        .foregroundColor(.red)
-                        .padding()
-                }
-            }
-            .navigationTitle(mode == .managerAddingOperative ? "Add Operative" : "Add New User")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
+        NavigationStack {
+            ZStack {
+                ManageUserProfilePalette.pageBackground.ignoresSafeArea()
+                VStack(spacing: 0) {
+                    wizardHeader
+                    if showSuccess {
+                        successView
+                    } else {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 0) {
+                                wizardProgressDots
+                                    .padding(.horizontal, 16)
+                                    .padding(.bottom, 8)
+                                Text(stepTitle)
+                                    .font(.system(size: 15, weight: .bold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.bottom, 12)
+                                stepContentInner
+                                    .padding(.horizontal, 16)
+                                    .padding(.bottom, 24)
+                            }
+                            .padding(.top, 8)
+                        }
+                        wizardFooter
+                    }
+                    if let errorMessage = errorMessage {
+                        Text(errorMessage)
+                            .foregroundStyle(.red)
+                            .font(.footnote)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 8)
                     }
                 }
             }
+            .navigationBarHidden(true)
             .onAppear {
                 resetAnnualLeaveInviteDefaults()
                 if mode == .managerAddingOperative {
                     invitedAccountType = .operative
                     applyPermissionsForInvitedType()
                     assignedManagerUserId = userStore.currentUser?.id
+                } else {
+                    applyPermissionsForInvitedType()
                 }
             }
         }
     }
-    
-    // MARK: - Progress
-    
-    private var progressSlider: some View {
-        VStack(spacing: 16) {
+
+    private var wizardHeader: some View {
+        VStack(spacing: 0) {
             HStack {
-                ForEach(1...totalSteps, id: \.self) { step in
+                Button("Cancel") { dismiss() }
+                    .font(.system(size: 17))
+                    .foregroundStyle(ManageUserProfilePalette.listBlue)
+                Spacer()
+                Text(mode == .managerAddingOperative ? "Add Operative" : "Add New User")
+                    .font(.system(size: 17, weight: .bold))
+                Spacer()
+                Text("Step \(currentStep)/\(totalSteps)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            Divider()
+        }
+        .background(ManageUserProfilePalette.pageBackground.opacity(0.95))
+    }
+
+    private var wizardProgressDots: some View {
+        HStack(spacing: 0) {
+            ForEach(1...totalSteps, id: \.self) { step in
+                ZStack {
                     Circle()
-                        .fill(step <= currentStep ? Color.indigo : Color.gray.opacity(0.3))
-                        .frame(width: 12, height: 12)
-                    
-                    if step < totalSteps {
-                        Rectangle()
-                            .fill(step < currentStep ? Color.indigo : Color.gray.opacity(0.3))
-                            .frame(height: 2)
+                        .fill(step < currentStep ? ManageUserProfilePalette.avatarGradientTop : (step == currentStep ? ManageUserProfilePalette.avatarGradientTop : Color(red: 0xE3 / 255, green: 0xE3 / 255, blue: 0xE8 / 255)))
+                        .frame(width: 26, height: 26)
+                    if step < currentStep {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white)
+                    } else {
+                        Text("\(step)")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(step == currentStep ? .white : ManageUserProfilePalette.textSecondary)
                     }
                 }
+                if step < totalSteps {
+                    Rectangle()
+                        .fill(step < currentStep ? ManageUserProfilePalette.avatarGradientTop : Color(red: 0xE3 / 255, green: 0xE3 / 255, blue: 0xE8 / 255))
+                        .frame(height: 2.5)
+                        .padding(.horizontal, 5)
+                }
             }
-            .padding(.horizontal, 40)
-            
-            Text(stepTitle)
-                .font(.headline)
-                .foregroundColor(.primary)
         }
-        .padding(.vertical, 20)
-        .background(Color(.systemGroupedBackground))
+    }
+
+    @ViewBuilder
+    private var stepContentInner: some View {
+        if mode == .managerAddingOperative {
+            switch currentStep {
+            case 1: stepDetailsOnly
+            case 2: stepManagerOperativeSummary
+            case 3: stepReview
+            default: EmptyView()
+            }
+        } else {
+            switch currentStep {
+            case 1: stepAccountType
+            case 2: stepDetailsWithManager
+            case 3: stepPermissionsControlled
+            case 4: stepReview
+            default: EmptyView()
+            }
+        }
+    }
+
+    private var wizardFooter: some View {
+        HStack(spacing: 11) {
+            Button {
+                withAnimation { currentStep -= 1 }
+            } label: {
+                Text("Back")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 14)
+                    .background(ManageUserProfilePalette.pageBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(currentStep <= 1)
+            .opacity(currentStep <= 1 ? 0.35 : 1)
+
+            Button {
+                if currentStep == finalReviewStep {
+                    createUser()
+                } else {
+                    withAnimation {
+                        if mode == .admin && currentStep == 1 {
+                            applyPermissionsForInvitedType()
+                            if invitedAccountType == .operative {
+                                assignedManagerUserId = nil
+                            }
+                        }
+                        currentStep += 1
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(currentStep == finalReviewStep ? (isCreating ? "Creating…" : "Create User") : "Next")
+                        .font(.system(size: 16, weight: .bold))
+                    if currentStep != finalReviewStep {
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 15, weight: .bold))
+                    }
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0x4F / 255, green: 0x46 / 255, blue: 0xE5 / 255), ManageUserProfilePalette.listBlue],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: Color(red: 0x4F / 255, green: 0x46 / 255, blue: 0xE5 / 255).opacity(0.28), radius: 6, y: 3)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canProceed || isCreating)
+            .opacity((canProceed && !isCreating) ? 1 : 0.55)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.white)
+        .overlay(alignment: .top) { Divider() }
+    }
+    
+    // MARK: - Progress (legacy name kept for references)
+    
+    private var progressSlider: some View {
+        EmptyView()
     }
     
     private var stepTitle: String {
@@ -147,95 +272,69 @@ struct AddUserView: View {
         }
     }
     
-    // MARK: - Step Content
-    
-    @ViewBuilder
-    private var stepContent: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                if mode == .managerAddingOperative {
-                    switch currentStep {
-                    case 1: stepDetailsOnly
-                    case 2: stepManagerOperativeSummary
-                    case 3: stepReview
-                    default: EmptyView()
-                    }
-                } else {
-                    switch currentStep {
-                    case 1: stepAccountType
-                    case 2: stepDetailsWithManager
-                    case 3: stepPermissionsControlled
-                    case 4: stepReview
-                    default: EmptyView()
-                    }
-                }
-            }
-            .padding(20)
-        }
-        
-        VStack(spacing: 12) {
-            Divider()
-            
-            HStack {
-                if currentStep > 1 {
-                    Button("Back") {
-                        withAnimation {
-                            currentStep -= 1
-                        }
-                    }
-                    .foregroundColor(.indigo)
-                }
-                
-                Spacer()
-                
-                Button(currentStep == finalReviewStep ? (isCreating ? "Creating..." : "Create User") : "Next") {
-                    if currentStep == finalReviewStep {
-                        createUser()
-                    } else {
-                        withAnimation {
-                            if mode == .admin && currentStep == 1 {
-                                applyPermissionsForInvitedType()
-                                if invitedAccountType == .operative {
-                                    assignedManagerUserId = nil
-                                }
-                            }
-                            currentStep += 1
-                        }
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.indigo)
-                .disabled(!canProceed || isCreating)
-                .opacity((canProceed && !isCreating) ? 1.0 : 0.5)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-        }
-        .background(Color(.systemBackground))
-    }
-    
     // MARK: - Steps
     
     private var stepAccountType: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Choose what kind of account this will be. Super admin is never assigned from here.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            
-            Picker("Account type", selection: $invitedAccountType) {
-                ForEach(InvitedAccountType.allCases) { t in
-                    Text(t.title).tag(t)
-                }
-            }
-            .pickerStyle(.inline)
-            .onChange(of: invitedAccountType) { _, _ in
-                applyPermissionsForInvitedType()
-                resetAnnualLeaveInviteDefaults()
-                if invitedAccountType == .admin {
-                    assignedManagerUserId = nil
-                }
+                .font(.system(size: 14))
+                .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                .lineSpacing(3)
+            VStack(spacing: 11) {
+                accountTypeCard(.admin, icon: "🛡️", description: "Full organisation access except operative mode.")
+                accountTypeCard(.manager, icon: "👔", description: "Manage teams, schedules and optional modules.")
+                accountTypeCard(.operative, icon: "👷", description: "Schedule, annual leave and qualifications.")
             }
         }
+    }
+
+    private func accountTypeCard(_ type: InvitedAccountType, icon: String, description: String) -> some View {
+        let selected = invitedAccountType == type
+        return Button {
+            invitedAccountType = type
+            applyPermissionsForInvitedType()
+            resetAnnualLeaveInviteDefaults()
+            if type == .admin { assignedManagerUserId = nil }
+        } label: {
+            HStack(spacing: 14) {
+                Text(icon)
+                    .font(.system(size: 23))
+                    .frame(width: 48, height: 48)
+                    .background(ManageUserProfilePalette.chipPurpleBg)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(type.title)
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                    Text(description)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer()
+                ZStack {
+                    Circle()
+                        .stroke(selected ? ManageUserProfilePalette.avatarGradientTop : Color(red: 0xE5 / 255, green: 0xE5 / 255, blue: 0xEA / 255), lineWidth: 2)
+                        .frame(width: 24, height: 24)
+                    if selected {
+                        Circle()
+                            .fill(ManageUserProfilePalette.avatarGradientTop)
+                            .frame(width: 24, height: 24)
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+            .padding(16)
+            .background(selected ? ManageUserProfilePalette.chipPurpleBg : Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(selected ? ManageUserProfilePalette.avatarGradientTop : Color(red: 0xE5 / 255, green: 0xE5 / 255, blue: 0xEB / 255), lineWidth: selected ? 2 : 1.5)
+            )
+        }
+        .buttonStyle(.plain)
     }
     
     private var stepDetailsOnly: some View {
@@ -325,6 +424,9 @@ struct AddUserView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .onChange(of: employmentType) { _, _ in
+                        timesheetsEnabled = AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
+                    }
                 }
                 
                 if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
@@ -346,6 +448,34 @@ struct AddUserView: View {
                         Text(invitedAccountType == .manager ? "Optional for managers. Leave blank if not needed." : "Stored on the operative profile when their account is linked.")
                             .font(.caption2)
                             .foregroundColor(.secondary)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("VAT number (optional)")
+                        .font(.headline)
+                    TextField("If VAT registered", text: $vatNumber)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .textInputAutocapitalization(.characters)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("UTR number (optional)")
+                        .font(.headline)
+                    TextField("Unique Taxpayer Reference", text: $utrNumber)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .textInputAutocapitalization(.characters)
+                }
+
+                if mode == .admin {
+                    Toggle(isOn: $timesheetsEnabled) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Timesheets")
+                                .font(.headline)
+                            Text("Operatives default to on; managers and admins default to off.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
             }
@@ -872,6 +1002,7 @@ struct AddUserView: View {
                 siteAudit: true
             )
         }
+        timesheetsEnabled = AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
     }
     
     private var tradeRequiredAndValid: Bool {
@@ -969,7 +1100,10 @@ struct AddUserView: View {
                 annualLeaveDaysPerYear: passAnnualLeaveInvite ? parseAnnualLeaveDaysForInvite() : nil,
                 annualLeaveYearStartMonth: passAnnualLeaveInvite ? annualLeaveStartMonth : nil,
                 annualLeaveYearEndMonth: passAnnualLeaveInvite ? annualLeaveEndMonth : nil,
-                annualLeaveCarriesOver: passAnnualLeaveInvite ? annualLeaveCarriesOver : nil
+                annualLeaveCarriesOver: passAnnualLeaveInvite ? annualLeaveCarriesOver : nil,
+                timesheetsEnabled: mode == .admin ? timesheetsEnabled : AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType),
+                vatNumber: vatNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : vatNumber.trimmingCharacters(in: .whitespacesAndNewlines),
+                utrNumber: utrNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : utrNumber.trimmingCharacters(in: .whitespacesAndNewlines)
             )
             
             await MainActor.run {

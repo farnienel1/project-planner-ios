@@ -10,7 +10,10 @@ import UIKit
 
 enum ManageUserProfilePalette {
     static let primaryBlue = Color(red: 0x18 / 255, green: 0x5F / 255, blue: 0xA5 / 255)
-    static let pageBackground = Color(red: 0xF7 / 255, green: 0xF8 / 255, blue: 0xFA / 255)
+    static let pageBackground = Color(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255)
+    static let segmentedBackground = Color(red: 0xE9 / 255, green: 0xE9 / 255, blue: 0xEC / 255)
+    static let searchBackground = Color(red: 0xE9 / 255, green: 0xE9 / 255, blue: 0xEC / 255)
+    static let listBlue = Color(red: 0x25 / 255, green: 0x63 / 255, blue: 0xEB / 255)
     static let cardBackground = Color.white
     static let cardBorder = Color(red: 0xEE / 255, green: 0xF0 / 255, blue: 0xF3 / 255)
     static let textPrimary = Color(red: 0x0B / 255, green: 0x10 / 255, blue: 0x20 / 255)

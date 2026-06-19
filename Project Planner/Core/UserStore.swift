@@ -550,12 +550,73 @@ class UserStore: ObservableObject {
         return organizationUsers.contains { orgUser in
             guard orgUser.permissions.operativeMode else { return false }
             guard orgUser.isActive else { return false }
-            return (orgUser.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == user.id
+            return orgUser.isLineManager(user.id)
         } || isHomeProfileLoading
     }
 
     func canAccessTimesheetsSurface() -> Bool {
-        canAccessMyTimesheets() || canAccessOperativeTimesheets()
+        canAccessMyTimesheets() || canAccessOperativeTimesheets() || shouldShowTimesheetsDisabledMessage()
+    }
+
+    /// User has a timesheet-eligible role but timesheets are turned off (e.g. PAYE without timesheet requirement).
+    func shouldShowTimesheetsDisabledMessage() -> Bool {
+        guard let user = displayUser else { return false }
+        guard !user.timesheetsEnabled else { return false }
+        guard user.employmentType(on: Date()) != .selfEmployed else { return false }
+        return isTimesheetEligibleRole(user)
+    }
+
+    func isTimesheetEligibleRole(_ user: AppUser) -> Bool {
+        user.permissions.operativeMode
+            || user.permissions.manager
+            || user.permissions.adminAccess
+            || user.role == .manager
+            || user.role == .admin
+    }
+
+    func updateUserBillingProfile(userId: String, vatNumber: String?, utrNumber: String?) async -> Bool {
+        guard let firebaseBackend = firebaseBackend else { return false }
+        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+
+        var updated = organizationUsers[index]
+        let trimmedVAT = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedUTR = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.vatNumber = (trimmedVAT?.isEmpty == false) ? trimmedVAT : nil
+        updated.utrNumber = (trimmedUTR?.isEmpty == false) ? trimmedUTR : nil
+
+        do {
+            try await firebaseBackend.saveUser(updated)
+            organizationUsers[index] = updated
+            if var cu = currentUser, cu.id == userId {
+                cu = updated
+                currentUser = cu
+            }
+            return true
+        } catch {
+            errorMessage = "Could not save billing details: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func updateUserTimesheetsEnabled(userId: String, enabled: Bool) async -> Bool {
+        guard let firebaseBackend = firebaseBackend else { return false }
+        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+
+        var updated = organizationUsers[index]
+        updated.timesheetsEnabled = enabled
+
+        do {
+            try await firebaseBackend.saveUser(updated)
+            organizationUsers[index] = updated
+            if var cu = currentUser, cu.id == userId {
+                cu = updated
+                currentUser = cu
+            }
+            return true
+        } catch {
+            errorMessage = "Could not save timesheets setting: \(error.localizedDescription)"
+            return false
+        }
     }
     
     func canEditProjects() -> Bool {
@@ -755,7 +816,7 @@ class UserStore: ObservableObject {
              // MARK: - User Invitation
              
     /// For operative invitations, pass the line manager's Firebase Auth UID (`users` document id).
-    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .paye, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil) async -> Bool {
+    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .paye, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async -> Bool {
         print("🔥🔥🔥 DEBUG: inviteUser called with firstName: \(firstName), surname: \(surname), email: \(email)")
         
         errorMessage = nil
@@ -909,7 +970,10 @@ class UserStore: ObservableObject {
                 annualLeaveDaysPerYear: annualLeaveDaysPerYear,
                 annualLeaveYearStartMonth: annualLeaveYearStartMonth,
                 annualLeaveYearEndMonth: annualLeaveYearEndMonth,
-                annualLeaveCarriesOver: annualLeaveCarriesOver
+                annualLeaveCarriesOver: annualLeaveCarriesOver,
+                timesheetsEnabled: timesheetsEnabled,
+                vatNumber: vatNumber,
+                utrNumber: utrNumber
             )
             print("🔥🔥🔥 DEBUG: createUserInvitation succeeded")
             
@@ -1568,6 +1632,7 @@ class UserStore: ObservableObject {
              func updateOperativeProfileFields(
                 for user: AppUser,
                 assignedManagerUserId: String?,
+                assignedManagerUserIds: [String]? = nil,
                 dayRate: Double?,
                 operativeStore: OperativeStore?,
                 dayRateEffectiveAt: Date? = nil,
@@ -1576,14 +1641,16 @@ class UserStore: ObservableObject {
                 guard let firebaseBackend = firebaseBackend else { return false }
                 guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
                 var updatedUser = organizationUsers[index]
-                guard updatedUser.permissions.operativeMode || updatedUser.role == .operative || updatedUser.permissions.manager || updatedUser.role == .manager else { return false }
-                let normalizedManagerId = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let normalizedManagerId, !normalizedManagerId.isEmpty, normalizedManagerId == updatedUser.id {
-                    errorMessage = "A manager cannot be their own line manager."
+                guard updatedUser.permissions.operativeMode || updatedUser.role == .operative || updatedUser.permissions.manager || updatedUser.role == .manager || updatedUser.permissions.adminAccess || updatedUser.role == .admin else { return false }
+                let managerIds = (assignedManagerUserIds ?? assignedManagerUserId.map { [$0] } ?? [])
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                if managerIds.contains(updatedUser.id) {
+                    errorMessage = "A user cannot be their own line manager."
                     return false
                 }
 
-                updatedUser.assignedManagerUserId = normalizedManagerId?.isEmpty == false ? normalizedManagerId : nil
+                updatedUser.setLineManagerUserIds(managerIds)
                 updatedUser.dayRate = dayRate
 
                 do {
@@ -1591,7 +1658,8 @@ class UserStore: ObservableObject {
                     let dayRateChanged = previousDayRate != dayRate
                     try await firebaseBackend.updateOperativeProfileMetadata(
                         userId: updatedUser.id,
-                        assignedManagerUserId: assignedManagerUserId,
+                        assignedManagerUserId: updatedUser.assignedManagerUserId,
+                        assignedManagerUserIds: updatedUser.lineManagerUserIds,
                         dayRate: dayRate,
                         updateDayRate: updateDayRate
                     )

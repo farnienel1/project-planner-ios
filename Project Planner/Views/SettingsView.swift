@@ -289,6 +289,8 @@ struct SettingsView: View {
                 .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
         }
         .padding(.vertical, 13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private var settingsHubOrganisationPromoCard: some View {

@@ -56,6 +56,7 @@ enum WarningsRefreshHelper {
         let projectsTomorrow = projects.filter { tomorrowIds.contains($0.id) }
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
+        let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
         let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
 
         await WarningsService.shared.updateWarningsAsync(
@@ -67,6 +68,7 @@ enum WarningsRefreshHelper {
             holidayBookings: holidayStore.bookings,
             payrollTimePolicy: policy,
             warningDetection: warningDetection,
+            invoicingSettings: invoicingSettings,
             materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
             materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
             materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,

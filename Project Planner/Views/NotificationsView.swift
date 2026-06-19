@@ -102,6 +102,9 @@ struct NotificationsView: View {
             .task {
                 await notificationService.markAllAsRead()
             }
+            .onDisappear {
+                notificationService.prepareInboxPresentation()
+            }
         }
     }
 }
@@ -171,6 +174,7 @@ struct NotificationRowView: View {
         case .holidayRequestDeclined: return "xmark.circle.fill"
         case .timesheetPendingManagerSignoff: return "signature"
         case .timesheetSignedByManager: return "checkmark.seal.fill"
+        case .lineManagerPeerUpdate: return "person.2.fill"
         }
     }
 
@@ -191,6 +195,7 @@ struct NotificationRowView: View {
         case .holidayRequestDeclined: return .red
         case .timesheetPendingManagerSignoff: return .orange
         case .timesheetSignedByManager: return .green
+        case .lineManagerPeerUpdate: return .blue
         }
     }
 }

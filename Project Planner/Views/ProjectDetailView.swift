@@ -106,6 +106,7 @@ struct ProjectDetailView: View {
         case healthSafety = "H&S"
         case siteAudit = "Site Audit"
         case location = "Location"
+        case activeUsers = "Active users"
 
         var id: String { rawValue }
         var icon: String {
@@ -117,6 +118,7 @@ struct ProjectDetailView: View {
             case .healthSafety: return "cross.case.fill"
             case .siteAudit: return "clipboard.fill"
             case .location: return "mappin.and.ellipse"
+            case .activeUsers: return "person.3.fill"
             }
         }
     }
@@ -516,6 +518,9 @@ struct ProjectDetailView: View {
                 tiles.append(.visibility)
             }
             tiles.append(contentsOf: [.tasks, .materials, .healthSafety, .siteAudit, .location])
+            if canViewActiveOperatives {
+                tiles.append(.activeUsers)
+            }
             return tiles
         }()
 
@@ -573,8 +578,34 @@ struct ProjectDetailView: View {
         switch tile {
         case .scheduling: return schedulingAttentionCount
         case .tasks: return openTasksCount
+        case .activeUsers: return activeBookedPeopleCount > 0 ? activeBookedPeopleCount : nil
         default: return nil
         }
+    }
+
+    private var activeBookedPeopleCount: Int {
+        let operativeIds = Set(
+            bookingStore.bookings
+                .filter { $0.projectId == project.id && $0.status != .cancelled }
+                .map(\.operativeId)
+        )
+        let staffIds = Set(
+            managerScheduleStore.managerSiteBookings
+                .filter {
+                    $0.locationId == project.id &&
+                    ($0.locationType == .project || $0.locationType == .smallWork)
+                }
+                .map(\.userId)
+        )
+        let subIds = Set(
+            subcontractorStore.bookings
+                .filter {
+                    $0.projectId == project.id &&
+                    ($0.status == .confirmed || $0.status == .tentative)
+                }
+                .map(\.subcontractorId)
+        )
+        return operativeIds.count + staffIds.count + subIds.count
     }
 
     private func manageTileBadgeColor(for tile: DetailTile) -> Color {
@@ -593,6 +624,7 @@ struct ProjectDetailView: View {
         case .healthSafety: return Color(red: 0.89, green: 0.98, blue: 0.95)
         case .siteAudit: return Color(red: 0.98, green: 0.925, blue: 0.906)
         case .location: return Color(red: 0.984, green: 0.918, blue: 0.941)
+        case .activeUsers: return Color(red: 0.902, green: 0.945, blue: 0.984)
         }
     }
 
@@ -605,6 +637,7 @@ struct ProjectDetailView: View {
         case .healthSafety: return Color(red: 0.07, green: 0.62, blue: 0.47)
         case .siteAudit: return Color(red: 0.6, green: 0.235, blue: 0.114)
         case .location: return Color(red: 0.6, green: 0.208, blue: 0.337)
+        case .activeUsers: return ProjectWorksRevampColors.blue
         }
     }
     
@@ -633,6 +666,14 @@ struct ProjectDetailView: View {
         case .healthSafety:
             ProjectHealthSafetyView(project: project)
                 .environmentObject(userStore)
+        case .activeUsers:
+            ProjectActiveOperativesView(project: project)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(subcontractorStore)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
         case .scheduling, .tasks, .location:
             ScrollView {
                 VStack(spacing: 20) {
@@ -1003,13 +1044,17 @@ struct ProjectDetailView: View {
     private func projectDetailBookingEditSheet(for target: DailyOverviewEditTarget) -> some View {
         switch target {
         case .operative(let booking, _, let personName):
+            let payeMode = isPayeOperativeBooking(booking)
             OperativeCustomHoursSheet(
                 policy: payrollTimePolicy,
                 title: "Edit booking",
-                subtitle: bookingEditSubtitle(date: booking.date),
+                subtitle: payeMode ? nil : bookingEditSubtitle(date: booking.date),
                 headerName: personName,
                 headerInitials: PlannerUIInitials.from(personName),
-                allowsOtMultiplierOverride: true,
+                allowsOtMultiplierOverride: !payeMode,
+                showsBreakControls: !payeMode,
+                showsBreakdown: !payeMode,
+                showsFooterNote: !payeMode,
                 initialChoice: OperativeDayBookingChoice(from: booking),
                 onSave: { start, end, isBreakRemoved, otMult in
                     bookingEditTarget = nil
@@ -1326,6 +1371,28 @@ struct ProjectDetailView: View {
     }
     
     // MARK: - Site Location Section
+
+    private var canViewActiveOperatives: Bool {
+        guard let user = userStore.displayUser else { return false }
+        if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin { return true }
+        guard user.permissions.manager else { return false }
+        let email = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return operativeStore.allManagers.contains { manager in
+            manager.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+                && project.managerIds.contains(manager.id)
+        }
+    }
+
+    private func isPayeOperativeBooking(_ booking: Booking) -> Bool {
+        guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else {
+            return false
+        }
+        let email = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let user = userStore.organizationUsers.first(where: {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+        }) else { return false }
+        return user.employmentType(on: booking.date) == .paye
+    }
     
     private var siteLocationSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1335,6 +1402,27 @@ struct ProjectDetailView: View {
                 Text("Site Location")
                     .font(.headline)
                     .foregroundColor(.primary)
+                Spacer()
+                if canViewActiveOperatives {
+                    NavigationLink {
+                        ProjectActiveOperativesView(project: project)
+                            .environmentObject(bookingStore)
+                            .environmentObject(operativeStore)
+                            .environmentObject(managerScheduleStore)
+                            .environmentObject(subcontractorStore)
+                            .environmentObject(userStore)
+                            .environmentObject(firebaseBackend)
+                    } label: {
+                        Label("Active users", systemImage: "person.3.fill")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.theme.primary.opacity(0.12))
+                            .foregroundStyle(Color.theme.primary)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             
             if hasValidLocation {
@@ -1397,8 +1485,6 @@ struct ProjectDetailView: View {
         .cornerRadius(12)
         .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
     }
-    
-    // MARK: - Helper Properties
     
     private var hasValidAddress: Bool {
         !project.siteAddress.isEmpty && project.siteAddress != "Site Location not available"

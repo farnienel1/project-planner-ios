@@ -86,6 +86,9 @@ class LocalNotificationService {
         case .timesheetSignedByManager:
             content.title = "Timesheet signed"
             content.body = details.isEmpty ? "Your line manager signed your timesheet." : details
+        case .lineManagerPeerUpdate:
+            content.title = "Line manager update"
+            content.body = details.isEmpty ? "Another line manager actioned a shared request." : details
         }
         
         // Set sound

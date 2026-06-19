@@ -35,8 +35,8 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
 
     static let `default` = OrgWarningDetectionSettings(
         detectClashes: true,
-        clashLookaheadMode: .endOfWorkingWeek,
-        clashLookaheadDays: 28,
+        clashLookaheadMode: .numberOfDays,
+        clashLookaheadDays: 7,
         includeWeekendsForUnbookedLabour: false,
         excludedUserIdsFromUnbookedWarnings: []
     )
@@ -51,8 +51,8 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
 
     init(
         detectClashes: Bool = true,
-        clashLookaheadMode: WarningClashLookaheadMode = .endOfWorkingWeek,
-        clashLookaheadDays: Int = 28,
+        clashLookaheadMode: WarningClashLookaheadMode = .numberOfDays,
+        clashLookaheadDays: Int = 7,
         includeWeekendsForUnbookedLabour: Bool = false,
         excludedUserIdsFromUnbookedWarnings: [String] = []
     ) {
@@ -66,8 +66,8 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         detectClashes = try c.decodeIfPresent(Bool.self, forKey: .detectClashes) ?? true
-        clashLookaheadMode = try c.decodeIfPresent(WarningClashLookaheadMode.self, forKey: .clashLookaheadMode) ?? .endOfWorkingWeek
-        clashLookaheadDays = try c.decodeIfPresent(Int.self, forKey: .clashLookaheadDays) ?? 28
+        clashLookaheadMode = try c.decodeIfPresent(WarningClashLookaheadMode.self, forKey: .clashLookaheadMode) ?? .numberOfDays
+        clashLookaheadDays = try c.decodeIfPresent(Int.self, forKey: .clashLookaheadDays) ?? 7
         includeWeekendsForUnbookedLabour = try c.decodeIfPresent(Bool.self, forKey: .includeWeekendsForUnbookedLabour) ?? false
         excludedUserIdsFromUnbookedWarnings = try c.decodeIfPresent([String].self, forKey: .excludedUserIdsFromUnbookedWarnings) ?? []
     }
@@ -82,7 +82,11 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     }
 
     /// How far ahead (from `today`) warnings should scan for clashes, unbooked labour, and materials.
-    func coverageEnd(from today: Date, calendar: Calendar = .current) -> Date {
+    func coverageEnd(
+        from today: Date,
+        invoicing: OrganizationInvoicingSettings = .default,
+        calendar: Calendar = .current
+    ) -> Date {
         let start = calendar.startOfDay(for: today)
         switch clashLookaheadMode {
         case .numberOfDays:
@@ -91,7 +95,7 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         case .endOfWorkingWeek:
             return Self.endOfWorkingWeek(from: start, calendar: calendar)
         case .endOfInvoicingPeriod:
-            return Self.endOfInvoicingPeriodStub(from: start, calendar: calendar)
+            return InvoicingPeriodResolver.warningCoverageEnd(invoicing: invoicing, referenceDate: start, calendar: calendar)
         }
     }
 
@@ -109,8 +113,12 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     }
 
     /// Human-readable end of the detection window (from today).
-    func detectionHorizonEndLabel(from today: Date = Date(), calendar: Calendar = .current) -> String {
-        let end = coverageEnd(from: today, calendar: calendar)
+    func detectionHorizonEndLabel(
+        from today: Date = Date(),
+        invoicing: OrganizationInvoicingSettings = .default,
+        calendar: Calendar = .current
+    ) -> String {
+        let end = coverageEnd(from: today, invoicing: invoicing, calendar: calendar)
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
@@ -118,11 +126,33 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     }
 
     /// Inclusive number of calendar days from today through the detection end date.
-    func detectionHorizonDayCount(from today: Date = Date(), calendar: Calendar = .current) -> Int {
+    func detectionHorizonDayCount(
+        from today: Date = Date(),
+        invoicing: OrganizationInvoicingSettings = .default,
+        calendar: Calendar = .current
+    ) -> Int {
         let start = calendar.startOfDay(for: today)
-        let end = coverageEnd(from: today, calendar: calendar)
+        let end = coverageEnd(from: today, invoicing: invoicing, calendar: calendar)
         let days = calendar.dateComponents([.day], from: start, to: end).day ?? 0
         return max(1, days + 1)
+    }
+
+    /// Scan window description for the settings UI.
+    func detectionScanSummary(
+        from today: Date = Date(),
+        invoicing: OrganizationInvoicingSettings = .default,
+        calendar: Calendar = .current
+    ) -> String {
+        let endLabel = detectionHorizonEndLabel(from: today, invoicing: invoicing, calendar: calendar)
+        switch clashLookaheadMode {
+        case .numberOfDays:
+            let count = max(1, min(clashLookaheadDays, 366))
+            return "Warnings scan \(count) day\(count == 1 ? "" : "s") — today through \(endLabel). Unbooked labour uses this window."
+        case .endOfInvoicingPeriod:
+            return "Warnings scan through end of current invoicing period — \(endLabel). Unbooked labour uses this window."
+        case .endOfWorkingWeek:
+            return "Warnings scan through end of this working week — \(endLabel). Resets each Monday. Unbooked labour uses the same window."
+        }
     }
 
     // MARK: - Private
@@ -134,18 +164,6 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         var add = friday - weekday
         if add < 0 { add += 7 }
         return calendar.startOfDay(for: calendar.date(byAdding: .day, value: add, to: date) ?? date)
-    }
-
-    /// Placeholder until invoicing periods exist: last day of the current calendar month.
-    private static func endOfInvoicingPeriodStub(from date: Date, calendar: Calendar) -> Date {
-        var comps = calendar.dateComponents([.year, .month], from: date)
-        comps.day = 1
-        guard let monthStart = calendar.date(from: comps),
-              let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart),
-              let lastDay = calendar.date(byAdding: .day, value: -1, to: nextMonth) else {
-            return date
-        }
-        return calendar.startOfDay(for: lastDay)
     }
 
     static func fromFirestore(_ data: [String: Any]) -> OrgWarningDetectionSettings {

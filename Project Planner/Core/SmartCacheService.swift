@@ -125,7 +125,7 @@ class SmartCacheService: ObservableObject {
         }
 
         print("🔥🔥🔥 DEBUG: 🔄 Syncing offline outbox (\(OfflineOutboxStore.shared.pendingCount) entries)")
-        _ = await OfflineSyncCoordinator.processOutbox(firebaseBackend: firebaseBackend)
+        _ = await OfflineSyncCoordinator.processOutbox(firebaseBackend: firebaseBackend, outbox: OfflineOutboxStore.shared)
         refreshOutboxCounts()
         await SiteAuditOfflineStore.shared.syncPending(firebaseBackend: firebaseBackend)
 

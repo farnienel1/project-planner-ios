@@ -17,6 +17,7 @@ private enum EditLocationMode: String, CaseIterable, Identifiable {
 struct EditProjectView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var userStore: UserStore
     @Environment(\.dismiss) private var dismiss
 
     let project: Project
@@ -596,9 +597,11 @@ struct EditProjectView: View {
     }
 
     private var availableManagersToAdd: [Manager] {
-        operativeStore.allManagers.filter { manager in
-            !selectedManagers.contains(where: { $0.id == manager.id })
-        }
+        ProjectManagerPickerSupport.availableManagers(
+            operativeStore: operativeStore,
+            userStore: userStore,
+            excluding: selectedManagers
+        )
     }
 
     private var selectedManagersSummary: String {

@@ -549,11 +549,27 @@ service cloud.firestore {
         allow delete: if isOrganizationAdmin(organizationId);
       }
 
+      match /acceptedBookingClashes/{clashId} {
+        allow read, create, update: if canAccessOrganization(organizationId);
+        allow delete: if isOrganizationAdmin(organizationId);
+      }
+
+      match /dashboardLayouts/{layoutUserId} {
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update, delete: if canAccessOrganization(organizationId) &&
+          (request.auth.uid == layoutUserId || isOrganizationAdmin(organizationId));
+      }
+
       // Unknown subcollections: allow org-scoped read fallback only.
       // Keep writes explicit per known subcollection rules above.
       match /{collection}/{document=**} {
         allow read: if canAccessOrganization(organizationId);
       }
+    }
+
+    match /platformConfig/{docId} {
+      allow read: if request.auth != null;
+      allow write: if isAdminOrSuperAdmin();
     }
   }
 }

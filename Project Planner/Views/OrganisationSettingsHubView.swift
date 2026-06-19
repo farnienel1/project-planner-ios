@@ -606,5 +606,7 @@ struct OrganisationSettingsHubView: View {
                 .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
         }
         .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }

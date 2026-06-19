@@ -97,6 +97,7 @@ class WarningsService: ObservableObject {
         holidayBookings: [HolidayBooking] = [],
         payrollTimePolicy: OrgPayrollTimePolicy? = nil,
         warningDetection: OrgWarningDetectionSettings? = nil,
+        invoicingSettings: OrganizationInvoicingSettings? = nil,
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
         materialOrderCutOffEnabled: Bool = true,
@@ -107,6 +108,7 @@ class WarningsService: ObservableObject {
     ) {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
         let resolvedWarningDetection = warningDetection ?? .default
+        let resolvedInvoicing = invoicingSettings ?? .default
 
         updateTask?.cancel()
         updateTask = Task { @MainActor in
@@ -119,6 +121,7 @@ class WarningsService: ObservableObject {
                 holidayBookings: holidayBookings,
                 payrollTimePolicy: resolvedPayrollTimePolicy,
                 warningDetection: resolvedWarningDetection,
+                invoicingSettings: resolvedInvoicing,
                 labourCoverageStart: labourCoverageStart,
                 labourCoverageEnd: labourCoverageEnd,
                 materialOrderCutOffEnabled: materialOrderCutOffEnabled,
@@ -140,6 +143,7 @@ class WarningsService: ObservableObject {
         holidayBookings: [HolidayBooking] = [],
         payrollTimePolicy: OrgPayrollTimePolicy? = nil,
         warningDetection: OrgWarningDetectionSettings? = nil,
+        invoicingSettings: OrganizationInvoicingSettings? = nil,
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
         materialOrderCutOffEnabled: Bool = true,
@@ -150,6 +154,7 @@ class WarningsService: ObservableObject {
     ) async {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
         let resolvedWarningDetection = warningDetection ?? .default
+        let resolvedInvoicing = invoicingSettings ?? .default
 
         updateTask?.cancel()
         await performUpdate(
@@ -161,6 +166,7 @@ class WarningsService: ObservableObject {
             holidayBookings: holidayBookings,
             payrollTimePolicy: resolvedPayrollTimePolicy,
             warningDetection: resolvedWarningDetection,
+            invoicingSettings: resolvedInvoicing,
             labourCoverageStart: labourCoverageStart,
             labourCoverageEnd: labourCoverageEnd,
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
@@ -180,6 +186,7 @@ class WarningsService: ObservableObject {
         holidayBookings: [HolidayBooking],
         payrollTimePolicy: OrgPayrollTimePolicy,
         warningDetection: OrgWarningDetectionSettings,
+        invoicingSettings: OrganizationInvoicingSettings,
         labourCoverageStart: Date?,
         labourCoverageEnd: Date?,
         materialOrderCutOffEnabled: Bool,
@@ -193,7 +200,7 @@ class WarningsService: ObservableObject {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let coverageStart = cal.startOfDay(for: labourCoverageStart ?? warningDetection.coverageStart(from: today, calendar: cal))
-        let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? warningDetection.coverageEnd(from: today, calendar: cal))
+        let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal))
         let input = WarningsComputationInput(
             operatives: operatives,
             bookings: bookings,

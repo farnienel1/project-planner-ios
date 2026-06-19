@@ -72,9 +72,11 @@ struct CreateSmallWorksView: View {
     }
 
     private var availableManagersToAdd: [Manager] {
-        operativeStore.allManagers.filter { manager in
-            !selectedManagers.contains(where: { $0.id == manager.id })
-        }
+        ProjectManagerPickerSupport.availableManagers(
+            operativeStore: operativeStore,
+            userStore: userStore,
+            excluding: selectedManagers
+        )
     }
 
     private var selectedManagersSummary: String {

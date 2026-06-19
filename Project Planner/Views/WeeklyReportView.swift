@@ -1,6 +1,21 @@
 import SwiftUI
 import UIKit
 
+private enum WeeklyReportColors {
+    static let navy = Color(red: 0.043, green: 0.071, blue: 0.125)
+    static let cyan = Color(red: 0.055, green: 0.647, blue: 0.914)
+    static let blue = Color(red: 0.145, green: 0.388, blue: 0.922)
+    static let orange = Color(red: 0.976, green: 0.451, blue: 0.090)
+    static let muted = Color(red: 0.392, green: 0.455, blue: 0.545)
+    static let light = Color(red: 0.941, green: 0.969, blue: 1.000)
+    static let mid = Color(red: 0.886, green: 0.922, blue: 0.965)
+    static let redBg = Color(red: 0.996, green: 0.949, blue: 0.949)
+    static let redText = Color(red: 0.600, green: 0.106, blue: 0.106)
+    static let amber = Color(red: 0.996, green: 0.984, blue: 0.922)
+    static let greenBg = Color(red: 0.941, green: 0.992, blue: 0.953)
+    static let greenTx = Color(red: 0.086, green: 0.400, blue: 0.204)
+}
+
 struct WeeklyReportView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var bookingStore: BookingStore
@@ -17,74 +32,28 @@ struct WeeklyReportView: View {
     @State private var showingWarningsDetail = false
     @State private var startDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var endDate: Date = Calendar.current.startOfDay(for: Date())
+    @State private var showStartPicker = false
+    @State private var showEndPicker = false
     @State private var isGenerating = false
-    @State private var generatedCSVURL: URL?
-    @State private var showShareSheet = false
+    @State private var generatedXLSXURL: URL?
+    @State private var generatedPDFURL: URL?
+    @State private var showShareXLSX = false
+    @State private var showSharePDF = false
+    @State private var showGeneratedSuccess = false
     @State private var message: String?
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
+    @State private var logoImage: UIImage?
 
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Choose week") {
-                    Button("This Week (Mon-Sun): \(rangeLabel(thisWeekRange))") { setThisWeekRange() }
-                    Button("Last Week (Mon-Sun): \(rangeLabel(lastWeekRange))") { setLastWeekRange() }
-                }
-                Section("Set date range") {
-                    DatePicker("Start", selection: $startDate, displayedComponents: .date)
-                    DatePicker("End", selection: $endDate, in: startDate..., displayedComponents: .date)
-                }
-                schedulingClashesSection
-                Section {
-                    Button {
-                        generateCSVReport()
-                    } label: {
-                        HStack {
-                            if isGenerating { ProgressView() }
-                            Text(isGenerating ? "Generating..." : "Generate Report (CSV)")
-                        }
-                    }
-                    .disabled(isGenerating)
-                }
-                if let message {
-                    Section {
-                        Text(message)
-                            .font(.footnote)
-                    }
-                }
-            }
-            .navigationTitle("Weekly Report")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") { dismiss() }
-                }
-            }
-            .sheet(isPresented: $showShareSheet) {
-                if let generatedCSVURL {
-                    WeeklyReportShareSheet(items: [generatedCSVURL])
-                }
-            }
-            .onAppear {
-                setThisWeekRange()
-                refreshReportWarnings()
-            }
-            .onChange(of: startDate) { _, _ in refreshReportWarnings() }
-            .onChange(of: endDate) { _, _ in refreshReportWarnings() }
-            .onChange(of: bookingStore.bookings) { _, _ in refreshReportWarnings() }
-            .onChange(of: managerScheduleStore.managerSiteBookings) { _, _ in refreshReportWarnings() }
-            .sheet(isPresented: $showingWarningsDetail) {
-                WarningsDetailView(warningsService: warningsService)
-                    .environmentObject(projectStore)
-                    .environmentObject(userStore)
-                    .environmentObject(operativeStore)
-                    .environmentObject(bookingStore)
-                    .environmentObject(managerScheduleStore)
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(appSettings)
-                    .environmentObject(holidayStore)
-            }
-        }
+    private var organizationName: String {
+        firebaseBackend.currentOrganization?.name ?? "Organization"
+    }
+
+    private var invoicingSettings: OrganizationInvoicingSettings {
+        firebaseBackend.currentOrganization?.settings.invoicing ?? .default
+    }
+
+    private var invoicingPeriod: InvoicingPeriodInfo {
+        InvoicingPeriodResolver.resolve(invoicing: invoicingSettings)
     }
 
     private var reportDateRange: ClosedRange<Date> {
@@ -94,89 +63,534 @@ struct WeeklyReportView: View {
         return start...end
     }
 
-    @ViewBuilder
-    private var schedulingClashesSection: some View {
+    private var hasReportWarnings: Bool {
         let range = reportDateRange
-        let operativeClashes = warningsService.operativeBookingClashes(in: range)
-        let managerUnresolved = warningsService.unresolvedManagerClashes(in: range)
-        let managerApproved = warningsService.approvedManagerClashes(in: range)
-        let unbooked = warningsService.unbookedLabourWarnings(in: range)
-        let materials = warningsService.materialsCutoffWarnings(in: range)
-        let hasAny = !operativeClashes.isEmpty || !managerUnresolved.isEmpty || !managerApproved.isEmpty
-            || !unbooked.isEmpty || !materials.isEmpty
+        return !warningsService.operativeBookingClashes(in: range).isEmpty
+            || !warningsService.unresolvedManagerClashes(in: range).isEmpty
+            || !warningsService.approvedManagerClashes(in: range).isEmpty
+            || !warningsService.unbookedLabourWarnings(in: range).isEmpty
+            || !warningsService.materialsCutoffWarnings(in: range).isEmpty
+    }
 
-        Section("Warnings in this period") {
-            if !hasAny {
-                Text("No high, medium, or low priority warnings for these dates.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            Button("Open Warnings") { showingWarningsDetail = true }
-
-            if !operativeClashes.isEmpty {
-                Text("High — operative booking clashes (\(operativeClashes.count))")
-                    .font(.footnote.weight(.semibold))
-                Text("Remove a booking on Warnings to clear. These are not ticked for the report.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ForEach(operativeClashes.prefix(5)) { warning in
-                    clashSummaryLabel(warning, status: "High")
+    var body: some View {
+        NavigationStack {
+            weeklyReportScrollContent
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { weeklyReportToolbar }
+                .sheet(isPresented: $showingWarningsDetail) { warningsDetailSheet }
+                .sheet(isPresented: $showShareXLSX) {
+                    if let generatedXLSXURL {
+                        WeeklyReportShareSheet(items: [generatedXLSXURL])
+                    }
                 }
-            }
-
-            if !unbooked.isEmpty {
-                Text("High — unbooked labour (\(unbooked.count) day\(unbooked.count == 1 ? "" : "s"))")
-                    .font(.footnote.weight(.semibold))
-                ForEach(unbooked.prefix(3)) { warning in
-                    clashSummaryLabel(warning, status: "High")
+                .sheet(isPresented: $showSharePDF) {
+                    if let generatedPDFURL {
+                        WeeklyReportShareSheet(items: [generatedPDFURL])
+                    }
                 }
-            }
-
-            if !managerUnresolved.isEmpty {
-                Text("Medium — manager/admin clashes (\(managerUnresolved.count))")
-                    .font(.footnote.weight(.semibold))
-                Text("Tick “Approve for weekly report” on Warnings to include intentional overlaps in the CSV.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ForEach(managerUnresolved.prefix(5)) { warning in
-                    clashSummaryLabel(warning, status: "Needs tick")
+                .sheet(isPresented: $showGeneratedSuccess) {
+                    reportGeneratedSuccessSheet
+                        .presentationDetents([.medium, .large])
+                        .presentationDragIndicator(.visible)
                 }
-            }
-
-            if !managerApproved.isEmpty {
-                Text("Medium — approved for report (\(managerApproved.count))")
-                    .font(.footnote.weight(.semibold))
-                ForEach(managerApproved.prefix(5)) { warning in
-                    clashSummaryLabel(warning, status: "Ticked")
+                .onAppear {
+                    setThisWeekRange()
+                    refreshReportWarnings()
+                    Task { await loadOrganizationLogo() }
                 }
-            }
+                .onChange(of: startDate) { _, _ in refreshReportWarnings() }
+                .onChange(of: endDate) { _, _ in refreshReportWarnings() }
+                .onChange(of: bookingStore.bookings) { _, _ in refreshReportWarnings() }
+                .onChange(of: managerScheduleStore.managerSiteBookings) { _, _ in refreshReportWarnings() }
+        }
+    }
 
-            if !materials.isEmpty {
-                Text("Low — material orders not placed by 16:00 (\(materials.count))")
-                    .font(.footnote.weight(.semibold))
-                ForEach(materials.prefix(3)) { warning in
-                    clashSummaryLabel(warning, status: "Low")
+    private var weeklyReportScrollContent: some View {
+        ZStack {
+            Color(.systemGroupedBackground).ignoresSafeArea()
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 24) {
+                    brandHeader
+                    quickSelectCard
+                    customRangeCard
+                    invoicingPeriodCard
+                    warningsCard
+                    generateSection
+                    if let message {
+                        Text(message)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    Spacer(minLength: 24)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 20)
+            }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var weeklyReportToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button { dismiss() } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Close")
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .foregroundStyle(WeeklyReportColors.blue)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(WeeklyReportColors.light)
+                .clipShape(Capsule())
+            }
+        }
+        ToolbarItem(placement: .principal) {
+            Text("Weekly Report")
+                .font(.system(size: 17, weight: .semibold))
+        }
+    }
+
+    private var warningsDetailSheet: some View {
+        WarningsDetailView(warningsService: warningsService)
+            .environmentObject(projectStore)
+            .environmentObject(userStore)
+            .environmentObject(operativeStore)
+            .environmentObject(bookingStore)
+            .environmentObject(managerScheduleStore)
+            .environmentObject(firebaseBackend)
+            .environmentObject(appSettings)
+            .environmentObject(holidayStore)
+    }
+
+    // MARK: - UI sections
+
+    private var brandHeader: some View {
+        ZStack {
+            LinearGradient(
+                colors: [WeeklyReportColors.navy, Color(red: 0.043, green: 0.118, blue: 0.224)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    barChartIcon.frame(width: 36, height: 36)
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 0) {
+                            Text("PROJECT").font(.system(size: 16, weight: .black)).foregroundStyle(.white).tracking(1.2)
+                            Text(" PLANNER").font(.system(size: 16, weight: .black)).foregroundStyle(WeeklyReportColors.cyan).tracking(1.2)
+                        }
+                        Text(organizationName)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Color.white.opacity(0.5))
+                    }
+                    Spacer()
+                    if let logoImage {
+                        Image(uiImage: logoImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 56, height: 44)
+                    } else {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("WEEKLY").font(.system(size: 10, weight: .heavy)).foregroundStyle(WeeklyReportColors.cyan).tracking(2)
+                            Text("REPORT").font(.system(size: 10, weight: .heavy)).foregroundStyle(.white.opacity(0.7)).tracking(2)
+                        }
+                    }
+                }
+                HStack(spacing: 0) {
+                    WeeklyReportColors.orange.frame(width: 40, height: 2)
+                    WeeklyReportColors.cyan.frame(height: 2)
+                }
+                .clipShape(Capsule())
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 16)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: WeeklyReportColors.navy.opacity(0.35), radius: 12, x: 0, y: 6)
+    }
+
+    private var barChartIcon: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.08))
+            HStack(alignment: .bottom, spacing: 3) {
+                ForEach([0.45, 0.9, 0.65, 0.4], id: \.self) { h in
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(WeeklyReportColors.cyan.opacity(0.85))
+                        .frame(width: 5, height: 20 * h)
                 }
             }
         }
     }
 
-    private func clashSummaryLabel(_ warning: Warning, status: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text(status)
-                    .font(.caption.weight(.medium))
-                Text(warning.severity.rawValue.capitalized)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+    private var quickSelectCard: some View {
+        reportSectionCard(title: "Quick Select", icon: "bolt.fill", iconColor: WeeklyReportColors.cyan) {
+            VStack(spacing: 0) {
+                quickWeekRow(label: "This Week", subLabel: rangeLabel(thisWeekRange), range: thisWeekRange)
+                Divider().padding(.leading, 16)
+                quickWeekRow(label: "Last Week", subLabel: rangeLabel(lastWeekRange), range: lastWeekRange)
             }
-            Text(warning.title)
-                .font(.subheadline)
-            Text(warning.message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 2)
+    }
+
+    private var customRangeCard: some View {
+        reportSectionCard(title: "Custom Range", icon: "calendar", iconColor: WeeklyReportColors.blue) {
+            VStack(spacing: 0) {
+                dateRow(label: "Start", date: $startDate, isExpanded: $showStartPicker)
+                Divider().padding(.leading, 16)
+                dateRow(label: "End", date: $endDate, isExpanded: $showEndPicker)
+            }
+        }
+    }
+
+    private var invoicingPeriodCard: some View {
+        reportSectionCard(title: "Invoicing Period", icon: "calendar.badge.clock", iconColor: WeeklyReportColors.blue) {
+            VStack(alignment: .leading, spacing: 12) {
+                if invoicingSettings.paymentRunMode == .dateRanges {
+                    ForEach(Array(invoicingPeriod.scheduleRows.enumerated()), id: \.offset) { index, row in
+                        if index > 0 { Divider() }
+                        HStack {
+                            Text(row.label).font(.subheadline).foregroundStyle(.secondary)
+                            Spacer()
+                            Text(row.summary).font(.subheadline.weight(.medium))
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                    }
+                    Divider().padding(.leading, 16)
+                } else {
+                    HStack {
+                        Text("Schedule").font(.subheadline).foregroundStyle(.secondary)
+                        Spacer()
+                        Text(invoicingSettings.recurringRunDisplaySummary)
+                            .font(.subheadline.weight(.medium))
+                            .multilineTextAlignment(.trailing)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    Divider().padding(.leading, 16)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("CURRENT INVOICING PERIOD")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(WeeklyReportColors.greenTx)
+                    Text(invoicingPeriod.currentPeriodLabel)
+                        .font(.subheadline.weight(.semibold))
+                    Text("Organisation payment runs are configured in Settings → Invoicing.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(WeeklyReportColors.greenBg)
+            }
+        }
+    }
+
+    private var warningsCard: some View {
+        reportSectionCard(
+            title: "Warnings in Period",
+            icon: "exclamationmark.triangle.fill",
+            iconColor: hasReportWarnings ? WeeklyReportColors.orange : WeeklyReportColors.greenTx
+        ) {
+            if !hasReportWarnings {
+                HStack(spacing: 10) {
+                    ZStack {
+                        Circle().fill(WeeklyReportColors.greenBg).frame(width: 36, height: 36)
+                        Image(systemName: "checkmark.shield.fill").foregroundStyle(WeeklyReportColors.greenTx)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("All Clear").font(.subheadline.weight(.semibold)).foregroundStyle(WeeklyReportColors.greenTx)
+                        Text("No warnings for this period").font(.caption).foregroundStyle(WeeklyReportColors.muted)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                Divider().padding(.leading, 16)
+                Button { showingWarningsDetail = true } label: {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle")
+                        Text("Open Warnings").font(.subheadline.weight(.medium))
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(WeeklyReportColors.muted)
+                    }
+                    .foregroundStyle(WeeklyReportColors.blue)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+            } else {
+                warningsSummaryContent
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var warningsSummaryContent: some View {
+        let range = reportDateRange
+        let summaries = periodWarningSummaries(in: range)
+        HStack(spacing: 8) {
+            ForEach(summaries, id: \.label) { item in
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
+                    Text("\(item.count) \(item.label)").font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundStyle(item.foreground)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(item.background)
+                .clipShape(Capsule())
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        Divider().padding(.leading, 16)
+        Button { showingWarningsDetail = true } label: {
+            HStack {
+                Image(systemName: "arrow.right.circle.fill")
+                Text("View All Warnings").font(.subheadline.weight(.medium))
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(WeeklyReportColors.muted)
+            }
+            .foregroundStyle(WeeklyReportColors.blue)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var generateSection: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 6) {
+                Image(systemName: "calendar.badge.clock").font(.system(size: 12, weight: .medium)).foregroundStyle(WeeklyReportColors.muted)
+                Text("\(formatDate(startDate))  →  \(formatDate(endDate))")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(WeeklyReportColors.muted)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(Color(.systemBackground))
+            .clipShape(Capsule())
+            .overlay(Capsule().strokeBorder(WeeklyReportColors.mid, lineWidth: 0.5))
+
+            Button {
+                generateReports()
+            } label: {
+                ZStack {
+                    if isGenerating {
+                        HStack(spacing: 10) {
+                            ProgressView().tint(.white).scaleEffect(0.85)
+                            Text("Generating Report…").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                        }
+                    } else {
+                        HStack(spacing: 8) {
+                            Image(systemName: "doc.badge.plus").font(.system(size: 17, weight: .semibold))
+                            Text("Generate Report").font(.system(size: 16, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(LinearGradient(colors: [WeeklyReportColors.blue, WeeklyReportColors.cyan], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: WeeklyReportColors.blue.opacity(0.4), radius: 10, x: 0, y: 5)
+            }
+            .buttonStyle(.plain)
+            .disabled(isGenerating)
+
+            Text("Generates Excel (.xlsx) and PDF files ready to share.")
+                .font(.system(size: 11))
+                .foregroundStyle(WeeklyReportColors.muted)
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    private var reportGeneratedSuccessSheet: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 10) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(WeeklyReportColors.greenTx)
+                    .padding(.top, 8)
+                Text("Report Generated Successfully")
+                    .font(.title3.weight(.bold))
+                Text("Your weekly report is ready to share.")
+                    .font(.subheadline)
+                    .foregroundStyle(WeeklyReportColors.muted)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
+
+            HStack(spacing: 12) {
+                exportSharePanel(title: "Excel", subtitle: ".xlsx", systemImage: "tablecells.fill", tint: WeeklyReportColors.greenTx) {
+                    showShareXLSX = true
+                }
+                exportSharePanel(title: "PDF", subtitle: ".pdf", systemImage: "doc.richtext.fill", tint: WeeklyReportColors.blue) {
+                    showSharePDF = true
+                }
+            }
+            .padding(.horizontal, 20)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 12)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemGroupedBackground))
+    }
+
+    private func exportSharePanel(title: String, subtitle: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 28))
+                .foregroundStyle(tint)
+            Text(title).font(.headline)
+            Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            Button(action: action) {
+                Label("Share", systemImage: "square.and.arrow.up")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(tint)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func reportSectionCard<Content: View>(title: String, icon: String, iconColor: Color, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 11, weight: .semibold)).foregroundStyle(iconColor)
+                Text(title.uppercased()).font(.system(size: 11, weight: .semibold)).foregroundStyle(WeeklyReportColors.muted).tracking(0.6)
+            }
+            .padding(.horizontal, 4)
+            .padding(.bottom, 8)
+
+            VStack(spacing: 0) { content() }
+                .background(Color(.systemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 2)
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(WeeklyReportColors.mid.opacity(0.6), lineWidth: 0.5))
+        }
+    }
+
+    private func quickWeekRow(label: String, subLabel: String, range: (start: Date, end: Date)) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                startDate = range.start
+                endDate = range.end
+                showStartPicker = false
+                showEndPicker = false
+            }
+        } label: {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(WeeklyReportColors.light).frame(width: 36, height: 36)
+                    Image(systemName: "calendar").foregroundStyle(WeeklyReportColors.blue)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label).font(.system(size: 15, weight: .semibold))
+                    Text(subLabel).font(.system(size: 12)).foregroundStyle(WeeklyReportColors.muted)
+                }
+                Spacer()
+                let selected = Calendar.current.isDate(startDate, inSameDayAs: range.start)
+                ZStack {
+                    Circle().fill(selected ? WeeklyReportColors.blue : WeeklyReportColors.mid.opacity(0.4)).frame(width: 22, height: 22)
+                    if selected {
+                        Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func dateRow(label: String, date: Binding<Date>, isExpanded: Binding<Bool>) -> some View {
+        VStack(spacing: 0) {
+            Button {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                    if label == "Start" { showEndPicker = false } else { showStartPicker = false }
+                    isExpanded.wrappedValue.toggle()
+                }
+            } label: {
+                HStack {
+                    Text(label).font(.system(size: 15, weight: .medium))
+                    Spacer()
+                    Text(formatDate(date.wrappedValue))
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(WeeklyReportColors.blue)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(WeeklyReportColors.light)
+                        .clipShape(Capsule())
+                    Image(systemName: isExpanded.wrappedValue ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(WeeklyReportColors.muted)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 13)
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded.wrappedValue {
+                Divider().padding(.leading, 16)
+                if label == "End" {
+                    DatePicker("", selection: date, in: startDate..., displayedComponents: .date)
+                        .datePickerStyle(.graphical)
+                        .tint(WeeklyReportColors.blue)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+                } else {
+                    DatePicker("", selection: date, displayedComponents: .date)
+                        .datePickerStyle(.graphical)
+                        .tint(WeeklyReportColors.blue)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+                }
+            }
+        }
+    }
+
+    private struct PeriodWarningChip {
+        let label: String
+        let count: Int
+        let foreground: Color
+        let background: Color
+    }
+
+    private func periodWarningSummaries(in range: ClosedRange<Date>) -> [PeriodWarningChip] {
+        var items: [PeriodWarningChip] = []
+        let high = warningsService.operativeBookingClashes(in: range).count + warningsService.unbookedLabourWarnings(in: range).count
+        let medium = warningsService.unresolvedManagerClashes(in: range).count + warningsService.approvedManagerClashes(in: range).count
+        let low = warningsService.materialsCutoffWarnings(in: range).count
+        if high > 0 { items.append(.init(label: "High", count: high, foreground: WeeklyReportColors.redText, background: WeeklyReportColors.redBg)) }
+        if medium > 0 { items.append(.init(label: "Medium", count: medium, foreground: Color(red: 0.573, green: 0.251, blue: 0.055), background: WeeklyReportColors.amber)) }
+        if low > 0 { items.append(.init(label: "Low", count: low, foreground: WeeklyReportColors.greenTx, background: WeeklyReportColors.greenBg)) }
+        return items
+    }
+
+    private func loadOrganizationLogo() async {
+        guard let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
+              let url = URL(string: logoURL) else { return }
+        if let (data, _) = try? await URLSession.shared.data(from: url),
+           let image = UIImage(data: data) {
+            await MainActor.run { logoImage = image }
+        }
     }
 
     private func refreshReportWarnings() {
@@ -195,6 +609,7 @@ struct WeeklyReportView: View {
             let allProjects = projectStore.projects
             let projectsTomorrow = allProjects.filter { tomorrowProjectIds.contains($0.id) }
             let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
+            let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
             let activeOperatives = operativeStore.activeOperatives.isEmpty
                 ? operativeStore.allOperatives.filter(\.isActive)
                 : operativeStore.activeOperatives
@@ -220,6 +635,7 @@ struct WeeklyReportView: View {
                 holidayBookings: holidayStore.bookings,
                 payrollTimePolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
                 warningDetection: warningDetection,
+                invoicingSettings: invoicingSettings,
                 labourCoverageStart: startDate,
                 labourCoverageEnd: endDate,
                 materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
@@ -264,21 +680,34 @@ struct WeeklyReportView: View {
         "\(formatDate(range.start)) - \(formatDate(range.end))"
     }
 
-    private func generateCSVReport() {
+    private func generateReports() {
         isGenerating = true
         message = nil
+        showGeneratedSuccess = false
         Task {
             if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
                 dayRateHistoryCollection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
             }
-            let csv = buildCSV()
-            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("WeeklyReport-\(Int(Date().timeIntervalSince1970)).csv")
+            if logoImage == nil {
+                await loadOrganizationLogo()
+            }
             do {
-                try csv.write(to: fileURL, atomically: true, encoding: .utf8)
+                let sections = buildExportSections()
+                let exports = try WeeklyReportExportBuilder.makeExports(
+                    context: WeeklyReportExportBuilder.Context(
+                        organizationName: organizationName,
+                        periodStart: startDate,
+                        periodEnd: endDate,
+                        invoicingPeriodLabel: invoicingPeriod.currentPeriodLabel,
+                        logoImage: logoImage,
+                        sections: sections
+                    )
+                )
                 await MainActor.run {
-                    generatedCSVURL = fileURL
-                    message = "Report generated."
-                    showShareSheet = true
+                    generatedXLSXURL = exports.xlsx
+                    generatedPDFURL = exports.pdf
+                    showGeneratedSuccess = true
+                    message = nil
                     isGenerating = false
                 }
             } catch {
@@ -290,6 +719,134 @@ struct WeeklyReportView: View {
         }
     }
 
+    private func buildExportSections() -> [WeeklyReportExportBuilder.Section] {
+        let range = reportDateRange
+        var sections: [WeeklyReportExportBuilder.Section] = []
+
+        var warningRows: [[String]] = []
+        for warning in warningsService.operativeBookingClashes(in: range) {
+            warningRows.append(clashExportCells(warning, status: "Active — remove booking"))
+        }
+        for warning in warningsService.unbookedLabourWarnings(in: range) {
+            warningRows.append(clashExportCells(warning, status: "Active"))
+        }
+        for warning in warningsService.unresolvedManagerClashes(in: range) {
+            warningRows.append(clashExportCells(warning, status: "Not ticked for report"))
+        }
+        for warning in warningsService.approvedManagerClashes(in: range) {
+            warningRows.append(clashExportCells(warning, status: "Ticked — on report"))
+        }
+        for warning in warningsService.materialsCutoffWarnings(in: range) {
+            warningRows.append(clashExportCells(warning, status: "Active"))
+        }
+        if warningRows.isEmpty {
+            warningRows.append(["", "", "", "", "No warnings in period", "", ""])
+        }
+        sections.append(
+            WeeklyReportExportBuilder.Section(
+                title: "⚠  Warnings Summary",
+                headers: ["Status", "Priority", "Type", "Date", "Description", "Detail", "For"],
+                rows: warningRows,
+                totalRow: nil
+            )
+        )
+
+        let operativeRows = operativeProjectRows()
+        let managerRows = managerProjectRows()
+        let allProjectRows = consolidateProjectRows(operativeRows + managerRows)
+        let grouped = Dictionary(grouping: allProjectRows) { "\($0.projectName)|\($0.jobNumber)" }
+        var projectRows: [[String]] = []
+        var projectGrandTotal = 0.0
+        for key in grouped.keys.sorted() {
+            guard let group = grouped[key] else { continue }
+            var projectTotal = 0.0
+            for row in group.sorted(by: projectWorkRowSort) {
+                let tradeCell = row.tradeDisplay == "—" ? "" : row.tradeDisplay
+                projectRows.append([row.projectName, row.jobNumber, row.personName, tradeCell, row.role, formatDays(row.days)])
+                projectTotal += row.days
+                projectGrandTotal += row.days
+            }
+            projectRows.append(["", "", "", "", "Project Total", formatDays(projectTotal)])
+        }
+        sections.append(
+            WeeklyReportExportBuilder.Section(
+                title: "🏗  Project Breakdown",
+                headers: ["Project", "Job No.", "Person", "Trade", "Role", "Days"],
+                rows: projectRows,
+                totalRow: ["", "", "", "", "All Project Work Total", formatDays(projectGrandTotal)]
+            )
+        )
+
+        var subcontractorTotal = 0.0
+        let subRows = subcontractorRows().map { row -> [String] in
+            subcontractorTotal += row.days
+            return [row.projectName, row.jobNumber, row.subcontractorName, row.subcontractorType, row.timeSlotLabel, formatDays(row.days)]
+        }
+        sections.append(
+            WeeklyReportExportBuilder.Section(
+                title: "🔧  Sub Contractors",
+                headers: ["Project", "Job No.", "Sub Contractor", "Type", "Time", "Days"],
+                rows: subRows,
+                totalRow: ["", "", "", "", "Sub Contractor Total", formatDays(subcontractorTotal)]
+            )
+        )
+
+        var annualLeaveTotal = 0.0
+        let leaveRows = annualLeaveRows().map { leave -> [String] in
+            annualLeaveTotal += leave.days
+            return [leave.personName, leave.role, formatDays(leave.days), "Approved"]
+        }
+        sections.append(
+            WeeklyReportExportBuilder.Section(
+                title: "🌴  Annual Leave",
+                headers: ["Person", "Role", "Days", "Type"],
+                rows: leaveRows,
+                totalRow: ["", "", formatDays(annualLeaveTotal), "Annual Leave Total"]
+            )
+        )
+
+        var additionalScheduleTotal = 0.0
+        let scheduleRows = managerAdditionalScheduleRows().map { row -> [String] in
+            additionalScheduleTotal += row.days
+            return [row.personName, row.role, row.location, row.timeSlotLabel, formatDays(row.days)]
+        }
+        sections.append(
+            WeeklyReportExportBuilder.Section(
+                title: "📅  Manager / Admin Additional Schedule",
+                headers: ["Person", "Role", "Location", "Time", "Days"],
+                rows: scheduleRows,
+                totalRow: ["", "", "Total", "", formatDays(additionalScheduleTotal)]
+            )
+        )
+
+        var totalAmount = 0.0
+        var payRows: [[String]] = []
+        for person in payrollPersonSummaries() {
+            for line in person.lines {
+                payRows.append([
+                    person.name,
+                    person.role,
+                    line.rateTypeLabel,
+                    formatDays(line.days),
+                    formatCurrency(line.rate),
+                    formatCurrency(line.pay),
+                ])
+                totalAmount += line.pay ?? 0
+            }
+            payRows.append(["", "", "\(person.name) total", "", "", formatCurrency(person.totalPay)])
+        }
+        sections.append(
+            WeeklyReportExportBuilder.Section(
+                title: "💷  Pay Summary",
+                headers: ["Person", "Role", "Rate Type", "Days", "Rate", "Pay"],
+                rows: payRows,
+                totalRow: ["", "", "Grand Total", "", "", formatCurrency(totalAmount)]
+            )
+        )
+
+        return sections
+    }
+
     private func buildCSV() -> String {
         var rows: [[String]] = []
         rows.append(["Weekly Report"])
@@ -297,22 +854,22 @@ struct WeeklyReportView: View {
         rows.append([])
         let range = reportDateRange
         rows.append(["WARNINGS SUMMARY"])
-        rows.append(["Priority", "Status", "Type", "Date", "Title", "Detail"])
+        rows.append(["Status", "Priority", "Type", "Date", "Description", "Detail", "For"])
 
         for warning in warningsService.operativeBookingClashes(in: range) {
-            rows.append(clashCSVCells(warning, status: "Active — remove booking"))
+            rows.append(clashExportCells(warning, status: "Active — remove booking"))
         }
         for warning in warningsService.unbookedLabourWarnings(in: range) {
-            rows.append(clashCSVCells(warning, status: "Active"))
+            rows.append(clashExportCells(warning, status: "Active"))
         }
         for warning in warningsService.unresolvedManagerClashes(in: range) {
-            rows.append(clashCSVCells(warning, status: "Not ticked for report"))
+            rows.append(clashExportCells(warning, status: "Not ticked for report"))
         }
         for warning in warningsService.approvedManagerClashes(in: range) {
-            rows.append(clashCSVCells(warning, status: "Ticked — on report"))
+            rows.append(clashExportCells(warning, status: "Ticked — on report"))
         }
         for warning in warningsService.materialsCutoffWarnings(in: range) {
-            rows.append(clashCSVCells(warning, status: "Active"))
+            rows.append(clashExportCells(warning, status: "Active"))
         }
         if warningsService.operativeBookingClashes(in: range).isEmpty
             && warningsService.unbookedLabourWarnings(in: range).isEmpty
@@ -874,14 +1431,15 @@ struct WeeklyReportView: View {
         return input
     }
 
-    private func clashCSVCells(_ warning: Warning, status: String) -> [String] {
+    private func clashExportCells(_ warning: Warning, status: String) -> [String] {
         [
             status,
             warning.severity.rawValue.capitalized,
             clashTypeLabel(warning.type),
             warning.occurrenceDate.map(formatDate) ?? "",
             warning.title,
-            warning.message
+            warning.message,
+            warning.affectedPersonNames,
         ]
     }
 

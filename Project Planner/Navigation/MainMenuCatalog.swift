@@ -160,7 +160,7 @@ enum MainMenuCatalog {
             MainMenuRowSpec(
                 id: "holiday",
                 section: .navigate,
-                title: "Holiday",
+                title: "Annual Leave",
                 detail: nil,
                 icon: "sun.max.fill",
                 iconBackground: Color(red: 0.98, green: 0.93, blue: 0.91),

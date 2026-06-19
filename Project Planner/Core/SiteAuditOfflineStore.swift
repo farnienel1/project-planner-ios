@@ -7,6 +7,7 @@
 
 import Foundation
 import UIKit
+import Combine
 
 struct PendingSiteAuditRecord: Codable, Identifiable {
     let id: UUID

@@ -62,7 +62,7 @@ enum WorksListProgress {
     }
 
     static func percentDisplay(for project: Project) -> Int {
-        min(100, Int(fraction(for: project) * 100))
+        min(100, Int((fraction(for: project) * 100).rounded()))
     }
 }
 
