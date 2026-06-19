@@ -63,7 +63,7 @@ struct HolidayView: View {
 
     enum HolidaySection: String, CaseIterable {
         case calendar = "Book"
-        case myHoliday = "My Holiday"
+        case myHoliday = "My Annual Leave"
         case requests = "Pending"
     }
 
@@ -253,7 +253,7 @@ struct HolidayView: View {
                                 if isRequestMode || canApproveRequests {
                                 Picker("Section", selection: $activeSection) {
                                     Text(isRequestMode ? "Request" : "Book").tag(HolidaySection.calendar)
-                                    Text("My holiday").tag(HolidaySection.myHoliday)
+                                    Text("My Annual Leave").tag(HolidaySection.myHoliday)
                                     Text("Pending").tag(HolidaySection.requests)
                                 }
                                 .pickerStyle(.segmented)
@@ -892,11 +892,12 @@ struct HolidayView: View {
                             startDate: startDate,
                             endDate: endDate,
                             assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser(),
+                            requesterUserId: uid,
                             excludeUserIdMatchingRequester: uid
                         )
                     }
                     await MainActor.run {
-                        successMessage = "Holiday request submitted for \(selectedDays.count) day\(selectedDays.count == 1 ? "" : "s")."
+                        successMessage = "Annual leave request submitted for \(selectedDays.count) day\(selectedDays.count == 1 ? "" : "s")."
                         showSuccess = true
                     }
                 } else {
@@ -943,9 +944,9 @@ struct HolidayView: View {
                     }
                     await MainActor.run {
                         if isManagerRequestMode {
-                            successMessage = "Holiday request submitted for \(selectedDays.count) day\(selectedDays.count == 1 ? "" : "s")."
+                            successMessage = "Annual leave request submitted for \(selectedDays.count) day\(selectedDays.count == 1 ? "" : "s")."
                         } else {
-                            successMessage = "Holiday booked for \(selectedDays.count) day\(selectedDays.count == 1 ? "" : "s")."
+                            successMessage = "Annual leave booked for \(selectedDays.count) day\(selectedDays.count == 1 ? "" : "s")."
                         }
                         showSuccess = true
                     }
@@ -1163,7 +1164,50 @@ struct HolidayView: View {
             }
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
             await notifyDecision(to: request, approved: true, decidedByName: approverName)
+            await notifyPeerLineManagers(
+                for: request,
+                actorUserId: uid,
+                actorName: approverName,
+                actionSummary: peerActionSummary(for: request),
+                actionVerb: "approved"
+            )
         }
+    }
+
+    private func peerActionSummary(for request: HolidayBooking) -> String {
+        let dateRange = "\(request.startDate.formatted(date: .abbreviated, time: .omitted)) – \(request.endDate.formatted(date: .abbreviated, time: .omitted))"
+        return "Annual leave \(dateRange)"
+    }
+
+    private func notifyPeerLineManagers(
+        for request: HolidayBooking,
+        actorUserId: String,
+        actorName: String,
+        actionSummary: String,
+        actionVerb: String
+    ) async {
+        let requesterUser: AppUser? = {
+            if let uid = request.userId {
+                return userStore.organizationUsers.first(where: { $0.id == uid })
+            }
+            if let oid = request.operativeId,
+               let op = operativeStore.allOperatives.first(where: { $0.id == oid }) {
+                return userStore.organizationUsers.first(where: {
+                    $0.email.lowercased() == op.email.lowercased()
+                })
+            }
+            return nil
+        }()
+        guard let requesterUser else { return }
+        let peers = requesterUser.lineManagerUserIds.filter { $0 != actorUserId }
+        guard !peers.isEmpty else { return }
+        await notificationService.notifyLineManagerPeerAction(
+            actorName: actorName,
+            actionSummary: actionSummary,
+            peerManagerUserIds: peers,
+            excludingActorUserId: actorUserId,
+            actionVerb: actionVerb
+        )
     }
 
     private func declineRequest(_ request: HolidayBooking) {
@@ -1173,6 +1217,13 @@ struct HolidayView: View {
             await holidayStore.rejectBooking(request, rejectedByUserId: uid)
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
             await notifyDecision(to: request, approved: false, decidedByName: approverName)
+            await notifyPeerLineManagers(
+                for: request,
+                actorUserId: uid,
+                actorName: approverName,
+                actionSummary: peerActionSummary(for: request),
+                actionVerb: "declined"
+            )
         }
     }
 
@@ -1255,6 +1306,7 @@ struct HolidayView: View {
                 startDate: booking.startDate,
                 endDate: booking.endDate,
                 assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser(),
+                requesterUserId: uid,
                 excludeUserIdMatchingRequester: uid
             )
         }

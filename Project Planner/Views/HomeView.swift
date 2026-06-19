@@ -1950,6 +1950,8 @@ private struct HomeProfileCardSheet: View {
 
                     profileRow("Day rate", dayRateText)
                     profileRow("Employment type", user?.employmentType(on: Date()).title ?? "—")
+                    profileRow("VAT number", user?.trimmedVATNumber ?? "Not set")
+                    profileRow("UTR number", user?.trimmedUTRNumber ?? "Not set")
                     profileRow("Skills", skillsText)
                     profileRow("Qualifications", qualificationsText)
                 }

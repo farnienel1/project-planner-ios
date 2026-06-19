@@ -167,6 +167,19 @@ struct Warning: Identifiable, Hashable {
         var date: Date
         var operativeName: String
     }
+    /// Person or people affected by this warning (for weekly report export).
+    var affectedPersonNames: String {
+        switch type {
+        case .operativeBookingClash:
+            return operativeClash?.operativeName ?? title
+        case .managerLocationClash:
+            return managerClash?.personName ?? title
+        case .unbookedLabour:
+            return unbookedLabour?.names.joined(separator: ", ") ?? ""
+        case .materialsCutoff, .qualificationExpiry, .operativeNotVerified:
+            return ""
+        }
+    }
 }
 
 enum WarningTimelineMath {

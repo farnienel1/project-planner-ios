@@ -467,6 +467,13 @@ struct OperativeCustomHoursSheet: View {
                             Color.clear.frame(height: 44)
                         }
                         headerSection
+                        if !showsBreakControls {
+                            Text("This user is PAYE and is not paid hourly.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 4)
+                        }
                         hoursCard
                         if showsBreakControls {
                             breakToggleCard

@@ -78,9 +78,11 @@ struct CreateProjectView: View {
     }
 
     private var availableManagersToAdd: [Manager] {
-        operativeStore.allManagers.filter { manager in
-            !selectedManagers.contains(where: { $0.id == manager.id })
-        }
+        ProjectManagerPickerSupport.availableManagers(
+            operativeStore: operativeStore,
+            userStore: userStore,
+            excluding: selectedManagers
+        )
     }
 
     private var selectedManagersSummary: String {
@@ -841,30 +843,33 @@ struct CreateProjectView: View {
             return !u.isExcludedFromManagerVisibilityHiding
         })
 
-        let project = Project(
-            jobNumber: projectJobNumber.trimmingCharacters(in: .whitespacesAndNewlines),
-            siteName: projectSiteName.trimmingCharacters(in: .whitespacesAndNewlines),
-            addressLine1: projectAddressLine1.trimmingCharacters(in: .whitespacesAndNewlines),
-            addressLine2: projectAddressLine2.isEmpty ? nil : projectAddressLine2,
-            townCity: projectTownCity.trimmingCharacters(in: .whitespacesAndNewlines),
-            postcode: projectPostcode.trimmingCharacters(in: .whitespacesAndNewlines),
-            client: client,
-            startDate: projectStartDate,
-            endDate: projectEndDate,
-            jobType: finalJobType,
-            customJobType: projectWorksType.isEmpty ? nil : projectWorksType,
-            manager: .custom,
-            managerId: selectedManagers.first?.id,
-            managerIds: selectedManagers.map(\.id),
-            isLive: true,
-            description: projectDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : projectDescription,
-            hiddenManagerUserIds: sanitizedHidden,
-            usesMapPinForLocation: hasPin,
-            latitude: hasPin ? pinLatitude : nil,
-            longitude: hasPin ? pinLongitude : nil
-        )
-
         Task {
+            let resolvedManagers = await ProjectManagerPickerSupport.resolveManagersForSave(
+                selectedManagers,
+                operativeStore: operativeStore
+            )
+            let project = Project(
+                jobNumber: projectJobNumber.trimmingCharacters(in: .whitespacesAndNewlines),
+                siteName: projectSiteName.trimmingCharacters(in: .whitespacesAndNewlines),
+                addressLine1: projectAddressLine1.trimmingCharacters(in: .whitespacesAndNewlines),
+                addressLine2: projectAddressLine2.isEmpty ? nil : projectAddressLine2,
+                townCity: projectTownCity.trimmingCharacters(in: .whitespacesAndNewlines),
+                postcode: projectPostcode.trimmingCharacters(in: .whitespacesAndNewlines),
+                client: client,
+                startDate: projectStartDate,
+                endDate: projectEndDate,
+                jobType: finalJobType,
+                customJobType: projectWorksType.isEmpty ? nil : projectWorksType,
+                manager: .custom,
+                managerId: resolvedManagers.first?.id,
+                managerIds: resolvedManagers.map(\.id),
+                isLive: true,
+                description: projectDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : projectDescription,
+                hiddenManagerUserIds: sanitizedHidden,
+                usesMapPinForLocation: hasPin,
+                latitude: hasPin ? pinLatitude : nil,
+                longitude: hasPin ? pinLongitude : nil
+            )
             do {
                 try await projectStore.addProject(project)
                 await MainActor.run {

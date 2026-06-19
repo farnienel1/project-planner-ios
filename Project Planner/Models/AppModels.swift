@@ -362,7 +362,10 @@ struct AppUser: Identifiable, Codable, Hashable {
     var policyAccepted: Bool // GDPR privacy policy acceptance
     var policyAcceptedAt: Date? // When policy was accepted
     /// For operative accounts: Firebase Auth UID of their line manager (holiday requests route here).
+    /// Legacy single manager — use `assignedManagerUserIds` for multiple managers.
     var assignedManagerUserId: String?
+    /// Line managers who receive holiday, timesheet, and related notifications.
+    var assignedManagerUserIds: [String] = []
     /// Default day rate for this operative (optional; copied to roster when the operative profile is created).
     var dayRate: Double?
     /// Hourly pay rate — **mutually exclusive** with `dayRate` (admins choose one or the other).
@@ -390,6 +393,12 @@ struct AppUser: Identifiable, Codable, Hashable {
     var annualLeaveYearEndMonth: Int
     /// When true, unused allowance from the previous leave year is added to the current year (simple model).
     var annualLeaveCarriesOver: Bool
+    /// When true, schedule feeds into timesheets and payroll sign-off applies. Operatives default on; managers/admins default off.
+    var timesheetsEnabled: Bool
+    /// VAT registration number (optional; shown on invoices when set).
+    var vatNumber: String?
+    /// Unique Taxpayer Reference (optional; recommended before generating invoices).
+    var utrNumber: String?
     
     init(
         id: String,
@@ -407,6 +416,7 @@ struct AppUser: Identifiable, Codable, Hashable {
         policyAccepted: Bool = false,
         policyAcceptedAt: Date? = nil,
         assignedManagerUserId: String? = nil,
+        assignedManagerUserIds: [String] = [],
         dayRate: Double? = nil,
         hourlyRate: Double? = nil,
         tradeTypePreset: String? = nil,
@@ -420,7 +430,10 @@ struct AppUser: Identifiable, Codable, Hashable {
         annualLeaveDaysPerYear: Double = AnnualLeavePolicy.defaultDaysPerYear,
         annualLeaveYearStartMonth: Int = AnnualLeavePolicy.defaultStartMonth,
         annualLeaveYearEndMonth: Int = AnnualLeavePolicy.defaultEndMonth,
-        annualLeaveCarriesOver: Bool = AnnualLeavePolicy.defaultCarriesOver
+        annualLeaveCarriesOver: Bool = AnnualLeavePolicy.defaultCarriesOver,
+        timesheetsEnabled: Bool? = nil,
+        vatNumber: String? = nil,
+        utrNumber: String? = nil
     ) {
         self.id = id
         self.email = email
@@ -437,6 +450,7 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.policyAccepted = policyAccepted
         self.policyAcceptedAt = policyAcceptedAt
         self.assignedManagerUserId = assignedManagerUserId
+        self.assignedManagerUserIds = assignedManagerUserIds
         self.dayRate = dayRate
         self.hourlyRate = hourlyRate
         self.tradeTypePreset = tradeTypePreset
@@ -451,6 +465,9 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.annualLeaveYearStartMonth = AnnualLeavePolicy.clampMonth(annualLeaveYearStartMonth)
         self.annualLeaveYearEndMonth = AnnualLeavePolicy.clampMonth(annualLeaveYearEndMonth)
         self.annualLeaveCarriesOver = annualLeaveCarriesOver
+        self.timesheetsEnabled = timesheetsEnabled ?? AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
+        self.vatNumber = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.utrNumber = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
     
     var fullName: String {
@@ -461,7 +478,33 @@ struct AppUser: Identifiable, Codable, Hashable {
     }
 }
 
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
+}
+
 extension AppUser {
+    /// Operatives default on; self-employed managers/admins default on; PAYE managers/admins default off.
+    static func defaultTimesheetsEnabled(for permissions: UserPermissions, employmentType: EmploymentType = .paye) -> Bool {
+        if permissions.operativeMode { return true }
+        if employmentType == .selfEmployed { return true }
+        return false
+    }
+
+    /// Whether this account participates in the timesheet workflow (toggle + employment type).
+    func participatesInTimesheets(on date: Date = Date()) -> Bool {
+        timesheetsEnabled || employmentType(on: date) == .selfEmployed
+    }
+
+    var trimmedUTRNumber: String? {
+        utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+
+    var trimmedVATNumber: String? {
+        vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+
     /// Org-wide admins always see every job; they cannot be denied access via View / `hiddenManagerUserIds`.
     var isExcludedFromManagerVisibilityHiding: Bool {
         if permissions.operativeMode { return false }

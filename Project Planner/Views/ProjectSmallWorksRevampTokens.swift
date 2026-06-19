@@ -58,6 +58,10 @@ enum WorksListProgress {
         let elapsed = Date().timeIntervalSince(project.startDate)
         return min(max(elapsed / total, 0), 1)
     }
+
+    static func percentDisplay(for project: Project) -> Int {
+        Int((fraction(for: project) * 100).rounded())
+    }
 }
 
 struct WorksListStatsRow: View {

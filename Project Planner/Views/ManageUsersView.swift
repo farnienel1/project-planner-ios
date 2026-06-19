@@ -25,6 +25,7 @@ struct ManageUsersView: View {
     @State private var showingDeleteConfirmation = false
     @State private var selectedTab = 0 // 0: Admins, 1: Managers, 2: Operatives
     @State private var rosterSegment: UserRosterSegment = .active
+    @State private var searchText = ""
     @State private var userToSendSignUpEmail: AppUser?
     @State private var isSendingSignUpEmail = false
     @State private var signUpEmailMessage: String?
@@ -60,20 +61,10 @@ struct ManageUsersView: View {
                     }
                 } else if !userStore.canManageUsers() {
                     if isManagerOperativeManagement {
-                        // Managers with Operative Management can manage operatives only
-                        VStack(spacing: 0) {
-                            Picker("", selection: $rosterSegment) {
-                                ForEach(UserRosterSegment.allCases) { seg in
-                                    Text(seg.title).tag(seg)
-                                }
-                            }
-                            .pickerStyle(SegmentedPickerStyle())
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 8)
-                            .background(Color(.systemGroupedBackground))
-                            
-                            operativesList
+                        ScrollView {
+                            manageUsersScrollContent
                         }
+                        .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
                     } else {
                         // Only admins can manage users – hide content from everyone else
                         manageUsersAccessDeniedView
@@ -81,57 +72,16 @@ struct ManageUsersView: View {
                 } else if userStore.organizationUsers.isEmpty {
                     emptyStateView
                 } else {
-                    // Tab Selector
-                    tabSelector
-                    
-                    // Active / Inactive / Pending filter for current tab
-                    Picker("", selection: $rosterSegment) {
-                        ForEach(UserRosterSegment.allCases) { segment in
-                            Text(segment.title).tag(segment)
-                        }
+                    ScrollView {
+                        manageUsersScrollContent
                     }
-                    .pickerStyle(SegmentedPickerStyle())
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemGroupedBackground))
-                    
-                    // Tab Content
-                    tabContent
-                    
-                    // Links to Operatives and Managers pages (same data, different tab)
-                    HStack(spacing: 12) {
-                        Button(action: {
-                            dismiss()
-                            NotificationCenter.default.post(
-                                name: NSNotification.Name("dismissManageUsersAndSelectTab"),
-                                object: nil,
-                                userInfo: ["tab": 3]
-                            )
-                        }) {
-                            Label("View on Operatives page", systemImage: "person.3.fill")
-                                .font(.subheadline)
-                        }
-                        .buttonStyle(.bordered)
-                        if userStore.hasAdminAccess() {
-                            Button(action: {
-                                dismiss()
-                                NotificationCenter.default.post(
-                                    name: NSNotification.Name("dismissManageUsersAndSelectTab"),
-                                    object: nil,
-                                    userInfo: ["tab": 4]
-                                )
-                            }) {
-                                Label("View on Managers page", systemImage: "person.badge.key.fill")
-                                    .font(.subheadline)
-                            }
-                            .buttonStyle(.bordered)
-                        }
+                    .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
+                    .refreshable {
+                        await userStore.loadOrganizationUsers()
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                    .background(Color(.systemGroupedBackground))
                 }
             }
+            .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
             .navigationTitle(isManagerOperativeManagement && !userStore.canManageUsers() ? "Manage Operatives" : "Manage Users")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -139,15 +89,17 @@ struct ManageUsersView: View {
                     Button("Done") {
                         dismiss()
                     }
+                    .font(.system(size: 17))
+                    .foregroundStyle(ManageUserProfilePalette.listBlue)
                 }
                 
                 if userStore.canManageUsers() || isManagerOperativeManagement {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button(isManagerOperativeManagement && !userStore.canManageUsers() ? "Add Operative" : "Add User") {
+                        Button(isManagerOperativeManagement && !userStore.canManageUsers() ? "Add Operative" : "Add") {
                             showingAddUser = true
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.indigo)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(ManageUserProfilePalette.listBlue)
                     }
                 }
             }
@@ -233,8 +185,9 @@ struct ManageUsersView: View {
                 selectedTab = initialTab
             }
         }
-        .onChange(of: selectedTab) { oldValue, newValue in
+        .onChange(of: selectedTab) { _, _ in
             rosterSegment = .active
+            searchText = ""
         }
         .onChange(of: showingAddUser) { oldValue, newValue in
             // Reload users when add user sheet is dismissed
@@ -248,6 +201,259 @@ struct ManageUsersView: View {
         .refreshable {
             await userStore.loadOrganizationUsers()
         }
+    }
+
+    // MARK: - Revamped list (matches manage-users-iphone.html / ManageUsers.tsx)
+
+    private var manageUsersScrollContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if userStore.canManageUsers() {
+                manageUsersRoleSegment
+            }
+            manageUsersStatusChips
+            manageUsersSearchBar
+            manageUsersListHeader
+            manageUsersCardList
+            if userStore.canManageUsers() {
+                manageUsersFooterLinks
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 40)
+    }
+
+    private var manageUsersRoleSegment: some View {
+        HStack(spacing: 0) {
+            manageUsersRoleButton(title: "Admins", tab: 0)
+            manageUsersRoleButton(title: "Managers", tab: 1)
+            manageUsersRoleButton(title: "Operatives", tab: 2)
+        }
+        .padding(2)
+        .background(ManageUserProfilePalette.segmentedBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func manageUsersRoleButton(title: String, tab: Int) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { selectedTab = tab }
+        } label: {
+            Text(title)
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundStyle(selectedTab == tab ? ManageUserProfilePalette.textPrimary : ManageUserProfilePalette.textPrimary.opacity(0.8))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(selectedTab == tab ? Color.white : Color.clear)
+                        .shadow(color: selectedTab == tab ? Color.black.opacity(0.08) : .clear, radius: 2, y: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var manageUsersStatusChips: some View {
+        HStack(spacing: 8) {
+            ForEach(UserRosterSegment.allCases) { segment in
+                let selected = rosterSegment == segment
+                let count = rosterCount(for: segment)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { rosterSegment = segment }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(segment.title)
+                        Text("\(count)")
+                            .font(.system(size: 11, weight: .bold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(selected ? Color.white.opacity(0.25) : Color.black.opacity(0.07))
+                            )
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(selected ? Color.white : ManageUserProfilePalette.textSecondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(selected ? ManageUserProfilePalette.listBlue : Color.white)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(selected ? ManageUserProfilePalette.listBlue : Color(red: 0xE5 / 255, green: 0xE7 / 255, blue: 0xEB / 255), lineWidth: 1)
+                    )
+                    .shadow(color: selected ? ManageUserProfilePalette.listBlue.opacity(0.25) : .clear, radius: 4, y: 2)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var manageUsersSearchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(ManageUserProfilePalette.textSecondary)
+            TextField("Search", text: $searchText)
+                .font(.system(size: 16))
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(ManageUserProfilePalette.searchBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+    }
+
+    private var manageUsersListHeader: some View {
+        HStack {
+            Text(roleSectionTitle.uppercased())
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                .tracking(0.5)
+            Spacer()
+            if !filteredUsers.isEmpty {
+                Text("\(filteredUsers.count) \(filteredUsers.count == 1 ? "person" : "people")")
+                    .font(.system(size: 13))
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    @ViewBuilder
+    private var manageUsersCardList: some View {
+        if filteredUsers.isEmpty {
+            manageUsersEmptyCard
+        } else {
+            LazyVStack(spacing: 11) {
+                ForEach(filteredUsers) { user in
+                    ManageUserRowView(user: user, showAdminBadge: selectedTab == 1 && (user.permissions.adminAccess || user.isSuperAdmin)) {
+                        selectedUser = user
+                    }
+                    .environmentObject(userStore)
+                    .contextMenu {
+                        if userStore.canDeleteUser(user) {
+                            Button(role: .destructive) {
+                                userToDelete = user
+                                showingDeleteConfirmation = true
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var manageUsersEmptyCard: some View {
+        VStack(spacing: 16) {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.white)
+                .frame(width: 64, height: 64)
+                .overlay {
+                    Image(systemName: "person.3.fill")
+                        .font(.system(size: 28))
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary.opacity(0.45))
+                }
+                .shadow(color: Color.black.opacity(0.05), radius: 3, y: 1)
+            Text("No \(rosterSegment.title.lowercased()) \(roleSectionTitle.lowercased())")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(ManageUserProfilePalette.textSecondary)
+            Text("There are no \(rosterSegment.title.lowercased()) \(roleSectionTitle.lowercased()) right now. Try another filter or add someone new.")
+                .font(.system(size: 13.5))
+                .foregroundStyle(ManageUserProfilePalette.textSecondary.opacity(0.75))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 260)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 56)
+    }
+
+    private var manageUsersFooterLinks: some View {
+        VStack(spacing: 10) {
+            Button {
+                dismiss()
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("dismissManageUsersAndSelectTab"),
+                    object: nil,
+                    userInfo: ["tab": 3]
+                )
+            } label: {
+                Label("View on Operatives page", systemImage: "person.3.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(ManageUserProfilePalette.chipPurpleFg)
+            .background(ManageUserProfilePalette.chipPurpleBg)
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+
+            if userStore.hasAdminAccess() {
+                Button {
+                    dismiss()
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("dismissManageUsersAndSelectTab"),
+                        object: nil,
+                        userInfo: ["tab": 4]
+                    )
+                } label: {
+                    Label("View on Managers page", systemImage: "person.badge.key.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(ManageUserProfilePalette.chipPurpleFg)
+                .background(ManageUserProfilePalette.chipPurpleBg)
+                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    private var roleSectionTitle: String {
+        switch selectedTab {
+        case 0: return "Administrators"
+        case 1: return "Managers"
+        default: return "Operatives"
+        }
+    }
+
+    private func usersForRoleTab(_ tab: Int) -> [AppUser] {
+        switch tab {
+        case 0:
+            return userStore.organizationUsers.filter { $0.permissions.adminAccess || $0.isSuperAdmin }
+        case 1:
+            return userStore.organizationUsers.filter { user in
+                guard !user.permissions.operativeMode else { return false }
+                return user.permissions.adminAccess || user.isSuperAdmin || user.permissions.manager
+            }
+        default:
+            return userStore.organizationUsers.filter { $0.permissions.operativeMode }
+        }
+    }
+
+    private var filteredUsers: [AppUser] {
+        let tab = userStore.canManageUsers() ? selectedTab : 2
+        var users = usersForRoleTab(tab).filter { rosterSegment.matches($0) }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !query.isEmpty {
+            users = users.filter {
+                $0.fullName.lowercased().contains(query) || $0.email.lowercased().contains(query)
+            }
+        }
+        return users.sorted {
+            ($0.fullName.isEmpty ? $0.email : $0.fullName).localizedCaseInsensitiveCompare($1.fullName.isEmpty ? $1.email : $1.fullName) == .orderedAscending
+        }
+    }
+
+    private func rosterCount(for segment: UserRosterSegment) -> Int {
+        let tab = userStore.canManageUsers() ? selectedTab : 2
+        return usersForRoleTab(tab).filter { segment.matches($0) }.count
     }
     
     // MARK: - Access Denied (non-admins)
@@ -420,6 +626,87 @@ struct ManageUsersView: View {
     }
 }
 
+// MARK: - Badge flow (matches manage-users-iphone.html flex-wrap badges)
+
+private struct ManageUserBadgeFlow: View {
+    struct Badge: Identifiable {
+        let id = UUID()
+        let label: String
+        let foreground: Color
+        let background: Color
+        let border: Color?
+
+        init(label: String, foreground: Color, background: Color, border: Color?) {
+            self.label = label
+            self.foreground = foreground
+            self.background = background
+            self.border = border
+        }
+    }
+
+    let badges: [Badge]
+
+    var body: some View {
+        FlowLayout(spacing: 6) {
+            ForEach(badges) { badge in
+                Text(badge.label)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(badge.foreground)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(badge.background)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay {
+                        if let border = badge.border {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(border, lineWidth: 1)
+                        }
+                    }
+            }
+        }
+    }
+}
+
+/// Simple left-to-right wrapping layout for badge chips.
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            rowHeight = max(rowHeight, size.height)
+            x += size.width + spacing
+        }
+        return CGSize(width: maxWidth, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
 // MARK: - User Row View
 
 struct ManageUserRowView: View {
@@ -454,131 +741,181 @@ struct ManageUserRowView: View {
     }
     
     var body: some View {
-        HStack(spacing: 12) {
-            // Avatar
-            Circle()
-                .fill(user.isActive ? Color.indigo : Color.gray)
-                .frame(width: 50, height: 50)
-                .overlay(
-                    Text(user.firstName.prefix(1) + user.surname.prefix(1))
-                        .font(.headline)
-                        .foregroundColor(.white)
-                )
-            
-            // User Info
-            VStack(alignment: .leading, spacing: 4) {
-                Text(user.fullName)
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                
-                Text(user.email)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
-                HStack {
-                    Text(user.role.displayName)
-                        .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(roleColor.opacity(0.2))
-                        .foregroundColor(roleColor)
-                        .cornerRadius(8)
-                    
-                    if showAdminBadge {
-                        Text("Admin")
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.green.opacity(0.2))
-                            .foregroundColor(.green)
-                            .cornerRadius(8)
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 13) {
+                    avatarView
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(user.fullName.isEmpty ? user.email : user.fullName)
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                            .lineLimit(1)
+                        Text(user.email)
+                            .font(.system(size: 13))
+                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                            .lineLimit(1)
                     }
-                    
-                    if !user.isActive {
-                        Text("Inactive")
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.red.opacity(0.2))
-                            .foregroundColor(.red)
-                            .cornerRadius(8)
+                    Spacer(minLength: 0)
+                    HStack(spacing: 9) {
+                        if user.passwordSet && canShowPasswordResetOnRow {
+                            keyActionButton
+                        } else if canSendSignUpEmail && !user.passwordSet && isManagerOrOperative {
+                            signUpActionButton
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Color(red: 0xC4 / 255, green: 0xC4 / 255, blue: 0xCC / 255))
                     }
-                    
-                    if user.passwordSet {
-                        Text("Verified")
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.green.opacity(0.2))
-                            .foregroundColor(.green)
-                            .cornerRadius(8)
-                    } else {
-                        Text("Pending")
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.orange.opacity(0.2))
-                            .foregroundColor(.orange)
-                            .cornerRadius(8)
-                    }
+                }
+                if !badges.isEmpty {
+                    ManageUserBadgeFlow(badges: badges.map {
+                        ManageUserBadgeFlow.Badge(label: $0.label, foreground: $0.foreground, background: $0.background, border: $0.border)
+                    })
+                        .padding(.top, 12)
                 }
             }
-            
-            Spacer()
-            
-            // Pending: resend sign-up / verification only. Verified: password reset only (no conflicting actions).
-            if canSendSignUpEmail && !user.passwordSet && isManagerOrOperative {
-                Button(action: {
-                    sendSignUpEmail()
-                }) {
-                    if isSendingSignUpEmail {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                    } else {
-                        Image(systemName: "envelope.badge.fill")
-                            .foregroundColor(.blue)
-                            .font(.body)
-                    }
-                }
-                .disabled(isSendingSignUpEmail || isSendingResetPassword)
-                .padding(.trailing, 8)
-                .accessibilityLabel("Resend sign-up email with verification code")
-            } else if canSendSignUpEmail && canShowPasswordResetOnRow {
-                Button(action: {
-                    sendPasswordResetFromRow()
-                }) {
-                    if isSendingResetPassword {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                    } else {
-                        Image(systemName: "key.fill")
-                            .foregroundColor(.indigo)
-                            .font(.body)
-                    }
-                }
-                .disabled(isSendingResetPassword || isSendingSignUpEmail)
-                .padding(.trailing, 8)
-                .accessibilityLabel("Send password reset email")
-            }
-            
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundColor(.gray)
+            .padding(15)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.black.opacity(0.02), lineWidth: 0.5)
+            )
+            .shadow(color: Color.black.opacity(0.04), radius: 2, y: 1)
         }
-        .padding(.vertical, 8)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onTap()
-        }
-        .alert("Email", isPresented: .constant(rowEmailFeedback != nil)) {
-            Button("OK") {
-                rowEmailFeedback = nil
-            }
+        .buttonStyle(.plain)
+        .alert("Email", isPresented: Binding(
+            get: { rowEmailFeedback != nil },
+            set: { if !$0 { rowEmailFeedback = nil } }
+        )) {
+            Button("OK") { rowEmailFeedback = nil }
         } message: {
             if let message = rowEmailFeedback {
                 Text(message)
             }
         }
+    }
+
+    private var avatarView: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: avatarGradientColors,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 46, height: 46)
+            Text(userInitials)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+        }
+    }
+
+    private var userInitials: String {
+        let f = user.firstName.prefix(1)
+        let s = user.surname.prefix(1)
+        let combined = "\(f)\(s)".uppercased()
+        if combined.trimmingCharacters(in: .whitespaces).isEmpty {
+            return String(user.email.prefix(2)).uppercased()
+        }
+        return combined
+    }
+
+    private var avatarGradientColors: [Color] {
+        if user.permissions.operativeMode {
+            return [Color(red: 0x16 / 255, green: 0xA3 / 255, blue: 0x4A / 255), Color(red: 0x0D / 255, green: 0x94 / 255, blue: 0x88 / 255)]
+        }
+        if user.permissions.adminAccess || user.isSuperAdmin {
+            return [Color(red: 0x4F / 255, green: 0x46 / 255, blue: 0xE5 / 255), Color(red: 0x25 / 255, green: 0x63 / 255, blue: 0xEB / 255)]
+        }
+        return [Color(red: 0x25 / 255, green: 0x63 / 255, blue: 0xEB / 255), Color(red: 0x3B / 255, green: 0x82 / 255, blue: 0xF6 / 255)]
+    }
+
+    private struct RowBadge: Identifiable {
+        let id = UUID()
+        let label: String
+        let foreground: Color
+        let background: Color
+        let border: Color?
+    }
+
+    private var badges: [RowBadge] {
+        var items: [RowBadge] = []
+        if user.isSuperAdmin || user.permissions.adminAccess {
+            items.append(.init(label: "Administrator", foreground: Color(red: 0xE1 / 255, green: 0x1D / 255, blue: 0x48 / 255), background: Color(red: 0xFD / 255, green: 0xEC / 255, blue: 0xF1 / 255), border: nil))
+        } else if user.permissions.manager {
+            items.append(.init(label: "Manager", foreground: ManageUserProfilePalette.listBlue, background: ManageUserProfilePalette.chipBlueBg, border: nil))
+        } else if user.permissions.operativeMode {
+            items.append(.init(label: "Operative", foreground: Color(red: 0x15 / 255, green: 0xA3 / 255, blue: 0x4A / 255), background: Color(red: 0xE9 / 255, green: 0xF9 / 255, blue: 0xEF / 255), border: nil))
+        }
+        if let trade = tradeBadgeLabel {
+            items.append(.init(label: trade, foreground: ManageUserProfilePalette.textSecondary, background: Color(red: 0xF9 / 255, green: 0xF9 / 255, blue: 0xFB / 255), border: Color(red: 0xE5 / 255, green: 0xE7 / 255, blue: 0xEB / 255)))
+        }
+        if !user.isActive && user.passwordSet {
+            items.append(.init(label: "Inactive", foreground: ManageUserProfilePalette.textSecondary, background: Color(red: 0xEC / 255, green: 0xEC / 255, blue: 0xEF / 255), border: nil))
+        } else if user.passwordSet {
+            items.append(.init(label: "Verified", foreground: Color(red: 0x15 / 255, green: 0xA3 / 255, blue: 0x4A / 255), background: Color(red: 0xE9 / 255, green: 0xF9 / 255, blue: 0xEF / 255), border: nil))
+        } else {
+            items.append(.init(label: "Pending invite", foreground: Color(red: 0xE0 / 255, green: 0x86 / 255, blue: 0x00 / 255), background: Color(red: 0xFF / 255, green: 0xF5 / 255, blue: 0xE6 / 255), border: nil))
+        }
+        if showAdminBadge && !items.contains(where: { $0.label == "Administrator" }) {
+            items.insert(.init(label: "Admin", foreground: Color(red: 0xE1 / 255, green: 0x1D / 255, blue: 0x48 / 255), background: Color(red: 0xFD / 255, green: 0xEC / 255, blue: 0xF1 / 255), border: nil), at: 0)
+        }
+        return items
+    }
+
+    private var tradeBadgeLabel: String? {
+        if let custom = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty {
+            return custom
+        }
+        if let preset = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines), !preset.isEmpty, preset != "Other" {
+            return preset
+        }
+        return nil
+    }
+
+    @ViewBuilder
+    private var keyActionButton: some View {
+        Button(action: { sendPasswordResetFromRow() }) {
+            Group {
+                if isSendingResetPassword {
+                    ProgressView().scaleEffect(0.75)
+                } else {
+                    Image(systemName: "key.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(ManageUserProfilePalette.chipPurpleFg)
+                }
+            }
+            .frame(width: 30, height: 30)
+            .background(ManageUserProfilePalette.chipPurpleBg)
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(isSendingResetPassword || isSendingSignUpEmail)
+        .accessibilityLabel("Send password reset email")
+    }
+
+    @ViewBuilder
+    private var signUpActionButton: some View {
+        Button(action: { sendSignUpEmail() }) {
+            Group {
+                if isSendingSignUpEmail {
+                    ProgressView().scaleEffect(0.75)
+                } else {
+                    Image(systemName: "envelope.badge.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(ManageUserProfilePalette.listBlue)
+                }
+            }
+            .frame(width: 30, height: 30)
+            .background(ManageUserProfilePalette.chipBlueBg)
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(isSendingSignUpEmail || isSendingResetPassword)
+        .accessibilityLabel("Resend sign-up email with verification code")
     }
     
     private func sendSignUpEmail() {
@@ -665,14 +1002,206 @@ struct ManageUserRowView: View {
             }
         }
     }
-    
-    private var roleColor: Color {
-        switch user.role {
-        case .admin: return .red
-        case .manager: return .blue
-        case .operative: return .green
-        case .viewer: return .gray
-        case .basic: return .orange
+}
+
+// MARK: - Edit user dialogs (split out to keep EditUserView type-checkable)
+
+private struct EditUserDialogModifier: ViewModifier {
+    let user: AppUser
+    let bookingStore: BookingStore
+    @Binding var showingDeleteConfirmation: Bool
+    @Binding var showingDeactivateConfirmation: Bool
+    @Binding var saveErrorMessage: String?
+    @Binding var showingEmploymentTypeConfirmation: Bool
+    @Binding var employmentTypeConfirmationAccepted: Bool
+    @Binding var showingEmploymentTypeEffectiveDatePicker: Bool
+    @Binding var employmentTypeEffectiveDate: Date
+    let employmentTypeDraft: EmploymentType
+    @Binding var showingPayeDayRateWarning: Bool
+    @Binding var pendingPayeDayRateText: String?
+    @Binding var showingDayRateEffectiveChoice: Bool
+    @Binding var showingQualificationsEditor: Bool
+    @Binding var operativeForSkillsEditor: Operative?
+    let linkedOperative: Operative?
+    let canEditPermissionsMatrix: Bool
+    let operativeStore: OperativeStore
+    let firebaseBackend: FirebaseBackend
+    @Binding var showingProfilePhotoSourcePicker: Bool
+    @Binding var profilePhotoPickerSource: UIImagePickerController.SourceType
+    @Binding var showingProfileImagePicker: Bool
+    @Binding var pickedProfileImage: UIImage?
+    @Binding var profilePhotoUploadMessage: String?
+    let onDelete: () -> Void
+    let onDeactivate: () -> Void
+    let onPersistEdits: (Date?, Date?) -> Void
+    let onUploadProfilePhoto: (UIImage) -> Void
+    let calendarStartOfDay: (Date) -> Date
+    let calendarStartOfTomorrow: () -> Date
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Delete user?", isPresented: $showingDeleteConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Delete", role: .destructive, action: onDelete)
+            } message: {
+                deleteUserAlertMessage
+            }
+            .alert("Deactivate user?", isPresented: $showingDeactivateConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Deactivate", role: .destructive, action: onDeactivate)
+            } message: {
+                Text("Are you sure you want to deactivate \(user.fullName)? They will not be able to sign in until an administrator reactivates them.")
+            }
+            .alert("Could Not Save", isPresented: saveErrorPresented) {
+                Button("OK") { saveErrorMessage = nil }
+            } message: {
+                if let msg = saveErrorMessage {
+                    Text(msg)
+                }
+            }
+            .alert("Change Employment Type?", isPresented: $showingEmploymentTypeConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    employmentTypeConfirmationAccepted = false
+                }
+                Button("Confirm Change") {
+                    employmentTypeConfirmationAccepted = true
+                    employmentTypeEffectiveDate = calendarStartOfDay(Date())
+                    showingEmploymentTypeEffectiveDatePicker = true
+                }
+            } message: {
+                Text("You are changing employment type to \(employmentTypeDraft.title). This affects timesheet access and day-rate handling.")
+            }
+            .alert("PAYE day rate", isPresented: $showingPayeDayRateWarning) {
+                Button("OK", role: .cancel) {
+                    pendingPayeDayRateText = nil
+                }
+            } message: {
+                Text("This user is currently set as PAYE. If you add a day rate, then their rate will appear on the weekly report, as well as their timesheet.")
+            }
+            .sheet(isPresented: $showingEmploymentTypeEffectiveDatePicker) {
+                employmentTypeEffectiveDateSheet
+            }
+            .confirmationDialog(
+                "Day rate change",
+                isPresented: $showingDayRateEffectiveChoice,
+                titleVisibility: .visible
+            ) {
+                Button("Today") {
+                    onPersistEdits(calendarStartOfDay(Date()), nil)
+                }
+                Button("Tomorrow") {
+                    onPersistEdits(calendarStartOfTomorrow(), nil)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("When the day rate is changed, the weekly report and invoicing (invoicing will be available in a future update) use the new rate from the working day you choose. If you want the new rate to apply from tomorrow, choose Tomorrow.")
+            }
+            .sheet(isPresented: $showingQualificationsEditor, onDismiss: { operativeForSkillsEditor = nil }) {
+                if let operative = operativeForSkillsEditor ?? linkedOperative {
+                    OperativeQualificationsEditorView(
+                        operative: operative,
+                        title: "Skills & Qualifications",
+                        canEditAssignments: canEditPermissionsMatrix
+                    )
+                    .environmentObject(operativeStore)
+                    .environmentObject(firebaseBackend)
+                }
+            }
+            .confirmationDialog("Profile photo", isPresented: $showingProfilePhotoSourcePicker, titleVisibility: .visible) {
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    Button("Take Photo") {
+                        profilePhotoPickerSource = .camera
+                        showingProfileImagePicker = true
+                    }
+                }
+                Button("Photo Library") {
+                    profilePhotoPickerSource = .photoLibrary
+                    showingProfileImagePicker = true
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+            .sheet(isPresented: $showingProfileImagePicker) {
+                ProfileImagePicker(image: $pickedProfileImage, sourceType: profilePhotoPickerSource)
+            }
+            .onChange(of: pickedProfileImage) { _, newImage in
+                guard let newImage else { return }
+                pickedProfileImage = nil
+                onUploadProfilePhoto(newImage)
+            }
+            .alert("Profile photo", isPresented: profilePhotoUploadPresented) {
+                Button("OK") { profilePhotoUploadMessage = nil }
+            } message: {
+                if let profilePhotoUploadMessage {
+                    Text(profilePhotoUploadMessage)
+                }
+            }
+    }
+
+    private var saveErrorPresented: Binding<Bool> {
+        Binding(
+            get: { saveErrorMessage != nil },
+            set: { if !$0 { saveErrorMessage = nil } }
+        )
+    }
+
+    private var profilePhotoUploadPresented: Binding<Bool> {
+        Binding(
+            get: { profilePhotoUploadMessage != nil },
+            set: { if !$0 { profilePhotoUploadMessage = nil } }
+        )
+    }
+
+    @ViewBuilder
+    private var deleteUserAlertMessage: some View {
+        let isManager = user.permissions.manager || user.permissions.adminAccess
+        if isManager {
+            let bookingCount = bookingStore.bookings.filter { $0.bookedBy == user.fullName }.count
+            if bookingCount > 0 {
+                Text("Are you sure you want to permanently delete \(user.fullName)? This cannot be undone.\n\nThis manager has \(bookingCount) booking\(bookingCount == 1 ? "" : "s"). All bookings will be reassigned to the super admin.")
+            } else {
+                Text("Are you sure you want to permanently delete \(user.fullName)? This cannot be undone.")
+            }
+        } else {
+            Text("Are you sure you want to permanently delete \(user.fullName)? This cannot be undone.")
+        }
+    }
+
+    private var employmentTypeEffectiveDateSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Employment type starts from") {
+                    DatePicker(
+                        employmentTypeDraft == .selfEmployed
+                            ? "Select the date this user starts as Self-Employed"
+                            : "Select the date this user starts as PAYE",
+                        selection: $employmentTypeEffectiveDate,
+                        in: ...Date.distantFuture,
+                        displayedComponents: .date
+                    )
+                }
+                Section {
+                    Text("Timesheets and day-rate application use this date. Days before this date follow the previous employment type.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Employment Type Date")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        employmentTypeConfirmationAccepted = false
+                        showingEmploymentTypeEffectiveDatePicker = false
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        let selected = calendarStartOfDay(employmentTypeEffectiveDate)
+                        showingEmploymentTypeEffectiveDatePicker = false
+                        onPersistEdits(nil, selected)
+                    }
+                }
+            }
         }
     }
 }
@@ -707,6 +1236,8 @@ struct EditUserView: View {
     @State private var showingHolidayReport = false
     @State private var saveErrorMessage: String?
     @State private var selectedAssignedManagerUserId: String?
+    @State private var selectedLineManagerUserIds: Set<String> = []
+    @State private var showingLineManagerPicker = false
     @State private var dayRateText: String
     @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
     @State private var showingQualificationsEditor = false
@@ -751,6 +1282,11 @@ struct EditUserView: View {
     @State private var employmentTypeConfirmationAccepted = false
     @State private var showingEmploymentTypeEffectiveDatePicker = false
     @State private var employmentTypeEffectiveDate = Date()
+    @State private var timesheetsEnabledDraft: Bool
+    @State private var vatNumberDraft: String
+    @State private var utrNumberDraft: String
+    @State private var showingPayeDayRateWarning = false
+    @State private var pendingPayeDayRateText: String?
 
     init(user: AppUser, suppressAdminAccessToggle: Bool = false) {
         self.user = user
@@ -758,6 +1294,7 @@ struct EditUserView: View {
         self._permissions = State(initialValue: user.permissions)
         self._isActive = State(initialValue: user.isActive)
         self._selectedAssignedManagerUserId = State(initialValue: user.assignedManagerUserId)
+        self._selectedLineManagerUserIds = State(initialValue: Set(user.lineManagerUserIds))
         self._dayRateText = State(initialValue: Self.formatPayrollRateText(dayRate: user.dayRate, hourlyRate: user.hourlyRate))
         self._tradePresetRaw = State(initialValue: user.tradeTypePreset ?? "")
         self._tradeCustomText = State(initialValue: user.tradeTypeCustom ?? "")
@@ -771,6 +1308,9 @@ struct EditUserView: View {
         self._annualLeaveCarriesOver = State(initialValue: user.annualLeaveCarriesOver)
         self._annualLeaveEnabledDraft = State(initialValue: user.annualLeaveEnabled)
         self._employmentTypeDraft = State(initialValue: user.employmentType)
+        self._timesheetsEnabledDraft = State(initialValue: user.timesheetsEnabled)
+        self._vatNumberDraft = State(initialValue: user.vatNumber ?? "")
+        self._utrNumberDraft = State(initialValue: user.utrNumber ?? "")
     }
 
     private static func formatAnnualLeaveDaysText(_ days: Double) -> String {
@@ -854,18 +1394,20 @@ struct EditUserView: View {
         VStack(alignment: .leading, spacing: 8) {
             ManageUserSectionTitle(text: "Annual leave in app")
             ManageUserCard {
-                VStack(alignment: .leading, spacing: 10) {
-                    Toggle(isOn: $annualLeaveEnabledDraft) {
-                        Text("Annual leave enabled")
-                            .font(.body.weight(.medium))
-                            .foregroundStyle(ManageUserProfilePalette.textPrimary)
-                    }
-                    .disabled(!canEditPermissionsMatrix)
-                    Text("Turn off for self-employed staff who do not use paid annual leave. Their Holiday tab and annual leave entry points are hidden until this is turned back on here.")
-                        .font(.caption)
-                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
-                }
-                .padding(14)
+                ManageUserPermissionToggleRow(
+                    iconName: "calendar.badge.clock",
+                    iconBackground: ManageUserProfilePalette.chipBlueBg,
+                    iconForeground: ManageUserProfilePalette.chipBlueFg,
+                    title: "Annual leave enabled",
+                    subtitle: "Turn off for self-employed staff who do not use paid annual leave",
+                    isOn: $annualLeaveEnabledDraft,
+                    isDisabled: !canEditPermissionsMatrix
+                )
+                Text("When turned off, their Holiday tab and annual leave entry points are hidden until this is turned back on here.")
+                    .font(.caption)
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 12)
             }
         }
     }
@@ -942,15 +1484,13 @@ struct EditUserView: View {
     }
 
     private var lineManagerSummary: String {
-        guard permissions.operativeMode || permissions.manager else { return "" }
-        guard let id = selectedAssignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
-            return "Select manager…"
-        }
-        if let m = lineManagerCandidates.first(where: { $0.id == id }) {
-            let name = m.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
-            return name.isEmpty ? m.email : name
-        }
-        return "Select manager…"
+        guard permissions.operativeMode || permissions.manager || permissions.adminAccess else { return "" }
+        if selectedLineManagerUserIds.isEmpty { return "Select manager(s)…" }
+        let names = lineManagerCandidates
+            .filter { selectedLineManagerUserIds.contains($0.id) }
+            .map { $0.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? $0.email : $0.fullName }
+        if names.count == 1 { return names[0] }
+        return "\(names.first ?? "Manager") +\(names.count - 1) more"
     }
 
     private var operativeSetupSectionTitle: String {
@@ -1048,8 +1588,10 @@ struct EditUserView: View {
         let origTradeP = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let origTradeC = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let tradeChanged = dayRateEligible && (trimmedTradeP != origTradeP || trimmedTradeC != origTradeC)
+        let billingChanged = normalizedVATDraft != displayedUser.vatNumber || normalizedUTRDraft != displayedUser.utrNumber
+        let timesheetsChanged = timesheetsEnabledDraft != displayedUser.timesheetsEnabled
         let operativeProfileChanged = (permissions.operativeMode || permissions.manager) && (
-            (selectedAssignedManagerUserId ?? "") != (user.assignedManagerUserId ?? "") ||
+            Set(selectedLineManagerUserIds) != Set(user.lineManagerUserIds) ||
             parseDayRate(dayRateText) != user.dayRate
         )
         let staffDayRateChanged = !permissions.operativeMode && (permissions.manager || permissions.adminAccess)
@@ -1063,9 +1605,11 @@ struct EditUserView: View {
                 tradeChanged ||
                 employmentTypeChanged ||
                 annualLeaveAccessDirty ||
-                annualLeaveEntitlementDirty
+                annualLeaveEntitlementDirty ||
+                billingChanged ||
+                timesheetsChanged
         }
-        if canEditPermissionsMatrix && (identityDirty || operativeProfileChanged || tradeChanged || staffDayRateChanged || employmentTypeChanged || annualLeaveAccessDirty || annualLeaveEntitlementDirty) {
+        if canEditPermissionsMatrix && (identityDirty || operativeProfileChanged || tradeChanged || staffDayRateChanged || employmentTypeChanged || annualLeaveAccessDirty || annualLeaveEntitlementDirty || billingChanged || timesheetsChanged) {
             return true
         }
         if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative) {
@@ -1075,9 +1619,21 @@ struct EditUserView: View {
                 tradeChanged ||
                 employmentTypeChanged ||
                 annualLeaveAccessDirty ||
-                annualLeaveEntitlementDirty
+                annualLeaveEntitlementDirty ||
+                billingChanged ||
+                timesheetsChanged
         }
         return false
+    }
+
+    private var normalizedVATDraft: String? {
+        let trimmed = vatNumberDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private var normalizedUTRDraft: String? {
+        let trimmed = utrNumberDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private var lineManagerCandidates: [AppUser] {
@@ -1093,230 +1649,162 @@ struct EditUserView: View {
     }
     
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 18) {
-                    userInfoHeader
-                    userDetailsChromeSection
-                    if showOperativeSetupCard {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ManageUserSectionTitle(text: operativeSetupSectionTitle)
-                            operativeAndManagerSetupCard
-                        }
-                    }
-                    if shouldShowAnnualLeaveAccessToggle {
-                        annualLeaveAccessSection
-                    }
-                    if shouldShowAnnualLeaveEntitlementSection {
-                        annualLeaveEntitlementSection
-                    }
-                    if canUseAdminAccountTools && !userStore.isOrganizationCreator(userId: user.id) {
-                        activeToggleChromeSection
-                    }
-                    permissionsSection
-                    if canShowCredentialActions || canUseAdminAccountTools {
-                        actionsChromeSection
-                    }
-                }
-                .padding(.horizontal, 18)
-                .padding(.bottom, 32)
-            }
-            .onAppear {
-                let u = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
-                editFirstName = u.firstName
-                editSurname = u.surname
-                editEmail = u.email
-                editMobile = u.mobileNumber ?? ""
-                annualLeaveDaysText = EditUserView.formatAnnualLeaveDaysText(u.annualLeaveDaysPerYear)
-                annualLeaveStartMonth = u.annualLeaveYearStartMonth
-                annualLeaveEndMonth = u.annualLeaveYearEndMonth
-                annualLeaveCarriesOver = u.annualLeaveCarriesOver
-                annualLeaveEnabledDraft = u.annualLeaveEnabled
-                employmentTypeDraft = u.employmentType
-            }
-            .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
-            .navigationTitle(editNavigationTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(ManageUserProfilePalette.textPrimary)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 7)
-                        .background(Capsule(style: .continuous).fill(Color.white))
-                        .overlay(
-                            Capsule(style: .continuous)
-                                .stroke(Color(red: 0xE5 / 255, green: 0xE7 / 255, blue: 0xEB / 255), lineWidth: 0.5)
-                        )
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    if canEditPermissionsMatrix {
-                        Button("Save") { saveChanges() }
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(hasChanges ? Color.white : ManageUserProfilePalette.textSecondary)
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 7)
-                            .background(
-                                Capsule(style: .continuous)
-                                    .fill(hasChanges ? ManageUserProfilePalette.primaryBlue : Color(.systemGray5))
-                            )
-                            .disabled(isUpdating || !hasChanges)
-                    }
-                }
-            }
-            .alert("Delete user?", isPresented: $showingDeleteConfirmation) {
-                Button("Cancel", role: .cancel) { }
-                Button("Delete", role: .destructive) {
-                    deleteUser()
-                }
-            } message: {
-                let isManager = user.permissions.manager || user.permissions.adminAccess
-                if isManager {
-                    let bookingCount = bookingStore.bookings.filter { $0.bookedBy == user.fullName }.count
-                    if bookingCount > 0 {
-                        Text("Are you sure you want to permanently delete \(user.fullName)? This cannot be undone.\n\nThis manager has \(bookingCount) booking\(bookingCount == 1 ? "" : "s"). All bookings will be reassigned to the super admin.")
-                    } else {
-                        Text("Are you sure you want to permanently delete \(user.fullName)? This cannot be undone.")
-                    }
-                } else {
-                    Text("Are you sure you want to permanently delete \(user.fullName)? This cannot be undone.")
-                }
-            }
-            .alert("Deactivate user?", isPresented: $showingDeactivateConfirmation) {
-                Button("Cancel", role: .cancel) { }
-                Button("Deactivate", role: .destructive) {
-                    toggleActiveStatus()
-                }
-            } message: {
-                Text("Are you sure you want to deactivate \(user.fullName)? They will not be able to sign in until an administrator reactivates them.")
-            }
-            .alert("Could Not Save", isPresented: .constant(saveErrorMessage != nil)) {
-                Button("OK") { saveErrorMessage = nil }
-            } message: {
-                if let msg = saveErrorMessage {
-                    Text(msg)
-                }
-            }
-            .alert("Change Employment Type?", isPresented: $showingEmploymentTypeConfirmation) {
-                Button("Cancel", role: .cancel) {
-                    employmentTypeConfirmationAccepted = false
-                }
-                Button("Confirm Change") {
-                    employmentTypeConfirmationAccepted = true
-                    employmentTypeEffectiveDate = calendarStartOfDay(Date())
-                    showingEmploymentTypeEffectiveDatePicker = true
-                }
-            } message: {
-                Text("You are changing employment type to \(employmentTypeDraft.title). This affects timesheet access and day-rate handling.")
-            }
-            .sheet(isPresented: $showingEmploymentTypeEffectiveDatePicker) {
-                NavigationStack {
-                    Form {
-                        Section("Employment type starts from") {
-                            DatePicker(
-                                employmentTypeDraft == .selfEmployed
-                                    ? "Select the date this user starts as Self-Employed"
-                                    : "Select the date this user starts as PAYE",
-                                selection: $employmentTypeEffectiveDate,
-                                in: ...Date.distantFuture,
-                                displayedComponents: .date
-                            )
-                        }
-                        Section {
-                            Text("Timesheets and day-rate application use this date. Days before this date follow the previous employment type.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .navigationTitle("Employment Type Date")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Cancel") {
-                                employmentTypeConfirmationAccepted = false
-                                showingEmploymentTypeEffectiveDatePicker = false
-                            }
-                        }
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Save") {
-                                let selected = calendarStartOfDay(employmentTypeEffectiveDate)
-                                showingEmploymentTypeEffectiveDatePicker = false
-                                Task { await runPersistUserEdits(dayRateEffectiveAt: nil, employmentTypeEffectiveAt: selected) }
-                            }
-                        }
-                    }
-                }
-            }
-            .confirmationDialog(
-                "Day rate change",
-                isPresented: $showingDayRateEffectiveChoice,
-                titleVisibility: .visible
-            ) {
-                Button("Today") {
-                    Task { await runPersistUserEdits(dayRateEffectiveAt: calendarStartOfDay(Date()), employmentTypeEffectiveAt: nil) }
-                }
-                Button("Tomorrow") {
-                    Task { await runPersistUserEdits(dayRateEffectiveAt: calendarStartOfTomorrow(), employmentTypeEffectiveAt: nil) }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("When the day rate is changed, the weekly report and invoicing (invoicing will be available in a future update) use the new rate from the working day you choose. If you want the new rate to apply from tomorrow, choose Tomorrow.")
-            }
-            .sheet(isPresented: $showingQualificationsEditor, onDismiss: { operativeForSkillsEditor = nil }) {
-                if let operative = operativeForSkillsEditor ?? linkedOperativeForUser {
-                    OperativeQualificationsEditorView(
-                        operative: operative,
-                        title: "Skills & Qualifications",
-                        canEditAssignments: canEditPermissionsMatrix
-                    )
+        editUserNavigationStack
+            .sheet(isPresented: $showingHolidayReport) {
+                HolidayReportView(user: user)
+                    .environmentObject(holidayStore)
                     .environmentObject(operativeStore)
-                    .environmentObject(firebaseBackend)
+            }
+            .sheet(isPresented: $showingChangeUserType) {
+                changeUserTypeSheet
+            }
+            .task {
+                await loadDayRateHistory()
+            }
+    }
+
+    private var editUserNavigationStack: some View {
+        NavigationStack {
+            editUserScrollView
+        }
+        .modifier(EditUserDialogModifier(
+            user: user,
+            bookingStore: bookingStore,
+            showingDeleteConfirmation: $showingDeleteConfirmation,
+            showingDeactivateConfirmation: $showingDeactivateConfirmation,
+            saveErrorMessage: $saveErrorMessage,
+            showingEmploymentTypeConfirmation: $showingEmploymentTypeConfirmation,
+            employmentTypeConfirmationAccepted: $employmentTypeConfirmationAccepted,
+            showingEmploymentTypeEffectiveDatePicker: $showingEmploymentTypeEffectiveDatePicker,
+            employmentTypeEffectiveDate: $employmentTypeEffectiveDate,
+            employmentTypeDraft: employmentTypeDraft,
+            showingPayeDayRateWarning: $showingPayeDayRateWarning,
+            pendingPayeDayRateText: $pendingPayeDayRateText,
+            showingDayRateEffectiveChoice: $showingDayRateEffectiveChoice,
+            showingQualificationsEditor: $showingQualificationsEditor,
+            operativeForSkillsEditor: $operativeForSkillsEditor,
+            linkedOperative: linkedOperativeForUser,
+            canEditPermissionsMatrix: canEditPermissionsMatrix,
+            operativeStore: operativeStore,
+            firebaseBackend: firebaseBackend,
+            showingProfilePhotoSourcePicker: $showingProfilePhotoSourcePicker,
+            profilePhotoPickerSource: $profilePhotoPickerSource,
+            showingProfileImagePicker: $showingProfileImagePicker,
+            pickedProfileImage: $pickedProfileImage,
+            profilePhotoUploadMessage: $profilePhotoUploadMessage,
+            onDelete: deleteUser,
+            onDeactivate: toggleActiveStatus,
+            onPersistEdits: { dayRateAt, employmentAt in
+                Task { await runPersistUserEdits(dayRateEffectiveAt: dayRateAt, employmentTypeEffectiveAt: employmentAt) }
+            },
+            onUploadProfilePhoto: { image in
+                Task { await uploadPickedProfilePhoto(image) }
+            },
+            calendarStartOfDay: { calendarStartOfDay($0) },
+            calendarStartOfTomorrow: calendarStartOfTomorrow
+        ))
+    }
+
+    private var editUserScrollView: some View {
+        ScrollView {
+            editUserFormSections
+        }
+        .onAppear(perform: syncEditUserDraftsFromStore)
+        .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
+        .navigationTitle(editNavigationTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { editUserToolbarContent }
+    }
+
+    @ViewBuilder
+    private var editUserFormSections: some View {
+        VStack(spacing: 18) {
+            userInfoHeader
+            userDetailsChromeSection
+            if showOperativeSetupCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    ManageUserSectionTitle(text: operativeSetupSectionTitle)
+                    operativeAndManagerSetupCard
                 }
             }
-            .confirmationDialog("Profile photo", isPresented: $showingProfilePhotoSourcePicker, titleVisibility: .visible) {
-                if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                    Button("Take Photo") {
-                        profilePhotoPickerSource = .camera
-                        showingProfileImagePicker = true
-                    }
-                }
-                Button("Photo Library") {
-                    profilePhotoPickerSource = .photoLibrary
-                    showingProfileImagePicker = true
-                }
-                Button("Cancel", role: .cancel) {}
+            editUserBillingAndTimesheetsSections
+            if shouldShowAnnualLeaveAccessToggle {
+                annualLeaveAccessSection
             }
-            .sheet(isPresented: $showingProfileImagePicker) {
-                ProfileImagePicker(image: $pickedProfileImage, sourceType: profilePhotoPickerSource)
+            if shouldShowAnnualLeaveEntitlementSection {
+                annualLeaveEntitlementSection
             }
-            .onChange(of: pickedProfileImage) { _, newImage in
-                guard let newImage else { return }
-                pickedProfileImage = nil
-                Task { await uploadPickedProfilePhoto(newImage) }
+            if canUseAdminAccountTools && !userStore.isOrganizationCreator(userId: user.id) {
+                activeToggleChromeSection
             }
-            .alert("Profile photo", isPresented: Binding(
-                get: { profilePhotoUploadMessage != nil },
-                set: { if !$0 { profilePhotoUploadMessage = nil } }
-            )) {
-                Button("OK") { profilePhotoUploadMessage = nil }
-            } message: {
-                if let profilePhotoUploadMessage {
-                    Text(profilePhotoUploadMessage)
-                }
+            permissionsSection
+            if canShowCredentialActions || canUseAdminAccountTools {
+                actionsChromeSection
             }
         }
-        .sheet(isPresented: $showingHolidayReport) {
-            HolidayReportView(user: user)
-                .environmentObject(holidayStore)
-                .environmentObject(operativeStore)
+        .padding(.horizontal, 18)
+        .padding(.bottom, 32)
+    }
+
+    @ViewBuilder
+    private var editUserBillingAndTimesheetsSections: some View {
+        if canEditPermissionsMatrix {
+            VStack(alignment: .leading, spacing: 8) {
+                ManageUserSectionTitle(text: "Billing details")
+                billingDetailsCard
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                ManageUserSectionTitle(text: "Timesheets access")
+                timesheetsAccessCard
+            }
         }
-        .sheet(isPresented: $showingChangeUserType) {
-            changeUserTypeSheet
+    }
+
+    @ToolbarContentBuilder
+    private var editUserToolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button("Cancel") { dismiss() }
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(Capsule(style: .continuous).fill(Color.white))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color(red: 0xE5 / 255, green: 0xE7 / 255, blue: 0xEB / 255), lineWidth: 0.5)
+                )
         }
-        .task {
-            await loadDayRateHistory()
+        ToolbarItem(placement: .navigationBarTrailing) {
+            if canEditPermissionsMatrix {
+                Button("Save") { saveChanges() }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(hasChanges ? Color.white : ManageUserProfilePalette.textSecondary)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 7)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(hasChanges ? ManageUserProfilePalette.primaryBlue : Color(.systemGray5))
+                    )
+                    .disabled(isUpdating || !hasChanges)
+            }
         }
+    }
+
+    private func syncEditUserDraftsFromStore() {
+        let u = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        editFirstName = u.firstName
+        editSurname = u.surname
+        editEmail = u.email
+        editMobile = u.mobileNumber ?? ""
+        annualLeaveDaysText = EditUserView.formatAnnualLeaveDaysText(u.annualLeaveDaysPerYear)
+        annualLeaveStartMonth = u.annualLeaveYearStartMonth
+        annualLeaveEndMonth = u.annualLeaveYearEndMonth
+        annualLeaveCarriesOver = u.annualLeaveCarriesOver
+        annualLeaveEnabledDraft = u.annualLeaveEnabled
+        employmentTypeDraft = u.employmentType
+        timesheetsEnabledDraft = u.timesheetsEnabled
+        vatNumberDraft = u.vatNumber ?? ""
+        utrNumberDraft = u.utrNumber ?? ""
     }
 
     private var changeUserTypeSheet: some View {
@@ -1551,6 +2039,7 @@ struct EditUserView: View {
             await MainActor.run {
                 if let fresh = userStore.organizationUsers.first(where: { $0.id == user.id }) {
                     permissions = fresh.permissions
+                    selectedLineManagerUserIds = Set(fresh.lineManagerUserIds)
                     selectedAssignedManagerUserId = fresh.assignedManagerUserId
                     isActive = fresh.isActive
                 }
@@ -1810,11 +2299,18 @@ struct EditUserView: View {
     private var operativeAndManagerSetupCard: some View {
         ManageUserCard {
             VStack(spacing: 0) {
-                if permissions.operativeMode || permissions.manager {
+                if permissions.operativeMode || permissions.manager || permissions.adminAccess {
                     lineManagerPickRow
                     ManageUserCardDivider()
                 }
                 ManageUserDayRateEditRow(dayRateText: $dayRateText, currencySymbol: localeCurrencySymbol())
+                    .onChange(of: dayRateText) { _, newValue in
+                        guard employmentTypeDraft == .paye else { return }
+                        guard parseDayRate(newValue) != nil else { return }
+                        guard parseDayRate(newValue) != displayedUser.dayRate else { return }
+                        pendingPayeDayRateText = newValue
+                        showingPayeDayRateWarning = true
+                    }
                 Text("Payroll uses either a day rate or an hourly rate, not both. Saving updates here applies the organisation rule: setting one clears the other on the account.")
                     .font(.caption2)
                     .foregroundStyle(ManageUserProfilePalette.textSecondary)
@@ -1843,24 +2339,91 @@ struct EditUserView: View {
         }
     }
 
-    private var lineManagerPickRow: some View {
-        Menu {
-            Button("Unassigned") { selectedAssignedManagerUserId = nil }
-            ForEach(lineManagerCandidates, id: \.id) { manager in
-                Button(manager.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? manager.email : manager.fullName) {
-                    selectedAssignedManagerUserId = manager.id
-                }
+    private var billingDetailsCard: some View {
+        ManageUserCard {
+            VStack(spacing: 0) {
+                ManageUserDetailTextFieldRow(
+                    iconName: "doc.text.fill",
+                    iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                    iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                    label: "VAT number",
+                    placeholder: "If VAT registered",
+                    text: $vatNumberDraft,
+                    autocapitalization: .characters
+                )
+                ManageUserCardDivider()
+                ManageUserDetailTextFieldRow(
+                    iconName: "number",
+                    iconBackground: ManageUserProfilePalette.chipAmberBg,
+                    iconForeground: ManageUserProfilePalette.chipAmberFg,
+                    label: "UTR number",
+                    placeholder: "Unique Taxpayer Reference",
+                    text: $utrNumberDraft,
+                    autocapitalization: .characters
+                )
             }
+        }
+    }
+
+    private var timesheetsAccessCard: some View {
+        ManageUserCard {
+            ManageUserExpandablePermissionToggleRow(
+                iconName: "clock.fill",
+                iconBackground: ManageUserProfilePalette.chipTealBg,
+                iconForeground: ManageUserProfilePalette.chipTealFg,
+                title: "Timesheets",
+                description: "When on, schedule feeds into timesheets and payroll sign-off applies. Operatives default to on; managers and admins default to off.",
+                isOn: $timesheetsEnabledDraft
+            )
+            .onChange(of: permissions.operativeMode) { _, isOperative in
+                syncTimesheetsToggleForOperativeMode(isOperative)
+            }
+            .onChange(of: permissions.adminAccess) { _, isAdmin in
+                syncTimesheetsToggleForAdminAccess(isAdmin)
+            }
+            .onChange(of: permissions.manager) { _, isManager in
+                syncTimesheetsToggleForManagerFlag(isManager)
+            }
+        }
+    }
+
+    private func syncTimesheetsToggleForOperativeMode(_ isOperative: Bool) {
+        if isOperative && !timesheetsEnabledDraft {
+            timesheetsEnabledDraft = true
+        }
+    }
+
+    private func syncTimesheetsToggleForAdminAccess(_ isAdmin: Bool) {
+        if isAdmin {
+            timesheetsEnabledDraft = false
+        }
+    }
+
+    private func syncTimesheetsToggleForManagerFlag(_ isManager: Bool) {
+        if isManager && !permissions.operativeMode && !permissions.adminAccess {
+            timesheetsEnabledDraft = false
+        }
+    }
+
+    private var lineManagerPickRow: some View {
+        Button {
+            showingLineManagerPicker = true
         } label: {
             ManageUserChevronRow(
                 iconName: "person.badge.plus",
                 iconBackground: ManageUserProfilePalette.chipPurpleBg,
                 iconForeground: ManageUserProfilePalette.chipPurpleFg,
-                label: "Line manager",
+                label: "Line manager(s)",
                 value: lineManagerSummary
             )
         }
         .buttonStyle(.plain)
+        .sheet(isPresented: $showingLineManagerPicker) {
+            LineManagersMultiSelectSheet(
+                candidates: lineManagerCandidates.filter { $0.id != user.id },
+                selectedIds: $selectedLineManagerUserIds
+            )
+        }
     }
 
     private var tradeTypePickSection: some View {
@@ -2556,24 +3119,24 @@ struct EditUserView: View {
         }
 
         var operativeDetailsSuccess = true
-        let managerAssignmentChanged = (selectedAssignedManagerUserId ?? "") != (subjectUser.assignedManagerUserId ?? "")
+        let managerAssignmentChanged = Set(selectedLineManagerUserIds) != Set(subjectUser.lineManagerUserIds)
         let operativeDayRateChanged = parseDayRate(dayRateText) != subjectUser.dayRate
         let operativeProfileChanged =
             (permissions.operativeMode && (managerAssignmentChanged || operativeDayRateChanged))
             || (permissions.manager && managerAssignmentChanged)
+            || (permissions.adminAccess && managerAssignmentChanged)
         if canEditPermissionsMatrix && (permissions.operativeMode || permissions.manager) {
-            let lineManagerId = selectedAssignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if lineManagerId.isEmpty {
+            if selectedLineManagerUserIds.isEmpty {
                 await MainActor.run {
                     isUpdating = false
                     saveErrorMessage = "Line manager is required for managers and operatives."
                 }
                 return
             }
-            if lineManagerId == subjectUser.id {
+            if selectedLineManagerUserIds.contains(subjectUser.id) {
                 await MainActor.run {
                     isUpdating = false
-                    saveErrorMessage = "A manager cannot be their own line manager."
+                    saveErrorMessage = "A user cannot be their own line manager."
                 }
                 return
             }
@@ -2582,9 +3145,11 @@ struct EditUserView: View {
             let parsedDayRate = parseDayRate(dayRateText)
             let effectiveForHistory: Date? = operativeDayRateChanged ? (dayRateEffectiveAt ?? calendarStartOfDay(Date())) : nil
             let rateToPersist = operativeDayRateChanged ? parsedDayRate : subjectUser.dayRate
+            let managerIds = Array(selectedLineManagerUserIds)
             operativeDetailsSuccess = await userStore.updateOperativeProfileFields(
                 for: subjectUser,
-                assignedManagerUserId: selectedAssignedManagerUserId,
+                assignedManagerUserId: managerIds.first,
+                assignedManagerUserIds: managerIds,
                 dayRate: permissions.operativeMode ? rateToPersist : subjectUser.dayRate,
                 operativeStore: operativeStore,
                 dayRateEffectiveAt: effectiveForHistory,
@@ -2648,6 +3213,23 @@ struct EditUserView: View {
             )
         }
 
+        var billingSuccess = true
+        if canEditPermissionsMatrix && (normalizedVATDraft != subjectUser.vatNumber || normalizedUTRDraft != subjectUser.utrNumber) {
+            billingSuccess = await userStore.updateUserBillingProfile(
+                userId: user.id,
+                vatNumber: normalizedVATDraft,
+                utrNumber: normalizedUTRDraft
+            )
+        }
+
+        var timesheetsSuccess = true
+        if canEditPermissionsMatrix && timesheetsEnabledDraft != subjectUser.timesheetsEnabled {
+            timesheetsSuccess = await userStore.updateUserTimesheetsEnabled(
+                userId: user.id,
+                enabled: timesheetsEnabledDraft
+            )
+        }
+
         if didPersistPermissions && permissionsSuccess {
             await holidayStore.loadData()
         }
@@ -2657,7 +3239,7 @@ struct EditUserView: View {
             showingDayRateEffectiveChoice = false
             employmentTypeConfirmationAccepted = false
             showingEmploymentTypeEffectiveDatePicker = false
-            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && employmentTypeSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess {
+            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && employmentTypeSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess && billingSuccess && timesheetsSuccess {
                 dismiss()
             } else {
                 saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."

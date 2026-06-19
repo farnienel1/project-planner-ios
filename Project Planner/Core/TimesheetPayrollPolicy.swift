@@ -104,7 +104,15 @@ enum TimesheetPayrollPolicy {
         calendar: Calendar = .current
     ) -> Bool {
         let today = calendar.startOfDay(for: referenceDate)
-        if user.employmentType(on: referenceDate) == .selfEmployed {
+        let isSelfEmployed = user.employmentType(on: referenceDate) == .selfEmployed
+
+        // Self-employed always retain personal timesheet access (sign-off / invoicing).
+        if isSelfEmployed {
+            return true
+        }
+
+        // PAYE (etc.) with timesheets turned on in Manage Users.
+        if user.timesheetsEnabled {
             return true
         }
 
@@ -128,6 +136,7 @@ enum TimesheetPayrollPolicy {
         calendar: Calendar = .current
     ) -> Bool {
         guard user.isActive else { return false }
+        guard user.participatesInTimesheets(on: referenceDate) else { return false }
         let isTimesheetEligibleRole =
             user.permissions.operativeMode
             || user.permissions.manager
@@ -140,6 +149,11 @@ enum TimesheetPayrollPolicy {
             return true
         }
 
+        // PAYE users with timesheets enabled always appear on manager/admin rosters.
+        if user.timesheetsEnabled {
+            return true
+        }
+
         let hasSelfEmployedDays = calendarDays(from: week.start, to: week.end, calendar: calendar)
             .contains { isBillableSelfEmployedDay(user, on: $0, calendar: calendar) }
         guard hasSelfEmployedDays else { return false }
@@ -148,6 +162,27 @@ enum TimesheetPayrollPolicy {
             return true
         }
         return calendar.startOfDay(for: referenceDate) <= calendar.startOfDay(for: payDate)
+    }
+
+    /// Completed pay periods before the open period (works for weekly and month-range pay runs).
+    static func previousPayPeriods(
+        before referenceDate: Date = Date(),
+        count: Int = 24,
+        settings: OrganizationInvoicingSettings,
+        calendar: Calendar = .current
+    ) -> [WeekRange] {
+        var periods: [WeekRange] = []
+        var cursor = calendar.startOfDay(for: referenceDate)
+        for _ in 0..<max(1, count) {
+            let open = timesheetWeekRange(for: settings, referenceDate: cursor, calendar: calendar)
+            guard let dayBefore = calendar.date(byAdding: .day, value: -1, to: open.start) else { break }
+            cursor = dayBefore
+            let previous = timesheetWeekRange(for: settings, referenceDate: cursor, calendar: calendar)
+            if periods.contains(where: { $0.start == previous.start }) { break }
+            periods.append(previous)
+            cursor = previous.start
+        }
+        return periods
     }
 
     static func calendarDays(from start: Date, to end: Date, calendar: Calendar = .current) -> [Date] {

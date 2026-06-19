@@ -3263,6 +3263,19 @@ class FirebaseBackend: ObservableObject {
         let resolvedRole: UserRole = operativeMode ? .operative : role
         
         let assignedManagerUserId = data["assignedManagerUserId"] as? String
+        let assignedManagerUserIdsRaw = data["assignedManagerUserIds"] as? [String] ?? []
+        let assignedManagerUserIds: [String] = {
+            var ids = assignedManagerUserIdsRaw
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if ids.isEmpty,
+               let legacy = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !legacy.isEmpty {
+                ids = [legacy]
+            }
+            var seen = Set<String>()
+            return ids.filter { seen.insert($0).inserted }
+        }()
         let dayRate = data["dayRate"] as? Double
         var hourlyRate = data["hourlyRate"] as? Double
         // Prefer day rate if both are present (legacy / misconfigured documents).
@@ -3289,6 +3302,10 @@ class FirebaseBackend: ObservableObject {
             ?? AnnualLeavePolicy.defaultEndMonth
         let alCarry = data["annualLeaveCarriesOver"] as? Bool ?? AnnualLeavePolicy.defaultCarriesOver
         let alEnabled = data["annualLeaveEnabled"] as? Bool ?? true
+        let timesheetsEnabledRaw = data["timesheetsEnabled"] as? Bool
+        let timesheetsEnabled = timesheetsEnabledRaw ?? AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
+        let vatRaw = (data["vatNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let utrRaw = (data["utrNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         
         return AppUser(
             id: userId,
@@ -3305,7 +3322,8 @@ class FirebaseBackend: ObservableObject {
             isSuperAdmin: isSuperAdmin,
             policyAccepted: policyAccepted,
             policyAcceptedAt: policyAcceptedAt,
-            assignedManagerUserId: assignedManagerUserId,
+            assignedManagerUserId: assignedManagerUserIds.first ?? assignedManagerUserId,
+            assignedManagerUserIds: assignedManagerUserIds,
             dayRate: dayRate,
             hourlyRate: hourlyRate,
             tradeTypePreset: (utp?.isEmpty == false) ? utp : nil,
@@ -3319,7 +3337,10 @@ class FirebaseBackend: ObservableObject {
             annualLeaveDaysPerYear: alDays,
             annualLeaveYearStartMonth: alStart,
             annualLeaveYearEndMonth: alEnd,
-            annualLeaveCarriesOver: alCarry
+            annualLeaveCarriesOver: alCarry,
+            timesheetsEnabled: timesheetsEnabled,
+            vatNumber: (vatRaw?.isEmpty == false) ? vatRaw : nil,
+            utrNumber: (utrRaw?.isEmpty == false) ? utrRaw : nil
         )
     }
     
@@ -3445,6 +3466,7 @@ class FirebaseBackend: ObservableObject {
             "endMonth": OrganizationAnnualLeaveDefaults.default.endMonth,
             "carriesOver": OrganizationAnnualLeaveDefaults.default.carriesOver,
         ]
+        payload["warningDetection"] = OrgWarningDetectionSettings.default.asFirestoreDictionary()
         try await db.collection("organizations").document(id).setData(payload, merge: true)
     }
 
@@ -3770,12 +3792,13 @@ class FirebaseBackend: ObservableObject {
             userData["policyAcceptedAt"] = FieldValue.delete()
         }
         
-        if user.permissions.operativeMode,
-           let mid = user.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !mid.isEmpty {
-            userData["assignedManagerUserId"] = mid
-        } else {
+        let lineManagerIds = user.lineManagerUserIds
+        if lineManagerIds.isEmpty {
             userData["assignedManagerUserId"] = FieldValue.delete()
+            userData["assignedManagerUserIds"] = FieldValue.delete()
+        } else {
+            userData["assignedManagerUserId"] = lineManagerIds[0]
+            userData["assignedManagerUserIds"] = lineManagerIds
         }
         
         if user.permissions.operativeMode || user.permissions.manager {
@@ -3824,6 +3847,18 @@ class FirebaseBackend: ObservableObject {
         userData["annualLeaveYearEndMonth"] = AnnualLeavePolicy.clampMonth(user.annualLeaveYearEndMonth)
         userData["annualLeaveCarriesOver"] = user.annualLeaveCarriesOver
         userData["annualLeaveEnabled"] = user.annualLeaveEnabled
+        userData["timesheetsEnabled"] = user.timesheetsEnabled
+        
+        if let vat = user.vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !vat.isEmpty {
+            userData["vatNumber"] = vat
+        } else {
+            userData["vatNumber"] = FieldValue.delete()
+        }
+        if let utr = user.utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !utr.isEmpty {
+            userData["utrNumber"] = utr
+        } else {
+            userData["utrNumber"] = FieldValue.delete()
+        }
         
         try await db.collection("users").document(user.id).setData(userData, merge: true)
     }
@@ -3938,17 +3973,30 @@ class FirebaseBackend: ObservableObject {
     func updateOperativeProfileMetadata(
         userId: String,
         assignedManagerUserId: String?,
+        assignedManagerUserIds: [String]? = nil,
         dayRate: Double?,
         updateDayRate: Bool = true
     ) async throws {
         var payload: [String: Any] = [
             "updatedAt": Timestamp(date: Date())
         ]
-        if let managerId = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !managerId.isEmpty {
-            payload["assignedManagerUserId"] = managerId
-        } else {
+        let ids: [String] = {
+            if let assignedManagerUserIds {
+                return assignedManagerUserIds
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            }
+            if let managerId = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !managerId.isEmpty {
+                return [managerId]
+            }
+            return []
+        }()
+        if ids.isEmpty {
             payload["assignedManagerUserId"] = FieldValue.delete()
+            payload["assignedManagerUserIds"] = FieldValue.delete()
+        } else {
+            payload["assignedManagerUserId"] = ids[0]
+            payload["assignedManagerUserIds"] = ids
         }
         if updateDayRate {
             if let dayRate {
@@ -4317,7 +4365,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         
         let emailLower = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4417,6 +4465,15 @@ class FirebaseBackend: ObservableObject {
             invitationData["annualLeaveCarriesOver"] = resolvedAnnualLeaveCarry
             invitationData["annualLeaveEnabled"] = resolvedAnnualLeaveEnabled
         }
+
+        let resolvedTimesheetsEnabled = timesheetsEnabled ?? AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
+        invitationData["timesheetsEnabled"] = resolvedTimesheetsEnabled
+        if let vat = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !vat.isEmpty {
+            invitationData["vatNumber"] = vat
+        }
+        if let utr = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !utr.isEmpty {
+            invitationData["utrNumber"] = utr
+        }
         
         print("🔥🔥🔥 DEBUG: Invitation data: \(invitationData)")
         
@@ -4468,7 +4525,16 @@ class FirebaseBackend: ObservableObject {
                 annualLeaveDaysPerYear: resolvedAnnualLeaveDays,
                 annualLeaveYearStartMonth: resolvedAnnualLeaveStart,
                 annualLeaveYearEndMonth: resolvedAnnualLeaveEnd,
-                annualLeaveCarriesOver: resolvedAnnualLeaveCarry
+                annualLeaveCarriesOver: resolvedAnnualLeaveCarry,
+                timesheetsEnabled: resolvedTimesheetsEnabled,
+                vatNumber: {
+                    guard let raw = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+                    return raw
+                }(),
+                utrNumber: {
+                    guard let raw = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+                    return raw
+                }()
             )
             
             do {

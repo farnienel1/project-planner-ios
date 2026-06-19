@@ -13,7 +13,7 @@ enum OfflineSyncCoordinator {
 
     static func processOutbox(
         firebaseBackend: FirebaseBackend,
-        outbox: OfflineOutboxStore = .shared
+        outbox: OfflineOutboxStore
     ) async -> (synced: Int, failed: Int) {
         guard !outbox.entries.isEmpty else { return (0, 0) }
 

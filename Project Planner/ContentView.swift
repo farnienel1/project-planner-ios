@@ -787,7 +787,7 @@ extension ContentView {
     private var defaultSecondaryTabItems: [TabButtonConfig] {
         var items: [TabButtonConfig] = []
         if userStore.isAnnualLeaveFeatureEnabled() {
-            items.append(TabButtonConfig(tag: 8, title: "Holiday", icon: "sun.max.fill", multilineTitle: false, requiresPermission: true))
+            items.append(TabButtonConfig(tag: 8, title: "Annual Leave", icon: "sun.max.fill", multilineTitle: true, requiresPermission: true))
         }
         
         if userStore.isOperativeMode() {
