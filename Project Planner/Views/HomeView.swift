@@ -22,6 +22,7 @@ struct HomeView: View {
     @EnvironmentObject var notificationService: NotificationService
     @State private var homeWarningCount: Int = 0
     @State private var cachedUpNextSections: [HomeUpNextDaySection] = []
+    @State private var cachedOverviewMetrics = HomeOverviewMetrics()
     @State private var showingCreateClient = false
     @State private var showingNotifications = false
     @State private var showingCreateProject = false
@@ -415,125 +416,45 @@ struct HomeView: View {
     }
 
     private var liveProjectCount: Int {
-        projectStore.liveProjects.count + projectStore.smallWorks.count
+        cachedOverviewMetrics.liveProjectCount
     }
 
     private var tasksDueTodayCount: Int {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        return taskStore.tasks.filter { task in
-            guard !task.isCompleted, let due = task.dueDate, cal.isDate(due, inSameDayAs: today) else { return false }
-            return task.isAssignedToUser(
-                userEmail: userStore.currentUser?.email,
-                operatives: operativeStore.allOperatives,
-                managers: operativeStore.allManagers,
-                isOperativeMode: userStore.isOperativeMode()
-            )
-        }.count
+        cachedOverviewMetrics.tasksDueToday
     }
 
     private var tasksDueThisWeekCount: Int {
-        let cal = Calendar.current
-        let now = Date()
-        guard let weekEnd = cal.date(byAdding: .day, value: 7, to: cal.startOfDay(for: now)) else { return 0 }
-        return taskStore.tasks.filter { task in
-            guard !task.isCompleted, let due = task.dueDate else { return false }
-            let d0 = cal.startOfDay(for: due)
-            guard d0 >= cal.startOfDay(for: now), d0 < weekEnd else { return false }
-            return task.isAssignedToUser(
-                userEmail: userStore.currentUser?.email,
-                operatives: operativeStore.allOperatives,
-                managers: operativeStore.allManagers,
-                isOperativeMode: userStore.isOperativeMode()
-            )
-        }.count
+        cachedOverviewMetrics.tasksDueThisWeek
     }
 
     /// Incomplete tasks assigned to the current user with due date strictly before today.
     private var tasksOverdueCount: Int {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        return taskStore.tasks.filter { task in
-            guard !task.isCompleted, let due = task.dueDate else { return false }
-            let d0 = cal.startOfDay(for: due)
-            guard d0 < today else { return false }
-            return task.isAssignedToUser(
-                userEmail: userStore.currentUser?.email,
-                operatives: operativeStore.allOperatives,
-                managers: operativeStore.allManagers,
-                isOperativeMode: userStore.isOperativeMode()
-            )
-        }.count
+        cachedOverviewMetrics.tasksOverdue
     }
 
     private var outstandingTasksAllUsersCount: Int {
-        taskStore.tasks.filter { !$0.isCompleted }.count
+        cachedOverviewMetrics.outstandingTasksAllUsers
     }
 
     private var operativesOnSiteTodayCount: Int {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let ids = Set(
-            bookingStore.bookings
-                .filter { cal.isDate($0.date, inSameDayAs: today) && ($0.status == .confirmed || $0.status == .tentative) }
-                .map { $0.operativeId.uuidString }
-        )
-        return ids.count
+        cachedOverviewMetrics.operativesOnSiteToday
     }
 
     private var managersOnSiteTodayCount: Int {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        return Set(
-            managerScheduleStore.managerSiteBookings
-                .filter {
-                    cal.isDate($0.date, inSameDayAs: today)
-                        && ($0.locationType == ManagerLocationType.project
-                            || $0.locationType == ManagerLocationType.smallWork)
-                }
-                .map(\.userId)
-        ).count
+        cachedOverviewMetrics.managersOnSiteToday
     }
 
     /// Combined daily on-site headcount across operative bookings and manager site bookings.
     private var peopleOnSiteTodayCount: Int {
-        operativesOnSiteTodayCount + managersOnSiteTodayCount
+        cachedOverviewMetrics.peopleOnSiteToday
     }
 
     private var operativesOnALTodayCount: Int {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let holidays = holidayStore.approvedBookings(covering: today)
-        var keys = Set<String>()
-        for h in holidays {
-            if let oid = h.operativeId {
-                keys.insert("op:\(oid.uuidString)")
-            }
-            if let uid = h.userId?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty,
-               let u = userStore.organizationUsers.first(where: { $0.id == uid }),
-               u.permissions.operativeMode {
-                keys.insert("u:\(uid)")
-            }
-        }
-        return keys.count
+        cachedOverviewMetrics.operativesOnALToday
     }
 
     private var managersOnALTodayCount: Int {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let holidays = holidayStore.approvedBookings(covering: today)
-        var seen = Set<String>()
-        for h in holidays {
-            guard let uid = h.userId?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else { continue }
-            guard let u = userStore.organizationUsers.first(where: { $0.id == uid }) else { continue }
-            guard !u.permissions.operativeMode,
-                  !u.isSuperAdmin,
-                  !u.permissions.adminAccess,
-                  u.permissions.manager,
-                  u.isActive else { continue }
-            seen.insert(uid)
-        }
-        return seen.count
+        cachedOverviewMetrics.managersOnALToday
     }
 
     private static let defaultAdminOverviewMetricIds: [HomeOverviewMetricID] = [
@@ -1317,6 +1238,7 @@ struct HomeView: View {
             managerBookingCount: managerScheduleStore.managerSiteBookings.count,
             holidayCount: holidayStore.bookings.count,
             userCount: userStore.organizationUsers.count,
+            taskIncompleteCount: taskStore.tasks.filter { !$0.isCompleted }.count,
             isHomeProfileLoading: userStore.isHomeProfileLoading,
             currentUserId: userStore.currentUser?.id
         )
@@ -1335,7 +1257,7 @@ struct HomeView: View {
     /// Rebuild Up Next + warning count off the main thread; Home does not observe `WarningsService` (avoids full-tree redraws).
     private func refreshHomeDerivedData() async {
         guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
-        try? await Task.sleep(nanoseconds: 400_000_000)
+        try? await Task.sleep(nanoseconds: 50_000_000)
         guard !Task.isCancelled else { return }
         guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
 
@@ -1348,10 +1270,16 @@ struct HomeView: View {
         let managerBookings = managerScheduleStore.managerSiteBookings
         let authUserId = firebaseBackend.currentUser?.uid
         let userEmail = userStore.currentUser?.email
-        let blue = homeBlue
-        let purple = Color(red: 0.325, green: 0.29, blue: 0.718)
+        let accentBlue = Color(red: 0.094, green: 0.373, blue: 0.647)
+        let accentPurple = Color(red: 0.325, green: 0.29, blue: 0.718)
+        let isOperativeMode = userStore.isOperativeMode()
+        let tasks = taskStore.tasks
+        let managers = operativeStore.allManagers
+        let holidays = holidayStore.bookings
+        let liveProjects = projectStore.liveProjects
+        let smallWorks = projectStore.smallWorks
 
-        async let upNextTask: [HomeUpNextDaySection] = Task(priority: .utility) { @MainActor in
+        async let upNextTask: [HomeUpNextDaySection] = Task.detached(priority: .utility) {
             HomeUpNextSupport.upcomingDaySections(
                 minDistinctDays: 2,
                 mergeRowLimit: 48,
@@ -1363,14 +1291,29 @@ struct HomeView: View {
                 managerBookings: managerBookings,
                 allProjects: projects,
                 organizationUsers: users,
-                accentBlue: blue,
-                accentPurple: purple,
+                accentBlue: accentBlue,
+                accentPurple: accentPurple,
                 payrollTimePolicy: policy
             )
         }.value
 
+        async let metricsTask = Task.detached(priority: .utility) {
+            HomeOverviewMetrics.compute(
+                tasks: tasks,
+                userEmail: userEmail,
+                isOperativeMode: isOperativeMode,
+                operatives: operatives,
+                managers: managers,
+                bookings: bookings,
+                managerBookings: managerBookings,
+                holidays: holidays,
+                organizationUsers: users,
+                liveProjectCount: liveProjects.count + smallWorks.count
+            )
+        }.value
+
         if userStore.hasAdminAccess() {
-            await WarningsRefreshHelper.refreshSharedWarnings(
+            async let warningsTask: Void = WarningsRefreshHelper.refreshSharedWarnings(
                 operativeStore: operativeStore,
                 bookingStore: bookingStore,
                 projectStore: projectStore,
@@ -1380,11 +1323,15 @@ struct HomeView: View {
                 firebaseBackend: firebaseBackend,
                 appSettings: appSettings
             )
+            cachedOverviewMetrics = await metricsTask
+            cachedUpNextSections = await upNextTask
+            await warningsTask
             guard !Task.isCancelled else { return }
             homeWarningCount = WarningsService.shared.warningCount
+        } else {
+            cachedOverviewMetrics = await metricsTask
+            cachedUpNextSections = await upNextTask
         }
-
-        cachedUpNextSections = await upNextTask
     }
 
     private func openWarningsDetail() async {
@@ -2053,8 +2000,124 @@ private struct HomeDataRefreshTrigger: Equatable {
     var managerBookingCount: Int
     var holidayCount: Int
     var userCount: Int
+    var taskIncompleteCount: Int
     var isHomeProfileLoading: Bool
     var currentUserId: String?
+}
+
+private struct HomeOverviewMetrics: Equatable {
+    var liveProjectCount: Int = 0
+    var tasksDueToday: Int = 0
+    var tasksDueThisWeek: Int = 0
+    var tasksOverdue: Int = 0
+    var outstandingTasksAllUsers: Int = 0
+    var operativesOnSiteToday: Int = 0
+    var managersOnSiteToday: Int = 0
+    var peopleOnSiteToday: Int = 0
+    var operativesOnALToday: Int = 0
+    var managersOnALToday: Int = 0
+
+    static func compute(
+        tasks: [ProjectTask],
+        userEmail: String?,
+        isOperativeMode: Bool,
+        operatives: [Operative],
+        managers: [Manager],
+        bookings: [Booking],
+        managerBookings: [ManagerSiteBooking],
+        holidays: [HolidayBooking],
+        organizationUsers: [AppUser],
+        liveProjectCount: Int
+    ) -> HomeOverviewMetrics {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let now = Date()
+        let weekEnd = cal.date(byAdding: .day, value: 7, to: cal.startOfDay(for: now))
+
+        var tasksDueToday = 0
+        var tasksDueThisWeek = 0
+        var tasksOverdue = 0
+        var outstandingTasksAllUsers = 0
+
+        for task in tasks {
+            if task.isCompleted { continue }
+            outstandingTasksAllUsers += 1
+            guard let due = task.dueDate else { continue }
+            let d0 = cal.startOfDay(for: due)
+            let assigned = task.isAssignedToUser(
+                userEmail: userEmail,
+                operatives: operatives,
+                managers: managers,
+                isOperativeMode: isOperativeMode
+            )
+            guard assigned else { continue }
+            if cal.isDate(due, inSameDayAs: today) {
+                tasksDueToday += 1
+            }
+            if let weekEnd, d0 >= cal.startOfDay(for: now), d0 < weekEnd {
+                tasksDueThisWeek += 1
+            }
+            if d0 < today {
+                tasksOverdue += 1
+            }
+        }
+
+        let operativeIds = Set(
+            bookings
+                .filter { cal.isDate($0.date, inSameDayAs: today) && ($0.status == .confirmed || $0.status == .tentative) }
+                .map { $0.operativeId.uuidString }
+        )
+        let managerIds = Set(
+            managerBookings
+                .filter {
+                    cal.isDate($0.date, inSameDayAs: today)
+                        && ($0.locationType == .project || $0.locationType == .smallWork)
+                }
+                .map(\.userId)
+        )
+
+        let approvedHolidays = holidays.filter { holiday in
+            guard holiday.status == .approved else { return false }
+            let start = cal.startOfDay(for: holiday.startDate)
+            let end = cal.startOfDay(for: holiday.endDate)
+            return today >= start && today <= end
+        }
+
+        var operativeALKeys = Set<String>()
+        var managerALSeen = Set<String>()
+        for h in approvedHolidays {
+            if let oid = h.operativeId {
+                operativeALKeys.insert("op:\(oid.uuidString)")
+            }
+            if let uid = h.userId?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty,
+               let u = organizationUsers.first(where: { $0.id == uid }),
+               u.permissions.operativeMode {
+                operativeALKeys.insert("u:\(uid)")
+            }
+            if let uid = h.userId?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty,
+               let u = organizationUsers.first(where: { $0.id == uid }),
+               !u.permissions.operativeMode,
+               !u.isSuperAdmin,
+               !u.permissions.adminAccess,
+               u.permissions.manager,
+               u.isActive {
+                managerALSeen.insert(uid)
+            }
+        }
+
+        return HomeOverviewMetrics(
+            liveProjectCount: liveProjectCount,
+            tasksDueToday: tasksDueToday,
+            tasksDueThisWeek: tasksDueThisWeek,
+            tasksOverdue: tasksOverdue,
+            outstandingTasksAllUsers: outstandingTasksAllUsers,
+            operativesOnSiteToday: operativeIds.count,
+            managersOnSiteToday: managerIds.count,
+            peopleOnSiteToday: operativeIds.count + managerIds.count,
+            operativesOnALToday: operativeALKeys.count,
+            managersOnALToday: managerALSeen.count
+        )
+    }
 }
 
 #Preview {

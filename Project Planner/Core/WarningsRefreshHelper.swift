@@ -25,7 +25,12 @@ enum WarningsRefreshHelper {
 
         if managerScheduleStore.managerSiteBookings.isEmpty {
             managerScheduleStore.loadData(force: true)
-            try? await Task.sleep(nanoseconds: 350_000_000)
+            for _ in 0..<20 {
+                if !managerScheduleStore.managerSiteBookings.isEmpty || !managerScheduleStore.isLoading {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
         }
 
         if !force {

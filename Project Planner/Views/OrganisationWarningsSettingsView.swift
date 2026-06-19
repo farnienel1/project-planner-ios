@@ -60,27 +60,6 @@ struct OrganisationWarningsSettingsView: View {
                         .foregroundStyle(ProjectWorksRevampColors.activeGreen)
                         .padding(.horizontal, 4)
                 }
-
-                Button {
-                    Task { await save() }
-                } label: {
-                    HStack {
-                        Spacer()
-                        if isSaving {
-                            ProgressView().tint(.white)
-                        } else {
-                            Text(saveSucceeded ? "Saved ✓" : "Save changes")
-                                .fontWeight(.semibold)
-                        }
-                        Spacer()
-                    }
-                    .padding(.vertical, 14)
-                }
-                .buttonStyle(.plain)
-                .background(saveSucceeded ? Color.green.opacity(0.15) : ProjectWorksRevampColors.blue)
-                .foregroundStyle(saveSucceeded ? Color.green : Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .disabled(isSaving)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -123,28 +102,13 @@ struct OrganisationWarningsSettingsView: View {
     // MARK: - Header
 
     private var headerBar: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Warnings")
-                    .font(.title2.bold())
-                Text("Control how and when your team is alerted to scheduling issues")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 12)
-            Button {
-                Task { await save() }
-            } label: {
-                Text(saveSucceeded ? "Saved ✓" : "Save changes")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 9)
-                    .background(saveSucceeded ? Color.green.opacity(0.15) : ProjectWorksRevampColors.blue)
-                    .foregroundStyle(saveSucceeded ? Color.green : Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-            .disabled(isSaving)
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Warnings")
+                .font(.title2.bold())
+            Text("Control how and when your team is alerted to scheduling issues")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

@@ -13,6 +13,10 @@ class WarningsService: ObservableObject {
 
     @Published private(set) var allGeneratedWarnings: [Warning] = []
     @Published private(set) var activeWarnings: [Warning] = []
+    @Published private(set) var warningCount: Int = 0
+    @Published private(set) var highCount: Int = 0
+    @Published private(set) var mediumCount: Int = 0
+    @Published private(set) var lowCount: Int = 0
 
     private let resolutionStore: WarningResolutionStore
     private var updateTask: Task<Void, Never>?
@@ -23,14 +27,26 @@ class WarningsService: ObservableObject {
     }
 
     /// Counts only core priority warnings (operative clashes, unbooked labour, manager clashes, materials).
-    var warningCount: Int { corePriorityActiveWarnings.count }
-
-    var highCount: Int { corePriorityActiveWarnings.filter { $0.severity == .high }.count }
-    var mediumCount: Int { corePriorityActiveWarnings.filter { $0.severity == .medium }.count }
-    var lowCount: Int { corePriorityActiveWarnings.filter { $0.severity == .low }.count }
-
     private var corePriorityActiveWarnings: [Warning] {
         activeWarnings.filter(\.isCorePriorityWarning)
+    }
+
+    private func refreshSeverityCounts() {
+        let core = corePriorityActiveWarnings
+        warningCount = core.count
+        var high = 0
+        var medium = 0
+        var low = 0
+        for warning in core {
+            switch warning.severity {
+            case .high: high += 1
+            case .medium: medium += 1
+            case .low: low += 1
+            }
+        }
+        highCount = high
+        mediumCount = medium
+        lowCount = low
     }
 
     func warningsSortedByDate() -> [Warning] {
@@ -230,6 +246,7 @@ class WarningsService: ObservableObject {
         )
         allGeneratedWarnings = generated
         activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+        refreshSeverityCounts()
     }
 
     /// Approve only applies to MEDIUM manager/admin clashes (weekly report tick).
@@ -248,6 +265,7 @@ class WarningsService: ObservableObject {
 
     private func refreshActiveFromGenerated() {
         activeWarnings = allGeneratedWarnings.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+        refreshSeverityCounts()
     }
 
     private func severityRank(_ severity: Warning.WarningSeverity) -> Int {
