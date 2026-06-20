@@ -1290,6 +1290,7 @@ struct WeeklyReportView: View {
             var normalHours: Double = 0
             var otHours: Double = 0
             var otMultiplier: Double
+            var standardDayHours: Double
         }
         var byKey: [String: Acc] = [:]
         let cal = Calendar.current
@@ -1311,11 +1312,12 @@ struct WeeklyReportView: View {
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
             let normalHours = max(0, paid - otHours)
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
+            let standardDayHours = max(policy.standardPaidHours, 0.01)
             let rateKey = resolved.basis == .hourly
                 ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
                 : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
             let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))"
-            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier)
+            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours)
             acc.normalHours += normalHours
             acc.otHours += otHours
             byKey[key] = acc
@@ -1340,12 +1342,13 @@ struct WeeklyReportView: View {
             let paid = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
             let normalHours = max(0, paid - otHours)
-            let otMultiplier = policy.weekdayOutsideStandardMultiplier
+            let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
+            let standardDayHours = max(policy.standardPaidHours, 0.01)
             let rateKey = resolved.basis == .hourly
                 ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
                 : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
             let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))"
-            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier)
+            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours)
             acc.normalHours += normalHours
             acc.otHours += otHours
             byKey[key] = acc
@@ -1361,6 +1364,7 @@ struct WeeklyReportView: View {
                 ($0.resolved.reportRateValue() ?? -1) < ($1.resolved.reportRateValue() ?? -1)
             }) {
                 if entry.normalHours > 0.0001 {
+                    let standard = entry.standardDayHours
                     let pay = entry.resolved.payForHours(entry.normalHours, standardDayHours: standard)
                     let days = entry.normalHours / standard
                     let rateLabel = entry.resolved.basis == .hourly ? "Normal (hourly)" : "Normal"
@@ -1375,6 +1379,7 @@ struct WeeklyReportView: View {
                     total += pay
                 }
                 if entry.otHours > 0.0001 {
+                    let standard = entry.standardDayHours
                     let otPay = entry.resolved.payForHours(
                         entry.otHours,
                         standardDayHours: standard,
