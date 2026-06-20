@@ -251,7 +251,7 @@ enum ScheduleBookingConflictEngine {
                     guard managerProbeOverlapsOperativeProbe(msb: msb, probe: probe, policy: policy) else { continue }
                     let location = myScheduleLocationLabel(msb, projectStore: projectStore)
                     let timeLabel = msb.workStartTime.flatMap { s in
-                        msb.workEndTime.map { e in "\(s)–\($0)" }
+                        msb.workEndTime.map { e in "\(s)–\(e)" }
                     } ?? msb.timeSlot.displayName
                     rows.append(
                         ScheduleConflictRow(
