@@ -92,120 +92,19 @@ struct ScheduleOperativeView: View {
     }
     
     var body: some View {
-        AnyView(
-            NavigationView {
-            ZStack(alignment: .top) {
-                ProjectWorksRevampColors.canvas
-                    .ignoresSafeArea()
-                
-                ScrollView {
-                    VStack(spacing: 12) {
-                        scheduleBookingProjectCard
-                        scheduleBookingCalendarCardCompact
-                        quickSelectSectionCompact
-                        scheduleBookingBulkHoursCard
-                        scheduleBookingOperativesSection
-                        if !selectedOperatives.isEmpty {
-                            scheduleBookingReviewSection
-                        }
-                        Spacer(minLength: 24)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.top, 10)
-                    .padding(.bottom, 100)
-                }
-
-                if mainScreenHasUnactionedConflicts {
-                    scheduleMainClashNotice
-                }
-            }
-            .navigationTitle("Schedule booking")
-            .navigationBarTitleDisplayMode(.inline)
-            .appChromeNavigationBarSurface()
+        baseNavigationView
             .sheet(item: $operativeCustomHoursPick) { pick in
-                OperativeCustomHoursSheet(
-                    policy: payrollTimePolicy,
-                    title: pick.operativeId == nil ? "Hours" : "Edit booking",
-                    subtitle: pick.operativeId == nil ? "Applies to all selected operatives and dates" : pick.operativeDisplaySubtitle,
-                    allowsOtMultiplierOverride: pick.operativeId != nil,
-                    initialChoice: pick.initialChoice,
-                    onSave: { start, end, breakRemoved, otMultiplierOverride in
-                        operativeCustomHoursPick = nil
-                        let newChoice = OperativeDayBookingChoice(
-                            timeSlot: .customHours,
-                            workStartTime: start,
-                            workEndTime: end,
-                            isBreakRemoved: breakRemoved,
-                            otMultiplierOverride: pick.operativeId == nil ? nil : otMultiplierOverride
-                        )
-                        if let opId = pick.operativeId {
-                            applyOperativeOverride(operativeId: opId, choice: newChoice)
-                            if newChoice.timeSlot == sharedBulkChoice.timeSlot,
-                               newChoice.workStartTime == sharedBulkChoice.workStartTime,
-                               newChoice.workEndTime == sharedBulkChoice.workEndTime,
-                               newChoice.isBreakRemoved == sharedBulkChoice.isBreakRemoved,
-                               newChoice.otMultiplierOverride == nil {
-                                operativeDefaultChoice.removeValue(forKey: opId)
-                            } else {
-                                operativeDefaultChoice[opId] = newChoice
-                            }
-                        } else {
-                            sharedBulkChoice = OperativeDayBookingChoice(
-                                timeSlot: .customHours,
-                                workStartTime: start,
-                                workEndTime: end,
-                                isBreakRemoved: breakRemoved,
-                                otMultiplierOverride: nil
-                            )
-                            syncSharedBulkToAllSelectedDates()
-                            operativeSlotOverrides.removeAll()
-                        }
-                    },
-                    onCancel: { operativeCustomHoursPick = nil }
-                )
+                operativeCustomHoursSheet(for: pick)
             }
             .sheet(isPresented: $showingBookingConfirmation, onDismiss: {
-                // After showing "Booking Confirmed", return to the scheduling overview page.
                 dismiss()
             }) {
                 BookingConfirmationView(isPresented: $showingBookingConfirmation)
                     .presentationDetents([.fraction(0.35)])
                     .interactiveDismissDisabled(true)
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: { dismiss() }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text("Back")
-                        }
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
-                        .fontWeight(.medium)
-                    }
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                bottomActionBar
-            }
             .sheet(isPresented: $showingSelectOperatives) {
-                SelectOperativesView(
-                    selectedOperatives: $selectedOperatives,
-                    people: bookablePeople,
-                    selectedDates: selectedDates,
-                    bulkChoice: sharedBulkChoice,
-                    projectId: project.id,
-                    excludingBookingIds: excludingBookingIds,
-                    acknowledgedConflictIds: $acknowledgedConflictIds,
-                    struckConflictIds: $struckConflictIds,
-                    expandedPersonIds: $expandedPickerPersonIds
-                )
-                    .environmentObject(operativeStore)
-                    .environmentObject(userStore)
-                    .environmentObject(bookingStore)
-                    .environmentObject(projectStore)
-                    .environmentObject(managerScheduleStore)
-                    .environmentObject(holidayStore)
-                    .environmentObject(firebaseBackend)
+                selectOperativesSheet
             }
             .alert("Select dates first", isPresented: $showingSelectDatesFirstAlert) {
                 Button("OK", role: .cancel) { }
@@ -234,32 +133,146 @@ struct ScheduleOperativeView: View {
                 handleHoursOrDatesChanged()
             }
             .onAppear {
-                Task {
-                    await holidayStore.loadData()
-                    managerScheduleStore.loadData()
+                scheduleBookingOnAppear()
+            }
+    }
+
+    private var baseNavigationView: some View {
+        NavigationView {
+            ZStack(alignment: .top) {
+                ProjectWorksRevampColors.canvas
+                    .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: 12) {
+                        scheduleBookingProjectCard
+                        scheduleBookingCalendarCardCompact
+                        quickSelectSectionCompact
+                        scheduleBookingBulkHoursCard
+                        scheduleBookingOperativesSection
+                        if !selectedOperatives.isEmpty {
+                            scheduleBookingReviewSection
+                        }
+                        Spacer(minLength: 24)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 10)
+                    .padding(.bottom, 100)
                 }
-                if !didApplyOrgDefaultHours {
-                    let p = payrollTimePolicy
+
+                if mainScreenHasUnactionedConflicts {
+                    scheduleMainClashNotice
+                }
+            }
+            .navigationTitle("Schedule booking")
+            .navigationBarTitleDisplayMode(.inline)
+            .appChromeNavigationBarSurface()
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: { dismiss() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text("Back")
+                        }
+                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .fontWeight(.medium)
+                    }
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                bottomActionBar
+            }
+        }
+    }
+
+    private var selectOperativesSheet: some View {
+        SelectOperativesView(
+            selectedOperatives: $selectedOperatives,
+            people: bookablePeople,
+            selectedDates: selectedDates,
+            bulkChoice: sharedBulkChoice,
+            projectId: project.id,
+            excludingBookingIds: excludingBookingIds,
+            acknowledgedConflictIds: $acknowledgedConflictIds,
+            struckConflictIds: $struckConflictIds,
+            expandedPersonIds: $expandedPickerPersonIds
+        )
+        .environmentObject(operativeStore)
+        .environmentObject(userStore)
+        .environmentObject(bookingStore)
+        .environmentObject(projectStore)
+        .environmentObject(managerScheduleStore)
+        .environmentObject(holidayStore)
+        .environmentObject(firebaseBackend)
+    }
+
+    private func operativeCustomHoursSheet(for pick: OperativeCustomHoursPick) -> some View {
+        OperativeCustomHoursSheet(
+            policy: payrollTimePolicy,
+            title: pick.operativeId == nil ? "Hours" : "Edit booking",
+            subtitle: pick.operativeId == nil ? "Applies to all selected operatives and dates" : pick.operativeDisplaySubtitle,
+            allowsOtMultiplierOverride: pick.operativeId != nil,
+            initialChoice: pick.initialChoice,
+            onSave: { start, end, breakRemoved, otMultiplierOverride in
+                operativeCustomHoursPick = nil
+                let newChoice = OperativeDayBookingChoice(
+                    timeSlot: .customHours,
+                    workStartTime: start,
+                    workEndTime: end,
+                    isBreakRemoved: breakRemoved,
+                    otMultiplierOverride: pick.operativeId == nil ? nil : otMultiplierOverride
+                )
+                if let opId = pick.operativeId {
+                    applyOperativeOverride(operativeId: opId, choice: newChoice)
+                    if newChoice.timeSlot == sharedBulkChoice.timeSlot,
+                       newChoice.workStartTime == sharedBulkChoice.workStartTime,
+                       newChoice.workEndTime == sharedBulkChoice.workEndTime,
+                       newChoice.isBreakRemoved == sharedBulkChoice.isBreakRemoved,
+                       newChoice.otMultiplierOverride == nil {
+                        operativeDefaultChoice.removeValue(forKey: opId)
+                    } else {
+                        operativeDefaultChoice[opId] = newChoice
+                    }
+                } else {
                     sharedBulkChoice = OperativeDayBookingChoice(
                         timeSlot: .customHours,
-                        workStartTime: p.standardDayStart,
-                        workEndTime: p.standardDayEnd,
-                        isBreakRemoved: false,
+                        workStartTime: start,
+                        workEndTime: end,
+                        isBreakRemoved: breakRemoved,
                         otMultiplierOverride: nil
                     )
-                    didApplyOrgDefaultHours = true
+                    syncSharedBulkToAllSelectedDates()
+                    operativeSlotOverrides.removeAll()
                 }
-                if let b = editingBooking, !didApplyEditingBookingPrefill {
-                    didApplyEditingBookingPrefill = true
-                    applyPrefillFromEditingBooking(b)
-                }
-                if let gid = editingGroupId, !didApplyEditingGroupPrefill {
-                    didApplyEditingGroupPrefill = true
-                    applyPrefillFromEditingGroup(gid)
-                }
-            }
-            }
+            },
+            onCancel: { operativeCustomHoursPick = nil }
         )
+    }
+
+    private func scheduleBookingOnAppear() {
+        Task {
+            await holidayStore.loadData()
+            managerScheduleStore.loadData()
+        }
+        if !didApplyOrgDefaultHours {
+            let p = payrollTimePolicy
+            sharedBulkChoice = OperativeDayBookingChoice(
+                timeSlot: .customHours,
+                workStartTime: p.standardDayStart,
+                workEndTime: p.standardDayEnd,
+                isBreakRemoved: false,
+                otMultiplierOverride: nil
+            )
+            didApplyOrgDefaultHours = true
+        }
+        if let b = editingBooking, !didApplyEditingBookingPrefill {
+            didApplyEditingBookingPrefill = true
+            applyPrefillFromEditingBooking(b)
+        }
+        if let gid = editingGroupId, !didApplyEditingGroupPrefill {
+            didApplyEditingGroupPrefill = true
+            applyPrefillFromEditingGroup(gid)
+        }
     }
     
     // MARK: - Project Header Card

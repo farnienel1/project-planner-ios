@@ -10,6 +10,7 @@ enum AppBranding {
     static let webAppBaseURL = "https://project-planner-f986c.web.app"
     static let organisationSetupURL = "\(webAppBaseURL)/setup"
 
+    @MainActor
     static func openOrganisationSetup() {
         guard let url = URL(string: organisationSetupURL) else { return }
         UIApplication.shared.open(url)

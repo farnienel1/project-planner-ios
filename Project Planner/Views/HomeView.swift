@@ -1279,7 +1279,7 @@ struct HomeView: View {
         let liveProjects = projectStore.liveProjects
         let smallWorks = projectStore.smallWorks
 
-        async let upNextTask: [HomeUpNextDaySection] = Task.detached(priority: .utility) {
+        async let upNextTask: [HomeUpNextDaySection] = Task { @MainActor in
             HomeUpNextSupport.upcomingDaySections(
                 minDistinctDays: 2,
                 mergeRowLimit: 48,
@@ -1297,7 +1297,7 @@ struct HomeView: View {
             )
         }.value
 
-        async let metricsTask = Task.detached(priority: .utility) {
+        async let metricsTask = Task { @MainActor in
             HomeOverviewMetrics.compute(
                 tasks: tasks,
                 userEmail: userEmail,

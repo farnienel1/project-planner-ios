@@ -107,7 +107,7 @@ struct AuthenticationView: View {
                             .font(.callout)
                             .foregroundColor(.secondary)
 
-                        Button(action: AppBranding.openOrganisationSetup) {
+                        Button(action: { AppBranding.openOrganisationSetup() }) {
                             HStack(spacing: 8) {
                                 Image(systemName: "safari")
                                 Text("Set up on the web")

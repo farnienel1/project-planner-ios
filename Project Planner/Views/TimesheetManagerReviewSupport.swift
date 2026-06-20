@@ -292,7 +292,7 @@ enum TimesheetPayrollLineBookingLookup {
         otMultiplier: Double?,
         policy: OrgPayrollTimePolicy
     ) -> Double {
-        var probe = Booking(
+        let probe = Booking(
             operativeId: UUID(),
             projectId: UUID(),
             date: row.date,
