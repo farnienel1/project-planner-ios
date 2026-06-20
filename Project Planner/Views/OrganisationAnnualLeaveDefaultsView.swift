@@ -13,11 +13,27 @@ struct OrganisationAnnualLeaveDefaultsView: View {
     @State private var startMonth: Int = AnnualLeavePolicy.defaultStartMonth
     @State private var endMonth: Int = AnnualLeavePolicy.defaultEndMonth
     @State private var carriesOver: Bool = AnnualLeavePolicy.defaultCarriesOver
+    @State private var bankHolidayRegionId: String = BankHolidayRegionDirectory.defaultRegionId
     @State private var isSaving = false
     @State private var errorMessage: String?
 
     var body: some View {
         Form {
+            Section("Annual Leave / Bank Holiday Region") {
+                Picker("Region", selection: $bankHolidayRegionId) {
+                    ForEach(BankHolidayRegionDirectory.groupedRegions(), id: \.group) { group in
+                        Section(group.group) {
+                            ForEach(group.regions) { region in
+                                Text(region.title).tag(region.id)
+                            }
+                        }
+                    }
+                }
+                Text("Bank holidays are shown on annual leave calendars for all users. Weekends are always blocked. Data is cached offline for this year and the next two years.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Default annual leave for new users") {
                 AnnualLeaveEntitlementEditor(
                     daysText: $daysText,
@@ -52,7 +68,7 @@ struct OrganisationAnnualLeaveDefaultsView: View {
                             ProgressView()
                                 .tint(.white)
                         } else {
-                            Text("Save defaults")
+                            Text("Save settings")
                                 .fontWeight(.semibold)
                         }
                         Spacer()
@@ -73,6 +89,8 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             startMonth = defaults.startMonth
             endMonth = defaults.endMonth
             carriesOver = defaults.carriesOver
+            bankHolidayRegionId = firebaseBackend.currentOrganization?.settings.bankHolidayRegionId
+                ?? BankHolidayRegionDirectory.defaultRegionId
         }
     }
 
@@ -96,10 +114,12 @@ struct OrganisationAnnualLeaveDefaultsView: View {
         )
         do {
             try await firebaseBackend.updateOrganizationAnnualLeaveDefaults(defaults)
+            try await firebaseBackend.updateOrganizationBankHolidayRegion(bankHolidayRegionId)
+            let region = BankHolidayRegionDirectory.region(id: bankHolidayRegionId, fallbackCountryCode: "GB")
+            await BankHolidayService.shared.ensureLoaded(region: region)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 }
-

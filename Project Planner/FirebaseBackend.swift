@@ -773,6 +773,14 @@ class FirebaseBackend: ObservableObject {
            let raw = settingsDict["myScheduleOptions"] as? [String: Any] {
             settings.myScheduleOptions = MyScheduleOptions.fromFirestore(raw)
         }
+        if let settingsDict = data["settings"] as? [String: Any],
+           let regionId = (settingsDict["bankHolidayRegionId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !regionId.isEmpty {
+            settings.bankHolidayRegionId = regionId
+        } else if let regionId = (data["bankHolidayRegionId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !regionId.isEmpty {
+            settings.bankHolidayRegionId = regionId
+        }
         return settings
     }
 
@@ -3243,6 +3251,7 @@ class FirebaseBackend: ObservableObject {
             ?? AnnualLeavePolicy.defaultEndMonth
         let alCarry = data["annualLeaveCarriesOver"] as? Bool ?? AnnualLeavePolicy.defaultCarriesOver
         let alEnabled = data["annualLeaveEnabled"] as? Bool ?? true
+        let hasNoLineManager = data["hasNoLineManager"] as? Bool ?? false
         let timesheetsEnabledRaw = data["timesheetsEnabled"] as? Bool
         let timesheetsEnabled = timesheetsEnabledRaw ?? AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
         let vatRaw = (data["vatNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3265,6 +3274,7 @@ class FirebaseBackend: ObservableObject {
             policyAcceptedAt: policyAcceptedAt,
             assignedManagerUserId: assignedManagerUserIds.first ?? assignedManagerUserId,
             assignedManagerUserIds: assignedManagerUserIds,
+            hasNoLineManager: hasNoLineManager,
             dayRate: dayRate,
             hourlyRate: hourlyRate,
             tradeTypePreset: (utp?.isEmpty == false) ? utp : nil,
@@ -3523,6 +3533,37 @@ class FirebaseBackend: ObservableObject {
         )
         guard var org = currentOrganization else { return }
         org.settings.annualLeaveDefaults = defaults
+        org.updatedAt = Date()
+        currentOrganization = org
+        storeOrganizationLocally(org)
+    }
+
+    /// Admin: bank holiday region for annual leave calendars.
+    func updateOrganizationBankHolidayRegion(_ regionId: String) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
+            )
+        }
+        let trimmed = regionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Select an annual leave / bank holiday region."]
+            )
+        }
+        try await db.collection("organizations").document(orgId).setData(
+            [
+                "settings.bankHolidayRegionId": trimmed,
+                "updatedAt": Timestamp(date: Date()),
+            ],
+            merge: true
+        )
+        guard var org = currentOrganization else { return }
+        org.settings.bankHolidayRegionId = trimmed
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
@@ -3788,6 +3829,7 @@ class FirebaseBackend: ObservableObject {
         userData["annualLeaveYearEndMonth"] = AnnualLeavePolicy.clampMonth(user.annualLeaveYearEndMonth)
         userData["annualLeaveCarriesOver"] = user.annualLeaveCarriesOver
         userData["annualLeaveEnabled"] = user.annualLeaveEnabled
+        userData["hasNoLineManager"] = user.hasNoLineManager
         userData["timesheetsEnabled"] = user.timesheetsEnabled
         
         if let vat = user.vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !vat.isEmpty {
@@ -3915,13 +3957,22 @@ class FirebaseBackend: ObservableObject {
         userId: String,
         assignedManagerUserId: String?,
         assignedManagerUserIds: [String]? = nil,
+        hasNoLineManager: Bool? = nil,
         dayRate: Double?,
         updateDayRate: Bool = true
     ) async throws {
         var payload: [String: Any] = [
             "updatedAt": Timestamp(date: Date())
         ]
+        if let hasNoLineManager {
+            payload["hasNoLineManager"] = hasNoLineManager
+            if hasNoLineManager {
+                payload["assignedManagerUserId"] = FieldValue.delete()
+                payload["assignedManagerUserIds"] = FieldValue.delete()
+            }
+        }
         let ids: [String] = {
+            if hasNoLineManager == true { return [] }
             if let assignedManagerUserIds {
                 return assignedManagerUserIds
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -3932,12 +3983,14 @@ class FirebaseBackend: ObservableObject {
             }
             return []
         }()
-        if ids.isEmpty {
-            payload["assignedManagerUserId"] = FieldValue.delete()
-            payload["assignedManagerUserIds"] = FieldValue.delete()
-        } else {
-            payload["assignedManagerUserId"] = ids[0]
-            payload["assignedManagerUserIds"] = ids
+        if hasNoLineManager != true {
+            if ids.isEmpty {
+                payload["assignedManagerUserId"] = FieldValue.delete()
+                payload["assignedManagerUserIds"] = FieldValue.delete()
+            } else {
+                payload["assignedManagerUserId"] = ids[0]
+                payload["assignedManagerUserIds"] = ids
+            }
         }
         if updateDayRate {
             if let dayRate {
@@ -4306,7 +4359,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         
         let emailLower = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4369,8 +4422,25 @@ class FirebaseBackend: ObservableObject {
             "isUsed": false
         ]
         
-        if (permissions.operativeMode || permissions.manager), let mid = assignedManagerUserId, !mid.isEmpty {
-            invitationData["assignedManagerUserId"] = mid
+        let resolvedManagerIds: [String] = {
+            if hasNoLineManager { return [] }
+            if let assignedManagerUserIds {
+                return assignedManagerUserIds
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            }
+            if let mid = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !mid.isEmpty {
+                return [mid]
+            }
+            return []
+        }()
+
+        if (permissions.operativeMode || permissions.manager || permissions.adminAccess), !resolvedManagerIds.isEmpty {
+            invitationData["assignedManagerUserId"] = resolvedManagerIds[0]
+            invitationData["assignedManagerUserIds"] = resolvedManagerIds
+        }
+        if hasNoLineManager {
+            invitationData["hasNoLineManager"] = true
         }
         if permissions.operativeMode, let dr = invitedOperativeDayRate {
             invitationData["dayRate"] = dr
@@ -4438,7 +4508,8 @@ class FirebaseBackend: ObservableObject {
             }
             
             let operativeManagerId: String? = {
-                guard (permissions.operativeMode || permissions.manager), let m = assignedManagerUserId, !m.isEmpty else { return nil }
+                guard !hasNoLineManager else { return nil }
+                guard (permissions.operativeMode || permissions.manager || permissions.adminAccess), let m = resolvedManagerIds.first else { return nil }
                 return m
             }()
             
@@ -4458,6 +4529,8 @@ class FirebaseBackend: ObservableObject {
                 permissions: permissions, // Use the permissions from the invitation
                 isSuperAdmin: false,
                 assignedManagerUserId: operativeManagerId,
+                assignedManagerUserIds: resolvedManagerIds,
+                hasNoLineManager: hasNoLineManager,
                 dayRate: permissions.operativeMode ? invitedOperativeDayRate : (permissions.manager ? invitedManagerDayRate : nil),
                 tradeTypePreset: (permissions.operativeMode || permissions.manager) && inviteTp?.isEmpty == false ? inviteTp : nil,
                 tradeTypeCustom: (permissions.operativeMode || permissions.manager) && inviteTc?.isEmpty == false ? inviteTc : nil,

@@ -42,7 +42,9 @@ struct AddUserView: View {
     @State private var mobileNumber = ""
     @State private var employmentType: EmploymentType = .selfEmployed
     @State private var permissions = UserPermissions()
-    @State private var assignedManagerUserId: String?
+    @State private var selectedLineManagerUserIds: Set<String> = []
+    @State private var hasNoLineManager = false
+    @State private var showingLineManagerPicker = false
     @State private var operativeDayRateText = ""
     @State private var managerDayRateText = ""
     @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
@@ -109,7 +111,9 @@ struct AddUserView: View {
                 if mode == .managerAddingOperative {
                     invitedAccountType = .operative
                     applyPermissionsForInvitedType()
-                    assignedManagerUserId = userStore.currentUser?.id
+                    if let me = userStore.currentUser?.id {
+                        selectedLineManagerUserIds = [me]
+                    }
                 } else {
                     applyPermissionsForInvitedType()
                 }
@@ -210,7 +214,8 @@ struct AddUserView: View {
                         if mode == .admin && currentStep == 1 {
                             applyPermissionsForInvitedType()
                             if invitedAccountType == .operative {
-                                assignedManagerUserId = nil
+                                selectedLineManagerUserIds.removeAll()
+                                hasNoLineManager = false
                             }
                         }
                         currentStep += 1
@@ -294,7 +299,8 @@ struct AddUserView: View {
             invitedAccountType = type
             applyPermissionsForInvitedType()
             resetAnnualLeaveInviteDefaults()
-            if type == .admin { assignedManagerUserId = nil }
+            selectedLineManagerUserIds.removeAll()
+            hasNoLineManager = false
         } label: {
             HStack(spacing: 14) {
                 Text(icon)
@@ -341,38 +347,94 @@ struct AddUserView: View {
         stepDetailsWithManagerWithoutManagerPicker
     }
     
+    private var lineManagerSummary: String {
+        if hasNoLineManager { return "No line manager" }
+        if selectedLineManagerUserIds.isEmpty { return "Select manager(s)…" }
+        let names = lineManagerCandidates
+            .filter { selectedLineManagerUserIds.contains($0.id) }
+            .map { $0.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? $0.email : $0.fullName }
+        if names.count == 1 { return names[0] }
+        return "\(names.first ?? "Manager") +\(names.count - 1) more"
+    }
+
+    private var inviteDraftUserForValidation: AppUser {
+        AppUser(
+            id: "invite-draft",
+            email: email,
+            organizationId: userStore.currentUser?.organizationId ?? "",
+            role: .manager,
+            permissions: permissions,
+            hasNoLineManager: hasNoLineManager
+        )
+    }
+
+    private var lineManagerSelectionValid: Bool {
+        if permissions.operativeMode {
+            return !selectedLineManagerUserIds.isEmpty
+        }
+        if permissions.manager || permissions.adminAccess {
+            if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: inviteDraftUserForValidation) {
+                return !selectedLineManagerUserIds.isEmpty
+            }
+            return !selectedLineManagerUserIds.isEmpty || hasNoLineManager
+        }
+        return true
+    }
+
+    @ViewBuilder
+    private var lineManagerPickerSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Line manager(s)")
+                .font(.headline)
+            Text(lineManagerPickerFootnote)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Button {
+                showingLineManagerPicker = true
+            } label: {
+                HStack {
+                    Text(lineManagerSummary)
+                        .foregroundStyle(selectedLineManagerUserIds.isEmpty && !hasNoLineManager ? .secondary : .primary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+        .sheet(isPresented: $showingLineManagerPicker) {
+            LineManagersMultiSelectSheet(
+                candidates: lineManagerCandidates,
+                selectedIds: $selectedLineManagerUserIds,
+                allowNoLineManager: !permissions.operativeMode && (permissions.manager || permissions.adminAccess),
+                hasNoLineManager: $hasNoLineManager
+            )
+        }
+        .onChange(of: selectedLineManagerUserIds) { _, newIds in
+            if !newIds.isEmpty { hasNoLineManager = false }
+        }
+    }
+
+    private var lineManagerPickerFootnote: String {
+        if permissions.operativeMode {
+            return "Holiday requests from this operative will go to their line manager(s) (and organisation admins)."
+        }
+        if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: inviteDraftUserForValidation) {
+            return "Required while annual leave self-book is off. Requests route to these line manager(s)."
+        }
+        return "Optional for senior staff who book their own annual leave. Choose No line manager if they approve their own leave."
+    }
+
     private var stepDetailsWithManager: some View {
         VStack(alignment: .leading, spacing: 20) {
             stepDetailsWithManagerWithoutManagerPicker
-            
-            if invitedAccountType == .operative {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Line manager")
-                        .font(.headline)
-                    Text("Holiday requests from this operative will go to this manager (and organisation admins).")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Picker("Manager", selection: $assignedManagerUserId) {
-                        Text("Select manager…").tag(nil as String?)
-                        ForEach(lineManagerCandidates, id: \.id) { u in
-                            Text(u.fullName.isEmpty ? u.email : u.fullName).tag(Optional(u.id))
-                        }
-                    }
-                }
-            } else if invitedAccountType == .manager {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Line manager")
-                        .font(.headline)
-                    Text("Mandatory for managers. Annual leave requests (when self-book is off) and self-employed timesheet sign-off route to this line manager.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Picker("Manager", selection: $assignedManagerUserId) {
-                        Text("Select manager…").tag(nil as String?)
-                        ForEach(lineManagerCandidates, id: \.id) { u in
-                            Text(u.fullName.isEmpty ? u.email : u.fullName).tag(Optional(u.id))
-                        }
-                    }
-                }
+
+            if invitedAccountType == .operative || invitedAccountType == .manager || invitedAccountType == .admin {
+                lineManagerPickerSection
             }
         }
     }
@@ -516,19 +578,7 @@ struct AddUserView: View {
             .background(Color.indigo.opacity(0.08))
             .cornerRadius(12)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Line manager")
-                    .font(.headline)
-                Text("Choose who receives this operative's holiday requests first. Options include super admins, admins, and managers.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Picker("Manager", selection: $assignedManagerUserId) {
-                    Text("Select manager…").tag(nil as String?)
-                    ForEach(lineManagerCandidates, id: \.id) { u in
-                        Text(u.fullName.isEmpty ? u.email : u.fullName).tag(Optional(u.id))
-                    }
-                }
-            }
+            lineManagerPickerSection
             .onAppear {
                 permissions.operativeMode = true
                 permissions.adminAccess = false
@@ -539,8 +589,8 @@ struct AddUserView: View {
                 permissions.materials = false
                 permissions.projects = true
                 permissions.smallWorks = true
-                if assignedManagerUserId == nil {
-                    assignedManagerUserId = userStore.currentUser?.id
+                if selectedLineManagerUserIds.isEmpty, let me = userStore.currentUser?.id {
+                    selectedLineManagerUserIds = [me]
                 }
             }
 
@@ -654,6 +704,14 @@ struct AddUserView: View {
                                 description: "Off for admin accounts.",
                                 isOn: .constant(false),
                                 isDisabled: true,
+                                style: .plainInset
+                            )
+                            invitePermissionDivider
+                            PermissionToggle(
+                                title: "Annual leave",
+                                description: "Can book their own annual leave. If unselected they will request leave for approval.",
+                                isOn: $permissions.annualLeaveSelfBook,
+                                isDisabled: hasNoLineManager,
                                 style: .plainInset
                             )
                         }
@@ -841,14 +899,14 @@ struct AddUserView: View {
                         }
                     }
                     
-                    if permissions.operativeMode, let mid = assignedManagerUserId,
-                       let mgr = userStore.organizationUsers.first(where: { $0.id == mid }) {
-                        HStack {
+                    if permissions.operativeMode || permissions.manager || permissions.adminAccess {
+                        HStack(alignment: .top) {
                             Text("Line manager:")
                                 .foregroundColor(.secondary)
                             Spacer()
-                            Text(mgr.fullName.isEmpty ? mgr.email : mgr.fullName)
+                            Text(lineManagerSummary)
                                 .fontWeight(.medium)
+                                .multilineTextAlignment(.trailing)
                         }
                     }
                     
@@ -968,6 +1026,7 @@ struct AddUserView: View {
                 projects: true,
                 smallWorks: true,
                 operativeMode: false,
+                annualLeaveSelfBook: false,
                 wholesalersOrderHistory: true
             )
         case .manager:
@@ -1018,7 +1077,7 @@ struct AddUserView: View {
             case 1:
                 return !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email) && tradeRequiredAndValid
             case 2:
-                return assignedManagerUserId != nil && !(assignedManagerUserId?.isEmpty ?? true)
+                return lineManagerSelectionValid
             case 3:
                 return true
             default:
@@ -1030,11 +1089,8 @@ struct AddUserView: View {
             return true
         case 2:
             let base = !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email) && tradeRequiredAndValid
-            if invitedAccountType == .operative {
-                return base && assignedManagerUserId != nil && !(assignedManagerUserId?.isEmpty ?? true)
-            }
-            if invitedAccountType == .manager {
-                return base && assignedManagerUserId != nil && !(assignedManagerUserId?.isEmpty ?? true)
+            if invitedAccountType == .operative || invitedAccountType == .manager || invitedAccountType == .admin {
+                return base && lineManagerSelectionValid
             }
             return base
         case 3:
@@ -1084,6 +1140,7 @@ struct AddUserView: View {
                 let t = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
                 return t.isEmpty ? nil : t
             }()
+            let managerIds = hasNoLineManager ? [] : Array(selectedLineManagerUserIds)
             let passAnnualLeaveInvite = mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager
             let success = await userStore.inviteUser(
                 firstName: firstName,
@@ -1092,7 +1149,9 @@ struct AddUserView: View {
                 mobileNumber: mobileNumber.isEmpty ? nil : mobileNumber,
                 permissions: permissions,
                 employmentType: employmentType,
-                assignedManagerUserId: (permissions.operativeMode || permissions.manager) ? assignedManagerUserId : nil,
+                assignedManagerUserId: managerIds.first,
+                assignedManagerUserIds: managerIds,
+                hasNoLineManager: hasNoLineManager,
                 invitedOperativeDayRate: permissions.operativeMode ? parsedDayRate : nil,
                 invitedManagerDayRate: permissions.manager ? parsedDayRate : nil,
                 invitedTradeTypePreset: needsTrade ? tradePresetRaw : nil,

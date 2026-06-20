@@ -78,6 +78,7 @@ class HolidayStore: ObservableObject {
         do {
             let orgId = try await resolveOrganizationId()
             bookings = try await fb.loadHolidayBookings(organizationId: orgId)
+            await purgeInvalidWeekendBookingsIfNeeded()
         } catch {
             let nsError = error as NSError
             if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 {
@@ -108,6 +109,33 @@ class HolidayStore: ObservableObject {
             bookings.removeAll { $0.id == booking.id }
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Removes weekend annual leave bookings (early-days cleanup; restores allowance).
+    func purgeInvalidWeekendBookingsIfNeeded() async {
+        let cal = Calendar.current
+        let invalid = bookings.filter { AnnualLeaveCalendarRules.bookingContainsWeekend($0, calendar: cal) }
+        for booking in invalid {
+            await deleteBooking(booking)
+        }
+    }
+
+    /// Removes self-booked approved annual leave when a user moves off the self-book path.
+    func deleteSelfBookedApprovedHolidaysFor(userId: String) async {
+        let trimmedUid = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let toDelete = bookings.filter { booking in
+            guard booking.userId == trimmedUid else { return false }
+            guard booking.status == .approved, booking.cancellationRequestedAt == nil else { return false }
+            if let approver = booking.approvedByUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !approver.isEmpty,
+               approver != trimmedUid {
+                return false
+            }
+            return true
+        }
+        for booking in toDelete {
+            await deleteBooking(booking)
         }
     }
 

@@ -670,6 +670,30 @@ class NotificationService: ObservableObject {
         await saveNotification(notification)
     }
 
+    /// Sent when a manager/admin loses self-book annual leave and must request days instead.
+    func notifyAnnualLeaveSelfBookDisabled(userId: String) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let targetId = resolvedRecipientUserId(userId)
+        let dedupeId = syntheticNotificationId(from: "annualLeaveSelfBookOff|\(targetId)")
+        let notification = AppNotification(
+            id: dedupeId,
+            organizationId: organizationId,
+            type: .holidayRequestDeclined,
+            title: "Annual leave update",
+            message: "Please check your annual leave and request any annual leave days moving forward.",
+            userId: targetId,
+            relatedId: nil,
+            requiresPermission: nil
+        )
+        await saveNotification(notification)
+        scheduleLocalInAppMirrorAlert(
+            title: "Annual leave update",
+            message: "Please check your annual leave and request any annual leave days moving forward.",
+            dedupeIdentifier: dedupeId.uuidString
+        )
+    }
+
     /// Sent when a manager/admin books approved annual leave on behalf of a team member.
     func notifyAnnualLeaveBookingConfirmation(
         userId: String,
@@ -1193,28 +1217,15 @@ class NotificationService: ObservableObject {
 
         if let requesterUserId,
            let requester = userStore.organizationUsers.first(where: { $0.id == requesterUserId }) {
-            let isManagerWithoutSelfBook = requester.permissions.manager &&
-                !requester.permissions.operativeMode &&
-                !requester.isSuperAdmin &&
-                !requester.permissions.adminAccess &&
-                requester.role != .admin &&
-                !requester.permissions.annualLeaveSelfBook
-            if isManagerWithoutSelfBook {
-                let admins = userStore.organizationUsers.filter {
-                    $0.isActive &&
-                    $0.passwordSet &&
-                    !$0.permissions.operativeMode &&
-                    ($0.isSuperAdmin || $0.permissions.adminAccess || $0.role == .admin)
-                }.map(\.id)
-                return uniqueCanonicalUserIds(from: admins)
-            }
-            let requesterManagers = requester.lineManagerUserIds
-            if !requesterManagers.isEmpty {
-                var recipients: [String] = []
-                for mid in requesterManagers {
-                    recipients.append(await resolvedRecipientUserIdResolvingStaleIds(mid))
+            if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: requester) {
+                let requesterManagers = requester.lineManagerUserIds
+                if !requesterManagers.isEmpty {
+                    var recipients: [String] = []
+                    for mid in requesterManagers {
+                        recipients.append(await resolvedRecipientUserIdResolvingStaleIds(mid))
+                    }
+                    return uniqueCanonicalUserIds(from: recipients)
                 }
-                return uniqueCanonicalUserIds(from: recipients)
             }
         }
 

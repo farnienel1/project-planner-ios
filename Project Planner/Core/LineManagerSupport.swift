@@ -22,7 +22,7 @@ extension AppUser {
         return ids.filter { seen.insert($0).inserted }
     }
 
-    var hasLineManager: Bool { !lineManagerUserIds.isEmpty }
+    var hasLineManager: Bool { hasNoLineManager || !lineManagerUserIds.isEmpty }
 
     /// Primary line manager (first assigned) — backward compatible with single-id field.
     var primaryLineManagerUserId: String? { lineManagerUserIds.first }
@@ -34,6 +34,17 @@ extension AppUser {
         var seen = Set<String>()
         assignedManagerUserIds = normalized.filter { seen.insert($0).inserted }
         assignedManagerUserId = assignedManagerUserIds.first
+        if !assignedManagerUserIds.isEmpty {
+            hasNoLineManager = false
+        }
+    }
+
+    mutating func setNoLineManager(_ enabled: Bool) {
+        hasNoLineManager = enabled
+        if enabled {
+            assignedManagerUserIds = []
+            assignedManagerUserId = nil
+        }
     }
 
     func isLineManager(_ managerUserId: String) -> Bool {

@@ -366,6 +366,8 @@ struct AppUser: Identifiable, Codable, Hashable {
     var assignedManagerUserId: String?
     /// Line managers who receive holiday, timesheet, and related notifications.
     var assignedManagerUserIds: [String] = []
+    /// Directors/senior staff with no line manager — they self-book annual leave without approval routing.
+    var hasNoLineManager: Bool = false
     /// Default day rate for this operative (optional; copied to roster when the operative profile is created).
     var dayRate: Double?
     /// Hourly pay rate — **mutually exclusive** with `dayRate` (admins choose one or the other).
@@ -417,6 +419,7 @@ struct AppUser: Identifiable, Codable, Hashable {
         policyAcceptedAt: Date? = nil,
         assignedManagerUserId: String? = nil,
         assignedManagerUserIds: [String] = [],
+        hasNoLineManager: Bool = false,
         dayRate: Double? = nil,
         hourlyRate: Double? = nil,
         tradeTypePreset: String? = nil,
@@ -451,6 +454,7 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.policyAcceptedAt = policyAcceptedAt
         self.assignedManagerUserId = assignedManagerUserId
         self.assignedManagerUserIds = assignedManagerUserIds
+        self.hasNoLineManager = hasNoLineManager
         self.dayRate = dayRate
         self.hourlyRate = hourlyRate
         self.tradeTypePreset = tradeTypePreset
@@ -646,6 +650,8 @@ struct OrganizationSettings: Codable, Hashable {
     var annualLeaveDefaults: OrganizationAnnualLeaveDefaults
     /// Org-wide My Schedule booking options (`organizations/{orgId}.settings.myScheduleOptions`).
     var myScheduleOptions: MyScheduleOptions
+    /// Region used for bank holiday calendars (Nager.Date + UK subdivisions).
+    var bankHolidayRegionId: String?
     
     init(
         allowSelfRegistration: Bool = true,
@@ -658,7 +664,8 @@ struct OrganizationSettings: Codable, Hashable {
         warningDetection: OrgWarningDetectionSettings = .default,
         invoicing: OrganizationInvoicingSettings = .default,
         annualLeaveDefaults: OrganizationAnnualLeaveDefaults = .default,
-        myScheduleOptions: MyScheduleOptions = MyScheduleOptions()
+        myScheduleOptions: MyScheduleOptions = MyScheduleOptions(),
+        bankHolidayRegionId: String? = BankHolidayRegionDirectory.defaultRegionId
     ) {
         self.allowSelfRegistration = allowSelfRegistration
         self.requireEmailVerification = requireEmailVerification
@@ -671,6 +678,7 @@ struct OrganizationSettings: Codable, Hashable {
         self.invoicing = invoicing
         self.annualLeaveDefaults = annualLeaveDefaults
         self.myScheduleOptions = myScheduleOptions
+        self.bankHolidayRegionId = bankHolidayRegionId
     }
 
     enum CodingKeys: String, CodingKey {
@@ -681,6 +689,7 @@ struct OrganizationSettings: Codable, Hashable {
         case invoicing
         case annualLeaveDefaults
         case myScheduleOptions
+        case bankHolidayRegionId
     }
 
     init(from decoder: Decoder) throws {
@@ -696,6 +705,7 @@ struct OrganizationSettings: Codable, Hashable {
         invoicing = try c.decodeIfPresent(OrganizationInvoicingSettings.self, forKey: .invoicing) ?? .default
         annualLeaveDefaults = try c.decodeIfPresent(OrganizationAnnualLeaveDefaults.self, forKey: .annualLeaveDefaults) ?? .default
         myScheduleOptions = try c.decodeIfPresent(MyScheduleOptions.self, forKey: .myScheduleOptions) ?? MyScheduleOptions()
+        bankHolidayRegionId = try c.decodeIfPresent(String.self, forKey: .bankHolidayRegionId)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -711,6 +721,7 @@ struct OrganizationSettings: Codable, Hashable {
         try c.encode(invoicing, forKey: .invoicing)
         try c.encode(annualLeaveDefaults, forKey: .annualLeaveDefaults)
         try c.encode(myScheduleOptions, forKey: .myScheduleOptions)
+        try c.encodeIfPresent(bankHolidayRegionId, forKey: .bankHolidayRegionId)
     }
 }
 

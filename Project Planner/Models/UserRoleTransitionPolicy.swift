@@ -107,7 +107,7 @@ enum UserRoleTransitionPolicy {
     }
 
     /// Permissions bundle aligned with **Add user** defaults, while applying sheet choices for manager / operative.
-    /// - Administrator: full manager-style capability flags; annual leave behaves like an admin in `HolidayView` (self-book via `hasAdminAccess`).
+    /// - Administrator: full manager-style capability flags; annual leave self-book follows the existing permission flag.
     static func permissions(
         for kind: ManagedAccountKind,
         carryingFrom current: UserPermissions,
@@ -171,7 +171,7 @@ enum UserRoleTransitionPolicy {
                 projects: true,
                 smallWorks: true,
                 operativeMode: false,
-                annualLeaveSelfBook: true,
+                annualLeaveSelfBook: current.annualLeaveSelfBook,
                 weeklyReports: true,
                 dailyOverview: true,
                 subContractors: true,
@@ -180,11 +180,47 @@ enum UserRoleTransitionPolicy {
         }
     }
 
-    /// User was on the “request / approval” holiday path and is moving to self-book (manager with self-book, or any administrator path).
-    static func shouldClearPendingAnnualLeave(old: UserPermissions, new: UserPermissions) -> Bool {
-        let oldRequestFlow = old.operativeMode
-            || (old.manager && !old.adminAccess && !old.annualLeaveSelfBook)
-        let newSelfBookFlow = !new.operativeMode && (new.adminAccess || new.annualLeaveSelfBook)
-        return oldRequestFlow && newSelfBookFlow
+    /// User was on the self-book path and is moving to request/approval routing.
+    static func shouldClearSelfBookedAnnualLeave(old: UserPermissions, new: UserPermissions, oldHasNoLineManager: Bool, newHasNoLineManager: Bool) -> Bool {
+        let oldUser = AppUser(
+            id: "transition-old",
+            email: "",
+            organizationId: "",
+            role: .manager,
+            permissions: old,
+            hasNoLineManager: oldHasNoLineManager
+        )
+        let newUser = AppUser(
+            id: "transition-new",
+            email: "",
+            organizationId: "",
+            role: .manager,
+            permissions: new,
+            hasNoLineManager: newHasNoLineManager
+        )
+        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: oldUser)
+            && !AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: newUser)
+    }
+
+    /// User was on the “request / approval” holiday path and is moving to self-book.
+    static func shouldClearPendingAnnualLeave(old: UserPermissions, new: UserPermissions, oldHasNoLineManager: Bool = false, newHasNoLineManager: Bool = false) -> Bool {
+        let oldUser = AppUser(
+            id: "transition-old",
+            email: "",
+            organizationId: "",
+            role: .manager,
+            permissions: old,
+            hasNoLineManager: oldHasNoLineManager
+        )
+        let newUser = AppUser(
+            id: "transition-new",
+            email: "",
+            organizationId: "",
+            role: .manager,
+            permissions: new,
+            hasNoLineManager: newHasNoLineManager
+        )
+        return AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: oldUser)
+            && AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: newUser)
     }
 }

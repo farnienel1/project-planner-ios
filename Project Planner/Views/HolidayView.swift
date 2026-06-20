@@ -38,9 +38,7 @@ struct HolidayView: View {
     private var isOperativeMode: Bool { userStore.isOperativeMode() }
     private var isManagerRequestMode: Bool {
         guard let u = userStore.displayUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if userStore.hasAdminAccess() { return false }
-        return u.permissions.manager && !u.permissions.annualLeaveSelfBook
+        return AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: u)
     }
     private var isRequestMode: Bool { isOperativeMode || isManagerRequestMode }
     // Admins don't show Requests by default. Requests section becomes available only when opened from a notification.
@@ -62,6 +60,8 @@ struct HolidayView: View {
     @State private var selectedHolidayTimeSlot: HolidayTimeSlot = .fullDay
     @State private var showSelfServeBookedAnnualLeaveSheet = false
     @State private var halfDayBookingEditor: HolidayBooking?
+    @StateObject private var bankHolidayService = BankHolidayService.shared
+    @State private var bankHolidayTooltip: String?
 
     enum HolidaySection: String, CaseIterable {
         case calendar = "Book"
@@ -96,12 +96,18 @@ struct HolidayView: View {
         holidayProfileUser?.annualLeaveEnabled ?? true
     }
 
-    /// Admins and managers who self-book approved leave without a separate approver.
+    /// Managers/admins with self-book (or no line manager) book approved leave without a separate approver.
     private var canShowSelfServeBookedAnnualLeave: Bool {
         guard let u = userStore.displayUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if userStore.hasAdminAccess() || u.role == .admin { return true }
-        return u.permissions.manager && u.permissions.annualLeaveSelfBook
+        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: u)
+    }
+
+    private var bankHolidayRegion: BankHolidayRegion {
+        let org = firebaseBackend.currentOrganization
+        return BankHolidayRegionDirectory.region(
+            id: org?.settings.bankHolidayRegionId,
+            fallbackCountryCode: org?.countryCode ?? "GB"
+        )
     }
 
     private var selfBookedApprovedHolidayBookings: [HolidayBooking] {
@@ -236,7 +242,7 @@ struct HolidayView: View {
                                             Image(systemName: "person.3.fill")
                                                 .font(.body.weight(.semibold))
                                             VStack(alignment: .leading, spacing: 2) {
-                                                Text("View and manage operative annual leave")
+                                                Text("View and manage user annual leave")
                                                     .font(.subheadline.weight(.semibold))
                                                 Text("Book leave and approve requests for your team")
                                                     .font(.caption)
@@ -343,7 +349,18 @@ struct HolidayView: View {
             if userStore.isOperativeMode() {
                 operativeStore.loadData()
             }
-            Task { await holidayStore.loadData() }
+            Task {
+                await holidayStore.loadData()
+                await bankHolidayService.ensureLoaded(region: bankHolidayRegion)
+            }
+        }
+        .alert("Annual leave calendar", isPresented: Binding(
+            get: { bankHolidayTooltip != nil },
+            set: { if !$0 { bankHolidayTooltip = nil } }
+        )) {
+            Button("OK") { bankHolidayTooltip = nil }
+        } message: {
+            if let bankHolidayTooltip { Text(bankHolidayTooltip) }
         }
         .onChange(of: userStore.currentUser?.id) { _, _ in
             if !(isRequestMode || canApproveRequests), activeSection != .calendar {
@@ -568,6 +585,7 @@ struct HolidayView: View {
     private var calendarSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             monthNavigation
+            calendarLegend
             calendarGrid
             selectedRangeSummary
             if let allowanceMsg = selectionAllowanceViolationMessage {
@@ -577,6 +595,27 @@ struct HolidayView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             submitButton
+        }
+    }
+
+    private var calendarLegend: some View {
+        HStack(spacing: 16) {
+            HStack(spacing: 6) {
+                Circle()
+                    .stroke(AnnualLeaveCalendarChrome.weekendStroke, lineWidth: 2)
+                    .frame(width: 14, height: 14)
+                Text("Weekend")
+                    .font(.caption2)
+                    .foregroundStyle(HolidayChrome.muted)
+            }
+            HStack(spacing: 6) {
+                Circle()
+                    .stroke(AnnualLeaveCalendarChrome.bankHolidayStroke, lineWidth: 2)
+                    .frame(width: 14, height: 14)
+                Text("Bank holiday")
+                    .font(.caption2)
+                    .foregroundStyle(HolidayChrome.muted)
+            }
         }
     }
 
@@ -656,6 +695,11 @@ struct HolidayView: View {
         let isInMonth = calendar.isDate(date, equalTo: displayedMonth, toGranularity: .month)
         let isToday = calendar.isDateInToday(day)
         let dayKind = calendarDayKind(for: day)
+        let blockReason = AnnualLeaveCalendarRules.blockReason(
+            for: day,
+            bankHolidays: bankHolidayService.holidaysByDayKey,
+            calendar: calendar
+        )
         let approvedFullDayLocksCell: Bool = {
             if case .approvedFull = dayKind { return true }
             if case .pendingFull = dayKind { return true }
@@ -663,6 +707,15 @@ struct HolidayView: View {
         }()
 
         return Button {
+            if let blockReason {
+                switch blockReason {
+                case .weekend:
+                    bankHolidayTooltip = "Weekends cannot be booked as annual leave."
+                case .bankHoliday(let name):
+                    bankHolidayTooltip = "\(name) — bank holidays cannot be booked as annual leave."
+                }
+                return
+            }
             switch dayKind {
             case .approvedFull, .pendingFull:
                 break
@@ -687,18 +740,41 @@ struct HolidayView: View {
             Text("\(calendar.component(.day, from: date))")
                 .font(.subheadline)
                 .fontWeight(isSelected ? .bold : .regular)
-                .foregroundStyle(
-                    isInMonth
-                        ? (isSelected ? Color.white : HolidayChrome.ink)
-                        : HolidayChrome.muted
-                )
                 .frame(width: 36, height: 36)
+                .annualLeaveBlockedDayStyle(
+                    blockReason: blockReason,
+                    isSelected: isSelected,
+                    isInMonth: isInMonth,
+                    defaultInk: HolidayChrome.ink,
+                    defaultMuted: HolidayChrome.muted
+                )
+                .overlay(
+                    Group {
+                        if isSelected {
+                            EmptyView()
+                        } else {
+                            switch dayKind {
+                            case .approvedHalf:
+                                Circle().stroke(HolidayChrome.halfDayBooked, lineWidth: 2)
+                            case .pendingHalf:
+                                Circle().stroke(HolidayChrome.pending, lineWidth: 2)
+                            case .pendingFull:
+                                Circle().stroke(HolidayChrome.pending.opacity(0.35), lineWidth: 1)
+                            default:
+                                EmptyView()
+                            }
+                        }
+                    }
+                )
+                .overlay {
+                    if isToday && blockReason == nil && !isSelected {
+                        Circle().stroke(HolidayChrome.border, lineWidth: 1)
+                    }
+                }
                 .background(
                     Group {
                         if isSelected {
-                            HolidayChrome.accent
-                        } else if isToday {
-                            HolidayChrome.border
+                            EmptyView()
                         } else {
                             switch dayKind {
                             case .approvedFull:
@@ -707,32 +783,17 @@ struct HolidayView: View {
                                 HolidayChrome.halfDayBooked.opacity(0.35)
                             case .pendingFull:
                                 HolidayChrome.pending.opacity(0.88)
-                            case .pendingHalf:
-                                Color.clear
-                            case .none:
+                            default:
                                 Color.clear
                             }
                         }
                     }
-                )
-                .overlay(
-                    Group {
-                        switch dayKind {
-                        case .approvedHalf:
-                            Circle().stroke(HolidayChrome.halfDayBooked, lineWidth: 2)
-                        case .pendingHalf:
-                            Circle().stroke(HolidayChrome.pending, lineWidth: 2)
-                        case .pendingFull:
-                            Circle().stroke(HolidayChrome.pending.opacity(0.35), lineWidth: 1)
-                        default:
-                            EmptyView()
-                        }
-                    }
+                    .clipShape(Circle())
                 )
                 .clipShape(Circle())
         }
         .buttonStyle(PlainButtonStyle())
-        .disabled(approvedFullDayLocksCell)
+        .disabled(approvedFullDayLocksCell || blockReason != nil)
     }
 
     private func daysInDisplayedMonth() -> [Date?] {
@@ -1150,16 +1211,10 @@ struct HolidayView: View {
     private func assignedApproverUserId(for request: HolidayBooking) -> String? {
         if let uid = request.userId,
            let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
-            if requester.permissions.manager &&
-                !requester.permissions.annualLeaveSelfBook &&
-                !requester.permissions.operativeMode &&
-                !requester.isSuperAdmin &&
-                !requester.permissions.adminAccess &&
-                requester.role != .admin {
-                return nil
+            if AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester) {
+                return requester.primaryLineManagerUserId
             }
-            let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (managerId?.isEmpty == false) ? managerId : nil
+            return nil
         }
         if let oid = request.operativeId,
            let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
@@ -1167,8 +1222,7 @@ struct HolidayView: View {
                ($0.permissions.operativeMode || $0.role == .operative) &&
                $0.email.lowercased() == op.email.lowercased()
            }) {
-            let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (managerId?.isEmpty == false) ? managerId : nil
+            return requester.primaryLineManagerUserId
         }
         return nil
     }
@@ -1264,12 +1318,8 @@ struct HolidayView: View {
             )
             if approved,
                let requester = userStore.organizationUsers.first(where: { $0.id == requesterUserId }),
-               requester.permissions.manager,
-               !requester.permissions.annualLeaveSelfBook,
-               !requester.permissions.operativeMode,
-               !requester.isSuperAdmin,
-               !requester.permissions.adminAccess,
-               requester.role != .admin {
+               AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester),
+               requester.permissions.manager {
                 await notificationService.notifyAdminAnnualLeaveApproval(
                     managerName: requester.fullName,
                     approvedByName: decidedByName,

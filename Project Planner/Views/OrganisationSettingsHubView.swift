@@ -432,7 +432,11 @@ struct OrganisationSettingsHubView: View {
         let daysText = d.daysPerYear.truncatingRemainder(dividingBy: 1) == 0
             ? String(Int(d.daysPerYear))
             : String(format: "%.1f", d.daysPerYear)
-        return "\(daysText) days · \(start)→\(end) · \(d.carriesOver ? "carry over" : "no carry over")"
+        let region = BankHolidayRegionDirectory.region(
+            id: org?.settings.bankHolidayRegionId,
+            fallbackCountryCode: org?.countryCode ?? "GB"
+        )
+        return "\(daysText) days · \(start)→\(end) · \(region.title)"
     }
 
     private var scheduleOptionsSubtitle: String {

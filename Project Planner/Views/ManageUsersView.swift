@@ -16,6 +16,7 @@ struct ManageUsersView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var notificationService: NotificationService
     @Environment(\.dismiss) private var dismiss
     
     @State private var showingAddUser = false
@@ -114,6 +115,7 @@ struct ManageUsersView: View {
                     .environmentObject(operativeStore)
                     .environmentObject(holidayStore)
                     .environmentObject(firebaseBackend)
+                    .environmentObject(notificationService)
             }
             .alert("Delete User", isPresented: $showingDeleteConfirmation) {
                 Button("Cancel", role: .cancel) {
@@ -1214,6 +1216,7 @@ struct EditUserView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var notificationService: NotificationService
     @Environment(\.dismiss) private var dismiss
     
     let user: AppUser
@@ -1237,7 +1240,10 @@ struct EditUserView: View {
     @State private var saveErrorMessage: String?
     @State private var selectedAssignedManagerUserId: String?
     @State private var selectedLineManagerUserIds: Set<String> = []
+    @State private var hasNoLineManagerDraft = false
     @State private var showingLineManagerPicker = false
+    @State private var showingSelfBookOffConfirmation = false
+    @State private var selfBookOffConfirmationAccepted = false
     @State private var dayRateText: String
     @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
     @State private var showingQualificationsEditor = false
@@ -1295,6 +1301,8 @@ struct EditUserView: View {
         self._isActive = State(initialValue: user.isActive)
         self._selectedAssignedManagerUserId = State(initialValue: user.assignedManagerUserId)
         self._selectedLineManagerUserIds = State(initialValue: Set(user.lineManagerUserIds))
+        self._hasNoLineManagerDraft = State(initialValue: user.hasNoLineManager)
+        self._managerSelfBookDraft = State(initialValue: user.permissions.annualLeaveSelfBook)
         self._dayRateText = State(initialValue: Self.formatPayrollRateText(dayRate: user.dayRate, hourlyRate: user.hourlyRate))
         self._tradePresetRaw = State(initialValue: user.tradeTypePreset ?? "")
         self._tradeCustomText = State(initialValue: user.tradeTypeCustom ?? "")
@@ -1403,7 +1411,7 @@ struct EditUserView: View {
                     isOn: $annualLeaveEnabledDraft,
                     isDisabled: !canEditPermissionsMatrix
                 )
-                Text("When turned off, their Holiday tab and annual leave entry points are hidden until this is turned back on here.")
+                Text("When turned off, their Annual leave tab and annual leave entry points are hidden until this is turned back on here.")
                     .font(.caption)
                     .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     .padding(.horizontal, 14)
@@ -1485,6 +1493,7 @@ struct EditUserView: View {
 
     private var lineManagerSummary: String {
         guard permissions.operativeMode || permissions.manager || permissions.adminAccess else { return "" }
+        if hasNoLineManagerDraft { return "No line manager" }
         if selectedLineManagerUserIds.isEmpty { return "Select manager(s)…" }
         let names = lineManagerCandidates
             .filter { selectedLineManagerUserIds.contains($0.id) }
@@ -1590,8 +1599,9 @@ struct EditUserView: View {
         let tradeChanged = dayRateEligible && (trimmedTradeP != origTradeP || trimmedTradeC != origTradeC)
         let billingChanged = normalizedVATDraft != displayedUser.vatNumber || normalizedUTRDraft != displayedUser.utrNumber
         let timesheetsChanged = timesheetsEnabledDraft != displayedUser.timesheetsEnabled
-        let operativeProfileChanged = (permissions.operativeMode || permissions.manager) && (
+        let operativeProfileChanged = (permissions.operativeMode || permissions.manager || permissions.adminAccess) && (
             Set(selectedLineManagerUserIds) != Set(user.lineManagerUserIds) ||
+            hasNoLineManagerDraft != user.hasNoLineManager ||
             parseDayRate(dayRateText) != user.dayRate
         )
         let staffDayRateChanged = !permissions.operativeMode && (permissions.manager || permissions.adminAccess)
@@ -1634,6 +1644,52 @@ struct EditUserView: View {
     private var normalizedUTRDraft: String? {
         let trimmed = utrNumberDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private var draftUserForAnnualLeaveValidation: AppUser {
+        var draft = displayedUser
+        draft.permissions = permissions
+        draft.hasNoLineManager = hasNoLineManagerDraft
+        return draft
+    }
+
+    private var lineManagerRoutingBlocked: Bool {
+        guard canEditPermissionsMatrix else { return false }
+        if permissions.operativeMode {
+            return selectedLineManagerUserIds.isEmpty
+        }
+        if permissions.manager || permissions.adminAccess {
+            if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: draftUserForAnnualLeaveValidation) {
+                return selectedLineManagerUserIds.isEmpty
+            }
+            return selectedLineManagerUserIds.isEmpty && !hasNoLineManagerDraft
+        }
+        return false
+    }
+
+    private var lineManagerValidationMessage: String? {
+        guard lineManagerRoutingBlocked else { return nil }
+        if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: draftUserForAnnualLeaveValidation) {
+            return "This user requires a Line Manager to Approve/Decline annual leave requests. Please set their line manager above."
+        }
+        if permissions.operativeMode {
+            return "Line manager is required for operatives."
+        }
+        return "Please assign a line manager or choose No line manager."
+    }
+
+    private var willDisableAnnualLeaveSelfBookOnSave: Bool {
+        let subject = displayedUser
+        let oldDraft = AppUser(
+            id: subject.id,
+            email: subject.email,
+            organizationId: subject.organizationId,
+            role: subject.role,
+            permissions: subject.permissions,
+            hasNoLineManager: subject.hasNoLineManager
+        )
+        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: oldDraft)
+            && !AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: draftUserForAnnualLeaveValidation)
     }
 
     private var lineManagerCandidates: [AppUser] {
@@ -1703,6 +1759,17 @@ struct EditUserView: View {
             calendarStartOfDay: { calendarStartOfDay($0) },
             calendarStartOfTomorrow: calendarStartOfTomorrow
         ))
+        .alert("Turn off annual leave self-book?", isPresented: $showingSelfBookOffConfirmation) {
+            Button("Cancel", role: .cancel) {
+                selfBookOffConfirmationAccepted = false
+            }
+            Button("Continue") {
+                selfBookOffConfirmationAccepted = true
+                saveChanges()
+            }
+        } message: {
+            Text("Any annual leave that this user had booked in themselves, will disappear. They will be notified about this and will need to request annual leave bookings moving forward.")
+        }
     }
 
     private var editUserScrollView: some View {
@@ -1738,6 +1805,12 @@ struct EditUserView: View {
                 activeToggleChromeSection
             }
             permissionsSection
+            if let lineManagerValidationMessage {
+                Text(lineManagerValidationMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 4)
+            }
             if canShowCredentialActions || canUseAdminAccountTools {
                 actionsChromeSection
             }
@@ -1785,7 +1858,7 @@ struct EditUserView: View {
                         Capsule(style: .continuous)
                             .fill(hasChanges ? ManageUserProfilePalette.primaryBlue : Color(.systemGray5))
                     )
-                    .disabled(isUpdating || !hasChanges)
+                    .disabled(isUpdating || !hasChanges || lineManagerRoutingBlocked)
             }
         }
     }
@@ -1805,6 +1878,9 @@ struct EditUserView: View {
         timesheetsEnabledDraft = u.timesheetsEnabled
         vatNumberDraft = u.vatNumber ?? ""
         utrNumberDraft = u.utrNumber ?? ""
+        hasNoLineManagerDraft = u.hasNoLineManager
+        selectedLineManagerUserIds = Set(u.lineManagerUserIds)
+        selectedAssignedManagerUserId = u.assignedManagerUserId
     }
 
     private var changeUserTypeSheet: some View {
@@ -2421,8 +2497,13 @@ struct EditUserView: View {
         .sheet(isPresented: $showingLineManagerPicker) {
             LineManagersMultiSelectSheet(
                 candidates: lineManagerCandidates.filter { $0.id != user.id },
-                selectedIds: $selectedLineManagerUserIds
+                selectedIds: $selectedLineManagerUserIds,
+                allowNoLineManager: !permissions.operativeMode && (permissions.manager || permissions.adminAccess),
+                hasNoLineManager: $hasNoLineManagerDraft
             )
+        }
+        .onChange(of: selectedLineManagerUserIds) { _, newIds in
+            if !newIds.isEmpty { hasNoLineManagerDraft = false }
         }
     }
 
@@ -2645,7 +2726,7 @@ struct EditUserView: View {
                         iconName: "chart.line.uptrend.xyaxis",
                         iconBackground: ManageUserProfilePalette.chipPurpleBg,
                         iconForeground: ManageUserProfilePalette.chipPurpleFg,
-                        title: "Holiday report",
+                        title: "Annual leave report",
                         action: { showingHolidayReport = true }
                     )
                 }
@@ -2916,17 +2997,29 @@ struct EditUserView: View {
                 isDisabled: false
             )
 
-            if !permissions.adminAccess && !permissions.operativeMode {
+            if (permissions.manager || permissions.adminAccess) && !permissions.operativeMode {
                 ManageUserCardDivider()
                 ManageUserExpandablePermissionToggleRow(
                     iconName: "beach.umbrella.fill",
                     iconBackground: ManageUserProfilePalette.chipBlueBg,
                     iconForeground: ManageUserProfilePalette.chipBlueFg,
-                    title: "Annual Leave",
-                    description: "Can book their own annual leave. If off, this manager requests leave for approval.",
+                    title: "Annual leave",
+                    description: "Can book their own annual leave. If off, this user requests leave for approval.",
                     isOn: $permissions.annualLeaveSelfBook,
-                    isDisabled: false
+                    isDisabled: hasNoLineManagerDraft
                 )
+                .onChange(of: permissions.annualLeaveSelfBook) { oldValue, newValue in
+                    if oldValue && !newValue && !hasNoLineManagerDraft {
+                        selfBookOffConfirmationAccepted = false
+                    }
+                }
+                if hasNoLineManagerDraft {
+                    Text("No line manager is selected, so this user books their own annual leave without approval routing.")
+                        .font(.caption)
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 8)
+                }
             }
 
             ManageUserCardDivider()
@@ -3007,6 +3100,20 @@ struct EditUserView: View {
     private func saveChanges() {
         isUpdating = true
         Task {
+            if lineManagerRoutingBlocked {
+                await MainActor.run {
+                    isUpdating = false
+                    saveErrorMessage = lineManagerValidationMessage
+                }
+                return
+            }
+            if willDisableAnnualLeaveSelfBookOnSave && !selfBookOffConfirmationAccepted {
+                await MainActor.run {
+                    isUpdating = false
+                    showingSelfBookOffConfirmation = true
+                }
+                return
+            }
             if shouldConfirmEmploymentTypeChange && !employmentTypeConfirmationAccepted {
                 await MainActor.run {
                     isUpdating = false
@@ -3085,6 +3192,8 @@ struct EditUserView: View {
 
         var permissionsSuccess = true
         var didPersistPermissions = false
+        let previousPermissions = subjectUser.permissions
+        let previousHasNoLineManager = subjectUser.hasNoLineManager
         if canEditPermissionsMatrix && !userStore.isOrganizationCreator(userId: user.id) {
             if canUseAdminAccountTools && permissions != subjectUser.permissions {
                 didPersistPermissions = true
@@ -3120,19 +3229,19 @@ struct EditUserView: View {
 
         var operativeDetailsSuccess = true
         let managerAssignmentChanged = Set(selectedLineManagerUserIds) != Set(subjectUser.lineManagerUserIds)
+        let hasNoLineManagerChanged = hasNoLineManagerDraft != subjectUser.hasNoLineManager
         let operativeDayRateChanged = parseDayRate(dayRateText) != subjectUser.dayRate
         let operativeProfileChanged =
-            (permissions.operativeMode && (managerAssignmentChanged || operativeDayRateChanged))
-            || (permissions.manager && managerAssignmentChanged)
-            || (permissions.adminAccess && managerAssignmentChanged)
-        if canEditPermissionsMatrix && (permissions.operativeMode || permissions.manager) {
-            if selectedLineManagerUserIds.isEmpty {
-                await MainActor.run {
-                    isUpdating = false
-                    saveErrorMessage = "Line manager is required for managers and operatives."
-                }
-                return
+            (permissions.operativeMode && (managerAssignmentChanged || operativeDayRateChanged || hasNoLineManagerChanged))
+            || ((permissions.manager || permissions.adminAccess) && (managerAssignmentChanged || hasNoLineManagerChanged))
+        if canEditPermissionsMatrix && lineManagerRoutingBlocked {
+            await MainActor.run {
+                isUpdating = false
+                saveErrorMessage = lineManagerValidationMessage
             }
+            return
+        }
+        if canEditPermissionsMatrix && operativeProfileChanged {
             if selectedLineManagerUserIds.contains(subjectUser.id) {
                 await MainActor.run {
                     isUpdating = false
@@ -3145,11 +3254,12 @@ struct EditUserView: View {
             let parsedDayRate = parseDayRate(dayRateText)
             let effectiveForHistory: Date? = operativeDayRateChanged ? (dayRateEffectiveAt ?? calendarStartOfDay(Date())) : nil
             let rateToPersist = operativeDayRateChanged ? parsedDayRate : subjectUser.dayRate
-            let managerIds = Array(selectedLineManagerUserIds)
+            let managerIds = hasNoLineManagerDraft ? [] : Array(selectedLineManagerUserIds)
             operativeDetailsSuccess = await userStore.updateOperativeProfileFields(
                 for: subjectUser,
                 assignedManagerUserId: managerIds.first,
                 assignedManagerUserIds: managerIds,
+                hasNoLineManager: hasNoLineManagerDraft,
                 dayRate: permissions.operativeMode ? rateToPersist : subjectUser.dayRate,
                 operativeStore: operativeStore,
                 dayRateEffectiveAt: effectiveForHistory,
@@ -3234,11 +3344,26 @@ struct EditUserView: View {
             await holidayStore.loadData()
         }
 
+        let finalPermissions = didPersistPermissions ? permissions : subjectUser.permissions
+        let finalHasNoLineManager = hasNoLineManagerChanged ? hasNoLineManagerDraft : subjectUser.hasNoLineManager
+        let needsSelfBookClear = UserRoleTransitionPolicy.shouldClearSelfBookedAnnualLeave(
+            old: previousPermissions,
+            new: finalPermissions,
+            oldHasNoLineManager: previousHasNoLineManager,
+            newHasNoLineManager: finalHasNoLineManager
+        )
+        if needsSelfBookClear && permissionsSuccess && operativeDetailsSuccess {
+            await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: user.id)
+            await notificationService.notifyAnnualLeaveSelfBookDisabled(userId: user.id)
+            await holidayStore.loadData()
+        }
+
         await MainActor.run {
             isUpdating = false
             showingDayRateEffectiveChoice = false
             employmentTypeConfirmationAccepted = false
             showingEmploymentTypeEffectiveDatePicker = false
+            selfBookOffConfirmationAccepted = false
             if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && employmentTypeSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess && billingSuccess && timesheetsSuccess {
                 dismiss()
             } else {

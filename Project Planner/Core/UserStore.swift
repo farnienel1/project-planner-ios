@@ -829,16 +829,37 @@ class UserStore: ObservableObject {
              // MARK: - User Invitation
              
     /// For operative invitations, pass the line manager's Firebase Auth UID (`users` document id).
-    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .paye, assignedManagerUserId: String? = nil, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async -> Bool {
+    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .paye, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async -> Bool {
         print("🔥🔥🔥 DEBUG: inviteUser called with firstName: \(firstName), surname: \(surname), email: \(email)")
         
         errorMessage = nil
-        
-        if (permissions.operativeMode || permissions.manager) && (assignedManagerUserId == nil || assignedManagerUserId?.isEmpty == true) {
-            errorMessage = permissions.manager
-                ? "Every manager must be assigned a line manager."
-                : "Every operative must be assigned a line manager."
+
+        let managerIds = (assignedManagerUserIds ?? assignedManagerUserId.map { [$0] } ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let draftUser = AppUser(
+            id: "invite-validation",
+            email: email,
+            organizationId: firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "",
+            role: .manager,
+            permissions: permissions,
+            hasNoLineManager: hasNoLineManager
+        )
+        if permissions.operativeMode && managerIds.isEmpty {
+            errorMessage = "Every operative must be assigned a line manager."
             return false
+        }
+        if (permissions.manager || permissions.adminAccess) && !permissions.operativeMode {
+            if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: draftUser) && managerIds.isEmpty {
+                errorMessage = "This user requires a Line Manager to Approve/Decline annual leave requests. Please set their line manager above."
+                return false
+            }
+            if managerIds.isEmpty && !hasNoLineManager {
+                errorMessage = permissions.manager
+                    ? "Every manager must be assigned a line manager or choose No line manager."
+                    : "Every administrator must be assigned a line manager or choose No line manager."
+                return false
+            }
         }
         
         guard let firebaseBackend = firebaseBackend else {
@@ -975,7 +996,9 @@ class UserStore: ObservableObject {
                 mobileNumber: mobileNumber,
                 permissions: permissions,
                 employmentType: employmentType,
-                assignedManagerUserId: assignedManagerUserId,
+                assignedManagerUserId: managerIds.first ?? assignedManagerUserId,
+                assignedManagerUserIds: managerIds,
+                hasNoLineManager: hasNoLineManager,
                 invitedOperativeDayRate: invitedOperativeDayRate,
                 invitedManagerDayRate: invitedManagerDayRate,
                 invitedTradeTypePreset: invitedTradeTypePreset,
@@ -1487,12 +1510,24 @@ class UserStore: ObservableObject {
                          if let holidayStore,
                             UserRoleTransitionPolicy.shouldClearPendingAnnualLeave(
                                 old: previousPermissions,
-                                new: permissions
+                                new: permissions,
+                                oldHasNoLineManager: organizationUsers[index].hasNoLineManager,
+                                newHasNoLineManager: organizationUsers[index].hasNoLineManager
                             ) {
                              await holidayStore.deletePendingHolidayRequestsFor(
                                  userId: userId,
                                  operativeId: linkedOperativeUUID
                              )
+                         }
+
+                         if let holidayStore,
+                            UserRoleTransitionPolicy.shouldClearSelfBookedAnnualLeave(
+                                old: previousPermissions,
+                                new: permissions,
+                                oldHasNoLineManager: organizationUsers[index].hasNoLineManager,
+                                newHasNoLineManager: organizationUsers[index].hasNoLineManager
+                            ) {
+                             await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: userId)
                          }
 
                          return true
@@ -1646,6 +1681,7 @@ class UserStore: ObservableObject {
                 for user: AppUser,
                 assignedManagerUserId: String?,
                 assignedManagerUserIds: [String]? = nil,
+                hasNoLineManager: Bool? = nil,
                 dayRate: Double?,
                 operativeStore: OperativeStore?,
                 dayRateEffectiveAt: Date? = nil,
@@ -1655,15 +1691,19 @@ class UserStore: ObservableObject {
                 guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
                 var updatedUser = organizationUsers[index]
                 guard updatedUser.permissions.operativeMode || updatedUser.role == .operative || updatedUser.permissions.manager || updatedUser.role == .manager || updatedUser.permissions.adminAccess || updatedUser.role == .admin else { return false }
+                if let hasNoLineManager {
+                    updatedUser.setNoLineManager(hasNoLineManager)
+                }
                 let managerIds = (assignedManagerUserIds ?? assignedManagerUserId.map { [$0] } ?? [])
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }
-                if managerIds.contains(updatedUser.id) {
-                    errorMessage = "A user cannot be their own line manager."
-                    return false
+                if !updatedUser.hasNoLineManager {
+                    if managerIds.contains(updatedUser.id) {
+                        errorMessage = "A user cannot be their own line manager."
+                        return false
+                    }
+                    updatedUser.setLineManagerUserIds(managerIds)
                 }
-
-                updatedUser.setLineManagerUserIds(managerIds)
                 updatedUser.dayRate = dayRate
 
                 do {
@@ -1673,6 +1713,7 @@ class UserStore: ObservableObject {
                         userId: updatedUser.id,
                         assignedManagerUserId: updatedUser.assignedManagerUserId,
                         assignedManagerUserIds: updatedUser.lineManagerUserIds,
+                        hasNoLineManager: hasNoLineManager ?? updatedUser.hasNoLineManager,
                         dayRate: dayRate,
                         updateDayRate: updateDayRate
                     )

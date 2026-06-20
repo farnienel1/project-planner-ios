@@ -49,7 +49,7 @@ private enum OperativeAnnualLeaveHubTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .manage: return "Manage operative annual leave"
+        case .manage: return "Manage user annual leave"
         case .approved: return "View approved bookings"
         case .requests: return "View annual leave requests"
         }
@@ -115,7 +115,7 @@ struct OperativeAnnualLeaveHubView: View {
             }
         }
         .background(HolidayChrome.canvas.ignoresSafeArea())
-        .navigationTitle("View and manage operative annual leave")
+        .navigationTitle("View and manage user annual leave")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await holidayStore.loadData()
@@ -409,8 +409,18 @@ struct OperativeAnnualLeaveCalendarView: View {
     @State private var showError = false
     @State private var successMessage: String?
     @State private var showSuccess = false
+    @StateObject private var bankHolidayService = BankHolidayService.shared
+    @State private var bankHolidayTooltip: String?
 
     private let calendar = Calendar.current
+
+    private var bankHolidayRegion: BankHolidayRegion {
+        let org = firebaseBackend.currentOrganization
+        return BankHolidayRegionDirectory.region(
+            id: org?.settings.bankHolidayRegionId,
+            fallbackCountryCode: org?.countryCode ?? "GB"
+        )
+    }
 
     var body: some View {
         ScrollView {
@@ -458,8 +468,17 @@ struct OperativeAnnualLeaveCalendarView: View {
         } message: {
             if let successMessage { Text(successMessage) }
         }
+        .alert("Annual leave calendar", isPresented: Binding(
+            get: { bankHolidayTooltip != nil },
+            set: { if !$0 { bankHolidayTooltip = nil } }
+        )) {
+            Button("OK") { bankHolidayTooltip = nil }
+        } message: {
+            if let bankHolidayTooltip { Text(bankHolidayTooltip) }
+        }
         .task {
             await holidayStore.loadData()
+            await bankHolidayService.ensureLoaded(region: bankHolidayRegion)
         }
     }
 
@@ -636,10 +655,22 @@ struct OperativeAnnualLeaveCalendarView: View {
     }
 
     private var legendRow: some View {
-        HStack(spacing: 12) {
-            legendDot(color: HolidayChrome.taken, label: "Approved full day")
-            legendDot(color: HolidayChrome.halfDayBooked, label: "Approved half day")
-            legendDot(color: HolidayChrome.pending, label: "Pending")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                legendDot(color: HolidayChrome.taken, label: "Approved full day")
+                legendDot(color: HolidayChrome.halfDayBooked, label: "Approved half day")
+                legendDot(color: HolidayChrome.pending, label: "Pending")
+            }
+            HStack(spacing: 12) {
+                HStack(spacing: 4) {
+                    Circle().stroke(AnnualLeaveCalendarChrome.weekendStroke, lineWidth: 2).frame(width: 8, height: 8)
+                    Text("Weekend")
+                }
+                HStack(spacing: 4) {
+                    Circle().stroke(AnnualLeaveCalendarChrome.bankHolidayStroke, lineWidth: 2).frame(width: 8, height: 8)
+                    Text("Bank holiday")
+                }
+            }
         }
         .font(.caption2)
         .foregroundStyle(HolidayChrome.muted)
@@ -766,8 +797,22 @@ struct OperativeAnnualLeaveCalendarView: View {
         let isSelected = selectedDay.map { calendar.isDate($0, inSameDayAs: day) } ?? false
         let isInMonth = calendar.isDate(date, equalTo: displayedMonth, toGranularity: .month)
         let kind = dayKind(for: day)
+        let blockReason = AnnualLeaveCalendarRules.blockReason(
+            for: day,
+            bankHolidays: bankHolidayService.holidaysByDayKey,
+            calendar: calendar
+        )
 
         return Button {
+            if let blockReason {
+                switch blockReason {
+                case .weekend:
+                    bankHolidayTooltip = "Weekends cannot be booked as annual leave."
+                case .bankHoliday(let name):
+                    bankHolidayTooltip = "\(name) — bank holidays cannot be booked as annual leave."
+                }
+                return
+            }
             if isSelected {
                 selectedDay = nil
             } else {
@@ -782,17 +827,19 @@ struct OperativeAnnualLeaveCalendarView: View {
             Text("\(calendar.component(.day, from: date))")
                 .font(.subheadline)
                 .fontWeight(isSelected ? .bold : .regular)
-                .foregroundStyle(
-                    isInMonth
-                        ? (isSelected ? Color.white : HolidayChrome.ink)
-                        : HolidayChrome.muted
-                )
                 .frame(width: 36, height: 36)
-                .background(dayBackground(kind: kind, isSelected: isSelected))
+                .annualLeaveBlockedDayStyle(
+                    blockReason: blockReason,
+                    isSelected: isSelected,
+                    isInMonth: isInMonth,
+                    defaultInk: HolidayChrome.ink,
+                    defaultMuted: HolidayChrome.muted
+                )
                 .overlay(dayOverlay(kind: kind))
                 .clipShape(Circle())
         }
         .buttonStyle(.plain)
+        .disabled(blockReason != nil)
     }
 
     @ViewBuilder
@@ -1001,7 +1048,7 @@ private enum AnnualLeavePersonBuilder {
         )
 
         for user in users where user.isActive {
-            if user.permissions.annualLeaveSelfBook { continue }
+            if AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: user) { continue }
             let email = user.email.lowercased()
             guard seenEmails.insert(email).inserted else { continue }
             let linkedOp = operativesByEmail[email]
@@ -1033,7 +1080,7 @@ private enum AnnualLeavePersonBuilder {
         for op in operatives where op.isActive {
             let email = op.email.lowercased()
             if let linkedUser = users.first(where: { $0.email.lowercased() == email }),
-               linkedUser.permissions.annualLeaveSelfBook {
+               AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: linkedUser) {
                 continue
             }
             guard seenEmails.insert(email).inserted else { continue }
