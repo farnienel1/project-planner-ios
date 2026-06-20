@@ -62,6 +62,7 @@ struct HomeView: View {
     @State private var persistedAdminOverviewMetricIds: [HomeOverviewMetricID] = []
     @State private var hasLoadedAdminOverviewMetrics = false
     @State private var showingHomeProfileCard = false
+    @State private var lastManagerWarningsRefreshAt: Date?
     
     var body: some View {
         ScrollView {
@@ -542,10 +543,19 @@ struct HomeView: View {
             loadPersistedAdminOverviewMetricsIfNeeded()
         }
         .task(id: homeDataRefreshTrigger) {
+            // Coalesce rapid store updates while Firebase batches load.
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
             await refreshHomeDerivedData()
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
             guard userStore.hasAdminAccess() else { return }
+            let now = Date()
+            if let lastManagerWarningsRefreshAt,
+               now.timeIntervalSince(lastManagerWarningsRefreshAt) < 2 {
+                return
+            }
+            lastManagerWarningsRefreshAt = now
             Task {
                 await WarningsRefreshHelper.refreshSharedWarnings(
                     operativeStore: operativeStore,
@@ -1256,9 +1266,14 @@ struct HomeView: View {
     /// Rebuild Up Next + warning count off the main thread; Home does not observe `WarningsService` (avoids full-tree redraws).
     private func refreshHomeDerivedData() async {
         guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
-        try? await Task.sleep(nanoseconds: 50_000_000)
         guard !Task.isCancelled else { return }
         guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
+
+        let storesStillLoading = bookingStore.isLoading
+            || operativeStore.isLoading
+            || projectStore.isLoading
+            || holidayStore.isLoading
+            || managerScheduleStore.isLoading
 
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let operatives = operativeStore.allOperatives
@@ -1278,7 +1293,7 @@ struct HomeView: View {
         let liveProjects = projectStore.liveProjects
         let smallWorks = projectStore.smallWorks
 
-        async let upNextTask: [HomeUpNextDaySection] = Task { @MainActor in
+        async let upNextTask = Task.detached(priority: .userInitiated) {
             HomeUpNextSupport.upcomingDaySections(
                 minDistinctDays: 2,
                 mergeRowLimit: 48,
@@ -1296,7 +1311,7 @@ struct HomeView: View {
             )
         }.value
 
-        async let metricsTask = Task { @MainActor in
+        async let metricsTask = Task.detached(priority: .userInitiated) {
             HomeOverviewMetrics.compute(
                 tasks: tasks,
                 userEmail: userEmail,
@@ -1311,7 +1326,7 @@ struct HomeView: View {
             )
         }.value
 
-        if userStore.hasAdminAccess() {
+        if userStore.hasAdminAccess(), !storesStillLoading {
             async let warningsTask: Void = WarningsRefreshHelper.refreshSharedWarnings(
                 operativeStore: operativeStore,
                 bookingStore: bookingStore,
@@ -1330,6 +1345,9 @@ struct HomeView: View {
         } else {
             cachedOverviewMetrics = await metricsTask
             cachedUpNextSections = await upNextTask
+            if userStore.hasAdminAccess(), storesStillLoading {
+                homeWarningCount = WarningsService.shared.warningCount
+            }
         }
     }
 

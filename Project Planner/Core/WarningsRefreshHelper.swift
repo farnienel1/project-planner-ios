@@ -23,14 +23,8 @@ enum WarningsRefreshHelper {
     ) async {
         guard userStore.hasAdminAccess() else { return }
 
-        if managerScheduleStore.managerSiteBookings.isEmpty {
+        if managerScheduleStore.managerSiteBookings.isEmpty && !managerScheduleStore.isLoading {
             managerScheduleStore.loadData(force: true)
-            for _ in 0..<20 {
-                if !managerScheduleStore.managerSiteBookings.isEmpty || !managerScheduleStore.isLoading {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 50_000_000)
-            }
         }
 
         if !force {

@@ -145,7 +145,6 @@ struct WarningsComputationSnapshot: Sendable {
 }
 
 enum WarningsComputation {
-    @MainActor
     static func makeSnapshot(from input: WarningsComputationInput) -> WarningsComputationSnapshot {
         let cal = Calendar.current
 
