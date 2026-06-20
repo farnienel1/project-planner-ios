@@ -176,50 +176,46 @@ extension ManagerSiteBooking {
     }
 
     func paidBookedHours(policy: OrgPayrollTimePolicy = .default) -> Double {
-        if let s = workStartTime, let e = workEndTime,
-           let sm = ManagerScheduleInterval.parseMinutes(s),
-           let em = ManagerScheduleInterval.parseMinutes(e), em > sm {
-            var wall = Double(em - sm) / 60.0
-            if !isBreakRemoved {
-                wall = max(0, wall - policy.standardUnpaidBreakHours)
+        payrollHoursResult(policy: policy).totalPaidHours
+    }
+
+    func payrollHoursResult(policy: OrgPayrollTimePolicy = .default) -> PayrollHoursResult {
+        PayrollHoursEngine.compute(booking: operativePayrollProbe(), day: date, policy: policy)
+    }
+
+    func effectiveWeekdayOtMultiplier(policy: OrgPayrollTimePolicy = .default) -> Double {
+        let result = payrollHoursResult(policy: policy)
+        if let outside = result.segments.first(where: { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }) {
+            return outside.multiplier
+        }
+        return policy.weekdayOutsideStandardMultiplier
+    }
+
+    /// Maps manager schedule booking into the shared operative payroll probe shape.
+    func operativePayrollProbe() -> Booking {
+        let slot: TimeSlot = {
+            switch timeSlot {
+            case .morning: return .morning
+            case .afternoon: return .afternoon
+            case .fullDay: return .fullDay
+            case .customHours: return .customHours
             }
-            return wall
-        }
-        // Legacy AM/PM/full day mapped to org clock window: show paid hours (e.g. 8h), not raw span (e.g. 8.5h).
-        switch timeSlot {
-        case .fullDay, .customHours:
-            return max(policy.standardPaidHours, 0)
-        case .morning, .afternoon:
-            return max(policy.standardPaidHours, 0) / 2
-        }
+        }()
+        return Booking(
+            operativeId: UUID(),
+            projectId: locationId ?? UUID(),
+            date: date,
+            timeSlot: slot,
+            bookedBy: userId,
+            workStartTime: workStartTime,
+            workEndTime: workEndTime,
+            isBreakRemoved: isBreakRemoved,
+            otMultiplierOverride: nil
+        )
     }
 
     func scheduleCoverageSubtitle(policy: OrgPayrollTimePolicy = .default) -> (text: String, emphasizedOvertime: Bool) {
-        if ManagerScheduleInterval.coversFullStandardDay(self, policy: policy) {
-            return ("Full standard day · \(policy.standardDayStart)–\(policy.standardDayEnd)", false)
-        }
-        if let s = workStartTime, let e = workEndTime, !s.isEmpty, !e.isEmpty {
-            let ot = overtimeHoursBeyondPaidStandard(policy: policy)
-            if ot > 0.05 {
-                let stdShow = paidBookedHours(policy: policy) - ot
-                let mult = policy.weekdayOutsideStandardMultiplier
-                let multStr = abs(mult - mult.rounded()) < 0.05 ? String(format: "%.0f", mult) : String(format: "%.1f", mult)
-                return ("\(s)–\(e) · \(ScheduleCoverageFormat.hours(stdShow))h std + \(ScheduleCoverageFormat.hours(ot))h × \(multStr)", true)
-            }
-            var t = "\(s)–\(e)"
-            if isBreakRemoved {
-                t += " · break removed"
-            }
-            return (t, false)
-        }
-        switch timeSlot {
-        case .fullDay:
-            return ("Full standard day · \(policy.standardDayStart)–\(policy.standardDayEnd)", false)
-        case .morning, .afternoon:
-            return (scheduleLabel(policy: policy), false)
-        case .customHours:
-            return (scheduleLabel(policy: policy), false)
-        }
+        operativePayrollProbe().scheduleCoverageSubtitle(policy: policy)
     }
 
     func scheduleCoveragePillHours(policy: OrgPayrollTimePolicy = .default) -> String {
@@ -289,6 +285,8 @@ extension ManagerSiteBooking {
     }
 
     func overtimeHoursBeyondPaidStandard(policy: OrgPayrollTimePolicy = .default) -> Double {
-        max(0, paidBookedHours(policy: policy) - max(policy.standardPaidHours, 0))
+        payrollHoursResult(policy: policy).segments
+            .filter { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }
+            .reduce(0) { $0 + $1.paidHours }
     }
 }

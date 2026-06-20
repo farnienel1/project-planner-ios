@@ -185,7 +185,6 @@ enum PayrollHoursEngine {
         let sm = interval.0
         let em = interval.1
         let countsAs = weekend.resolvedCountsAsHours(fallback: policy.standardPaidHours)
-        let windowSpan = Double(we - ws) / 60.0
         let outsideMult = booking.effectiveOutsideMultiplier(policy: policy, weekend: weekend)
 
         var segments: [PayrollHoursSegment] = []

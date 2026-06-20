@@ -91,8 +91,7 @@ enum PayrollTimePolicyCatalog {
 
     static func resolvedSundaySettings(from policy: OrgPayrollTimePolicy) -> OrgWeekendDayPayrollSettings {
         if policy.sundaySameAsSaturday {
-            var sun = policy.saturday
-            return sun
+            return policy.saturday
         }
         return policy.sunday
     }
