@@ -213,6 +213,7 @@ struct ProjectDetailView: View {
                 .environmentObject(holidayStore)
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
+                .environmentObject(managerScheduleStore)
                 .environmentObject(notificationService)
                 .preference(key: HideBottomMenuKey.self, value: true)
         }

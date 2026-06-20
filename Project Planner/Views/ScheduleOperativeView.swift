@@ -17,6 +17,7 @@ struct ScheduleOperativeView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     
     let project: Project
     /// When opening from a project week booking row, pre-selects operative/date/hours and replaces that booking after confirm.
@@ -55,6 +56,13 @@ struct ScheduleOperativeView: View {
     @State private var didApplyEditingGroupPrefill = false
     /// `operativeOverrideKey` → booking id to delete before creating the replacement on confirm.
     @State private var replaceBookingOnConfirmByOverrideKey: [String: UUID] = [:]
+    @State private var acknowledgedConflictIds: Set<String> = []
+    @State private var struckConflictIds: Set<String> = []
+    @State private var expandedMainConflictPersonIds: Set<UUID> = []
+    @State private var expandedPickerPersonIds: Set<UUID> = []
+    @State private var showingSelectDatesFirstAlert = false
+    @State private var showingHoursClashAlert = false
+    @State private var didShowHoursClashAlertThisSession = false
     @EnvironmentObject var notificationService: NotificationService
     
     private var payrollTimePolicy: OrgPayrollTimePolicy {
@@ -93,12 +101,13 @@ struct ScheduleOperativeView: View {
                 ScrollView {
                     VStack(spacing: 12) {
                         scheduleBookingProjectCard
-                        scheduleBookingOperativesSection
-                        if !selectedOperatives.isEmpty {
-                            scheduleBookingBulkHoursCard
-                        }
                         scheduleBookingCalendarCardCompact
                         quickSelectSectionCompact
+                        scheduleBookingBulkHoursCard
+                        scheduleBookingOperativesSection
+                        if !selectedOperatives.isEmpty {
+                            scheduleBookingReviewSection
+                        }
                         Spacer(minLength: 24)
                     }
                     .padding(.horizontal, 14)
@@ -106,8 +115,8 @@ struct ScheduleOperativeView: View {
                     .padding(.bottom, 100)
                 }
 
-                if !clashReviewOperativeIds.isEmpty {
-                    operativeClashReviewBanner
+                if mainScreenHasUnactionedConflicts {
+                    scheduleMainClashNotice
                 }
             }
             .navigationTitle("Schedule booking")
@@ -181,38 +190,54 @@ struct ScheduleOperativeView: View {
             .sheet(isPresented: $showingSelectOperatives) {
                 SelectOperativesView(
                     selectedOperatives: $selectedOperatives,
-                    visiblySelectedOperativeIds: selectedOperatives
-                        .union(clashReviewOperativeIds)
-                        .union(approvedOverlapOperativeIds),
-                    unavailableOperativeIds: unavailableOperativeIdsForSelectedDates
+                    people: bookablePeople,
+                    selectedDates: selectedDates,
+                    bulkChoice: sharedBulkChoice,
+                    projectId: project.id,
+                    excludingBookingIds: excludingBookingIds,
+                    acknowledgedConflictIds: $acknowledgedConflictIds,
+                    struckConflictIds: $struckConflictIds,
+                    expandedPersonIds: $expandedPickerPersonIds
                 )
                     .environmentObject(operativeStore)
+                    .environmentObject(userStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(holidayStore)
+                    .environmentObject(firebaseBackend)
+            }
+            .alert("Select dates first", isPresented: $showingSelectDatesFirstAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Select a day or days below first, then you will be able to add users to the booking.")
+            }
+            .alert("Hours caused clashes", isPresented: $showingHoursClashAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("New hours have been selected, which has caused clashes with other bookings. Make your final change and then acknowledge each clash above before being able to Confirm booking.")
             }
             .onChange(of: selectedDates) { oldSet, newSet in
-                removeUnavailableSelectedOperatives()
-                approvedOverlapOperativeIds.removeAll()
-                if oldSet.isEmpty && !newSet.isEmpty {
-                    for opId in selectedOperatives {
-                        if let d = operativeDefaultChoice[opId] {
-                            applyOperativeOverride(operativeId: opId, choice: d)
-                        }
-                    }
+                if oldSet != newSet {
+                    acknowledgedConflictIds.removeAll()
+                    struckConflictIds.removeAll()
                 }
-                reconcileOperativeClashState()
+                reconcileMainConflictExpansion()
             }
             .onChange(of: selectedOperatives) { _, _ in
-                reconcileOperativeClashState()
+                reconcileMainConflictExpansion()
             }
             .onChange(of: operativeSlotOverrides.count) { _, _ in
-                approvedOverlapOperativeIds.removeAll()
-                reconcileOperativeClashState()
+                handleHoursOrDatesChanged()
             }
             .onChange(of: sharedBulkChoice) { _, _ in
-                approvedOverlapOperativeIds.removeAll()
-                reconcileOperativeClashState()
+                handleHoursOrDatesChanged()
             }
             .onAppear {
-                Task { await holidayStore.loadData() }
+                Task {
+                    await holidayStore.loadData()
+                    managerScheduleStore.loadData()
+                }
                 if !didApplyOrgDefaultHours {
                     let p = payrollTimePolicy
                     sharedBulkChoice = OperativeDayBookingChoice(
@@ -238,6 +263,124 @@ struct ScheduleOperativeView: View {
     }
     
     // MARK: - Project Header Card
+    private var bookablePeople: [ScheduleBookablePerson] {
+        ScheduleBookablePersonBuilder.build(
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers,
+            projectId: project.id,
+            bookings: bookingStore.bookings
+        )
+    }
+
+    private var excludingBookingIds: Set<UUID> {
+        Set(replaceBookingOnConfirmByOverrideKey.values)
+    }
+
+    private var canOpenPeoplePicker: Bool {
+        !selectedDates.isEmpty
+    }
+
+    private var mainScreenHasUnactionedConflicts: Bool {
+        !selectedOperatives.isEmpty && selectedOperatives.contains { opId in
+            guard let person = bookablePeople.first(where: { $0.operativeId == opId }) else { return false }
+            let summary = personConflictSummary(person)
+            return summary?.hasUnactionedRows == true
+        }
+    }
+
+    private var canConfirmBooking: Bool {
+        guard !selectedOperatives.isEmpty, !selectedDates.isEmpty, !isBooking else { return false }
+        return ScheduleBookingConflictEngine.allActionableRowsResolved(
+            people: bookablePeople,
+            selectedOperativeIds: selectedOperatives,
+            selectedDates: selectedDates,
+            choice: sharedBulkChoice,
+            projectId: project.id,
+            projectStore: projectStore,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            policy: payrollTimePolicy,
+            excludingBookingIds: excludingBookingIds,
+            manuallyExcludedDaysByOperative: autoExcludedDaysByOperative,
+            acknowledgedRowIds: acknowledgedConflictIds,
+            struckRowIds: struckConflictIds
+        )
+    }
+
+    private var autoExcludedDaysByOperative: [UUID: Set<Date>] {
+        var map: [UUID: Set<Date>] = [:]
+        for person in bookablePeople where selectedOperatives.contains(person.operativeId) {
+            let rows = ScheduleBookingConflictEngine.buildConflictRows(
+                person: person,
+                selectedDates: selectedDates,
+                choice: sharedBulkChoice,
+                projectId: project.id,
+                projectStore: projectStore,
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                holidayStore: holidayStore,
+                policy: payrollTimePolicy,
+                excludingBookingIds: excludingBookingIds
+            )
+            map[person.operativeId] = Set(rows.filter { $0.kind == .approvedAnnualLeave }.map { Calendar.current.startOfDay(for: $0.date) })
+        }
+        return map
+    }
+
+    private func personConflictSummary(_ person: ScheduleBookablePerson) -> SchedulePersonConflictSummary? {
+        ScheduleBookingConflictEngine.summarizePerson(
+            person: person,
+            selectedDates: selectedDates,
+            isSelected: selectedOperatives.contains(person.operativeId),
+            choice: sharedBulkChoice,
+            projectId: project.id,
+            projectStore: projectStore,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            policy: payrollTimePolicy,
+            excludingBookingIds: excludingBookingIds,
+            manuallyExcludedDays: autoExcludedDaysByOperative[person.operativeId] ?? [],
+            acknowledgedRowIds: acknowledgedConflictIds,
+            struckRowIds: struckConflictIds
+        )
+    }
+
+    private func effectiveDates(for operativeId: UUID) -> [Date] {
+        guard let person = bookablePeople.first(where: { $0.operativeId == operativeId }) else {
+            return selectedDates.sorted()
+        }
+        return personConflictSummary(person)?.effectiveSelectedDates ?? []
+    }
+
+    private func handleHoursOrDatesChanged() {
+        acknowledgedConflictIds.removeAll()
+        struckConflictIds.removeAll()
+        if mainScreenHasUnactionedConflicts && !didShowHoursClashAlertThisSession {
+            didShowHoursClashAlertThisSession = true
+            showingHoursClashAlert = true
+        }
+        reconcileMainConflictExpansion()
+    }
+
+    private func reconcileMainConflictExpansion() {
+        for opId in selectedOperatives {
+            guard let person = bookablePeople.first(where: { $0.operativeId == opId }),
+                  let summary = personConflictSummary(person),
+                  summary.triangle != .none else { continue }
+            expandedMainConflictPersonIds.insert(opId)
+        }
+    }
+
+    private func openPeoplePicker() {
+        guard canOpenPeoplePicker else {
+            showingSelectDatesFirstAlert = true
+            return
+        }
+        showingSelectOperatives = true
+    }
+
     private var selectableOperatives: [Operative] {
         let active = operativeStore.activeOperatives
         return active.isEmpty ? operativeStore.allOperatives : active
@@ -364,13 +507,12 @@ struct ScheduleOperativeView: View {
     }
 
     private var totalPlannedHours: Double {
-        let dates = selectedDates.sorted()
-        guard !selectedOperatives.isEmpty, !dates.isEmpty else { return 0 }
+        guard !selectedOperatives.isEmpty, !selectedDates.isEmpty else { return 0 }
         let ops = selectableOperatives.filter { selectedOperatives.contains($0.id) }
         var sum = 0.0
         let p = payrollTimePolicy
         for op in ops {
-            for d in dates {
+            for d in effectiveDates(for: op.id) {
                 let choice = resolvedChoice(operativeId: op.id, date: d)
                 let probe = choice.bookingProbe(operativeId: op.id, projectId: project.id, date: d, bookedBy: loggedInUserName)
                 sum += probe.paidBookedHours(policy: p)
@@ -379,14 +521,19 @@ struct ScheduleOperativeView: View {
         return sum
     }
 
+    private var totalEffectiveBookingDays: Int {
+        selectedOperatives.reduce(0) { partial, opId in
+            partial + effectiveDates(for: opId).count
+        }
+    }
+
     private var bottomBarHoursCaption: String {
-        let dates = selectedDates.sorted()
-        guard !selectedOperatives.isEmpty, !dates.isEmpty else { return "" }
+        guard !selectedOperatives.isEmpty, !selectedDates.isEmpty else { return "" }
         let ops = selectedOperatives.count
-        let dCount = dates.count
+        let dCount = totalEffectiveBookingDays
         let h = totalPlannedHours
         let hStr = formatHoursOneDecimal(h)
-        return "\(ops) ops × \(dCount) date\(dCount == 1 ? "" : "s") · \(hStr)h total"
+        return "\(ops) people · \(dCount) booking day\(dCount == 1 ? "" : "s") · \(hStr)h total"
     }
 
     private var bottomBarStandardCaption: String {
@@ -462,91 +609,130 @@ struct ScheduleOperativeView: View {
                             .font(.system(size: 11))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                             .fixedSize(horizontal: false, vertical: true)
-                        Button { showingSelectOperatives = true } label: {
+                        Button { openPeoplePicker() } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: "person.badge.plus")
                                     .font(.system(size: 15, weight: .medium))
-                                Text("Add operatives")
+                                Text("Add people")
                                     .font(.system(size: 13, weight: .semibold))
                             }
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                            .foregroundStyle(canOpenPeoplePicker ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.muted)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .background(Color(red: 0.902, green: 0.945, blue: 0.984))
+                            .background(Color(red: 0.902, green: 0.945, blue: 0.984).opacity(canOpenPeoplePicker ? 1 : 0.5))
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 1)
+                                    .stroke(ProjectWorksRevampColors.blue.opacity(canOpenPeoplePicker ? 0.35 : 0.15), lineWidth: 1)
                             )
                         }
                         .buttonStyle(.plain)
+                        .disabled(!canOpenPeoplePicker)
                     }
                     .padding(14)
                 } else {
-                    let ordered = selectableOperatives.filter { selectedOperatives.contains($0.id) }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-                    ForEach(Array(ordered.enumerated()), id: \.element.id) { idx, op in
+                    let ordered = bookablePeople.filter { selectedOperatives.contains($0.operativeId) }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                    ForEach(Array(ordered.enumerated()), id: \.element.id) { idx, person in
+                        let op = selectableOperatives.first(where: { $0.id == person.operativeId }) ?? Operative(
+                            firstName: person.name,
+                            lastName: "",
+                            email: person.email,
+                            startDate: Date()
+                        )
                         if idx > 0 {
                             Divider().overlay(ProjectWorksRevampColors.border)
                         }
-                        HStack(spacing: 10) {
-                            Button {
-                                let initial: OperativeDayBookingChoice
-                                if let d = selectedDates.sorted().first {
-                                    initial = resolvedChoice(operativeId: op.id, date: d)
-                                } else {
-                                    initial = operativeDefaultChoice[op.id] ?? sharedBulkChoice
-                                }
-                                operativeCustomHoursPick = OperativeCustomHoursPick(
-                                    operativeId: op.id,
-                                    operativeName: op.name,
-                                    initialChoice: initial
-                                )
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Text(PlannerUIInitials.from(op.name))
-                                        .font(.system(size: 10, weight: .medium))
-                                        .foregroundStyle(.white)
-                                        .frame(width: 30, height: 30)
-                                        .background(
-                                            LinearGradient(
-                                                colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            )
-                                        )
-                                        .clipShape(Circle())
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(op.name)
-                                            .font(.system(size: 13, weight: .semibold))
-                                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                                        Text(operativeHoursSubtitle(for: op.id))
-                                            .font(.system(size: 11, weight: .medium))
-                                            .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 10) {
+                                Button {
+                                    let initial: OperativeDayBookingChoice
+                                    if let d = selectedDates.sorted().first {
+                                        initial = resolvedChoice(operativeId: op.id, date: d)
+                                    } else {
+                                        initial = operativeDefaultChoice[op.id] ?? sharedBulkChoice
                                     }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    operativeCustomHoursPick = OperativeCustomHoursPick(
+                                        operativeId: op.id,
+                                        operativeName: op.name,
+                                        initialChoice: initial
+                                    )
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Text(PlannerUIInitials.from(op.name))
+                                            .font(.system(size: 10, weight: .medium))
+                                            .foregroundStyle(.white)
+                                            .frame(width: 30, height: 30)
+                                            .background(
+                                                LinearGradient(
+                                                    colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
+                                                    startPoint: .topLeading,
+                                                    endPoint: .bottomTrailing
+                                                )
+                                            )
+                                            .clipShape(Circle())
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack(spacing: 6) {
+                                                Text(op.name)
+                                                    .font(.system(size: 13, weight: .semibold))
+                                                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                                                Text(person.roleLabel)
+                                                    .font(.system(size: 9, weight: .medium))
+                                                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                                            }
+                                            Text(operativeHoursSubtitle(for: op.id))
+                                                .font(.system(size: 11, weight: .medium))
+                                                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                                            if let days = personConflictSummary(person)?.effectiveSelectedDates, !days.isEmpty {
+                                                Text(days.map { $0.formatted(date: .abbreviated, time: .omitted) }.joined(separator: ", "))
+                                                    .font(.system(size: 10))
+                                                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                                            }
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .contentShape(Rectangle())
                                 }
-                                .contentShape(Rectangle())
+                                .buttonStyle(.plain)
+                                Button {
+                                    clearOverrides(for: op.id)
+                                    selectedOperatives.remove(op.id)
+                                    expandedMainConflictPersonIds.remove(op.id)
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
+                                        .frame(width: 32, height: 32)
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
-                            Button {
-                                clearOverrides(for: op.id)
-                                selectedOperatives.remove(op.id)
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
-                                    .frame(width: 32, height: 32)
+                            if let summary = personConflictSummary(person), !summary.rows.isEmpty {
+                                ScheduleOperativeMainConflictBlock(
+                                    person: person,
+                                    summary: summary,
+                                    isExpanded: expandedMainConflictPersonIds.contains(person.operativeId),
+                                    acknowledgedIds: acknowledgedConflictIds,
+                                    struckIds: struckConflictIds,
+                                    onToggleExpand: {
+                                        if expandedMainConflictPersonIds.contains(person.operativeId) {
+                                            expandedMainConflictPersonIds.remove(person.operativeId)
+                                        } else {
+                                            expandedMainConflictPersonIds.insert(person.operativeId)
+                                        }
+                                    },
+                                    onAcknowledge: { acknowledgedConflictIds.insert($0); struckConflictIds.remove($0) },
+                                    onStrike: { struckConflictIds.insert($0); acknowledgedConflictIds.remove($0) }
+                                )
+                                .padding(.leading, 4)
                             }
-                            .buttonStyle(.plain)
                         }
                         .padding(.vertical, 10)
                     }
                     Divider().overlay(ProjectWorksRevampColors.border)
-                    Button { showingSelectOperatives = true } label: {
+                    Button { openPeoplePicker() } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "plus.circle.fill")
                                 .font(.system(size: 16, weight: .medium))
-                            Text(selectedOperatives.count <= 1 ? "Add operative" : "Add another operative")
+                            Text(selectedOperatives.count <= 1 ? "Add another person" : "Add another person")
                                 .font(.system(size: 13, weight: .semibold))
                         }
                         .foregroundStyle(ProjectWorksRevampColors.blue)
@@ -566,6 +752,96 @@ struct ScheduleOperativeView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
         )
+    }
+
+    private var scheduleMainClashNotice: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.red)
+            Text("Acknowledge each clash above before you can confirm booking.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.red.opacity(0.08))
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+
+    private var scheduleBookingReviewSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("CONFIRM BOOKING")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .tracking(0.4)
+                .padding(.leading, 4)
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Hours")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                    Text(operativeLineForChoice(sharedBulkChoice))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                    if hasAnyOperativeOverrides {
+                        Text("Some people have custom hours — tap a name above to review.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                    }
+                }
+                Divider().overlay(ProjectWorksRevampColors.border)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Selected dates")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                    Text(selectedDates.sorted().map { $0.formatted(date: .abbreviated, time: .omitted) }.joined(separator: ", "))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Divider().overlay(ProjectWorksRevampColors.border)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("People")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                    let ordered = bookablePeople
+                        .filter { selectedOperatives.contains($0.operativeId) }
+                        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                    ForEach(ordered) { person in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 6) {
+                                Text(person.name)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                                if let summary = personConflictSummary(person), summary.triangle != .none {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(summary.triangle == .red ? .red : .orange)
+                                }
+                            }
+                            if let days = personConflictSummary(person)?.effectiveSelectedDates, !days.isEmpty {
+                                Text(days.map { $0.formatted(date: .abbreviated, time: .omitted) }.joined(separator: ", "))
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+            )
+        }
     }
 
     private var scheduleBookingBulkHoursCard: some View {
@@ -952,11 +1228,11 @@ struct ScheduleOperativeView: View {
                     .padding(.vertical, 10)
                     .background(
                         RoundedRectangle(cornerRadius: 11, style: .continuous)
-                            .fill(selectedOperatives.isEmpty || selectedDates.isEmpty || isBooking ? ProjectWorksRevampColors.muted.opacity(0.45) : ProjectWorksRevampColors.blue)
+                            .fill(canConfirmBooking ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.muted.opacity(0.45))
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(selectedOperatives.isEmpty || selectedDates.isEmpty || isBooking || !clashReviewOperativeIds.isEmpty)
+                .disabled(!canConfirmBooking)
                 .padding(.horizontal, 14)
             }
             .padding(.vertical, 12)
@@ -1095,10 +1371,7 @@ struct ScheduleOperativeView: View {
     }
 
     private func bookOperatives() {
-        guard !selectedDates.isEmpty else { return }
-        reconcileOperativeClashState()
-        guard clashReviewOperativeIds.isEmpty else { return }
-        guard !selectedOperatives.isEmpty else { return }
+        guard canConfirmBooking else { return }
         proceedWithBooking()
     }
     
@@ -1179,12 +1452,13 @@ struct ScheduleOperativeView: View {
         
         Task {
             let operatives = selectableOperatives.filter { selectedOperatives.contains($0.id) }
-            let dates = Array(selectedDates.sorted())
             var newBookings: [Booking] = []
             var createdDatesByOperative: [UUID: Set<Date>] = [:]
             let groupId: String? = operatives.count > 1 ? UUID().uuidString : nil
 
             for operative in operatives {
+                let dates = effectiveDates(for: operative.id)
+                guard !dates.isEmpty else { continue }
                 for date in dates {
                     let ovKey = operativeOverrideKey(operative.id, date)
                     if let rid = replaceBookingOnConfirmByOverrideKey[ovKey],
@@ -1206,7 +1480,7 @@ struct ScheduleOperativeView: View {
                             (booking.status == .confirmed || booking.status == .tentative)
                     }
 
-                    if !duplicateExists && !isOperativeOnApprovedHoliday(operative: operative, date: date) {
+                    if !duplicateExists {
                         let normalizedDate = Calendar.current.startOfDay(for: date)
                         var booking = Booking(
                             operativeId: operative.id,
@@ -1246,9 +1520,8 @@ struct ScheduleOperativeView: View {
             await MainActor.run {
                 isBooking = false
                 showingBookingConfirmation = newBookings.isEmpty ? false : true
-                clashReviewOperativeIds.removeAll()
-                operativeClashSummaries.removeAll()
-                approvedOverlapOperativeIds.removeAll()
+                acknowledgedConflictIds.removeAll()
+                struckConflictIds.removeAll()
                 selectedDates.removeAll()
                 selectedOperatives.removeAll()
                 dateSlotChoices.removeAll()

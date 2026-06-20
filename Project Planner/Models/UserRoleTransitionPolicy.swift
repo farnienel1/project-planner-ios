@@ -50,9 +50,9 @@ enum UserRoleTransitionPolicy {
         return .operative
     }
 
-    /// Initial manager-toggle state when **Manager** is selected on the change-type sheet.
+    /// Initial manager-toggle state when **Manager** or **Administrator** is selected on the change-type sheet.
     static func managerConfigForSheet(current: UserPermissions, selectedKind: ManagedAccountKind) -> ManagerUserTypeTransitionConfig? {
-        guard selectedKind == .manager else { return nil }
+        guard selectedKind == .manager || selectedKind == .administrator else { return nil }
         let actual = kind(for: current)
         switch actual {
         case .manager:
@@ -161,6 +161,7 @@ enum UserRoleTransitionPolicy {
                 siteAudit: true
             )
         case .administrator:
+            let annualLeaveSelfBook = manager?.annualLeaveSelfBook ?? current.annualLeaveSelfBook
             return UserPermissions(
                 adminAccess: true,
                 manager: true,
@@ -171,7 +172,7 @@ enum UserRoleTransitionPolicy {
                 projects: true,
                 smallWorks: true,
                 operativeMode: false,
-                annualLeaveSelfBook: current.annualLeaveSelfBook,
+                annualLeaveSelfBook: annualLeaveSelfBook,
                 weeklyReports: true,
                 dailyOverview: true,
                 subContractors: true,

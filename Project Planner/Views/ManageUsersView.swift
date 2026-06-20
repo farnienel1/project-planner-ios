@@ -1537,7 +1537,7 @@ struct EditUserView: View {
                 && managerTransitionProjects == permissions.projects
                 && managerTransitionSmallWorks == permissions.smallWorks
         case .administrator:
-            return true
+            return managerSelfBookDraft == permissions.annualLeaveSelfBook
         }
     }
 
@@ -1589,7 +1589,7 @@ struct EditUserView: View {
     // Check if any changes have been made
     private var hasChanges: Bool {
         if userStore.isOrganizationCreator(userId: user.id) {
-            return false
+            return permissions.annualLeaveSelfBook != user.permissions.annualLeaveSelfBook
         }
         let dayRateEligible = permissions.operativeMode || permissions.manager || permissions.adminAccess
         let trimmedTradeP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1759,7 +1759,7 @@ struct EditUserView: View {
             calendarStartOfDay: { calendarStartOfDay($0) },
             calendarStartOfTomorrow: calendarStartOfTomorrow
         ))
-        .alert("Turn off annual leave self-book?", isPresented: $showingSelfBookOffConfirmation) {
+        .alert("Turn off Annual Leave Management?", isPresented: $showingSelfBookOffConfirmation) {
             Button("Cancel", role: .cancel) {
                 selfBookOffConfirmationAccepted = false
             }
@@ -1921,7 +1921,7 @@ struct EditUserView: View {
                                 iconName: "beach.umbrella.fill",
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
-                                title: "Annual Leave",
+                                title: "Annual Leave Management",
                                 description: "Can book their own annual leave. If off, this manager requests leave for approval.",
                                 isOn: $managerSelfBookDraft
                             )
@@ -1996,7 +1996,28 @@ struct EditUserView: View {
                                 .stroke(Color(red: 0xE5 / 255, green: 0xE7 / 255, blue: 0xEB / 255), lineWidth: 0.5)
                         )
 
-                        Text("If annual leave self-book is turned on, pending approval requests are cleared.")
+                        Text("If Annual Leave Management is turned on, pending approval requests are cleared.")
+                            .font(.caption)
+                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    }
+
+                    if changeUserTypeDraft == .administrator {
+                        Text("Administrator access")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(ManageUserProfilePalette.textPrimary)
+
+                        ManageUserCard {
+                            ManageUserExpandablePermissionToggleRow(
+                                iconName: "beach.umbrella.fill",
+                                iconBackground: ManageUserProfilePalette.chipBlueBg,
+                                iconForeground: ManageUserProfilePalette.chipBlueFg,
+                                title: "Annual Leave Management",
+                                description: "Can book their own annual leave. If off, this administrator requests leave for approval.",
+                                isOn: $managerSelfBookDraft
+                            )
+                        }
+
+                        Text("Other administrator permissions are granted automatically.")
                             .font(.caption)
                             .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     }
@@ -2080,18 +2101,30 @@ struct EditUserView: View {
             isApplyingUserType = true
             userTypeChangeMessage = nil
         }
-        let managerConfig: ManagerUserTypeTransitionConfig? = changeUserTypeDraft == .manager
-            ? ManagerUserTypeTransitionConfig(
-                annualLeaveSelfBook: managerSelfBookDraft,
-                operatives: managerTransitionOperatives,
-                skills: managerTransitionSkills,
-                qualifications: managerTransitionQualifications,
-                weeklyReports: managerTransitionWeeklyReports,
-                dailyOverview: managerTransitionDailyOverview,
-                subContractors: managerTransitionSubContractors,
-                projects: managerTransitionProjects,
-                smallWorks: managerTransitionSmallWorks
-            )
+        let managerConfig: ManagerUserTypeTransitionConfig? = (changeUserTypeDraft == .manager || changeUserTypeDraft == .administrator)
+            ? (changeUserTypeDraft == .manager
+                ? ManagerUserTypeTransitionConfig(
+                    annualLeaveSelfBook: managerSelfBookDraft,
+                    operatives: managerTransitionOperatives,
+                    skills: managerTransitionSkills,
+                    qualifications: managerTransitionQualifications,
+                    weeklyReports: managerTransitionWeeklyReports,
+                    dailyOverview: managerTransitionDailyOverview,
+                    subContractors: managerTransitionSubContractors,
+                    projects: managerTransitionProjects,
+                    smallWorks: managerTransitionSmallWorks
+                )
+                : ManagerUserTypeTransitionConfig(
+                    annualLeaveSelfBook: managerSelfBookDraft,
+                    operatives: permissions.operatives,
+                    skills: permissions.skills,
+                    qualifications: permissions.qualifications,
+                    weeklyReports: permissions.weeklyReports,
+                    dailyOverview: permissions.dailyOverview,
+                    subContractors: permissions.subContractors,
+                    projects: permissions.projects,
+                    smallWorks: permissions.smallWorks
+                ))
             : nil
         let operativeConfig: OperativeUserTypeTransitionConfig? = changeUserTypeDraft == .operative
             ? OperativeUserTypeTransitionConfig(materials: operativeTransitionMaterials, siteAudit: operativeTransitionSiteAudit)
@@ -2847,12 +2880,37 @@ struct EditUserView: View {
                             Text("Super Admin")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(Color.orange)
-                            Text("This user is the organization creator. Their permissions cannot be changed.")
+                            Text("This user is the organization creator. Core permissions cannot be changed.")
                                 .font(.system(size: 11))
                                 .foregroundStyle(ManageUserProfilePalette.textSecondary)
                         }
                     }
                     .padding(16)
+                }
+                if permissions.manager || permissions.adminAccess {
+                    ManageUserCard {
+                        ManageUserExpandablePermissionToggleRow(
+                            iconName: "beach.umbrella.fill",
+                            iconBackground: ManageUserProfilePalette.chipBlueBg,
+                            iconForeground: ManageUserProfilePalette.chipBlueFg,
+                            title: "Annual Leave Management",
+                            description: "Can book their own annual leave. If off, this user requests leave for approval.",
+                            isOn: $permissions.annualLeaveSelfBook,
+                            isDisabled: hasNoLineManagerDraft
+                        )
+                        .onChange(of: permissions.annualLeaveSelfBook) { oldValue, newValue in
+                            if oldValue && !newValue && !hasNoLineManagerDraft {
+                                selfBookOffConfirmationAccepted = false
+                            }
+                        }
+                        if hasNoLineManagerDraft {
+                            Text("No line manager is selected, so this user books their own annual leave without approval routing.")
+                                .font(.caption)
+                                .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                                .padding(.horizontal, 14)
+                                .padding(.bottom, 8)
+                        }
+                    }
                 }
             } else if !canEditPermissionsMatrix {
                 Text("You do not have permission to change access for this user. Ask an organisation admin.")
@@ -3003,7 +3061,7 @@ struct EditUserView: View {
                     iconName: "beach.umbrella.fill",
                     iconBackground: ManageUserProfilePalette.chipBlueBg,
                     iconForeground: ManageUserProfilePalette.chipBlueFg,
-                    title: "Annual leave",
+                    title: "Annual Leave Management",
                     description: "Can book their own annual leave. If off, this user requests leave for approval.",
                     isOn: $permissions.annualLeaveSelfBook,
                     isDisabled: hasNoLineManagerDraft
@@ -3194,7 +3252,19 @@ struct EditUserView: View {
         var didPersistPermissions = false
         let previousPermissions = subjectUser.permissions
         let previousHasNoLineManager = subjectUser.hasNoLineManager
-        if canEditPermissionsMatrix && !userStore.isOrganizationCreator(userId: user.id) {
+        if canEditPermissionsMatrix && userStore.isOrganizationCreator(userId: user.id) {
+            if permissions.annualLeaveSelfBook != subjectUser.permissions.annualLeaveSelfBook {
+                didPersistPermissions = true
+                var outgoing = subjectUser.permissions
+                outgoing.annualLeaveSelfBook = permissions.annualLeaveSelfBook
+                permissionsSuccess = await userStore.updateUserPermissions(
+                    userId: user.id,
+                    permissions: outgoing,
+                    holidayStore: holidayStore,
+                    linkedOperativeUUID: linkedOpId
+                )
+            }
+        } else if canEditPermissionsMatrix && !userStore.isOrganizationCreator(userId: user.id) {
             if canUseAdminAccountTools && permissions != subjectUser.permissions {
                 didPersistPermissions = true
                 var outgoing = permissions

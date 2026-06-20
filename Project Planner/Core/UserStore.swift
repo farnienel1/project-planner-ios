@@ -468,7 +468,11 @@ class UserStore: ObservableObject {
     private static func normalizedScheduleNavigationLabel(key: String, value: String) -> String {
         guard key == "dashboard_schedule" else { return value }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.caseInsensitiveCompare("Schedule") == .orderedSame {
+        let lower = trimmed.lowercased()
+        if lower == "schedule" || lower == "my schedule" {
+            return "My Schedule"
+        }
+        if !lower.contains("my") && lower.contains("schedule") {
             return "My Schedule"
         }
         return value

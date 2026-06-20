@@ -708,7 +708,7 @@ struct AddUserView: View {
                             )
                             invitePermissionDivider
                             PermissionToggle(
-                                title: "Annual leave",
+                                title: "Annual Leave Management",
                                 description: "Can book their own annual leave. If unselected they will request leave for approval.",
                                 isOn: $permissions.annualLeaveSelfBook,
                                 isDisabled: hasNoLineManager,
@@ -728,7 +728,7 @@ struct AddUserView: View {
                             )
                             invitePermissionDivider
                             PermissionToggle(
-                                title: "Annual Leave",
+                                title: "Annual Leave Management",
                                 description: "Can book their own annual leave. If unselected the manager will need to request annual leave and have this approved.",
                                 isOn: $permissions.annualLeaveSelfBook,
                                 isDisabled: false,
@@ -1113,7 +1113,7 @@ struct AddUserView: View {
             ("Projects", permissions.projects),
             ("Small Works", permissions.smallWorks),
             ("Operative Mode", permissions.operativeMode),
-            ("Annual Leave Self-Book", permissions.annualLeaveSelfBook),
+            ("Annual Leave Management", permissions.annualLeaveSelfBook),
             ("Weekly Reports", permissions.weeklyReports),
             ("Daily Overview", permissions.dailyOverview),
             ("Sub Contractors", permissions.subContractors),
