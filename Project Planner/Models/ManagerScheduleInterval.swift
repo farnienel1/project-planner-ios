@@ -184,11 +184,7 @@ extension ManagerSiteBooking {
     }
 
     func effectiveWeekdayOtMultiplier(policy: OrgPayrollTimePolicy = .default) -> Double {
-        let result = payrollHoursResult(policy: policy)
-        if let outside = result.segments.first(where: { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }) {
-            return outside.multiplier
-        }
-        return policy.weekdayOutsideStandardMultiplier
+        PayrollTimePolicyCatalog.effectiveMultiplier(for: self, policy: policy)
     }
 
     /// Maps manager schedule booking into the shared operative payroll probe shape.

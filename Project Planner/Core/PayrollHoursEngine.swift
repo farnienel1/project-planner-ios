@@ -290,7 +290,7 @@ extension Booking {
         if let weekend {
             return weekend.allHoursAtMultiplierMode ? weekend.allHoursMultiplier : weekend.outsideStandardWindowMultiplier
         }
-        return policy.weekdayOutsideStandardMultiplier
+        return PayrollTimePolicyCatalog.effectiveMultiplier(for: self, policy: policy)
     }
 
     func payrollHoursResult(policy: OrgPayrollTimePolicy) -> PayrollHoursResult {

@@ -760,18 +760,29 @@ struct OperativeCustomHoursSheet: View {
 
             if allowsOtMultiplierOverride {
                 Divider().overlay(ProjectWorksRevampColors.border)
+                let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: referenceDay, policy: policy)
+                let defaultMult = timeline.outsideMultiplier
+                let windowLabel: String = {
+                    if timeline.allHoursAtMultiplier {
+                        return "Every hour on this day is paid at the org multiplier."
+                    }
+                    if let start = timeline.standardWindowStart, let end = timeline.standardWindowEnd {
+                        return "Hours outside \(start)–\(end). Leave blank for org default (\(String(format: "%.1f", defaultMult))×)."
+                    }
+                    return "Leave blank for org default (\(String(format: "%.1f", defaultMult))×)."
+                }()
                 VStack(alignment: .leading, spacing: 4) {
                     Text("OVERTIME MULTIPLIER")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
                         .tracking(0.4)
                     TextField(
-                        "Optional — e.g. \(String(format: "%.1f", policy.weekdayOutsideStandardMultiplier))",
+                        "Optional — e.g. \(String(format: "%.1f", defaultMult))",
                         text: $otMultText
                     )
                     .font(.system(size: 15, weight: .medium))
                     .keyboardType(.decimalPad)
-                    Text("Hours outside \(policy.standardDayStart)–\(policy.standardDayEnd). Leave blank for org default.")
+                    Text(windowLabel)
                         .font(.system(size: 10))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
                 }

@@ -523,7 +523,7 @@ struct DailyOverviewView: View {
     /// Unified summary hero (`project_planner_daily_overview_unified_hero.html`) — display only, not tappable.
     private var todayAtAGlanceHeroCard: some View {
         let unbooked = glanceUnbookedCount
-        let mult = payrollTimePolicy.weekdayOutsideStandardMultiplier
+        let mult = PayrollTimePolicyCatalog.timelinePolicy(for: overviewDate, policy: payrollTimePolicy).outsideMultiplier
         let multLabel = abs(mult - mult.rounded()) < 0.05 ? String(format: "%.0f", mult) : String(format: "%.1f", mult)
         let jobsCount = displayedProjectIds.count
         let people = glanceHeadlinePeopleCount

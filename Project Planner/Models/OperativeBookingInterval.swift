@@ -13,8 +13,8 @@ enum OperativeBookingInterval {
            let sm = ManagerScheduleInterval.parseMinutes(s), let em = ManagerScheduleInterval.parseMinutes(e), em > sm {
             return (sm, em)
         }
-        guard let dayStart = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
-              let dayEnd = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd),
+        guard let dayStart = resolvedStandardWindowStart(for: booking, policy: policy),
+              let dayEnd = resolvedStandardWindowEnd(for: booking, policy: policy),
               dayEnd > dayStart else {
             if booking.timeSlot == .fullDay { return (0, 24 * 60) }
             return nil
@@ -52,11 +52,12 @@ enum OperativeBookingInterval {
         return closedIntervalsOverlap(ia, ib)
     }
 
-    /// Wall-clock hours overlapping the org standard day window (`standardDayStart`–`standardDayEnd`).
+    /// Wall-clock hours overlapping the org standard day window for the booking's calendar day.
     static func hoursInsideStandardClockWindow(booking: Booking, policy: OrgPayrollTimePolicy) -> Double {
-        guard let iv = clashInterval(for: booking, policy: policy),
-              let ds = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
-              let de = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd), de > ds else { return 0 }
+        guard let iv = clashInterval(for: booking, policy: policy) else { return 0 }
+        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy)
+        guard let ds = timeline.standardWindowStartMinutes,
+              let de = timeline.standardWindowEndMinutes, de > ds else { return 0 }
         let overlapStart = max(iv.0, ds)
         let overlapEnd = min(iv.1, de)
         guard overlapEnd > overlapStart else { return 0 }
@@ -64,11 +65,26 @@ enum OperativeBookingInterval {
     }
 
     static func coversFullStandardDay(_ booking: Booking, policy: OrgPayrollTimePolicy) -> Bool {
-        guard let iv = clashInterval(for: booking, policy: policy),
-              let ws = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
-              let we = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd),
-              we > ws else { return false }
+        guard let iv = clashInterval(for: booking, policy: policy) else { return false }
+        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy)
+        guard !timeline.allHoursAtMultiplier,
+              let ws = timeline.standardWindowStartMinutes,
+              let we = timeline.standardWindowEndMinutes else { return false }
         return iv.0 <= ws && iv.1 >= we
+    }
+
+    private static func resolvedStandardWindowStart(for booking: Booking, policy: OrgPayrollTimePolicy) -> Int? {
+        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy)
+        if timeline.allHoursAtMultiplier { return nil }
+        return timeline.standardWindowStartMinutes
+            ?? ManagerScheduleInterval.parseMinutes(policy.standardDayStart)
+    }
+
+    private static func resolvedStandardWindowEnd(for booking: Booking, policy: OrgPayrollTimePolicy) -> Int? {
+        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy)
+        if timeline.allHoursAtMultiplier { return nil }
+        return timeline.standardWindowEndMinutes
+            ?? ManagerScheduleInterval.parseMinutes(policy.standardDayEnd)
     }
 
     private static func legacyOperativeSlotClash(_ a: TimeSlot, _ b: TimeSlot) -> Bool {
@@ -103,8 +119,11 @@ extension Booking {
 
     /// Second line under the person’s name (daily overview / my schedule): clock-first, full-day phrasing, OT hint.
     func scheduleCoverageSubtitle(policy: OrgPayrollTimePolicy = .default) -> (text: String, emphasizedOvertime: Bool) {
+        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: date, policy: policy)
         if OperativeBookingInterval.coversFullStandardDay(self, policy: policy) {
-            return ("Full standard day · \(policy.standardDayStart)–\(policy.standardDayEnd)", false)
+            if let start = timeline.standardWindowStart, let end = timeline.standardWindowEnd {
+                return ("Full standard day · \(start)–\(end)", false)
+            }
         }
         if let s = workStartTime, let e = workEndTime, !s.isEmpty, !e.isEmpty {
             let result = payrollHoursResult(policy: policy)
@@ -122,6 +141,9 @@ extension Booking {
         }
         switch timeSlot {
         case .fullDay:
+            if let start = timeline.standardWindowStart, let end = timeline.standardWindowEnd {
+                return ("Full standard day · \(start)–\(end)", false)
+            }
             return ("Full standard day · \(policy.standardDayStart)–\(policy.standardDayEnd)", false)
         case .morning, .afternoon:
             return (scheduleLabel(policy: policy), false)
@@ -135,7 +157,7 @@ extension Booking {
     }
 
     func effectiveWeekdayOtMultiplier(policy: OrgPayrollTimePolicy = .default) -> Double {
-        effectiveOutsideMultiplier(policy: policy, weekend: nil)
+        PayrollTimePolicyCatalog.effectiveMultiplier(for: self, policy: policy)
     }
 
     func minutesSortKey(policy: OrgPayrollTimePolicy = .default) -> Int {

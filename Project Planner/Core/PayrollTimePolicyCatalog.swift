@@ -37,6 +37,32 @@ struct OrgPayrollTimePolicyScheduledChange: Codable, Hashable {
 }
 
 enum PayrollTimePolicyCatalog {
+    /// Visual standard window for schedule/timesheet timeline bars on a given day.
+    struct DayTimelinePolicy: Equatable {
+        enum DayKind: Equatable {
+            case weekday
+            case saturday
+            case sunday
+        }
+
+        let dayKind: DayKind
+        /// Blue “standard” band; nil when every hour is paid at the multiplier.
+        let standardWindowStart: String?
+        let standardWindowEnd: String?
+        let allHoursAtMultiplier: Bool
+        let outsideMultiplier: Double
+
+        var standardWindowStartMinutes: Int? {
+            guard let s = standardWindowStart else { return nil }
+            return ManagerScheduleInterval.parseMinutes(s)
+        }
+
+        var standardWindowEndMinutes: Int? {
+            guard let e = standardWindowEnd else { return nil }
+            return ManagerScheduleInterval.parseMinutes(e)
+        }
+    }
+
     static func dayKey(_ date: Date) -> String {
         let f = DateFormatter()
         f.calendar = Calendar.current
@@ -117,32 +143,6 @@ enum PayrollTimePolicyCatalog {
         return policy.saturday.equivalentForBatchBooking(policy.sunday, fallbackCountsAs: policy.standardPaidHours)
     }
 
-    /// Visual standard window for schedule/timesheet timeline bars on a given day.
-    struct DayTimelinePolicy: Equatable {
-        enum DayKind: Equatable {
-            case weekday
-            case saturday
-            case sunday
-        }
-
-        let dayKind: DayKind
-        /// Blue “standard” band; nil when every hour is paid at the multiplier.
-        let standardWindowStart: String?
-        let standardWindowEnd: String?
-        let allHoursAtMultiplier: Bool
-        let outsideMultiplier: Double
-
-        var standardWindowStartMinutes: Int? {
-            guard let s = standardWindowStart else { return nil }
-            return ManagerScheduleInterval.parseMinutes(s)
-        }
-
-        var standardWindowEndMinutes: Int? {
-            guard let e = standardWindowEnd else { return nil }
-            return ManagerScheduleInterval.parseMinutes(e)
-        }
-    }
-
     static func timelinePolicy(for day: Date, policy: OrgPayrollTimePolicy) -> DayTimelinePolicy {
         let wd = Calendar.current.component(.weekday, from: day)
         if wd >= 2 && wd <= 6 {
@@ -172,6 +172,25 @@ enum PayrollTimePolicyCatalog {
             allHoursAtMultiplier: false,
             outsideMultiplier: weekend.outsideStandardWindowMultiplier
         )
+    }
+
+    /// Multiplier applied to outside-window / all-hours segments for a booking on its calendar day.
+    static func effectiveMultiplier(for booking: Booking, policy: OrgPayrollTimePolicy) -> Double {
+        if let override = booking.otMultiplierOverride, override > 0 { return override }
+        let result = PayrollHoursEngine.compute(booking: booking, day: booking.date, policy: policy)
+        if let seg = result.segments.first(where: { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }) {
+            return seg.multiplier
+        }
+        return timelinePolicy(for: booking.date, policy: policy).outsideMultiplier
+    }
+
+    /// Multiplier applied to outside-window / all-hours segments for a manager booking on its calendar day.
+    static func effectiveMultiplier(for booking: ManagerSiteBooking, policy: OrgPayrollTimePolicy) -> Double {
+        let result = booking.payrollHoursResult(policy: policy)
+        if let seg = result.segments.first(where: { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }) {
+            return seg.multiplier
+        }
+        return timelinePolicy(for: booking.date, policy: policy).outsideMultiplier
     }
 
     static func defaultWeekendBookingChoice(policy: OrgPayrollTimePolicy, day: Date) -> OperativeDayBookingChoice {

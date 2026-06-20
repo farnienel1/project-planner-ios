@@ -118,7 +118,7 @@ fileprivate func myScheduleLocationStripeColor(_ t: ManagerLocationType) -> Colo
 fileprivate func managerBookingOtChipText(_ b: ManagerSiteBooking, policy: OrgPayrollTimePolicy) -> String? {
     let ot = b.overtimeHoursBeyondPaidStandard(policy: policy)
     guard ot > 0.05 else { return nil }
-    let m = policy.weekdayOutsideStandardMultiplier
+    let m = PayrollTimePolicyCatalog.effectiveMultiplier(for: b, policy: policy)
     let s = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
     return "OT \(ScheduleCoverageFormat.hours(ot))h × \(s)"
 }
@@ -278,10 +278,15 @@ fileprivate struct MyScheduleDayNavigatorCard: View {
 }
 
 fileprivate struct MyScheduleTodaysHoursCard: View {
+    let day: Date
     let policy: OrgPayrollTimePolicy
     let segments: DayHoursSegmentTotals
     var annualLeaveLabel: String? = nil
     var annualLeaveTimeSlot: HolidayTimeSlot? = nil
+
+    private var timeline: PayrollTimePolicyCatalog.DayTimelinePolicy {
+        PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
+    }
 
     @ViewBuilder
     var body: some View {
@@ -292,7 +297,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                         Text("Total hours")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.ink)
-                        Text("Standard \(policy.standardDayStart)–\(policy.standardDayEnd)")
+                        Text("Standard \(timeline.standardWindowStart ?? policy.standardDayStart)–\(timeline.standardWindowEnd ?? policy.standardDayEnd)")
                             .font(.system(size: 11))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                     }
@@ -381,7 +386,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                         Text("Total hours")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.ink)
-                        Text("Standard \(policy.standardDayStart)–\(policy.standardDayEnd) · \(ScheduleCoverageFormat.hours(paidStd)) hrs")
+                        Text("Standard \(timeline.standardWindowStart ?? policy.standardDayStart)–\(timeline.standardWindowEnd ?? policy.standardDayEnd) · \(ScheduleCoverageFormat.hours(paidStd)) hrs")
                             .font(.system(size: 11))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                     }
@@ -472,7 +477,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
     }
 
     private var multCaption: String {
-        let m = policy.weekdayOutsideStandardMultiplier
+        let m = timeline.outsideMultiplier
         let s = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
         return "\(s)×"
     }
@@ -1490,7 +1495,7 @@ struct ManagerScheduleContentView: View {
     }
 
     private func dayContent(for day: Date) -> some View {
-        let policy = payrollTimePolicy
+        let policy = firebaseBackend.payrollPolicy(for: day)
         let bookings = managerScheduleStore.myBookings(on: day)
         let operativeBookings = myOperativeBookings(on: day)
         let holidayBookings = myHolidayBookings(on: day)
@@ -1504,6 +1509,7 @@ struct ManagerScheduleContentView: View {
                         onNext: { shiftSelectedDay(by: 1) }
                     )
                     MyScheduleTodaysHoursCard(
+                        day: day,
                         policy: policy,
                         segments: mergedDaySegments(manager: bookings, operative: operativeBookings, policy: policy),
                         annualLeaveLabel: annualLeaveLabel,
@@ -2630,7 +2636,7 @@ struct OperativeScheduleContentView: View {
     }
 
     private func dayRow(date: Date) -> some View {
-        let policy = payrollTimePolicy
+        let policy = firebaseBackend.payrollPolicy(for: date)
         let dayBookings = myBookingsThisWeek.filter { calendar.isDate($0.date, inSameDayAs: date) }
         let dayManagerBookings = myManagerAttendanceThisWeek.filter { calendar.isDate($0.date, inSameDayAs: date) }
         let isOnHoliday = holidayCoversDay(date)
@@ -2654,6 +2660,7 @@ struct OperativeScheduleContentView: View {
             } else {
                 if !dayBookings.isEmpty || !dayManagerBookings.isEmpty {
                     MyScheduleTodaysHoursCard(
+                        day: date,
                         policy: policy,
                         segments: mergedDaySegments(manager: dayManagerBookings, operative: dayBookings, policy: policy),
                         annualLeaveLabel: annualLeaveLabel,

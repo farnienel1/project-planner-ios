@@ -971,7 +971,7 @@ struct ProjectDetailView: View {
     }
 
     private func schedulingDayOvertimeTotal(_ date: Date) -> Double {
-        let p = payrollTimePolicy
+        let p = firebaseBackend.payrollPolicy(for: date)
         var t = 0.0
         for b in bookingsForDate(date) {
             t += b.overtimeHoursBeyondPaidStandard(policy: p)
@@ -986,11 +986,13 @@ struct ProjectDetailView: View {
     }
 
     private func subcontractorApproximateHours(_ booking: SubcontractorBooking) -> Double {
-        booking.payrollMirrorBooking().paidBookedHours(policy: payrollTimePolicy)
+        let p = firebaseBackend.payrollPolicy(for: booking.date)
+        return booking.payrollMirrorBooking().paidBookedHours(policy: p)
     }
 
     private func subcontractorScheduleLabel(_ booking: SubcontractorBooking) -> String {
-        booking.payrollMirrorBooking().scheduleLabel(policy: payrollTimePolicy)
+        let p = firebaseBackend.payrollPolicy(for: booking.date)
+        return booking.payrollMirrorBooking().scheduleLabel(policy: p)
     }
 
     private func formatSchedulingOTHours(_ hours: Double) -> String {
@@ -1001,8 +1003,9 @@ struct ProjectDetailView: View {
         return String(format: "%.1f", rounded)
     }
 
-    private var otMultiplierBadgeLabel: String {
-        let mult = payrollTimePolicy.weekdayOutsideStandardMultiplier
+    private func otMultiplierBadgeLabel(for date: Date) -> String {
+        let policy = firebaseBackend.payrollPolicy(for: date)
+        let mult = PayrollTimePolicyCatalog.timelinePolicy(for: date, policy: policy).outsideMultiplier
         if abs(mult - mult.rounded()) < 0.01 {
             return "x\(Int(mult.rounded()))"
         }
@@ -1124,7 +1127,7 @@ struct ProjectDetailView: View {
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
                         if dayOT > 0.05 {
-                            Text("+\(formatSchedulingOTHours(dayOT))h OT (\(otMultiplierBadgeLabel))")
+                            Text("+\(formatSchedulingOTHours(dayOT))h OT (\(otMultiplierBadgeLabel(for: date)))")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
                         }
@@ -1234,7 +1237,7 @@ struct ProjectDetailView: View {
         let op = operativeStore.activeOperatives.first { $0.id == booking.operativeId }
         let name = op?.name ?? "Unknown operative"
         let initials = PlannerUIInitials.from(name)
-        let p = payrollTimePolicy
+        let p = firebaseBackend.payrollPolicy(for: booking.date)
         let hrs = booking.paidBookedHours(policy: p)
         let ot = booking.overtimeHoursBeyondPaidStandard(policy: p)
         return Button(action: onTap) {
@@ -1264,7 +1267,7 @@ struct ProjectDetailView: View {
     private func schedulingManagerBookingRow(booking: ManagerSiteBooking) -> some View {
         let managerName = userStore.organizationUsers.first(where: { $0.id == booking.userId })?.fullName ?? "Manager"
         let initials = PlannerUIInitials.from(managerName)
-        let p = payrollTimePolicy
+        let p = firebaseBackend.payrollPolicy(for: booking.date)
         let hrs = booking.paidBookedHours(policy: p)
         let ot = booking.overtimeHoursBeyondPaidStandard(policy: p)
         return Button {
@@ -1303,7 +1306,7 @@ struct ProjectDetailView: View {
         let operativeNames = booking.bookedOperativeNames(subcontractor: sub)
         let initials = PlannerUIInitials.from(name)
         let hrs = subcontractorApproximateHours(booking)
-        let ot = booking.payrollMirrorBooking().overtimeHoursBeyondPaidStandard(policy: payrollTimePolicy)
+        let ot = booking.payrollMirrorBooking().overtimeHoursBeyondPaidStandard(policy: firebaseBackend.payrollPolicy(for: booking.date))
         return Button {
             subcontractorEditBooking = booking
         } label: {
