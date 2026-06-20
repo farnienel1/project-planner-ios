@@ -899,7 +899,8 @@ struct ManagerScheduleContentView: View {
                 projectStore.smallWorks.first(where: { $0.id == booking.projectId })
             let personName = operativeStore.allOperatives.first { $0.id == booking.operativeId }?.name ?? "Booking"
             OperativeCustomHoursSheet(
-                policy: payrollTimePolicy,
+                policy: firebaseBackend.payrollPolicy(for: booking.date),
+                referenceDay: booking.date,
                 title: "Edit booking",
                 subtitle: p.map { "\($0.jobNumber) \($0.siteName)" } ?? "Project booking",
                 headerName: personName,

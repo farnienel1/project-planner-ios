@@ -56,22 +56,29 @@ struct BookingEditHoursBreakdown {
     static func compute(
         booking: Booking,
         policy: OrgPayrollTimePolicy,
+        day: Date,
         breakIncluded: Bool
     ) -> BookingEditHoursBreakdown {
         var probe = booking
         probe.isBreakRemoved = !breakIncluded
-        let elapsed = probe.totalBookedHours(policy: policy)
         let total = probe.paidBookedHours(policy: policy)
-        let insideStandard = OperativeBookingInterval.hoursInsideStandardClockWindow(booking: probe, policy: policy)
-        let outsideStandard = max(0, elapsed - insideStandard)
-        let ot = outsideStandard > 0.05 ? outsideStandard : probe.overtimeHoursBeyondPaidStandard(policy: policy)
-        let standardRate = outsideStandard > 0.05 ? insideStandard : elapsed
-        let breakH = (breakIncluded && policy.standardUnpaidBreakHours > 0.05) ? policy.standardUnpaidBreakHours : 0
+        let result = PayrollHoursEngine.compute(booking: probe, day: day, policy: policy)
+        let standardRate = result.segments
+            .filter { $0.kind == .standardWindow }
+            .reduce(0.0) { $0 + $1.paidHours }
+        let ot = max(0, result.totalPaidHours - standardRate)
+        let breakH = (breakIncluded && PayrollTimePolicyCatalog.isWeekday(day) && policy.standardUnpaidBreakHours > 0.05)
+            ? policy.standardUnpaidBreakHours
+            : 0
+        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
+        let otMult = timeline.allHoursAtMultiplier
+            ? timeline.outsideMultiplier
+            : probe.effectiveWeekdayOtMultiplier(policy: policy)
         return BookingEditHoursBreakdown(
             totalHours: total,
             standardRateHours: standardRate,
             overtimeHours: ot,
-            overtimeMultiplier: probe.effectiveWeekdayOtMultiplier(policy: policy),
+            overtimeMultiplier: otMult,
             breakDeductionHours: breakH,
             showsBreakLine: breakH > 0.05
         )
@@ -102,12 +109,17 @@ private enum BookingHoursTimelineLayout {
 
     static func segments(
         policy: OrgPayrollTimePolicy,
+        day: Date,
         startMinutes: Int,
         endMinutes: Int
     ) -> [BookingTimelineSegment] {
         guard endMinutes > startMinutes else { return [] }
-        guard let ds = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
-              let de = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd),
+        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
+        if timeline.allHoursAtMultiplier {
+            return [BookingTimelineSegment(kind: .overtime, startMinute: startMinutes, endMinute: endMinutes)]
+        }
+        guard let ds = timeline.standardWindowStartMinutes,
+              let de = timeline.standardWindowEndMinutes,
               de > ds else {
             return [BookingTimelineSegment(kind: .standard, startMinute: startMinutes, endMinute: endMinutes)]
         }
@@ -128,11 +140,13 @@ private enum BookingHoursTimelineLayout {
 
     static func breakStripeRange(
         policy: OrgPayrollTimePolicy,
+        day: Date,
         startMinutes: Int,
         endMinutes: Int,
         breakIncluded: Bool
     ) -> (Int, Int)? {
         guard breakIncluded,
+              PayrollTimePolicyCatalog.isWeekday(day),
               let ds = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
               let de = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd) else { return nil }
         let breakCenter = (ds + de) / 2
@@ -146,16 +160,26 @@ private enum BookingHoursTimelineLayout {
 
 private struct BookingHoursTimelineBar: View {
     let policy: OrgPayrollTimePolicy
+    let referenceDay: Date
     let startMinutes: Int
     let endMinutes: Int
     let breakIncluded: Bool
     let forceSolidBlue: Bool
 
+    private var timeline: PayrollTimePolicyCatalog.DayTimelinePolicy {
+        PayrollTimePolicyCatalog.timelinePolicy(for: referenceDay, policy: policy)
+    }
+
     private var segments: [BookingTimelineSegment] {
         if forceSolidBlue {
             return [BookingTimelineSegment(kind: .standard, startMinute: startMinutes, endMinute: endMinutes)]
         }
-        return BookingHoursTimelineLayout.segments(policy: policy, startMinutes: startMinutes, endMinutes: endMinutes)
+        return BookingHoursTimelineLayout.segments(
+            policy: policy,
+            day: referenceDay,
+            startMinutes: startMinutes,
+            endMinutes: endMinutes
+        )
     }
 
     var body: some View {
@@ -167,8 +191,9 @@ private struct BookingHoursTimelineBar: View {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
 
-                    if let ds = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
-                       let de = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd), de > ds {
+                    if !timeline.allHoursAtMultiplier,
+                       let ds = timeline.standardWindowStartMinutes,
+                       let de = timeline.standardWindowEndMinutes, de > ds {
                         let l = BookingHoursTimelineLayout.fraction(ds)
                         let ww = BookingHoursTimelineLayout.fraction(de) - l
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -202,6 +227,7 @@ private struct BookingHoursTimelineBar: View {
 
                     if let br = BookingHoursTimelineLayout.breakStripeRange(
                         policy: policy,
+                        day: referenceDay,
                         startMinutes: startMinutes,
                         endMinutes: endMinutes,
                         breakIncluded: breakIncluded
@@ -303,6 +329,7 @@ private struct BookingHMTimePickerColumn: View {
 
 struct OperativeCustomHoursSheet: View {
     let policy: OrgPayrollTimePolicy
+    let referenceDay: Date
     var title: String
     var subtitle: String?
     var headerName: String?
@@ -332,6 +359,7 @@ struct OperativeCustomHoursSheet: View {
 
     init(
         policy: OrgPayrollTimePolicy,
+        referenceDay: Date = Date(),
         title: String = "Edit booking",
         subtitle: String? = nil,
         headerName: String? = nil,
@@ -346,6 +374,7 @@ struct OperativeCustomHoursSheet: View {
         onCancel: @escaping () -> Void
     ) {
         self.policy = policy
+        self.referenceDay = Calendar.current.startOfDay(for: referenceDay)
         self.title = title
         self.subtitle = subtitle
         self.headerName = headerName
@@ -365,6 +394,10 @@ struct OperativeCustomHoursSheet: View {
         let included: Bool
         var otm = ""
 
+        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: referenceDay, policy: policy)
+        let defaultStart = timeline.standardWindowStart ?? policy.standardDayStart
+        let defaultEnd = timeline.standardWindowEnd ?? policy.standardDayEnd
+
         if let ic {
             let s = ic.workStartTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let e = ic.workEndTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -373,12 +406,12 @@ struct OperativeCustomHoursSheet: View {
                 endHM = BookingHMTimePickerSupport.clampToQuarterHour(e, fallbackHour: 16, fallbackMinute: 30)
             } else {
                 startHM = BookingHMTimePickerSupport.clampToQuarterHour(
-                    policy.standardDayStart,
+                    defaultStart,
                     fallbackHour: 8,
                     fallbackMinute: 0
                 )
                 endHM = BookingHMTimePickerSupport.clampToQuarterHour(
-                    policy.standardDayEnd,
+                    defaultEnd,
                     fallbackHour: 16,
                     fallbackMinute: 30
                 )
@@ -389,16 +422,16 @@ struct OperativeCustomHoursSheet: View {
             }
         } else {
             startHM = BookingHMTimePickerSupport.clampToQuarterHour(
-                policy.standardDayStart,
+                defaultStart,
                 fallbackHour: 8,
                 fallbackMinute: 0
             )
             endHM = BookingHMTimePickerSupport.clampToQuarterHour(
-                policy.standardDayEnd,
+                defaultEnd,
                 fallbackHour: 16,
                 fallbackMinute: 30
             )
-            included = showsBreakControls
+            included = showsBreakControls && PayrollTimePolicyCatalog.isWeekday(referenceDay)
         }
 
         _startHour = State(initialValue: startHM.0)
@@ -443,13 +476,14 @@ struct OperativeCustomHoursSheet: View {
             workEndTime: endText,
             isBreakRemoved: !breakIncluded,
             otMultiplierOverride: resolvedOtMultiplierOverride
-        ).bookingProbe(operativeId: UUID(), projectId: UUID(), date: Date(), bookedBy: "")
+        ).bookingProbe(operativeId: UUID(), projectId: UUID(), date: referenceDay, bookedBy: "")
     }
 
     private var breakdown: BookingEditHoursBreakdown {
         BookingEditHoursBreakdown.compute(
             booking: probeBooking,
             policy: policy,
+            day: referenceDay,
             breakIncluded: breakIncluded
         )
     }
@@ -602,6 +636,7 @@ struct OperativeCustomHoursSheet: View {
             if endMinutes > startMinutes {
                 BookingHoursTimelineBar(
                     policy: policy,
+                    referenceDay: referenceDay,
                     startMinutes: startMinutes,
                     endMinutes: endMinutes,
                     breakIncluded: breakIncluded,

@@ -90,10 +90,16 @@ struct BookLabourFlowView: View {
         firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
     }
 
+    private var dayPayrollPolicy: OrgPayrollTimePolicy {
+        firebaseBackend.payrollPolicy(for: day)
+    }
+
     private var canBookStandardDayWindow: Bool {
-        let p = payrollTimePolicy
-        guard let s = ManagerScheduleInterval.parseMinutes(p.standardDayStart),
-              let e = ManagerScheduleInterval.parseMinutes(p.standardDayEnd) else { return false }
+        let p = dayPayrollPolicy
+        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: p)
+        if timeline.allHoursAtMultiplier { return true }
+        guard let s = timeline.standardWindowStartMinutes,
+              let e = timeline.standardWindowEndMinutes else { return false }
         return e > s
     }
 
@@ -610,7 +616,8 @@ struct BookLabourFlowView: View {
 
                         bookLabourSectionLabel("0-24 timeline")
                         BookLabourRectifyTimeline(
-                            policy: payrollTimePolicy,
+                            day: day,
+                            policy: dayPayrollPolicy,
                             existingIntervals: existingIntervals,
                             proposedStart: draft.startMinutes,
                             proposedEnd: draft.endMinutes
@@ -771,13 +778,15 @@ struct BookLabourFlowView: View {
     }
 
     private func defaultOperativeDraft(operativeId: UUID) -> OperativeRectifyDraft {
-        let defaultStart = ManagerScheduleInterval.parseMinutes(payrollTimePolicy.standardDayStart) ?? 450
-        let defaultEnd = ManagerScheduleInterval.parseMinutes(payrollTimePolicy.standardDayEnd) ?? 960
+        let policy = dayPayrollPolicy
+        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
+        let defaultStart = timeline.standardWindowStartMinutes ?? 450
+        let defaultEnd = timeline.standardWindowEndMinutes ?? 960
         let intervals = existingIntervalsForOperative(operativeId)
         let latestEnd = intervals.map(\.1).max() ?? defaultStart
         let start = max(defaultStart, latestEnd)
         let end = start < defaultEnd ? defaultEnd : min(24 * 60, start + 60)
-        return .init(startMinutes: start, endMinutes: max(start + 30, end), breakRemoved: false)
+        return .init(startMinutes: start, endMinutes: max(start + 30, end), breakRemoved: timeline.allHoursAtMultiplier)
     }
 
     private func existingIntervalsForOperative(_ operativeId: UUID) -> [(Int, Int)] {
@@ -787,7 +796,7 @@ struct BookLabourFlowView: View {
                 calendar.isDate($0.date, inSameDayAs: day) &&
                 ($0.status == .confirmed || $0.status == .tentative)
             }
-            .compactMap { OperativeBookingInterval.clashInterval(for: $0, policy: payrollTimePolicy) }
+            .compactMap { OperativeBookingInterval.clashInterval(for: $0, policy: dayPayrollPolicy) }
             .sorted { $0.0 < $1.0 }
     }
 
@@ -798,7 +807,7 @@ struct BookLabourFlowView: View {
                 calendar.isDate($0.date, inSameDayAs: day) &&
                 ($0.status == .confirmed || $0.status == .tentative)
             }
-            .reduce(0.0) { $0 + $1.paidBookedHours(policy: payrollTimePolicy) }
+            .reduce(0.0) { $0 + $1.paidBookedHours(policy: dayPayrollPolicy) }
     }
 
     private func paidHours(startMinutes: Int, endMinutes: Int, breakRemoved: Bool) -> Double {
@@ -811,20 +820,23 @@ struct BookLabourFlowView: View {
     }
 
     private func applyQuickTimeSlot(_ slot: TimeSlot, projectId: UUID, currentBreakRemoved: Bool) {
-        guard let ds = ManagerScheduleInterval.parseMinutes(payrollTimePolicy.standardDayStart),
-              let de = ManagerScheduleInterval.parseMinutes(payrollTimePolicy.standardDayEnd),
+        let policy = dayPayrollPolicy
+        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
+        guard let ds = timeline.standardWindowStartMinutes,
+              let de = timeline.standardWindowEndMinutes,
               de > ds else { return }
         let mid = ds + ((de - ds) / 2)
+        let breakRemoved = timeline.allHoursAtMultiplier ? true : currentBreakRemoved
         let next: OperativeRectifyDraft
         switch slot {
         case .fullDay:
-            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: currentBreakRemoved)
+            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved)
         case .morning:
-            next = .init(startMinutes: ds, endMinutes: mid, breakRemoved: currentBreakRemoved)
+            next = .init(startMinutes: ds, endMinutes: mid, breakRemoved: breakRemoved)
         case .afternoon:
-            next = .init(startMinutes: mid, endMinutes: de, breakRemoved: currentBreakRemoved)
+            next = .init(startMinutes: mid, endMinutes: de, breakRemoved: breakRemoved)
         default:
-            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: currentBreakRemoved)
+            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved)
         }
         setOperativeDraft(for: projectId, draft: next)
     }
@@ -1474,17 +1486,22 @@ private struct BookLabourRoleChipRow: View {
 }
 
 private struct BookLabourRectifyTimeline: View {
+    let day: Date
     let policy: OrgPayrollTimePolicy
     let existingIntervals: [(Int, Int)]
     let proposedStart: Int
     let proposedEnd: Int
 
+    private var timeline: PayrollTimePolicyCatalog.DayTimelinePolicy {
+        PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
+    }
+
     private var standardStart: Int {
-        ManagerScheduleInterval.parseMinutes(policy.standardDayStart) ?? 450
+        timeline.standardWindowStartMinutes ?? 450
     }
 
     private var standardEnd: Int {
-        ManagerScheduleInterval.parseMinutes(policy.standardDayEnd) ?? 960
+        timeline.standardWindowEndMinutes ?? 960
     }
 
     var body: some View {
@@ -1494,6 +1511,15 @@ private struct BookLabourRectifyTimeline: View {
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
+
+                    if !timeline.allHoursAtMultiplier {
+                        segment(
+                            color: Color.white.opacity(0.55),
+                            start: standardStart,
+                            end: standardEnd,
+                            totalWidth: width
+                        )
+                    }
 
                     ForEach(Array(existingIntervals.enumerated()), id: \.offset) { _, iv in
                         segment(
@@ -1505,22 +1531,39 @@ private struct BookLabourRectifyTimeline: View {
                     }
 
                     if proposedEnd > proposedStart {
-                        let standardCapEnd = min(proposedEnd, standardEnd)
-                        if standardCapEnd > proposedStart {
-                            segment(
-                                color: ProjectWorksRevampColors.activeGreen,
-                                start: proposedStart,
-                                end: standardCapEnd,
-                                totalWidth: width
-                            )
-                        }
-                        if proposedEnd > standardEnd {
+                        if timeline.allHoursAtMultiplier {
                             segment(
                                 color: ProjectWorksRevampColors.upcomingAmber,
-                                start: max(standardEnd, proposedStart),
+                                start: proposedStart,
                                 end: proposedEnd,
                                 totalWidth: width
                             )
+                        } else {
+                            let standardCapEnd = min(proposedEnd, standardEnd)
+                            if standardCapEnd > proposedStart {
+                                segment(
+                                    color: ProjectWorksRevampColors.activeGreen,
+                                    start: proposedStart,
+                                    end: standardCapEnd,
+                                    totalWidth: width
+                                )
+                            }
+                            if proposedStart < standardStart {
+                                segment(
+                                    color: ProjectWorksRevampColors.upcomingAmber,
+                                    start: proposedStart,
+                                    end: min(proposedEnd, standardStart),
+                                    totalWidth: width
+                                )
+                            }
+                            if proposedEnd > standardEnd {
+                                segment(
+                                    color: ProjectWorksRevampColors.upcomingAmber,
+                                    start: max(standardEnd, proposedStart),
+                                    end: proposedEnd,
+                                    totalWidth: width
+                                )
+                            }
                         }
                     }
                 }

@@ -117,6 +117,63 @@ enum PayrollTimePolicyCatalog {
         return policy.saturday.equivalentForBatchBooking(policy.sunday, fallbackCountsAs: policy.standardPaidHours)
     }
 
+    /// Visual standard window for schedule/timesheet timeline bars on a given day.
+    struct DayTimelinePolicy: Equatable {
+        enum DayKind: Equatable {
+            case weekday
+            case saturday
+            case sunday
+        }
+
+        let dayKind: DayKind
+        /// Blue “standard” band; nil when every hour is paid at the multiplier.
+        let standardWindowStart: String?
+        let standardWindowEnd: String?
+        let allHoursAtMultiplier: Bool
+        let outsideMultiplier: Double
+
+        var standardWindowStartMinutes: Int? {
+            guard let s = standardWindowStart else { return nil }
+            return ManagerScheduleInterval.parseMinutes(s)
+        }
+
+        var standardWindowEndMinutes: Int? {
+            guard let e = standardWindowEnd else { return nil }
+            return ManagerScheduleInterval.parseMinutes(e)
+        }
+    }
+
+    static func timelinePolicy(for day: Date, policy: OrgPayrollTimePolicy) -> DayTimelinePolicy {
+        let wd = Calendar.current.component(.weekday, from: day)
+        if wd >= 2 && wd <= 6 {
+            return DayTimelinePolicy(
+                dayKind: .weekday,
+                standardWindowStart: policy.standardDayStart,
+                standardWindowEnd: policy.standardDayEnd,
+                allHoursAtMultiplier: false,
+                outsideMultiplier: policy.weekdayOutsideStandardMultiplier
+            )
+        }
+        let weekend = weekendSettings(for: day, policy: policy)
+        let kind: DayTimelinePolicy.DayKind = wd == 7 ? .saturday : .sunday
+        if weekend.allHoursAtMultiplierMode {
+            return DayTimelinePolicy(
+                dayKind: kind,
+                standardWindowStart: nil,
+                standardWindowEnd: nil,
+                allHoursAtMultiplier: true,
+                outsideMultiplier: weekend.allHoursMultiplier
+            )
+        }
+        return DayTimelinePolicy(
+            dayKind: kind,
+            standardWindowStart: weekend.customStandardStart ?? policy.standardDayStart,
+            standardWindowEnd: weekend.customStandardEnd ?? "13:00",
+            allHoursAtMultiplier: false,
+            outsideMultiplier: weekend.outsideStandardWindowMultiplier
+        )
+    }
+
     static func defaultWeekendBookingChoice(policy: OrgPayrollTimePolicy, day: Date) -> OperativeDayBookingChoice {
         let weekend = weekendSettings(for: day, policy: policy)
         if weekend.allHoursAtMultiplierMode {

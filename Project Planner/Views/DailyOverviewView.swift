@@ -1298,7 +1298,8 @@ private extension DailyOverviewView {
         switch target {
         case .operative(let booking, let project, let personName):
             OperativeCustomHoursSheet(
-                policy: payrollTimePolicy,
+                policy: firebaseBackend.payrollPolicy(for: booking.date),
+                referenceDay: booking.date,
                 title: "Edit booking",
                 subtitle: editSheetSubtitle(date: booking.date, locationTitle: "\(project.jobNumber) \(project.siteName)"),
                 headerName: personName,
@@ -1319,13 +1320,14 @@ private extension DailyOverviewView {
             )
         case .manager(let booking, let locationTitle, let personName):
             OperativeCustomHoursSheet(
-                policy: payrollTimePolicy,
+                policy: firebaseBackend.payrollPolicy(for: booking.date),
+                referenceDay: booking.date,
                 title: "Edit booking",
                 subtitle: editSheetSubtitle(date: booking.date, locationTitle: locationTitle),
                 headerName: personName,
                 headerInitials: PlannerUIInitials.from(personName),
                 allowsOtMultiplierOverride: false,
-                initialChoice: booking.hoursEditChoice(policy: payrollTimePolicy),
+                initialChoice: booking.hoursEditChoice(policy: firebaseBackend.payrollPolicy(for: booking.date)),
                 onSave: { start, end, breakRemoved, _ in
                     bookingEditTarget = nil
                     saveManagerBookingEdit(

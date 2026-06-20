@@ -1047,7 +1047,8 @@ struct ProjectDetailView: View {
         case .operative(let booking, _, let personName):
             let payeMode = isPayeOperativeBooking(booking)
             OperativeCustomHoursSheet(
-                policy: payrollTimePolicy,
+                policy: firebaseBackend.payrollPolicy(for: booking.date),
+                referenceDay: booking.date,
                 title: "Edit booking",
                 subtitle: payeMode ? nil : bookingEditSubtitle(date: booking.date),
                 headerName: personName,
@@ -1072,13 +1073,14 @@ struct ProjectDetailView: View {
             )
         case .manager(let booking, _, let personName):
             OperativeCustomHoursSheet(
-                policy: payrollTimePolicy,
+                policy: firebaseBackend.payrollPolicy(for: booking.date),
+                referenceDay: booking.date,
                 title: "Edit booking",
                 subtitle: bookingEditSubtitle(date: booking.date),
                 headerName: personName,
                 headerInitials: PlannerUIInitials.from(personName),
                 allowsOtMultiplierOverride: false,
-                initialChoice: booking.hoursEditChoice(policy: payrollTimePolicy),
+                initialChoice: booking.hoursEditChoice(policy: firebaseBackend.payrollPolicy(for: booking.date)),
                 onSave: { start, end, isBreakRemoved, _ in
                     bookingEditTarget = nil
                     var updated = booking
