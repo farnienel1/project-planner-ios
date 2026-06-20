@@ -177,11 +177,6 @@ struct HomeView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         }
-        .sheet(isPresented: $showingMaterialCatalogue) {
-            MaterialCatalogueRootView()
-                .environmentObject(userStore)
-                .environmentObject(firebaseBackend)
-        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("dismissManageUsersAndSelectTab"))) { notification in
             showingManageUsers = false
         }
@@ -1293,7 +1288,7 @@ struct HomeView: View {
         let liveProjects = projectStore.liveProjects
         let smallWorks = projectStore.smallWorks
 
-        async let upNextTask = Task.detached(priority: .userInitiated) {
+        async let upNextTask: [HomeUpNextDaySection] = Task { @MainActor in
             HomeUpNextSupport.upcomingDaySections(
                 minDistinctDays: 2,
                 mergeRowLimit: 48,
@@ -1311,7 +1306,7 @@ struct HomeView: View {
             )
         }.value
 
-        async let metricsTask = Task.detached(priority: .userInitiated) {
+        async let metricsTask = Task { @MainActor in
             HomeOverviewMetrics.compute(
                 tasks: tasks,
                 userEmail: userEmail,

@@ -175,22 +175,15 @@ enum PayrollTimePolicyCatalog {
     }
 
     /// Multiplier applied to outside-window / all-hours segments for a booking on its calendar day.
+    /// Resolves from org policy only — must not call `PayrollHoursEngine.compute` (that path uses this helper).
     static func effectiveMultiplier(for booking: Booking, policy: OrgPayrollTimePolicy) -> Double {
         if let override = booking.otMultiplierOverride, override > 0 { return override }
-        let result = PayrollHoursEngine.compute(booking: booking, day: booking.date, policy: policy)
-        if let seg = result.segments.first(where: { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }) {
-            return seg.multiplier
-        }
         return timelinePolicy(for: booking.date, policy: policy).outsideMultiplier
     }
 
     /// Multiplier applied to outside-window / all-hours segments for a manager booking on its calendar day.
     static func effectiveMultiplier(for booking: ManagerSiteBooking, policy: OrgPayrollTimePolicy) -> Double {
-        let result = booking.payrollHoursResult(policy: policy)
-        if let seg = result.segments.first(where: { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }) {
-            return seg.multiplier
-        }
-        return timelinePolicy(for: booking.date, policy: policy).outsideMultiplier
+        timelinePolicy(for: booking.date, policy: policy).outsideMultiplier
     }
 
     static func defaultWeekendBookingChoice(policy: OrgPayrollTimePolicy, day: Date) -> OperativeDayBookingChoice {
