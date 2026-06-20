@@ -5,6 +5,7 @@
 //  Fetches public holidays from Nager.Date, caches per region/year for offline use.
 //
 
+import Combine
 import Foundation
 
 struct BankHolidayDay: Hashable, Codable, Sendable, Identifiable {
