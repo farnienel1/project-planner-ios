@@ -1138,7 +1138,7 @@ private struct WorkingHoursStepper: View {
     var body: some View {
         HStack(spacing: 0) {
             Button {
-                value = max(min, roundedStep(value - step, step: step))
+                value = Swift.max(min, roundedStep(value - step, step: step))
             } label: {
                 Text("–")
                     .font(.system(size: 17, weight: .semibold))
@@ -1152,7 +1152,7 @@ private struct WorkingHoursStepper: View {
                 .frame(minWidth: 52)
 
             Button {
-                value = min(max, roundedStep(value + step, step: step))
+                value = Swift.min(max, roundedStep(value + step, step: step))
             } label: {
                 Text("+")
                     .font(.system(size: 17, weight: .semibold))
