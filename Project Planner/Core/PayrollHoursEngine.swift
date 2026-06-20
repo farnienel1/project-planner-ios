@@ -300,8 +300,9 @@ extension Booking {
 
 extension ManagerScheduleInterval {
     static func formatMinutes(_ minutes: Int) -> String {
-        let h = minutes / 60
-        let m = minutes % 60
+        let clamped = Swift.min(Swift.max(0, minutes), 24 * 60 - 1)
+        let h = clamped / 60
+        let m = clamped % 60
         return String(format: "%02d:%02d", h, m)
     }
 }

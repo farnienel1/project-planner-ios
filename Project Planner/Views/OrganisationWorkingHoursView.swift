@@ -136,7 +136,7 @@ struct OrganisationWorkingHoursView: View {
         .safeAreaInset(edge: .bottom) {
             bottomActionBar
         }
-        .onAppear { loadDraft() }
+        .task { loadDraft() }
         .sheet(isPresented: $showingScheduleSheet) {
             scheduleChangeSheet
         }
@@ -359,10 +359,6 @@ struct OrganisationWorkingHoursView: View {
                     value: $draft.weekdayOutsideStandardMultiplier,
                     accent: WorkingHoursPalette.indigo
                 )
-
-                if isFormValid {
-                    weekdayExampleCard
-                }
             }
         }
     }
@@ -390,24 +386,6 @@ struct OrganisationWorkingHoursView: View {
             .font(.system(size: 10.5, weight: .medium))
             .foregroundStyle(Color(.systemGray))
         }
-    }
-
-    private var weekdayExampleCard: some View {
-        let example = PayrollHoursEngine.compute(
-            choice: OperativeDayBookingChoice(
-                timeSlot: .customHours,
-                workStartTime: draft.standardDayStart,
-                workEndTime: "18:00",
-                isBreakRemoved: false,
-                otMultiplierOverride: nil
-            ),
-            day: nextWeekday(),
-            policy: draft
-        )
-        return exampleBreakdownCard(
-            title: "Example: \(draft.standardDayStart)–18:00",
-            summary: example.breakdownSummary
-        )
     }
 
     // MARK: - Saturday
@@ -521,10 +499,6 @@ struct OrganisationWorkingHoursView: View {
             footerValue: "\(formatHoursDisplay(settings.wrappedValue.resolvedCountsAsHours(fallback: draft.standardPaidHours))) @ 1x",
             accent: WorkingHoursPalette.amber
         )
-
-        if isFormValid {
-            weekendExampleCard(settings: settings.wrappedValue, title: title)
-        }
     }
 
     @ViewBuilder
@@ -855,39 +829,6 @@ struct OrganisationWorkingHoursView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    private func exampleBreakdownCard(title: String, summary: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption.weight(.medium))
-            Text(summary)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemGray6).opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
-    private func weekendExampleCard(settings: OrgWeekendDayPayrollSettings, title: String) -> some View {
-        let start = settings.customStandardStart ?? draft.standardDayStart
-        let end = settings.customStandardEnd ?? "16:00"
-        let day = title == "Saturday" ? nextSaturday() : nextSunday()
-        let result = PayrollHoursEngine.compute(
-            choice: OperativeDayBookingChoice(
-                timeSlot: .customHours,
-                workStartTime: start,
-                workEndTime: end,
-                isBreakRemoved: true,
-                otMultiplierOverride: nil
-            ),
-            day: day,
-            policy: draft
-        )
-        return exampleBreakdownCard(title: "Example: \(start)–\(end)", summary: result.breakdownSummary)
-    }
-
     // MARK: - Schedule sheet
 
     private var scheduleChangeSheet: some View {
@@ -1091,33 +1032,6 @@ struct OrganisationWorkingHoursView: View {
         }
         return String(format: "%.1f", value)
     }
-
-    private func nextWeekday() -> Date {
-        var d = Date()
-        let cal = Calendar.current
-        while cal.component(.weekday, from: d) == 1 || cal.component(.weekday, from: d) == 7 {
-            d = cal.date(byAdding: .day, value: 1, to: d) ?? d
-        }
-        return cal.startOfDay(for: d)
-    }
-
-    private func nextSaturday() -> Date {
-        var d = Date()
-        let cal = Calendar.current
-        while cal.component(.weekday, from: d) != 7 {
-            d = cal.date(byAdding: .day, value: 1, to: d) ?? d
-        }
-        return cal.startOfDay(for: d)
-    }
-
-    private func nextSunday() -> Date {
-        var d = Date()
-        let cal = Calendar.current
-        while cal.component(.weekday, from: d) != 1 {
-            d = cal.date(byAdding: .day, value: 1, to: d) ?? d
-        }
-        return cal.startOfDay(for: d)
-    }
 }
 
 // MARK: - Computed weekday paid hours
@@ -1260,16 +1174,6 @@ private struct WorkingHoursMultiplierField: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .strokeBorder(WorkingHoursPalette.cardBorder, lineWidth: 1)
                 )
-                .onChange(of: value) { _, newValue in
-                    guard newValue.isFinite else {
-                        value = 1.5
-                        return
-                    }
-                    let clamped = Swift.max(1, Swift.min(3, newValue))
-                    if abs(clamped - newValue) > 0.001 {
-                        value = clamped
-                    }
-                }
             Text("x")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(Color(red: 0.580, green: 0.639, blue: 0.722))
