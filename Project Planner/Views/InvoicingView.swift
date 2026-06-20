@@ -1031,6 +1031,7 @@ private struct MyTimesheetView: View {
             smallWorks: projectStore.smallWorks,
             history: dayRateHistoryCollection,
             policy: policy,
+            organization: firebaseBackend.currentOrganization,
             scheduleOptions: scheduleOptions
         )
         return summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
@@ -2098,6 +2099,7 @@ private struct PreviousTimesheetsView: View {
             smallWorks: projectStore.smallWorks,
             history: dayRateHistoryCollection,
             policy: policy,
+            organization: firebaseBackend.currentOrganization,
             scheduleOptions: scheduleOptions
         )
         return (summary.totalHours, summary.overtimeHours, summary.baseAmount, summary.overtimeAmount)
@@ -2368,6 +2370,7 @@ private struct OperativeTimesheetsView: View {
             projectStore: projectStore,
             dayRateHistory: dayRateHistoryCollection,
             payrollPolicy: policy,
+            organization: firebaseBackend.currentOrganization,
             organizationName: orgName
         )
 
@@ -2411,6 +2414,7 @@ private struct OperativeTimesheetsView: View {
             smallWorks: projectStore.smallWorks,
             history: dayRateHistoryCollection,
             policy: policy,
+            organization: firebaseBackend.currentOrganization,
             scheduleOptions: scheduleOptions
         )
         return (
@@ -3020,6 +3024,7 @@ private struct OperativeTimesheetReviewView: View {
             smallWorks: projectStore.smallWorks,
             history: dayRateHistoryCollection,
             policy: policy,
+            organization: firebaseBackend.currentOrganization,
             scheduleOptions: scheduleOptions
         )
     }
@@ -3652,6 +3657,7 @@ private enum InvoicePDFGenerationSupport {
             smallWorks: projectStore.smallWorks,
             history: dayRateHistoryCollection,
             policy: policy,
+            organization: firebaseBackend.currentOrganization,
             scheduleOptions: scheduleOptions
         )
         var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
@@ -4102,6 +4108,7 @@ private struct GenerateInvoiceView: View {
             smallWorks: projectStore.smallWorks,
             history: dayRateHistoryCollection,
             policy: policy,
+            organization: firebaseBackend.currentOrganization,
             scheduleOptions: scheduleOptions
         )
         var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
@@ -4740,6 +4747,7 @@ private enum TimesheetExportHelper {
         projectStore: ProjectStore,
         dayRateHistory: OperativeDayRateHistoryCollection,
         payrollPolicy: OrgPayrollTimePolicy,
+        organization: Organization?,
         organizationName: String
     ) async -> Result {
         var emailedUserIds = Set<String>()
@@ -4762,7 +4770,8 @@ private enum TimesheetExportHelper {
                 operativeStore: operativeStore,
                 projectStore: projectStore,
                 dayRateHistory: dayRateHistory,
-                payrollPolicy: payrollPolicy
+                payrollPolicy: payrollPolicy,
+                organization: organization
             )
             let draft = draftForUser(operative)
             let workTotal = rows.reduce(0) { $0 + $1.amount }
@@ -4819,6 +4828,7 @@ private enum TimesheetExportHelper {
         projectStore: ProjectStore,
         dayRateHistory: OperativeDayRateHistoryCollection,
         payrollPolicy: OrgPayrollTimePolicy,
+        organization: Organization?,
         scheduleOptions: MyScheduleOptions = MyScheduleOptions()
     ) -> [InvoiceLineItem] {
         let summary = TimesheetPayrollCollector.collect(
@@ -4831,6 +4841,7 @@ private enum TimesheetExportHelper {
             smallWorks: projectStore.smallWorks,
             history: dayRateHistory,
             policy: payrollPolicy,
+            organization: organization,
             scheduleOptions: scheduleOptions
         )
         return summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }

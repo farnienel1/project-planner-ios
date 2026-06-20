@@ -1005,8 +1005,7 @@ struct HomeView: View {
                 .minimumScaleFactor(0.88)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, minHeight: 104, maxHeight: 104)
         .padding(.horizontal, 5)
         .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))

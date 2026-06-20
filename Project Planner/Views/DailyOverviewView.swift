@@ -60,7 +60,7 @@ struct DailyOverviewView: View {
     }
 
     private var payrollTimePolicy: OrgPayrollTimePolicy {
-        firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        firebaseBackend.payrollPolicy(for: overviewDate)
     }
     
     private var canBookLabour: Bool {
@@ -1561,7 +1561,7 @@ struct ProjectBookingCard: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
 
     private var payrollTimePolicy: OrgPayrollTimePolicy {
-        firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        firebaseBackend.payrollPolicy(for: overviewDate)
     }
 
     private var smallWorksFlow: Bool { project.jobType == .smallWorks }

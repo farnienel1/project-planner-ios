@@ -784,6 +784,34 @@ class FirebaseBackend: ObservableObject {
         return settings
     }
 
+    /// Reads current/prior/scheduled payroll policy fields and promotes due scheduled changes.
+    private static func applyPayrollPolicyFields(from data: [String: Any], to organization: inout Organization) {
+        let current = organization.settings.payrollTimePolicy
+        var prior: OrgPayrollTimePolicy?
+        if let priorDict = data["payrollTimePolicyPrior"] as? [String: Any] {
+            prior = OrgPayrollTimePolicy.fromFirestore(priorDict)
+        }
+        var effectiveFrom = Calendar.current.startOfDay(for: Date())
+        if let key = data["payrollTimePolicyEffectiveFrom"] as? String,
+           let d = PayrollTimePolicyCatalog.date(fromDayKey: key) {
+            effectiveFrom = d
+        }
+        var scheduled: OrgPayrollTimePolicyScheduledChange?
+        if let schedDict = data["payrollTimePolicyScheduled"] as? [String: Any] {
+            scheduled = OrgPayrollTimePolicyScheduledChange.fromFirestore(schedDict)
+        }
+        let applied = PayrollTimePolicyCatalog.appliedPolicyState(
+            current: current,
+            prior: prior,
+            effectiveFrom: effectiveFrom,
+            scheduled: scheduled
+        )
+        organization.settings.payrollTimePolicy = applied.current
+        organization.payrollTimePolicyPrior = applied.prior
+        organization.payrollTimePolicyEffectiveFrom = applied.effectiveFrom
+        organization.payrollTimePolicyScheduled = applied.scheduled
+    }
+
     private static func organizationHasMyScheduleOptionsInDocument(_ data: [String: Any]) -> Bool {
         guard let settingsDict = data["settings"] as? [String: Any] else { return false }
         return settingsDict["myScheduleOptions"] != nil
@@ -1066,7 +1094,7 @@ class FirebaseBackend: ObservableObject {
             
             let orgSettings = Self.organizationSettingsFromOrgDocument(data)
             organizationHasFirestoreMyScheduleOptions = Self.organizationHasMyScheduleOptionsInDocument(data)
-            let organization = Organization(
+            var organization = Organization(
                 id: UUID(uuidString: organizationId) ?? UUID(),
                 firestoreDocumentId: organizationId,
                 name: organizationName,
@@ -1080,6 +1108,7 @@ class FirebaseBackend: ObservableObject {
                 companyLogoURL: data["companyLogoURL"] as? String,
                 creatorUserId: creatorUserId
             )
+            Self.applyPayrollPolicyFields(from: data, to: &organization)
             
             self.currentOrganization = organization
             self.userRole = UserRole(rawValue: userData["role"] as? String ?? UserRole.basic.rawValue) ?? .basic
@@ -3444,23 +3473,32 @@ class FirebaseBackend: ObservableObject {
         storeOrganizationLocally(org)
     }
 
-    /// Admin: update organisation-wide payroll / working time defaults (`organizations/{orgId}.payrollTimePolicy`).
-    func updateOrganizationPayrollTimePolicy(_ policy: OrgPayrollTimePolicy) async throws {
+    /// Date-aware payroll policy for bookings / timesheets on `day`.
+    func payrollPolicy(for day: Date) -> OrgPayrollTimePolicy {
+        PayrollTimePolicyCatalog.policy(for: day, organization: currentOrganization)
+    }
+
+    /// Admin: apply working-hours changes immediately (today onward).
+    func applyOrganizationPayrollTimePolicyImmediately(_ policy: OrgPayrollTimePolicy) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
-            )
+            throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
         }
-        try await db.collection("organizations").document(orgId).setData(
-            [
-                "payrollTimePolicy": policy.asFirestoreDictionary(),
-                "updatedAt": Timestamp(date: Date()),
-            ],
-            merge: true
-        )
+        let today = Calendar.current.startOfDay(for: Date())
+        let prior = currentOrganization?.settings.payrollTimePolicy
+        var payload: [String: Any] = [
+            "payrollTimePolicy": policy.asFirestoreDictionary(),
+            "payrollTimePolicyEffectiveFrom": PayrollTimePolicyCatalog.dayKey(today),
+            "payrollTimePolicyScheduled": NSNull(),
+            "updatedAt": Timestamp(date: Date()),
+        ]
+        if let prior {
+            payload["payrollTimePolicyPrior"] = prior.asFirestoreDictionary()
+        }
+        try await db.collection("organizations").document(orgId).setData(payload, merge: true)
         guard var org = currentOrganization else { return }
+        org.payrollTimePolicyPrior = prior
+        org.payrollTimePolicyEffectiveFrom = today
+        org.payrollTimePolicyScheduled = nil
         org.settings.payrollTimePolicy = policy
         org.settings.workingHours.startTime = policy.standardDayStart
         org.settings.workingHours.endTime = policy.standardDayEnd
@@ -3468,6 +3506,33 @@ class FirebaseBackend: ObservableObject {
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
+    }
+
+    /// Admin: queue a future working-hours change (replaces any pending schedule).
+    func scheduleOrganizationPayrollTimePolicyChange(_ policy: OrgPayrollTimePolicy, effectiveFrom: Date) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
+        }
+        let day = Calendar.current.startOfDay(for: effectiveFrom)
+        let scheduled = OrgPayrollTimePolicyScheduledChange(policy: policy, effectiveFrom: day)
+        try await db.collection("organizations").document(orgId).setData(
+            [
+                "payrollTimePolicyScheduled": scheduled.asFirestoreDictionary(),
+                "updatedAt": Timestamp(date: Date()),
+            ],
+            merge: true
+        )
+        guard var org = currentOrganization else { return }
+        org.payrollTimePolicyScheduled = scheduled
+        org.updatedAt = Date()
+        currentOrganization = org
+        storeOrganizationLocally(org)
+    }
+
+    /// Admin: update organisation-wide payroll / working time defaults (`organizations/{orgId}.payrollTimePolicy`).
+    /// Prefer `applyOrganizationPayrollTimePolicyImmediately` or `scheduleOrganizationPayrollTimePolicyChange`.
+    func updateOrganizationPayrollTimePolicy(_ policy: OrgPayrollTimePolicy) async throws {
+        try await applyOrganizationPayrollTimePolicyImmediately(policy)
     }
 
     /// Admin: update organisation invoicing settings (`organizations/{orgId}.invoicing`).

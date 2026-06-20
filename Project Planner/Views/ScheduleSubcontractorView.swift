@@ -3,6 +3,7 @@ import SwiftUI
 struct ScheduleSubcontractorView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var subcontractorStore: SubcontractorStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     
     let project: Project
     
@@ -13,6 +14,8 @@ struct ScheduleSubcontractorView: View {
     @State private var dateTimeSlots: [String: TimeSlot] = [:]
     @State private var currentMonth: Date = Date()
     @State private var quickSelectDays: Int? = nil
+    @State private var showingDateSelectionAlert = false
+    @State private var dateSelectionAlertMessage = ""
     @State private var isSaving = false
     @State private var searchText = ""
     @State private var selectedTypeFilter = "All Types"
@@ -56,7 +59,16 @@ struct ScheduleSubcontractorView: View {
             .task {
                 await subcontractorStore.loadData()
             }
+            .alert("Date selection", isPresented: $showingDateSelectionAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(dateSelectionAlertMessage)
+            }
         }
+    }
+
+    private var payrollTimePolicy: OrgPayrollTimePolicy {
+        firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
     }
     
     private var selectedSubcontractor: Subcontractor? {
@@ -281,16 +293,12 @@ struct ScheduleSubcontractorView: View {
     private func quickSelectButton(days: Int, label: String) -> some View {
         Button(action: {
             quickSelectDays = days
-            let cal = Calendar.current
-            let today = cal.startOfDay(for: Date())
-            selectedDates.removeAll()
+            var dates: Set<Date> = []
+            ScheduleDateSelectionPolicy.quickSelect(count: days, into: &dates)
+            selectedDates = dates
             dateTimeSlots.removeAll()
-            for i in 0..<days {
-                if let date = cal.date(byAdding: .day, value: i, to: today) {
-                    let d = cal.startOfDay(for: date)
-                    selectedDates.insert(d)
-                    dateTimeSlots[slotKey(for: d)] = .fullDay
-                }
+            for d in dates.sorted() {
+                dateTimeSlots[slotKey(for: d)] = .fullDay
             }
         }) {
             Text(label)
@@ -487,22 +495,19 @@ struct ScheduleSubcontractorView: View {
     private var calendarGrid: some View {
         VStack(spacing: 10) {
             HStack(spacing: 0) {
-                ForEach(["S", "M", "T", "W", "T", "F", "S"], id: \.self) { day in
+                ForEach(MondayFirstCalendarSupport.weekdayHeaders, id: \.self) { day in
                     Text(day)
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity)
                 }
             }
-            
+
             let calendar = Calendar.current
-            let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: currentMonth))!
-            let monthEnd = calendar.date(byAdding: DateComponents(month: 1, day: -1), to: monthStart)!
-            let startDate = calendar.date(byAdding: DateComponents(day: -calendar.component(.weekday, from: monthStart) + 1), to: monthStart)!
-            let endDate = calendar.date(byAdding: DateComponents(day: 6 - calendar.component(.weekday, from: monthEnd) + calendar.range(of: .day, in: .month, for: monthEnd)!.count), to: monthStart)!
-            let days = generateDays(start: startDate, end: endDate)
+            let range = MondayFirstCalendarSupport.gridRange(for: currentMonth, calendar: calendar)
+            let days = MondayFirstCalendarSupport.days(from: range.start, through: range.end, calendar: calendar)
             let weeks = days.chunked(into: 7)
-            
+
             ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
                 HStack(spacing: 8) {
                     ForEach(week, id: \.self) { date in
@@ -512,18 +517,29 @@ struct ScheduleSubcontractorView: View {
             }
         }
     }
-    
+
     private func dayButton(for date: Date, isCurrentMonth: Bool) -> some View {
         let calendar = Calendar.current
         let normalized = calendar.startOfDay(for: date)
         let isSelected = selectedDates.contains(normalized)
-        
+
         return Button {
             if isSelected {
                 selectedDates.remove(normalized)
                 dateTimeSlots.removeValue(forKey: slotKey(for: normalized))
             } else {
-                selectedDates.insert(normalized)
+                var next = selectedDates
+                if let message = ScheduleDateSelectionPolicy.toggle(
+                    date: date,
+                    selected: &next,
+                    policy: payrollTimePolicy,
+                    calendar: calendar
+                ) {
+                    dateSelectionAlertMessage = message
+                    showingDateSelectionAlert = true
+                    return
+                }
+                selectedDates = next
                 if dateTimeSlots[slotKey(for: normalized)] == nil {
                     dateTimeSlots[slotKey(for: normalized)] = .fullDay
                 }

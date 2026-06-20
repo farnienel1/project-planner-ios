@@ -62,11 +62,24 @@ struct ScheduleOperativeView: View {
     @State private var expandedPickerPersonIds: Set<UUID> = []
     @State private var showingSelectDatesFirstAlert = false
     @State private var showingHoursClashAlert = false
+    @State private var showingDateSelectionAlert = false
+    @State private var dateSelectionAlertMessage = ""
     @State private var didShowHoursClashAlertThisSession = false
     @EnvironmentObject var notificationService: NotificationService
     
     private var payrollTimePolicy: OrgPayrollTimePolicy {
         firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+    }
+
+    private func payrollPolicy(for day: Date) -> OrgPayrollTimePolicy {
+        firebaseBackend.payrollPolicy(for: day)
+    }
+
+    private var primarySelectedDatePolicy: OrgPayrollTimePolicy {
+        if let first = selectedDates.sorted().first {
+            return payrollPolicy(for: first)
+        }
+        return payrollTimePolicy
     }
 
     private var canBookStandardDayWindow: Bool {
@@ -115,6 +128,11 @@ struct ScheduleOperativeView: View {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("New hours have been selected, which has caused clashes with other bookings. Make your final change and then acknowledge each clash above before being able to Confirm booking.")
+            }
+            .alert("Date selection", isPresented: $showingDateSelectionAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(dateSelectionAlertMessage)
             }
             .onChange(of: selectedDates) { oldSet, newSet in
                 if oldSet != newSet {
@@ -303,6 +321,10 @@ struct ScheduleOperativeView: View {
 
     private var canConfirmBooking: Bool {
         guard !selectedOperatives.isEmpty, !selectedDates.isEmpty, !isBooking else { return false }
+        guard ScheduleDateSelectionPolicy.saturdaySundaySelectionAllowed(
+            selected: selectedDates,
+            policy: payrollTimePolicy
+        ) else { return false }
         return ScheduleBookingConflictEngine.allActionableRowsResolved(
             people: bookablePeople,
             selectedOperativeIds: selectedOperatives,
@@ -858,7 +880,8 @@ struct ScheduleOperativeView: View {
     }
 
     private var scheduleBookingBulkHoursCard: some View {
-        let p = payrollTimePolicy
+        let p = primarySelectedDatePolicy
+        let refDay = selectedDates.sorted().first ?? Date()
         let start = sharedBulkChoice.workStartTime ?? p.standardDayStart
         let end = sharedBulkChoice.workEndTime ?? p.standardDayEnd
         let probe = OperativeDayBookingChoice(
@@ -866,15 +889,16 @@ struct ScheduleOperativeView: View {
             workStartTime: start,
             workEndTime: end,
             isBreakRemoved: sharedBulkChoice.isBreakRemoved,
-            otMultiplierOverride: nil
+            otMultiplierOverride: sharedBulkChoice.otMultiplierOverride
         ).bookingProbe(
             operativeId: UUID(),
             projectId: project.id,
-            date: Date(),
+            date: refDay,
             bookedBy: ""
         )
         let paidH = probe.paidBookedHours(policy: p)
         let otH = probe.overtimeHoursBeyondPaidStandard(policy: p)
+        let breakdown = probe.payrollHoursResult(policy: p)
         return VStack(alignment: .leading, spacing: 10) {
             Text("HOURS · APPLIES TO ALL SELECTED")
                 .font(.system(size: 10, weight: .medium))
@@ -979,15 +1003,12 @@ struct ScheduleOperativeView: View {
                     .foregroundStyle(otH < 0.05 ? ProjectWorksRevampColors.activeGreen : ProjectWorksRevampColors.upcomingAmber)
                 Group {
                     if otH < 0.05 {
-                        Text("\(formatHoursOneDecimal(paidH))h within standard window · \(formatHoursOneDecimal(p.weekdayOutsideStandardMultiplier))× OT if extended")
+                        Text("\(formatHoursOneDecimal(paidH))h paid · \(breakdown.breakdownSummary)")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.activeGreen)
                     } else {
-                        Text("\(formatHoursOneDecimal(paidH))h booked · ")
+                        Text(breakdown.breakdownSummary)
                             .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                        + Text("\(formatHoursOneDecimal(otH))h outside standard (\(formatHoursOneDecimal(p.weekdayOutsideStandardMultiplier))×)")
-                            .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
                     }
                 }
@@ -1134,7 +1155,7 @@ struct ScheduleOperativeView: View {
     private var calendarGridCompact: some View {
         VStack(spacing: 6) {
             HStack(spacing: 0) {
-                ForEach(["S", "M", "T", "W", "T", "F", "S"], id: \.self) { day in
+                ForEach(MondayFirstCalendarSupport.weekdayHeaders, id: \.self) { day in
                     Text(day)
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
@@ -1142,11 +1163,8 @@ struct ScheduleOperativeView: View {
                 }
             }
             let calendar = Calendar.current
-            let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: currentMonth))!
-            let monthEnd = calendar.date(byAdding: DateComponents(month: 1, day: -1), to: monthStart)!
-            let startDate = calendar.date(byAdding: DateComponents(day: -calendar.component(.weekday, from: monthStart) + 1), to: monthStart)!
-            let endDate = calendar.date(byAdding: DateComponents(day: 6 - calendar.component(.weekday, from: monthEnd) + calendar.range(of: .day, in: .month, for: monthEnd)!.count), to: monthStart)!
-            let days = generateDaysInMonth(start: startDate, end: endDate)
+            let range = MondayFirstCalendarSupport.gridRange(for: currentMonth, calendar: calendar)
+            let days = MondayFirstCalendarSupport.days(from: range.start, through: range.end, calendar: calendar)
             let weeks = days.chunked(into: 7)
             ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
                 HStack(spacing: 4) {
@@ -1271,30 +1289,49 @@ struct ScheduleOperativeView: View {
         let calendar = Calendar.current
         let normalizedDate = calendar.startOfDay(for: date)
         let key = slotKey(for: normalizedDate)
-        
+
         if selectedDates.contains(normalizedDate) {
             selectedDates.remove(normalizedDate)
             dateSlotChoices.removeValue(forKey: key)
+            quickSelectDays = nil
+            return
+        }
+
+        var next = selectedDates
+        if let message = ScheduleDateSelectionPolicy.toggle(
+            date: date,
+            selected: &next,
+            policy: payrollTimePolicy,
+            calendar: calendar
+        ) {
+            dateSelectionAlertMessage = message
+            showingDateSelectionAlert = true
+            return
+        }
+
+        selectedDates = next
+        if PayrollTimePolicyCatalog.isWeekend(normalizedDate, calendar: calendar) {
+            let policy = payrollPolicy(for: normalizedDate)
+            dateSlotChoices[key] = PayrollTimePolicyCatalog.defaultWeekendBookingChoice(policy: policy, day: normalizedDate)
         } else {
-            selectedDates.insert(normalizedDate)
             dateSlotChoices[key] = sharedBulkChoice
         }
-        
         quickSelectDays = nil
     }
-    
+
     private func quickSelectDays(days: Int) {
         quickSelectDays = days
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        selectedDates.removeAll()
+        var dates: Set<Date> = []
+        ScheduleDateSelectionPolicy.quickSelect(count: days, into: &dates)
+        selectedDates = dates
         dateSlotChoices.removeAll()
-        
-        for i in 0..<days {
-            if let date = calendar.date(byAdding: .day, value: i, to: today) {
-                let normalizedDate = calendar.startOfDay(for: date)
-                selectedDates.insert(normalizedDate)
-                dateSlotChoices[slotKey(for: normalizedDate)] = sharedBulkChoice
+        for d in dates.sorted() {
+            let key = slotKey(for: d)
+            if PayrollTimePolicyCatalog.isWeekend(d) {
+                let policy = payrollPolicy(for: d)
+                dateSlotChoices[key] = PayrollTimePolicyCatalog.defaultWeekendBookingChoice(policy: policy, day: d)
+            } else {
+                dateSlotChoices[key] = sharedBulkChoice
             }
         }
     }

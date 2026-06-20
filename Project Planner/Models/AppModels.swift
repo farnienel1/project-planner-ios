@@ -555,6 +555,12 @@ struct Organization: Identifiable, Codable, Hashable {
     var updatedAt: Date
     /// Firebase Auth UID of the organization creator. Only this user may be super admin.
     var creatorUserId: String?
+    /// Previous payroll rules — used for bookings dated before `payrollTimePolicyEffectiveFrom`.
+    var payrollTimePolicyPrior: OrgPayrollTimePolicy?
+    /// First calendar day (local) when `settings.payrollTimePolicy` applies.
+    var payrollTimePolicyEffectiveFrom: Date?
+    /// Queued future working-hours change (replaces any prior pending schedule on save).
+    var payrollTimePolicyScheduled: OrgPayrollTimePolicyScheduledChange?
     
     init(
         id: UUID = UUID(),
@@ -568,7 +574,10 @@ struct Organization: Identifiable, Codable, Hashable {
         defaultLatitude: Double? = nil,
         defaultLongitude: Double? = nil,
         companyLogoURL: String? = nil,
-        creatorUserId: String? = nil
+        creatorUserId: String? = nil,
+        payrollTimePolicyPrior: OrgPayrollTimePolicy? = nil,
+        payrollTimePolicyEffectiveFrom: Date? = nil,
+        payrollTimePolicyScheduled: OrgPayrollTimePolicyScheduledChange? = nil
     ) {
         self.id = id
         if let fid = firestoreDocumentId, !fid.isEmpty {
@@ -588,11 +597,15 @@ struct Organization: Identifiable, Codable, Hashable {
         self.createdAt = Date()
         self.updatedAt = Date()
         self.creatorUserId = creatorUserId
+        self.payrollTimePolicyPrior = payrollTimePolicyPrior
+        self.payrollTimePolicyEffectiveFrom = payrollTimePolicyEffectiveFrom
+        self.payrollTimePolicyScheduled = payrollTimePolicyScheduled
     }
 
     enum CodingKeys: String, CodingKey {
         case id, firestoreDocumentId, name, settings, officeAddressLine1, officeCity, officePostcode
         case countryCode, defaultLatitude, defaultLongitude, companyLogoURL, createdAt, updatedAt, creatorUserId
+        case payrollTimePolicyPrior, payrollTimePolicyEffectiveFrom, payrollTimePolicyScheduled
     }
 
     init(from decoder: Decoder) throws {
@@ -611,6 +624,9 @@ struct Organization: Identifiable, Codable, Hashable {
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         creatorUserId = try c.decodeIfPresent(String.self, forKey: .creatorUserId)
         firestoreDocumentId = try c.decodeIfPresent(String.self, forKey: .firestoreDocumentId) ?? id.uuidString
+        payrollTimePolicyPrior = try c.decodeIfPresent(OrgPayrollTimePolicy.self, forKey: .payrollTimePolicyPrior)
+        payrollTimePolicyEffectiveFrom = try c.decodeIfPresent(Date.self, forKey: .payrollTimePolicyEffectiveFrom)
+        payrollTimePolicyScheduled = try c.decodeIfPresent(OrgPayrollTimePolicyScheduledChange.self, forKey: .payrollTimePolicyScheduled)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -629,6 +645,9 @@ struct Organization: Identifiable, Codable, Hashable {
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encodeIfPresent(creatorUserId, forKey: .creatorUserId)
+        try c.encodeIfPresent(payrollTimePolicyPrior, forKey: .payrollTimePolicyPrior)
+        try c.encodeIfPresent(payrollTimePolicyEffectiveFrom, forKey: .payrollTimePolicyEffectiveFrom)
+        try c.encodeIfPresent(payrollTimePolicyScheduled, forKey: .payrollTimePolicyScheduled)
     }
 }
 
@@ -899,23 +918,43 @@ struct OrganizationUILabels: Codable, Hashable {
 
 /// Per-weekend-day policy. Sat and Sun are configured independently in org settings.
 struct OrgWeekendDayPayrollSettings: Codable, Hashable {
-    /// When `true`, every paid hour that day uses `allHoursMultiplier` (see org settings copy: “All hours on these days will be at the multiplier rate”). Unpaid break rules still apply to paid time.
+    /// When `true`, every paid hour that day uses `allHoursMultiplier` (no break deduction).
     var allHoursAtMultiplierMode: Bool
     /// Multiplier for all paid hours when `allHoursAtMultiplierMode` is `true`.
     var allHoursMultiplier: Double
-    /// When `allHoursAtMultiplierMode` is `false`, use a custom clock window that counts as `OrgPayrollTimePolicy.standardPaidHours` paid at standard rate (break ignored for that band). Hours outside use `outsideStandardWindowMultiplier`.
+    /// When `allHoursAtMultiplierMode` is `false`, use a custom clock window that counts as `countsAsHours` at standard rate. Hours outside use `outsideStandardWindowMultiplier`.
     var useCustomStandardDayWindow: Bool
     var customStandardStart: String?
     var customStandardEnd: String?
+    /// Paid hours credited when the booking covers the defined window (e.g. 8h for 07:30–13:00).
+    var countsAsHours: Double?
     /// Hours outside the custom standard window (weekend only, when not in all-multiplier mode).
     var outsideStandardWindowMultiplier: Double
 
+    func resolvedCountsAsHours(fallback: Double) -> Double {
+        countsAsHours ?? fallback
+    }
+
+    /// True when two weekend day configs can be batch-booked together (Sat+Sun).
+    func equivalentForBatchBooking(_ other: OrgWeekendDayPayrollSettings, fallbackCountsAs: Double) -> Bool {
+        guard allHoursAtMultiplierMode == other.allHoursAtMultiplierMode else { return false }
+        if allHoursAtMultiplierMode {
+            return abs(allHoursMultiplier - other.allHoursMultiplier) < 0.001
+        }
+        return useCustomStandardDayWindow == other.useCustomStandardDayWindow
+            && customStandardStart == other.customStandardStart
+            && customStandardEnd == other.customStandardEnd
+            && abs(resolvedCountsAsHours(fallback: fallbackCountsAs) - other.resolvedCountsAsHours(fallback: fallbackCountsAs)) < 0.001
+            && abs(outsideStandardWindowMultiplier - other.outsideStandardWindowMultiplier) < 0.001
+    }
+
     static let defaultSaturday: OrgWeekendDayPayrollSettings = .init(
-        allHoursAtMultiplierMode: true,
+        allHoursAtMultiplierMode: false,
         allHoursMultiplier: 2.0,
-        useCustomStandardDayWindow: false,
-        customStandardStart: nil,
-        customStandardEnd: nil,
+        useCustomStandardDayWindow: true,
+        customStandardStart: "07:30",
+        customStandardEnd: "13:00",
+        countsAsHours: 8,
         outsideStandardWindowMultiplier: 2.0
     )
 
@@ -925,6 +964,7 @@ struct OrgWeekendDayPayrollSettings: Codable, Hashable {
         useCustomStandardDayWindow: false,
         customStandardStart: nil,
         customStandardEnd: nil,
+        countsAsHours: nil,
         outsideStandardWindowMultiplier: 2.0
     )
 }
@@ -935,6 +975,8 @@ struct OrgPayrollTimePolicy: Codable, Hashable {
     var standardDayEnd: String
     /// Unpaid break length (minutes) assumed once per continuous work span unless removed on a booking.
     var unpaidBreakMinutes: Int
+    /// When `true`, the configured break is paid and not deducted from booked hours.
+    var breakPaid: Bool
     /// Paid hours represented by the custom weekend “full day” window (industry default 8). Shown in org UI copy.
     var standardPaidHours: Double
     /// Default placement of unpaid break (org-configurable).
@@ -944,6 +986,8 @@ struct OrgPayrollTimePolicy: Codable, Hashable {
     var weekdayOutsideStandardMultiplier: Double
     var saturday: OrgWeekendDayPayrollSettings
     var sunday: OrgWeekendDayPayrollSettings
+    /// When `true`, Sunday uses Saturday’s weekend rules in settings UI and payroll.
+    var sundaySameAsSaturday: Bool
 
     /// Unpaid break length in hours (from `unpaidBreakMinutes`). Used when deducting break from elapsed clock time.
     var standardUnpaidBreakHours: Double {
@@ -954,12 +998,14 @@ struct OrgPayrollTimePolicy: Codable, Hashable {
         standardDayStart: "07:30",
         standardDayEnd: "16:00",
         unpaidBreakMinutes: 30,
+        breakPaid: false,
         standardPaidHours: 8,
         breakWindowStart: "12:00",
         breakWindowEnd: "12:30",
         weekdayOutsideStandardMultiplier: 1.5,
         saturday: .defaultSaturday,
-        sunday: .defaultSunday
+        sunday: .defaultSunday,
+        sundaySameAsSaturday: false
     )
 
     /// Firestore `organizations/{id}.payrollTimePolicy` map.
@@ -968,12 +1014,14 @@ struct OrgPayrollTimePolicy: Codable, Hashable {
             "standardDayStart": standardDayStart,
             "standardDayEnd": standardDayEnd,
             "unpaidBreakMinutes": unpaidBreakMinutes,
+            "breakPaid": breakPaid,
             "standardPaidHours": standardPaidHours,
             "breakWindowStart": breakWindowStart,
             "breakWindowEnd": breakWindowEnd,
             "weekdayOutsideStandardMultiplier": weekdayOutsideStandardMultiplier,
             "saturday": saturday.asFirestoreDictionary(),
             "sunday": sunday.asFirestoreDictionary(),
+            "sundaySameAsSaturday": sundaySameAsSaturday,
         ]
     }
 
@@ -982,22 +1030,26 @@ struct OrgPayrollTimePolicy: Codable, Hashable {
         let start = data["standardDayStart"] as? String ?? OrgPayrollTimePolicy.default.standardDayStart
         let end = data["standardDayEnd"] as? String ?? OrgPayrollTimePolicy.default.standardDayEnd
         let breakMins = (data["unpaidBreakMinutes"] as? NSNumber)?.intValue ?? (data["unpaidBreakMinutes"] as? Int) ?? OrgPayrollTimePolicy.default.unpaidBreakMinutes
+        let breakPaid = data["breakPaid"] as? Bool ?? OrgPayrollTimePolicy.default.breakPaid
         let paidHrs = (data["standardPaidHours"] as? NSNumber)?.doubleValue ?? (data["standardPaidHours"] as? Double) ?? OrgPayrollTimePolicy.default.standardPaidHours
         let bws = data["breakWindowStart"] as? String ?? OrgPayrollTimePolicy.default.breakWindowStart
         let bwe = data["breakWindowEnd"] as? String ?? OrgPayrollTimePolicy.default.breakWindowEnd
         let wkMult = (data["weekdayOutsideStandardMultiplier"] as? NSNumber)?.doubleValue ?? (data["weekdayOutsideStandardMultiplier"] as? Double) ?? OrgPayrollTimePolicy.default.weekdayOutsideStandardMultiplier
         let satDict = data["saturday"] as? [String: Any] ?? [:]
         let sunDict = data["sunday"] as? [String: Any] ?? [:]
+        let sundaySame = data["sundaySameAsSaturday"] as? Bool ?? OrgPayrollTimePolicy.default.sundaySameAsSaturday
         return OrgPayrollTimePolicy(
             standardDayStart: start,
             standardDayEnd: end,
             unpaidBreakMinutes: breakMins,
+            breakPaid: breakPaid,
             standardPaidHours: paidHrs,
             breakWindowStart: bws,
             breakWindowEnd: bwe,
             weekdayOutsideStandardMultiplier: wkMult,
             saturday: OrgWeekendDayPayrollSettings.fromFirestore(satDict),
-            sunday: OrgWeekendDayPayrollSettings.fromFirestore(sunDict)
+            sunday: OrgWeekendDayPayrollSettings.fromFirestore(sunDict),
+            sundaySameAsSaturday: sundaySame
         )
     }
 }
@@ -1010,6 +1062,7 @@ private extension OrgWeekendDayPayrollSettings {
             "useCustomStandardDayWindow": useCustomStandardDayWindow,
             "outsideStandardWindowMultiplier": outsideStandardWindowMultiplier,
         ]
+        if let counts = countsAsHours { d["countsAsHours"] = counts }
         if let s = customStandardStart { d["customStandardStart"] = s } else { d["customStandardStart"] = NSNull() }
         if let e = customStandardEnd { d["customStandardEnd"] = e } else { d["customStandardEnd"] = NSNull() }
         return d
@@ -1021,6 +1074,7 @@ private extension OrgWeekendDayPayrollSettings {
         let custom = data["useCustomStandardDayWindow"] as? Bool ?? false
         let cs = data["customStandardStart"] as? String
         let ce = data["customStandardEnd"] as? String
+        let counts = (data["countsAsHours"] as? NSNumber)?.doubleValue ?? (data["countsAsHours"] as? Double)
         let outside = (data["outsideStandardWindowMultiplier"] as? NSNumber)?.doubleValue ?? (data["outsideStandardWindowMultiplier"] as? Double) ?? allMult
         return OrgWeekendDayPayrollSettings(
             allHoursAtMultiplierMode: allMode,
@@ -1028,6 +1082,7 @@ private extension OrgWeekendDayPayrollSettings {
             useCustomStandardDayWindow: custom,
             customStandardStart: cs,
             customStandardEnd: ce,
+            countsAsHours: counts,
             outsideStandardWindowMultiplier: outside
         )
     }

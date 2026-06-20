@@ -1140,7 +1140,7 @@ struct WeeklyReportView: View {
                 personName: personName,
                 role: roleLabel,
                 location: locationName,
-                timeSlotLabel: booking.scheduleLabel(policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default),
+                timeSlotLabel: booking.scheduleLabel(policy: firebaseBackend.payrollPolicy(for: booking.date)),
                 days: managerDayValue(from: booking)
             )
         }
@@ -1195,7 +1195,7 @@ struct WeeklyReportView: View {
 
     /// Uses day-rate history keyed by user id; compares **calendar days** so a change effective “tomorrow” does not apply to today’s bookings.
     private func resolvedPayrollRate(user: AppUser?, operative: Operative?, on date: Date) -> ResolvedPayrollRate {
-        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let policy = firebaseBackend.payrollPolicy(for: date)
         let standardDayHours = max(policy.standardPaidHours, 8)
         return PayrollRateResolver.resolveForTimesheetDay(
             user: user,
@@ -1228,7 +1228,7 @@ struct WeeklyReportView: View {
     }
 
     private func bookingDayValue(from booking: Booking) -> Double {
-        booking.reportDayValue(policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default)
+        booking.reportDayValue(policy: firebaseBackend.payrollPolicy(for: booking.date))
     }
 
     private func subcontractorDayValue(from timeSlot: TimeSlot) -> Double {
@@ -1240,7 +1240,7 @@ struct WeeklyReportView: View {
     }
 
     private func managerDayValue(from booking: ManagerSiteBooking) -> Double {
-        booking.reportDayValue(policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default)
+        booking.reportDayValue(policy: firebaseBackend.payrollPolicy(for: booking.date))
     }
 
     private func linkedAppUser(for operative: Operative) -> AppUser? {
@@ -1283,8 +1283,6 @@ struct WeeklyReportView: View {
     }
 
     private func payrollPersonSummaries() -> [PayrollPersonSummary] {
-        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
-        let standard = max(policy.standardPaidHours, 0.01)
         struct Acc {
             var name: String
             var role: String
@@ -1304,6 +1302,7 @@ struct WeeklyReportView: View {
         }
         for booking in operativeBookings {
             guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else { continue }
+            let policy = firebaseBackend.payrollPolicy(for: booking.date)
             let linkedUser = linkedAppUser(for: operative)
             let role = reportRoleLabel(for: linkedUser, fallback: "Operative")
             let name = (linkedUser?.fullName.isEmpty == false) ? (linkedUser?.fullName ?? operative.name) : operative.name
@@ -1330,6 +1329,7 @@ struct WeeklyReportView: View {
         }
         for booking in managerBookings {
             guard let manager = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { continue }
+            let policy = firebaseBackend.payrollPolicy(for: booking.date)
             let role = reportRoleLabel(for: manager, fallback: "Manager")
             let name = manager.fullName.isEmpty ? manager.email : manager.fullName
             let linkedOperative = operativeStore.allOperatives.first {

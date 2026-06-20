@@ -88,27 +88,17 @@ extension Booking {
         return timeSlot.displayName
     }
 
-    /// Paid hours for UI: elapsed window minus org unpaid break when times are explicit and break applies.
+    /// Paid hours for UI: uses the shared payroll engine (weekday/weekend OT, multipliers, break rules).
     func paidBookedHours(policy: OrgPayrollTimePolicy = .default) -> Double {
-        if let s = workStartTime, let e = workEndTime,
-           let sm = ManagerScheduleInterval.parseMinutes(s),
-           let em = ManagerScheduleInterval.parseMinutes(e), em > sm {
-            var wall = Double(em - sm) / 60.0
-            if !isBreakRemoved {
-                wall = max(0, wall - policy.standardUnpaidBreakHours)
-            }
-            return wall
-        }
-        switch timeSlot {
-        case .fullDay, .customHours:
-            return max(policy.standardPaidHours, 0)
-        case .morning, .afternoon:
-            return max(policy.standardPaidHours, 0) / 2
-        case .evening:
-            return 4
-        case .overtime:
-            return 2
-        }
+        payrollHoursResult(policy: policy).totalPaidHours
+    }
+
+    /// Wall-clock overtime hours outside the standard window (weekday or weekend), for badges.
+    func overtimeHoursBeyondPaidStandard(policy: OrgPayrollTimePolicy = .default) -> Double {
+        let result = payrollHoursResult(policy: policy)
+        return result.segments
+            .filter { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }
+            .reduce(0) { $0 + $1.paidHours }
     }
 
     /// Second line under the person’s name (daily overview / my schedule): clock-first, full-day phrasing, OT hint.
@@ -117,12 +107,12 @@ extension Booking {
             return ("Full standard day · \(policy.standardDayStart)–\(policy.standardDayEnd)", false)
         }
         if let s = workStartTime, let e = workEndTime, !s.isEmpty, !e.isEmpty {
+            let result = payrollHoursResult(policy: policy)
             let ot = overtimeHoursBeyondPaidStandard(policy: policy)
-            if ot > 0.05 {
-                let stdShow = paidBookedHours(policy: policy) - ot
-                let mult = effectiveWeekdayOtMultiplier(policy: policy)
-                let multStr = abs(mult - mult.rounded()) < 0.05 ? String(format: "%.0f", mult) : String(format: "%.1f", mult)
-                return ("\(s)–\(e) · \(ScheduleCoverageFormat.hours(stdShow))h std + \(ScheduleCoverageFormat.hours(ot))h × \(multStr)", true)
+            if ot > 0.05, let outside = result.segments.first(where: { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }) {
+                let stdShow = result.totalPaidHours - ot
+                let multStr = outside.multiplierLabel
+                return ("\(s)–\(e) · \(ScheduleCoverageFormat.hours(stdShow))h + \(ScheduleCoverageFormat.hours(ot))h × \(multStr) (Multiplier)", true)
             }
             var t = "\(s)–\(e)"
             if isBreakRemoved {
@@ -145,7 +135,7 @@ extension Booking {
     }
 
     func effectiveWeekdayOtMultiplier(policy: OrgPayrollTimePolicy = .default) -> Double {
-        otMultiplierOverride ?? policy.weekdayOutsideStandardMultiplier
+        effectiveOutsideMultiplier(policy: policy, weekend: nil)
     }
 
     func minutesSortKey(policy: OrgPayrollTimePolicy = .default) -> Int {
@@ -198,11 +188,6 @@ extension Booking {
         case .overtime: return 2
         case .customHours: return max(policy.standardPaidHours, 0)
         }
-    }
-
-    /// Hours beyond org `standardPaidHours` (for OT badges / daily totals).
-    func overtimeHoursBeyondPaidStandard(policy: OrgPayrollTimePolicy = .default) -> Double {
-        max(0, paidBookedHours(policy: policy) - max(policy.standardPaidHours, 0))
     }
 }
 

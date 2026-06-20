@@ -44,26 +44,34 @@ enum TimesheetPayrollCollector {
         smallWorks: [Project],
         history: OperativeDayRateHistoryCollection,
         policy: OrgPayrollTimePolicy,
+        organization: Organization? = nil,
         scheduleOptions: MyScheduleOptions = MyScheduleOptions()
     ) -> TimesheetPayrollSummary {
         let cal = Calendar.current
-        let standardDayHours = max(policy.standardPaidHours, 0.01)
-        let matchedOperatives = operatives.filter {
-            $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                == user.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        func dayPolicy(for day: Date) -> OrgPayrollTimePolicy {
+            if let organization {
+                return PayrollTimePolicyCatalog.policy(for: day, organization: organization)
+            }
+            return policy
         }
-        let operativeIds = Set(matchedOperatives.map(\.id))
         var lineItems: [TimesheetPayrollLineItem] = []
         var shiftCount = 0
         var totalHours = 0.0
         var overtimeHours = 0.0
         var baseAmount = 0.0
         var overtimeAmount = 0.0
+        let matchedOperatives = operatives.filter {
+            $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                == user.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        let operativeIds = Set(matchedOperatives.map(\.id))
 
         for booking in bookings where booking.status != .cancelled {
             guard operativeIds.contains(booking.operativeId) else { continue }
             let day = cal.startOfDay(for: booking.date)
             guard day >= range.lowerBound && day <= range.upperBound else { continue }
+            let policy = dayPolicy(for: day)
+            let standardDayHours = max(policy.standardPaidHours, 0.01)
             shiftCount += 1
             let matchedOperative = matchedOperatives.first(where: { $0.id == booking.operativeId })
             let resolved = PayrollRateResolver.resolveForTimesheetDay(
@@ -127,6 +135,8 @@ enum TimesheetPayrollCollector {
             guard scheduleOptions.includesManagerScheduleLocation(booking) else { continue }
             let day = cal.startOfDay(for: booking.date)
             guard day >= range.lowerBound && day <= range.upperBound else { continue }
+            let policy = dayPolicy(for: day)
+            let standardDayHours = max(policy.standardPaidHours, 0.01)
             shiftCount += 1
             let resolved = PayrollRateResolver.resolveForTimesheetDay(
                 user: user,
@@ -138,7 +148,7 @@ enum TimesheetPayrollCollector {
             let paidHours = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
             let normalHours = max(0, paidHours - otHours)
-            let otMultiplier = policy.weekdayOutsideStandardMultiplier
+            let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
             totalHours += paidHours
             overtimeHours += otHours
 
@@ -215,6 +225,7 @@ enum TimesheetPayrollCollector {
         smallWorks: [Project],
         history: OperativeDayRateHistoryCollection,
         policy: OrgPayrollTimePolicy,
+        organization: Organization? = nil,
         scheduleOptions: MyScheduleOptions = MyScheduleOptions()
     ) -> TimesheetPayrollSummary {
         collect(
@@ -227,6 +238,7 @@ enum TimesheetPayrollCollector {
             smallWorks: smallWorks,
             history: history,
             policy: policy,
+            organization: organization,
             scheduleOptions: scheduleOptions
         )
     }

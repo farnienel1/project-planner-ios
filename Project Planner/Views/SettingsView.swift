@@ -306,52 +306,22 @@ struct SettingsView: View {
                 .environmentObject(projectStore)
                 .environmentObject(managerScheduleStore)
         } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top, spacing: 14) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.white.opacity(0.18))
-                            .frame(width: 42, height: 42)
-                        Image(systemName: "building.2.fill")
-                            .font(.system(size: 20, weight: .medium))
-                            .foregroundStyle(.white)
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            Text("Organisation settings")
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(.white)
-                            Text("Admin only")
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.95))
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 2)
-                                .background(Color.white.opacity(0.22))
-                                .clipShape(Capsule())
-                        }
-                        Text("Hours, leave, schedule options & more for \(firebaseBackend.currentOrganization?.name ?? "your team").")
-                            .font(.system(size: 11, weight: .regular))
-                            .foregroundStyle(.white.opacity(0.88))
-                            .fixedSize(horizontal: false, vertical: true)
-                        HStack(spacing: 6) {
-                            organisationPromoChip("clock", "Hours")
-                            organisationPromoChip("beach.umbrella.fill", "Leave")
-                            organisationPromoChip("calendar.badge.clock", "My Schedule")
-                            Text("+3 more")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.9))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(Color.white.opacity(0.18))
-                                .clipShape(Capsule())
-                        }
-                        .padding(.top, 4)
-                    }
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .padding(.top, 4)
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.white.opacity(0.18))
+                        .frame(width: 42, height: 42)
+                    Image(systemName: "building.2.fill")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(.white)
                 }
+                Text("Organisation Settings Hub")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.7))
             }
             .padding(18)
             .background(
@@ -365,20 +335,6 @@ struct SettingsView: View {
             .shadow(color: ProjectWorksRevampColors.blue.opacity(0.22), radius: 16, x: 0, y: 8)
         }
         .buttonStyle(.plain)
-    }
-
-    private func organisationPromoChip(_ systemImage: String, _ label: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: systemImage)
-                .font(.system(size: 10, weight: .medium))
-            Text(label)
-                .font(.system(size: 10, weight: .medium))
-        }
-        .foregroundStyle(.white.opacity(0.95))
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(Color.white.opacity(0.18))
-        .clipShape(Capsule())
     }
 
     private var settingsHubSupportGroup: some View {
