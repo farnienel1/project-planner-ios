@@ -68,10 +68,8 @@ class FirebaseBackend: ObservableObject {
     @Published var errorMessage: String?
     @Published var currentOrganization: Organization?
     @Published var userRole: UserRole = .basic
-    @Published var shouldShowSetupFlow = false
     /// Set after the root shell has kicked off the first org-wide store load (prevents duplicate parallel reloads on launch).
     @Published var hasBootstrappedOrgDataLoad = false
-    var isNewOrganization = false
     
     /// Lazy so `FirebaseBackend` can be constructed before `application(_:didFinishLaunchingWithOptions:)` calls `FirebaseApp.configure()`.
     private lazy var auth: Auth = Auth.auth()
@@ -282,24 +280,12 @@ class FirebaseBackend: ObservableObject {
                 if let user = user {
                     print("🔥🔥🔥 Firebase user signed in: \(user.email ?? "N/A")")
 
-                    let shouldPreserveSetupFlow = self.shouldShowSetupFlow && self.isNewOrganization
-
                     if self.currentOrganization != nil {
                         print("🔥🔥🔥 DEBUG: Organization already set, skipping reload from auth listener")
                         self.broadcastOrganizationDidLoadIfNeeded()
                     } else {
                         Task { [weak self] in
                             await self?.loadUserOrganizationWithRecovery(userId: user.uid)
-                        }
-                    }
-
-                    if shouldPreserveSetupFlow {
-                        Task { @MainActor [weak self] in
-                            try? await Task.sleep(nanoseconds: 300_000_000)
-                            guard let self else { return }
-                            self.shouldShowSetupFlow = true
-                            self.isNewOrganization = true
-                            print("🔥🔥🔥 DEBUG: Auth state changed - preserved shouldShowSetupFlow for new sign-up")
                         }
                     }
 
@@ -310,9 +296,7 @@ class FirebaseBackend: ObservableObject {
                     self.organizationHasFirestoreMyScheduleOptions = false
                     self.currentOrganization = nil
                     self.userRole = .basic
-                    self.shouldShowSetupFlow = false
                     self.hasBootstrappedOrgDataLoad = false
-                    self.isNewOrganization = false
                     self.clearLocalOrganizationCache()
                     NotificationCenter.default.post(name: .userDidSignOut, object: nil)
                 }
@@ -445,10 +429,8 @@ class FirebaseBackend: ObservableObject {
             await MainActor.run {
                 self.currentOrganization = organization
                 self.userRole = .admin
-                self.isNewOrganization = true // Mark this as a new organization
-                self.shouldShowSetupFlow = true // ALWAYS show setup flow for new sign-ups
                 self.errorMessage = nil // Clear any errors
-                print("🔥🔥🔥 DEBUG: Sign-up completed - shouldShowSetupFlow set to TRUE for new organization")
+                print("🔥🔥🔥 DEBUG: Sign-up completed for new organization")
                 print("🔥🔥🔥 DEBUG: Organization set in memory: \(organization.name) (ID: \(organizationId))")
                 
                 // Post notification that organization was loaded
@@ -536,12 +518,6 @@ class FirebaseBackend: ObservableObject {
     
     func signOut() throws {
         try auth.signOut()
-    }
-    
-    func completeSetupFlow() {
-        shouldShowSetupFlow = false
-        isNewOrganization = false
-        print("🔥🔥🔥 DEBUG: Setup flow completed, flags reset")
     }
     
     /// Sends a new verification code (invitation token) so the user can set or reset their password on the Project Planner page.
@@ -3013,41 +2989,6 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: deleteManager called for manager: \(manager.fullName), organization: \(organizationId)")
         try await db.collection("organizations").document(organizationId).collection("managers").document(manager.id.uuidString).delete()
         print("🔥🔥🔥 DEBUG: Manager deleted successfully from Firebase")
-    }
-    
-    // Check if organization needs setup (has no clients, projects, or managers)
-    private func checkIfSetupNeeded(organizationId: String) async {
-        do {
-            // Check if organization has any clients, projects, or managers
-            let clientsSnapshot = try await db.collection("organizations").document(organizationId).collection("clients").limit(to: 1).getDocuments()
-            let projectsSnapshot = try await db.collection("organizations").document(organizationId).collection("projects").limit(to: 1).getDocuments()
-            let managersSnapshot = try await db.collection("organizations").document(organizationId).collection("managers").limit(to: 1).getDocuments()
-            
-            let hasClients = !clientsSnapshot.documents.isEmpty
-            let hasProjects = !projectsSnapshot.documents.isEmpty
-            let hasManagers = !managersSnapshot.documents.isEmpty
-            
-            // If no data exists, show setup flow
-            if !hasClients && !hasProjects && !hasManagers {
-                await MainActor.run {
-                    self.shouldShowSetupFlow = true
-                    print("🔥🔥🔥 DEBUG: Organization has no data, showing setup flow")
-                }
-            } else {
-                await MainActor.run {
-                    self.shouldShowSetupFlow = false
-                    self.isNewOrganization = false
-                    print("🔥🔥🔥 DEBUG: Organization has data, setup flow not needed")
-                }
-            }
-        } catch {
-            print("🔥🔥🔥 DEBUG: Error checking setup status: \(error.localizedDescription)")
-            // On error, assume setup is not needed
-            await MainActor.run {
-                self.shouldShowSetupFlow = false
-                self.isNewOrganization = false
-            }
-        }
     }
     
     func saveQualifications(organizationId: String, qualifications: [Qualification]) async throws {

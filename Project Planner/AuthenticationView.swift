@@ -11,11 +11,8 @@ import FirebaseAuth
 struct AuthenticationView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
-    @State private var isSignUp = false
     @State private var email = ""
     @State private var password = ""
-    @State private var confirmPassword = ""
-    @State private var organizationName = ""
     @State private var showingForgotPassword = false
     
     var body: some View {
@@ -33,7 +30,7 @@ struct AuthenticationView: View {
                             .fontWeight(.bold)
                             .foregroundColor(.blue)
 
-                        Text(isSignUp ? "Create your organization account" : "Welcome back")
+                        Text("Welcome back")
                             .font(.headline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -41,16 +38,6 @@ struct AuthenticationView: View {
                     .padding(.top, 30)
 
                     VStack(spacing: 18) {
-                        if isSignUp {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Organization Name")
-                                    .font(.headline)
-                                    .foregroundColor(.primary)
-                                TextField("Enter your organization name", text: $organizationName)
-                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                            }
-                        }
-
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Email")
                                 .font(.headline)
@@ -68,15 +55,6 @@ struct AuthenticationView: View {
                                 .font(.headline)
                                 .foregroundColor(.primary)
                             CustomSecureField(title: "Enter your password", text: $password)
-                        }
-
-                        if isSignUp {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Confirm Password")
-                                    .font(.headline)
-                                    .foregroundColor(.primary)
-                                CustomSecureField(title: "Confirm your password", text: $confirmPassword)
-                            }
                         }
                     }
                     .padding(.horizontal, 32)
@@ -97,16 +75,14 @@ struct AuthenticationView: View {
                     }
 
                     VStack(spacing: 14) {
-                        Button(action: {
-                            if isSignUp { signUp() } else { signIn() }
-                        }) {
+                        Button(action: signIn) {
                             HStack {
                                 if firebaseBackend.isLoading {
                                     ProgressView()
                                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                         .scaleEffect(0.8)
                                 }
-                                Text(isSignUp ? "Create Account" : "Sign In")
+                                Text("Sign In")
                                     .font(.headline)
                                     .foregroundColor(.white)
                             }
@@ -119,19 +95,34 @@ struct AuthenticationView: View {
                         .opacity(firebaseBackend.isLoading ? 0.6 : 1.0)
                         .padding(.horizontal, 32)
 
-                        if !isSignUp {
-                            Button("Forgot Password?") {
-                                showingForgotPassword = true
-                            }
-                            .font(.subheadline)
-                            .foregroundColor(.blue)
+                        Button("Forgot Password?") {
+                            showingForgotPassword = true
                         }
+                        .font(.subheadline)
+                        .foregroundColor(.blue)
                     }
 
-                    Button(action: { isSignUp.toggle() }) {
-                        Text(isSignUp ? "Already have an account? Sign In" : "Don't have an account? Sign Up")
+                    VStack(spacing: 10) {
+                        Text("New organisation?")
                             .font(.callout)
                             .foregroundColor(.secondary)
+
+                        Button(action: AppBranding.openOrganisationSetup) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "safari")
+                                Text("Set up on the web")
+                                    .font(.headline)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.white)
+                            .foregroundColor(.blue)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.blue, lineWidth: 1.5)
+                            )
+                        }
+                        .padding(.horizontal, 32)
                     }
                     .padding(.bottom, 20)
                 }
@@ -144,11 +135,7 @@ struct AuthenticationView: View {
             firebaseBackend.isLoading = false
         }
         .onSubmit {
-            if isSignUp {
-                if isFormValid { signUp() }
-            } else {
-                if isFormValid { signIn() }
-            }
+            if isFormValid { signIn() }
         }
         .onChange(of: email) { _, _ in
             firebaseBackend.errorMessage = nil
@@ -166,57 +153,8 @@ struct AuthenticationView: View {
     
     private var isFormValid: Bool {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        if isSignUp {
-            return !trimmedEmail.isEmpty && password.count >= 6 && password == confirmPassword && !organizationName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
         // Keep sign-in permissive so users can always submit and receive a concrete backend error.
         return !trimmedEmail.isEmpty && !password.isEmpty
-    }
-    
-    private func signUp() {
-        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedOrg = organizationName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedEmail.isEmpty else {
-            firebaseBackend.errorMessage = "Please enter your email address."
-            return
-        }
-        guard password.count >= 6 else {
-            firebaseBackend.errorMessage = "Password must be at least 6 characters."
-            return
-        }
-        guard password == confirmPassword else {
-            firebaseBackend.errorMessage = "Passwords do not match."
-            return
-        }
-        guard !trimmedOrg.isEmpty else {
-            firebaseBackend.errorMessage = "Please enter your organization name."
-            return
-        }
-
-        userStore.errorMessage = nil
-        Task { @MainActor in
-            do {
-                firebaseBackend.shouldShowSetupFlow = true
-                firebaseBackend.isNewOrganization = true
-
-                try await firebaseBackend.signUp(
-                    email: email,
-                    password: password,
-                    organizationName: organizationName
-                )
-
-                if let uid = Auth.auth().currentUser?.uid, !uid.isEmpty {
-                    NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: ["uid": uid])
-                }
-
-                await userStore.loadCurrentUser()
-
-                firebaseBackend.shouldShowSetupFlow = true
-                firebaseBackend.isNewOrganization = true
-            } catch {
-                // firebaseBackend.errorMessage set by backend
-            }
-        }
     }
     
     private func signIn() {
@@ -247,16 +185,6 @@ struct AuthenticationView: View {
                 if firebaseBackend.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
                     firebaseBackend.errorMessage = "Sign in failed. Please check your email/password and try again."
                 }
-            }
-        }
-    }
-    
-    private func resetPassword() {
-        Task { @MainActor in
-            do {
-                try await firebaseBackend.resetPassword(email: email)
-            } catch {
-                // Error is handled by firebaseBackend.errorMessage
             }
         }
     }

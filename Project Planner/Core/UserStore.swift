@@ -457,8 +457,21 @@ class UserStore: ObservableObject {
     /// Shared cross-platform nav label from `organizations/{orgId}.settings.uiLabels.navigationLabels`.
     /// Returns `fallback` when the key is not configured.
     func navigationLabel(_ key: String, fallback: String) -> String {
-        guard let org = firebaseBackend?.currentOrganization else { return fallback }
-        return org.settings.uiLabels.navigationLabel(for: key, fallback: fallback)
+        guard let org = firebaseBackend?.currentOrganization else {
+            return Self.normalizedScheduleNavigationLabel(key: key, value: fallback)
+        }
+        let value = org.settings.uiLabels.navigationLabel(for: key, fallback: fallback)
+        return Self.normalizedScheduleNavigationLabel(key: key, value: value)
+    }
+
+    /// Legacy orgs may still store "Schedule" for the shared dashboard key.
+    private static func normalizedScheduleNavigationLabel(key: String, value: String) -> String {
+        guard key == "dashboard_schedule" else { return value }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.caseInsensitiveCompare("Schedule") == .orderedSame {
+            return "My Schedule"
+        }
+        return value
     }
     
     // Simplified permission checks using user.permissions. Operatives get restricted access.

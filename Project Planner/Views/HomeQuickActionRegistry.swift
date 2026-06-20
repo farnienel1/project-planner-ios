@@ -124,7 +124,7 @@ enum HomeQuickActionRegistry {
             return HomeQuickActionMeta(
                 id: id,
                 symbol: "calendar",
-                title: configuredTitle(key: "dashboard_schedule", fallback: "My\nschedule", userStore: userStore, preferTwoLines: true),
+                title: configuredTitle(key: "dashboard_schedule", fallback: "My\nSchedule", userStore: userStore, preferTwoLines: true),
                 tint: rose
             )
         case HomeQuickActionID.opSettings.rawValue:
@@ -159,7 +159,7 @@ enum HomeQuickActionRegistry {
             return HomeQuickActionMeta(
                 id: id,
                 symbol: "calendar",
-                title: configuredTitle(key: "dashboard_schedule", fallback: "My\nschedule", userStore: userStore, preferTwoLines: true),
+                title: configuredTitle(key: "dashboard_schedule", fallback: "My\nSchedule", userStore: userStore, preferTwoLines: true),
                 tint: rose
             )
         case HomeQuickActionID.staffSiteAudit.rawValue:

@@ -139,8 +139,8 @@ struct ProjectPlannerRootView: View {
 
     /// Kept in sync with notifications only; routing uses `Auth` + `firebaseBackend` so we never sit on an empty “session” gate.
     @State private var firebaseAuthUID: String?
-    /// Avoid flashing “Loading your account” on fast profile loads.
-    @State private var showDeferredProfileLoadingOverlay = false
+    /// Avoid flashing the login screen while Firebase session / profile are still resolving.
+    @State private var hasResolvedInitialAuth = false
 
     /// Prefer backend flag first so we’re not gated on `FirebaseApp.app()` before `ensureFirebaseAppConfigured()` runs; only then read Auth.
     private var showMainExperience: Bool {
@@ -149,20 +149,13 @@ struct ProjectPlannerRootView: View {
         return Auth.auth().currentUser != nil
     }
 
+    private var isSessionLoading: Bool {
+        !hasResolvedInitialAuth || (showMainExperience && userStore.isHomeProfileLoading)
+    }
+
     @ViewBuilder
     private var authenticatedShell: some View {
-        if firebaseBackend.shouldShowSetupFlow {
-            OrganisationSetupFlow()
-                .environmentObject(firebaseBackend)
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(userStore)
-                .environmentObject(taskStore)
-                .onDisappear {
-                    print("🔥🔥🔥 DEBUG: OrganisationSetupFlow disappeared, setting shouldShowSetupFlow to false")
-                    firebaseBackend.shouldShowSetupFlow = false
-                }
-        } else if let currentUser = userStore.currentUser, !currentUser.policyAccepted {
+        if let currentUser = userStore.currentUser, !currentUser.policyAccepted {
             PolicyAcceptanceView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
@@ -189,8 +182,9 @@ struct ProjectPlannerRootView: View {
 
     var body: some View {
         ZStack {
-            Color(.systemGroupedBackground).ignoresSafeArea()
-            if showMainExperience {
+            if isSessionLoading {
+                AppLaunchSplashView()
+            } else if showMainExperience {
                 authenticatedShell
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -199,35 +193,9 @@ struct ProjectPlannerRootView: View {
                     .environmentObject(userStore)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-
-            if showMainExperience, showDeferredProfileLoadingOverlay {
-                VStack(spacing: 14) {
-                    ProgressView()
-                        .controlSize(.large)
-                    Text("Loading your account…")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(.systemGroupedBackground).opacity(0.92))
-                .allowsHitTesting(false)
-            }
         }
+        .background(isSessionLoading ? Color.white : Color(.systemGroupedBackground))
         .preferredColorScheme(.light)
-        .onChange(of: userStore.isHomeProfileLoading) { _, isLoading in
-            if isLoading {
-                Task {
-                    try? await Task.sleep(nanoseconds: 450_000_000)
-                    await MainActor.run {
-                        if userStore.isHomeProfileLoading {
-                            showDeferredProfileLoadingOverlay = true
-                        }
-                    }
-                }
-            } else {
-                showDeferredProfileLoadingOverlay = false
-            }
-        }
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
             guard !signedIn else { return }
             guard FirebaseApp.app() != nil else { return }
@@ -271,9 +239,6 @@ struct ProjectPlannerRootView: View {
             )
 
             firebaseBackend.syncPublishedAuthFromAuthSession()
-            if firebaseBackend.currentOrganization != nil, !firebaseBackend.isNewOrganization {
-                firebaseBackend.shouldShowSetupFlow = false
-            }
             if FirebaseApp.app() != nil {
                 firebaseAuthUID = firebaseAuthUID ?? Auth.auth().currentUser?.uid
             }
@@ -296,6 +261,7 @@ struct ProjectPlannerRootView: View {
             // Profile first so the shell can paint; heavy org loads run after a short delay.
             Task { @MainActor in
                 await firebaseBackend.syncAuthStateFromSessionIfNeeded()
+                hasResolvedInitialAuth = true
                 if firebaseBackend.isAuthenticated {
                     await userStore.loadCurrentUser()
                 }

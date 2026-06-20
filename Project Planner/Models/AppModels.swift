@@ -878,7 +878,7 @@ struct OrganizationUILabels: Codable, Hashable {
         "dashboard_small_works": "Small works",
         "dashboard_operatives": "Operatives",
         "dashboard_managers": "Managers",
-        "dashboard_schedule": "Schedule",
+        "dashboard_schedule": "My Schedule",
         "dashboard_settings": "Settings",
         "site_audit": "Site audit",
     ]

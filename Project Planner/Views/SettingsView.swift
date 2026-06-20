@@ -336,7 +336,7 @@ struct SettingsView: View {
                         HStack(spacing: 6) {
                             organisationPromoChip("clock", "Hours")
                             organisationPromoChip("beach.umbrella.fill", "Leave")
-                            organisationPromoChip("calendar.badge.clock", "Schedule")
+                            organisationPromoChip("calendar.badge.clock", "My Schedule")
                             Text("+3 more")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.white.opacity(0.9))
