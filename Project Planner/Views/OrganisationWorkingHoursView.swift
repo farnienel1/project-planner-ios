@@ -11,6 +11,9 @@ import SwiftUI
 
 private enum WorkingHoursPalette {
     static let canvas = Color(red: 0.965, green: 0.969, blue: 0.984) // #f6f7fb
+    static let cardBorder = Color(red: 0.886, green: 0.910, blue: 0.941) // slate-200
+    static let ink = Color(red: 0.059, green: 0.090, blue: 0.165) // slate-900
+    static let muted = Color(red: 0.392, green: 0.455, blue: 0.545) // slate-500
     static let indigo = Color(red: 0.310, green: 0.275, blue: 0.898) // #4f46e5
     static let amber = Color(red: 0.851, green: 0.467, blue: 0.024) // #d97706
     static let rose = Color(red: 0.882, green: 0.114, blue: 0.282) // #e11d48
@@ -103,23 +106,30 @@ struct OrganisationWorkingHoursView: View {
         .background(WorkingHoursPalette.canvas.ignoresSafeArea())
         .navigationBarBackButtonHidden(true)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(WorkingHoursPalette.canvas.opacity(0.92), for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") {
+                Button {
                     if isDirty {
                         showingCancelConfirm = true
                     } else {
                         dismiss()
                     }
+                } label: {
+                    Text("Cancel")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(WorkingHoursPalette.ink)
                 }
             }
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
                     Text("Working hours")
                         .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(WorkingHoursPalette.ink)
                     Text("Organisation default")
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(WorkingHoursPalette.muted)
                 }
             }
         }
@@ -153,7 +163,8 @@ struct OrganisationWorkingHoursView: View {
     private var introText: some View {
         Text("These rules apply across the firm and decide how hours are costed on every timesheet — set the standard week, then how Saturday and Sunday are treated.")
             .font(.system(size: 13))
-            .foregroundStyle(Color(.systemGray))
+            .foregroundStyle(WorkingHoursPalette.muted)
+            .lineSpacing(2)
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -204,25 +215,27 @@ struct OrganisationWorkingHoursView: View {
         workingHoursCard {
             Text("WEEK AT A GLANCE")
                 .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(Color(.systemGray))
+                .foregroundStyle(WorkingHoursPalette.muted)
                 .tracking(1.2)
-                .padding(.bottom, 4)
+                .padding(.bottom, 2)
 
-            glanceRow(
-                label: "Mon–Fri",
-                color: WorkingHoursPalette.indigo,
-                text: "\(draft.standardDayStart)–\(draft.standardDayEnd)  ·  \(formatHoursDisplay(draft.computedWeekdayPaidHours)) paid  ·  OT \(formatMultiplier(draft.weekdayOutsideStandardMultiplier))x"
-            )
-            glanceRow(
-                label: "Saturday",
-                color: WorkingHoursPalette.amber,
-                text: saturdayGlanceText
-            )
-            glanceRow(
-                label: "Sunday",
-                color: WorkingHoursPalette.rose,
-                text: sundayGlanceText
-            )
+            VStack(alignment: .leading, spacing: 10) {
+                glanceRow(
+                    label: "Mon–Fri",
+                    color: WorkingHoursPalette.indigo,
+                    text: "\(draft.standardDayStart)–\(draft.standardDayEnd)  ·  \(formatHoursDisplay(draft.computedWeekdayPaidHours)) paid  ·  OT \(formatMultiplier(draft.weekdayOutsideStandardMultiplier))x"
+                )
+                glanceRow(
+                    label: "Saturday",
+                    color: WorkingHoursPalette.amber,
+                    text: saturdayGlanceText
+                )
+                glanceRow(
+                    label: "Sunday",
+                    color: WorkingHoursPalette.rose,
+                    text: sundayGlanceText
+                )
+            }
         }
     }
 
@@ -234,7 +247,7 @@ struct OrganisationWorkingHoursView: View {
         let start = sat.customStandardStart ?? draft.standardDayStart
         let end = sat.customStandardEnd ?? "13:00"
         let flat = sat.resolvedCountsAsHours(fallback: draft.standardPaidHours)
-        return "\(start)–\(end)  ·  \(formatHoursDisplay(flat)) flat  ·  outside \(formatMultiplier(sat.outsideStandardWindowMultiplier))x"
+        return "\(start)–\(end)  ·  \(formatHoursDisplay(flat)) flat  ·  \(formatMultiplier(sat.outsideStandardWindowMultiplier))x"
     }
 
     private var sundayGlanceText: String {
@@ -248,7 +261,7 @@ struct OrganisationWorkingHoursView: View {
         let start = sun.customStandardStart ?? draft.standardDayStart
         let end = sun.customStandardEnd ?? "13:00"
         let flat = sun.resolvedCountsAsHours(fallback: draft.standardPaidHours)
-        return "\(start)–\(end)  ·  \(formatHoursDisplay(flat)) flat  ·  outside \(formatMultiplier(sun.outsideStandardWindowMultiplier))x"
+        return "\(start)–\(end)  ·  \(formatHoursDisplay(flat)) flat  ·  \(formatMultiplier(sun.outsideStandardWindowMultiplier))x"
     }
 
     private func glanceRow(label: String, color: Color, text: String) -> some View {
@@ -263,7 +276,8 @@ struct OrganisationWorkingHoursView: View {
                 .frame(width: 64, alignment: .leading)
             Text(text)
                 .font(.system(size: 12.5))
-                .foregroundStyle(Color(.systemGray))
+                .foregroundStyle(WorkingHoursPalette.muted)
+                .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -346,7 +360,9 @@ struct OrganisationWorkingHoursView: View {
                     accent: WorkingHoursPalette.indigo
                 )
 
-                weekdayExampleCard
+                if isFormValid {
+                    weekdayExampleCard
+                }
             }
         }
     }
@@ -502,11 +518,13 @@ struct OrganisationWorkingHoursView: View {
             bottomColor: WorkingHoursPalette.amberGradientBottom,
             rows: [],
             footerLabel: "A \(settings.wrappedValue.customStandardStart ?? draft.standardDayStart)–\(settings.wrappedValue.customStandardEnd ?? "13:00") \(title) pays",
-            footerValue: formatHoursDisplay(settings.wrappedValue.resolvedCountsAsHours(fallback: draft.standardPaidHours)),
+            footerValue: "\(formatHoursDisplay(settings.wrappedValue.resolvedCountsAsHours(fallback: draft.standardPaidHours))) @ 1x",
             accent: WorkingHoursPalette.amber
         )
 
-        weekendExampleCard(settings: settings.wrappedValue, title: title)
+        if isFormValid {
+            weekendExampleCard(settings: settings.wrappedValue, title: title)
+        }
     }
 
     @ViewBuilder
@@ -642,7 +660,9 @@ struct OrganisationWorkingHoursView: View {
                 .foregroundStyle(.white)
                 .background(WorkingHoursPalette.indigo)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: WorkingHoursPalette.indigo.opacity(0.25), radius: 4, y: 2)
                 .disabled(!isFormValid || isSaving)
+                .opacity(!isFormValid || isSaving ? 0.55 : 1)
 
                 Button {
                     showingScheduleSheet = true
@@ -661,6 +681,7 @@ struct OrganisationWorkingHoursView: View {
                         .strokeBorder(WorkingHoursPalette.indigo.opacity(0.35), lineWidth: 1)
                 )
                 .disabled(!isFormValid || isSaving)
+                .opacity(!isFormValid || isSaving ? 0.55 : 1)
 
                 Button {
                     clearDraft()
@@ -671,17 +692,17 @@ struct OrganisationWorkingHoursView: View {
                         .padding(.vertical, 12)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Color(.systemGray))
+                .foregroundStyle(WorkingHoursPalette.muted)
                 .background(Color(.systemBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color(.systemGray4), lineWidth: 1)
+                        .strokeBorder(WorkingHoursPalette.cardBorder, lineWidth: 1)
                 )
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(WorkingHoursPalette.canvas.opacity(0.95))
+            .background(.ultraThinMaterial)
         }
     }
 
@@ -694,10 +715,10 @@ struct OrganisationWorkingHoursView: View {
         .padding(16)
         .background(Color(.systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .shadow(color: Color.black.opacity(0.05), radius: 8, y: 2)
+        .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(Color(.separator).opacity(0.35), lineWidth: 0.5)
+                .strokeBorder(WorkingHoursPalette.cardBorder, lineWidth: 1)
         )
     }
 
@@ -708,14 +729,15 @@ struct OrganisationWorkingHoursView: View {
                 .frame(width: 6, height: 6)
             Text(title.uppercased())
                 .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(Color(.systemGray))
+                .foregroundStyle(WorkingHoursPalette.muted)
                 .tracking(1.1)
         }
+        .padding(.bottom, 2)
     }
 
     private var cardDivider: some View {
         Rectangle()
-            .fill(Color(.systemGray6))
+            .fill(Color(red: 0.945, green: 0.961, blue: 0.976))
             .frame(height: 1)
     }
 
@@ -723,7 +745,7 @@ struct OrganisationWorkingHoursView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
                 .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(Color(.systemGray))
+                .foregroundStyle(WorkingHoursPalette.muted)
             WorkingHoursTimeField(text: text)
         }
         .frame(maxWidth: .infinity)
@@ -733,17 +755,17 @@ struct OrganisationWorkingHoursView: View {
         HStack {
             Text(label)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Color(.systemGray))
+                .foregroundStyle(WorkingHoursPalette.muted)
             Spacer()
             WorkingHoursStepper(value: value, step: step, min: min, max: max, suffix: suffix)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Color(.systemGray6).opacity(0.65))
+        .background(Color(red: 0.973, green: 0.980, blue: 0.988))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color(.systemGray5), lineWidth: 1)
+                .strokeBorder(Color(red: 0.945, green: 0.961, blue: 0.976), lineWidth: 1)
         )
     }
 
@@ -797,10 +819,11 @@ struct OrganisationWorkingHoursView: View {
                 HStack {
                     Text(row.0)
                         .font(.system(size: 13))
-                        .foregroundStyle(Color(.systemGray))
+                        .foregroundStyle(WorkingHoursPalette.muted)
                     Spacer()
                     Text(row.1)
                         .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(WorkingHoursPalette.ink)
                 }
                 .padding(.vertical, 10)
                 if index < rows.count - 1 {
@@ -902,13 +925,51 @@ struct OrganisationWorkingHoursView: View {
     // MARK: - Data
 
     private func loadDraft() {
-        if let p = firebaseBackend.currentOrganization?.settings.payrollTimePolicy {
-            draft = p
-            baselineDraft = p
-        } else {
-            baselineDraft = draft
-        }
+        var loaded = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        loaded = sanitizePolicy(loaded)
+        draft = loaded
+        baselineDraft = loaded
         syncBreakWindowPlacement()
+    }
+
+    private func sanitizePolicy(_ policy: OrgPayrollTimePolicy) -> OrgPayrollTimePolicy {
+        var out = policy
+        if !isValidHM(out.standardDayStart) {
+            out.standardDayStart = OrgPayrollTimePolicy.default.standardDayStart
+        }
+        if !isValidHM(out.standardDayEnd) {
+            out.standardDayEnd = OrgPayrollTimePolicy.default.standardDayEnd
+        }
+        out.unpaidBreakMinutes = Swift.max(0, Swift.min(90, out.unpaidBreakMinutes))
+        out.standardPaidHours = Swift.max(1, Swift.min(24, out.standardPaidHours))
+        out.weekdayOutsideStandardMultiplier = clampMultiplier(out.weekdayOutsideStandardMultiplier)
+        out.saturday = sanitizeWeekendSettings(out.saturday, fallbackPaid: out.standardPaidHours)
+        out.sunday = sanitizeWeekendSettings(out.sunday, fallbackPaid: out.standardPaidHours)
+        return out
+    }
+
+    private func sanitizeWeekendSettings(_ settings: OrgWeekendDayPayrollSettings, fallbackPaid: Double) -> OrgWeekendDayPayrollSettings {
+        var out = settings
+        out.allHoursMultiplier = clampMultiplier(out.allHoursMultiplier)
+        out.outsideStandardWindowMultiplier = clampMultiplier(out.outsideStandardWindowMultiplier)
+        if let start = out.customStandardStart, !isValidHM(start) { out.customStandardStart = nil }
+        if let end = out.customStandardEnd, !isValidHM(end) { out.customStandardEnd = nil }
+        if let counts = out.countsAsHours {
+            out.countsAsHours = Swift.max(1, Swift.min(24, counts))
+        }
+        if !out.allHoursAtMultiplierMode,
+           out.customStandardStart == nil,
+           out.customStandardEnd == nil {
+            out.customStandardStart = OrgPayrollTimePolicy.default.standardDayStart
+            out.customStandardEnd = "13:00"
+            out.countsAsHours = out.countsAsHours ?? fallbackPaid
+        }
+        return out
+    }
+
+    private func clampMultiplier(_ value: Double) -> Double {
+        guard value.isFinite else { return 1.5 }
+        return Swift.max(1, Swift.min(3, value))
     }
 
     private func clearDraft() {
@@ -1100,7 +1161,7 @@ private struct WorkingHoursSegmentedPicker: View {
             }
         }
         .padding(3)
-        .background(Color(.systemGray6))
+        .background(Color(red: 0.945, green: 0.961, blue: 0.976))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
@@ -1160,7 +1221,7 @@ private struct WorkingHoursStepper: View {
             }
             .buttonStyle(.plain)
         }
-        .background(Color(.systemGray6))
+        .background(Color(red: 0.945, green: 0.961, blue: 0.976))
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
     }
 
@@ -1193,15 +1254,25 @@ private struct WorkingHoursMultiplierField: View {
                 .foregroundStyle(accent)
                 .frame(width: 56)
                 .padding(.vertical, 8)
-                .background(Color(.systemGray6))
+                .background(Color(red: 0.973, green: 0.980, blue: 0.988))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color(.systemGray4), lineWidth: 1)
+                        .strokeBorder(WorkingHoursPalette.cardBorder, lineWidth: 1)
                 )
+                .onChange(of: value) { _, newValue in
+                    guard newValue.isFinite else {
+                        value = 1.5
+                        return
+                    }
+                    let clamped = Swift.max(1, Swift.min(3, newValue))
+                    if abs(clamped - newValue) > 0.001 {
+                        value = clamped
+                    }
+                }
             Text("x")
                 .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(Color(.systemGray3))
+                .foregroundStyle(Color(red: 0.580, green: 0.639, blue: 0.722))
         }
     }
 }
@@ -1229,11 +1300,11 @@ private struct WorkingHoursTimeField: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color(.systemGray6))
+        .background(Color(red: 0.973, green: 0.980, blue: 0.988))
         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(focused ? WorkingHoursPalette.indigo.opacity(0.35) : Color(.systemGray4), lineWidth: 1)
+                .strokeBorder(focused ? WorkingHoursPalette.indigo.opacity(0.35) : WorkingHoursPalette.cardBorder, lineWidth: 1)
         )
         .onAppear { draft = text }
         .onChange(of: text) { _, newValue in
@@ -1253,7 +1324,7 @@ private struct WorkingHoursTimeField: View {
            r.lowerBound == trimmed.startIndex && r.upperBound == trimmed.endIndex {
             let parts = trimmed.split(separator: ":")
             if parts.count == 2, let hRaw = Int(parts[0]), let mRaw = Int(parts[1]) {
-                return String(format: "%02d:%02d", min(23, max(0, hRaw)), min(59, max(0, mRaw)))
+                return String(format: "%02d:%02d", Swift.min(23, Swift.max(0, hRaw)), Swift.min(59, Swift.max(0, mRaw)))
             }
         }
         let digits = trimmed.filter(\.isNumber)
@@ -1261,7 +1332,7 @@ private struct WorkingHoursTimeField: View {
             let hPart = String(digits.prefix(digits.count - 2))
             let mPart = String(digits.suffix(2))
             if let hRaw = Int(hPart), let mRaw = Int(mPart) {
-                return String(format: "%02d:%02d", min(23, max(0, hRaw)), min(59, max(0, mRaw)))
+                return String(format: "%02d:%02d", Swift.min(23, Swift.max(0, hRaw)), Swift.min(59, Swift.max(0, mRaw)))
             }
         }
         return fallback
@@ -1281,20 +1352,20 @@ private struct WorkingHoursTimelineBar: View {
         GeometryReader { geo in
             let w = geo.size.width
             let h = geo.size.height
-            let axisSpan = axisEndMinutes - axisStartMinutes
+            let axisSpan = Swift.max(1, axisEndMinutes - axisStartMinutes)
             let xPos: (Int) -> CGFloat = { minutes in
-                let clipped = min(axisEndMinutes, max(axisStartMinutes, minutes))
+                let clipped = Swift.min(axisEndMinutes, Swift.max(axisStartMinutes, minutes))
                 return CGFloat(clipped - axisStartMinutes) / CGFloat(axisSpan) * w
             }
             let ws = ManagerScheduleInterval.parseMinutes(windowStart) ?? axisStartMinutes
             let we = ManagerScheduleInterval.parseMinutes(windowEnd) ?? axisEndMinutes
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color(.systemGray5))
+                    .fill(Color(red: 0.945, green: 0.961, blue: 0.976))
                 if we > ws {
                     Capsule()
                         .fill(accentColor)
-                        .frame(width: max(4, xPos(we) - xPos(ws)), height: h)
+                        .frame(width: Swift.max(4, xPos(we) - xPos(ws)), height: h)
                         .offset(x: xPos(ws))
                 }
                 if let bs = breakStart, let be = breakEnd,
@@ -1302,7 +1373,7 @@ private struct WorkingHoursTimelineBar: View {
                    let bem = ManagerScheduleInterval.parseMinutes(be), bem > bsm {
                     Capsule()
                         .fill(Color.white.opacity(0.9))
-                        .frame(width: max(3, xPos(bem) - xPos(bsm)), height: h)
+                        .frame(width: Swift.max(3, xPos(bem) - xPos(bsm)), height: h)
                         .offset(x: xPos(bsm))
                 }
             }
