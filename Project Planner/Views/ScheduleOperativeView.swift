@@ -257,7 +257,7 @@ struct ScheduleOperativeView: View {
     private func operativeCustomHoursSheet(for pick: OperativeCustomHoursPick) -> some View {
         let refDay = selectedDates.sorted().first ?? Date()
         let dayPolicy = payrollPolicy(for: refDay)
-        OperativeCustomHoursSheet(
+        return OperativeCustomHoursSheet(
             policy: dayPolicy,
             referenceDay: refDay,
             title: pick.operativeId == nil ? "Hours" : "Edit booking",
