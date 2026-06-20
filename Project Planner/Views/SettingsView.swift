@@ -306,24 +306,25 @@ struct SettingsView: View {
                 .environmentObject(projectStore)
                 .environmentObject(managerScheduleStore)
         } label: {
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(Color.white.opacity(0.18))
-                        .frame(width: 42, height: 42)
+                        .frame(width: 36, height: 36)
                     Image(systemName: "building.2.fill")
-                        .font(.system(size: 20, weight: .medium))
+                        .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(.white)
                 }
                 Text("Organisation Settings Hub")
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.75))
             }
-            .padding(18)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
             .background(
                 LinearGradient(
                     colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
@@ -331,8 +332,8 @@ struct SettingsView: View {
                     endPoint: .bottomTrailing
                 )
             )
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .shadow(color: ProjectWorksRevampColors.blue.opacity(0.22), radius: 16, x: 0, y: 8)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .shadow(color: ProjectWorksRevampColors.blue.opacity(0.18), radius: 10, x: 0, y: 4)
         }
         .buttonStyle(.plain)
     }
