@@ -102,7 +102,7 @@ struct OrganisationWorkingHoursView: View {
             HStack {
                 Text("Standard paid day")
                 Spacer()
-                Text("\(draft.computedWeekdayPaidHours, specifier: "%.1f")h")
+                Text(String(format: "%.1fh", draft.computedWeekdayPaidHours))
                     .foregroundStyle(.secondary)
             }
 
@@ -123,7 +123,7 @@ struct OrganisationWorkingHoursView: View {
             windowEnd: draft.standardDayEnd,
             breakStart: draft.breakPaid ? nil : draft.breakWindowStart,
             breakEnd: draft.breakPaid ? nil : draft.breakWindowEnd,
-            accentLabel: "\(draft.computedWeekdayPaidHours, specifier: "%.1f")h"
+            accentLabel: String(format: "%.1fh", draft.computedWeekdayPaidHours)
         )
         .frame(height: 36)
     }
@@ -156,30 +156,29 @@ struct OrganisationWorkingHoursView: View {
     // MARK: - Saturday
 
     private var saturdaySection: some View {
-        weekendSection(title: "Saturday", settings: $draft.saturday, mirrorSaturday: false)
+        weekendSection(title: "Saturday", settings: $draft.saturday)
     }
 
     // MARK: - Sunday
 
+    @ViewBuilder
     private var sundaySection: some View {
         Section {
             Toggle("Same setup as Saturday", isOn: $draft.sundaySameAsSaturday)
-        } header: {
-            Text("Sunday")
-        }
-        if !draft.sundaySameAsSaturday {
-            weekendSectionInner(title: "Sunday", settings: $draft.sunday)
-        } else {
-            Section {
+            if draft.sundaySameAsSaturday {
                 Text("Sunday uses Saturday's rules.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else {
+                weekendSectionInner(title: "Sunday", settings: $draft.sunday)
             }
+        } header: {
+            Text("Sunday")
         }
     }
 
     @ViewBuilder
-    private func weekendSection(title: String, settings: Binding<OrgWeekendDayPayrollSettings>, mirrorSaturday: Bool) -> some View {
+    private func weekendSection(title: String, settings: Binding<OrgWeekendDayPayrollSettings>, mirrorSaturday: Bool = false) -> some View {
         Section {
             weekendSectionInner(title: title, settings: settings)
         } header: {
@@ -249,7 +248,10 @@ struct OrganisationWorkingHoursView: View {
                     windowEnd: end,
                     breakStart: nil,
                     breakEnd: nil,
-                    accentLabel: "\(settings.wrappedValue.resolvedCountsAsHours(fallback: draft.standardPaidHours), specifier: "%.1f")h"
+                    accentLabel: String(
+                        format: "%.1fh",
+                        settings.wrappedValue.resolvedCountsAsHours(fallback: draft.standardPaidHours)
+                    )
                 )
                 .frame(height: 36)
             }
