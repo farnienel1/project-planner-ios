@@ -1561,7 +1561,7 @@ struct ProjectBookingCard: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
 
     private var payrollTimePolicy: OrgPayrollTimePolicy {
-        firebaseBackend.payrollPolicy(for: overviewDate)
+        firebaseBackend.payrollPolicy(for: day)
     }
 
     private var smallWorksFlow: Bool { project.jobType == .smallWorks }
