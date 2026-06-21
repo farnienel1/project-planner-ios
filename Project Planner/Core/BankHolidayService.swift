@@ -33,7 +33,7 @@ final class BankHolidayService: ObservableObject {
     private var activeRegionId: String?
     private let calendar = Calendar.current
     /// Bumped when filtering / parsing rules change so stale caches are refetched.
-    private let cacheFileName = "bank-holiday-cache-v2.json"
+    private let cacheFileName = "bank-holiday-cache-v3.json"
     private let urlSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 20

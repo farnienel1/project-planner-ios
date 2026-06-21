@@ -104,11 +104,7 @@ struct HolidayView: View {
     }
 
     private var bankHolidayRegion: BankHolidayRegion {
-        let org = firebaseBackend.currentOrganization
-        return BankHolidayRegionDirectory.region(
-            id: org?.settings.bankHolidayRegionId,
-            fallbackCountryCode: org?.countryCode ?? "GB"
-        )
+        BankHolidayRegionDirectory.resolvedRegion(for: firebaseBackend.currentOrganization)
     }
 
     private var selfBookedApprovedHolidayBookings: [HolidayBooking] {
@@ -610,23 +606,28 @@ struct HolidayView: View {
     }
 
     private var calendarLegend: some View {
-        HStack(spacing: 16) {
-            HStack(spacing: 6) {
-                Circle()
-                    .stroke(AnnualLeaveCalendarChrome.weekendStroke, lineWidth: 2)
-                    .frame(width: 14, height: 14)
-                Text("Weekend")
-                    .font(.caption2)
-                    .foregroundStyle(HolidayChrome.muted)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 16) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .stroke(AnnualLeaveCalendarChrome.weekendStroke, lineWidth: 2)
+                        .frame(width: 14, height: 14)
+                    Text("Weekend")
+                        .font(.caption2)
+                        .foregroundStyle(HolidayChrome.muted)
+                }
+                HStack(spacing: 6) {
+                    Circle()
+                        .stroke(AnnualLeaveCalendarChrome.bankHolidayStroke, lineWidth: 2)
+                        .frame(width: 14, height: 14)
+                    Text("Bank holiday")
+                        .font(.caption2)
+                        .foregroundStyle(HolidayChrome.muted)
+                }
             }
-            HStack(spacing: 6) {
-                Circle()
-                    .stroke(AnnualLeaveCalendarChrome.bankHolidayStroke, lineWidth: 2)
-                    .frame(width: 14, height: 14)
-                Text("Bank holiday")
-                    .font(.caption2)
-                    .foregroundStyle(HolidayChrome.muted)
-            }
+            Text("Holidays: \(bankHolidayRegion.title)")
+                .font(.caption2)
+                .foregroundStyle(HolidayChrome.muted)
         }
     }
 

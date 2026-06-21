@@ -53,10 +53,44 @@ enum BankHolidayRegionDirectory {
 
     static func region(id: String?, fallbackCountryCode: String) -> BankHolidayRegion {
         if let match = region(id: id) { return match }
-        if let countryMatch = all.first(where: { $0.countryCode == fallbackCountryCode.uppercased() && $0.countyCodes == nil }) {
-            return countryMatch
+        return defaultRegion(forCountryCode: fallbackCountryCode)
+    }
+
+    /// Bank holidays for annual leave calendars — uses the saved annual-leave region, not company country.
+    static func resolvedRegion(for organization: Organization?) -> BankHolidayRegion {
+        if let id = organization?.settings.bankHolidayRegionId,
+           let match = region(id: id) {
+            return match
         }
-        return all.first { $0.id == defaultRegionId } ?? all[0]
+        return defaultRegion(forCountryCode: organization?.countryCode ?? "GB")
+    }
+
+    /// Sensible default when no annual-leave bank-holiday region has been saved yet.
+    static func defaultRegion(forCountryCode countryCode: String) -> BankHolidayRegion {
+        switch countryCode.uppercased() {
+        case "GB":
+            return region(id: defaultRegionId) ?? all[0]
+        case "IE": return region(id: "IE") ?? all.first { $0.id == "IE" }!
+        case "US": return region(id: "US") ?? all.first { $0.id == "US" }!
+        case "CA": return region(id: "CA") ?? all.first { $0.id == "CA" }!
+        case "AU": return region(id: "AU") ?? all.first { $0.id == "AU" }!
+        case "NZ": return region(id: "NZ") ?? all.first { $0.id == "NZ" }!
+        case "FR": return region(id: "FR") ?? all.first { $0.id == "FR" }!
+        case "DE": return region(id: "DE") ?? all.first { $0.id == "DE" }!
+        case "ES": return region(id: "ES") ?? all.first { $0.id == "ES" }!
+        case "IT": return region(id: "IT") ?? all.first { $0.id == "IT" }!
+        case "NL": return region(id: "NL") ?? all.first { $0.id == "NL" }!
+        case "SE": return region(id: "SE") ?? all.first { $0.id == "SE" }!
+        case "NO": return region(id: "NO") ?? all.first { $0.id == "NO" }!
+        case "DK": return region(id: "DK") ?? all.first { $0.id == "DK" }!
+        case "PL": return region(id: "PL") ?? all.first { $0.id == "PL" }!
+        case "AE": return region(id: "AE") ?? all.first { $0.id == "AE" }!
+        default:
+            if let countryMatch = all.first(where: { $0.countryCode == countryCode.uppercased() && $0.countyCodes == nil }) {
+                return countryMatch
+            }
+            return region(id: defaultRegionId) ?? all[0]
+        }
     }
 
     static func groupedRegions() -> [(group: String, regions: [BankHolidayRegion])] {

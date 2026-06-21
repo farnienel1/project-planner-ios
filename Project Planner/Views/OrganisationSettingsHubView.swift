@@ -52,6 +52,12 @@ struct OrganisationSettingsHubView: View {
         return "\(admins) admin · \(managers) managers · \(ops) ops"
     }
 
+    private var currencySubtitle: String {
+        let code = org?.settings.currencyCode
+        let option = OrganizationCurrencyCatalog.option(for: code?.isEmpty == false ? code : OrganizationCurrencyCatalog.defaultCode(forCountryCode: org?.countryCode ?? "GB"))
+        return "\(option.symbol) \(option.code)"
+    }
+
     private var countryLabel: String {
         guard let code = org?.countryCode else { return "—" }
         return CountryCapitalDirectory.supported.first(where: { $0.code == code })?.name ?? code
@@ -75,13 +81,19 @@ struct OrganisationSettingsHubView: View {
                         showingCompanyDetails = true
                     }
                     Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 54)
-                    hubChevronRow(
-                        icon: "sterlingsign.circle.fill",
-                        iconBg: ProjectWorksRevampColors.upcomingAmber.opacity(0.18),
-                        iconFg: ProjectWorksRevampColors.upcomingAmber,
-                        title: "Currency & region",
-                        subtitle: "GBP · \(countryLabel)"
-                    )
+                    NavigationLink {
+                        OrganisationCurrencyView()
+                            .environmentObject(firebaseBackend)
+                    } label: {
+                        hubRowLabel(
+                            icon: "sterlingsign.circle.fill",
+                            iconBg: ProjectWorksRevampColors.upcomingAmber.opacity(0.18),
+                            iconFg: ProjectWorksRevampColors.upcomingAmber,
+                            title: "Currency",
+                            subtitle: currencySubtitle
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
 
                 hubSectionTitle("Defaults for new operatives")
@@ -432,10 +444,7 @@ struct OrganisationSettingsHubView: View {
         let daysText = d.daysPerYear.truncatingRemainder(dividingBy: 1) == 0
             ? String(Int(d.daysPerYear))
             : String(format: "%.1f", d.daysPerYear)
-        let region = BankHolidayRegionDirectory.region(
-            id: org?.settings.bankHolidayRegionId,
-            fallbackCountryCode: org?.countryCode ?? "GB"
-        )
+        let region = BankHolidayRegionDirectory.resolvedRegion(for: org)
         return "\(daysText) days · \(start)→\(end) · \(region.title)"
     }
 

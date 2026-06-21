@@ -416,11 +416,7 @@ struct OperativeAnnualLeaveCalendarView: View {
     private let calendar = Calendar.current
 
     private var bankHolidayRegion: BankHolidayRegion {
-        let org = firebaseBackend.currentOrganization
-        return BankHolidayRegionDirectory.region(
-            id: org?.settings.bankHolidayRegionId,
-            fallbackCountryCode: org?.countryCode ?? "GB"
-        )
+        BankHolidayRegionDirectory.resolvedRegion(for: firebaseBackend.currentOrganization)
     }
 
     var body: some View {

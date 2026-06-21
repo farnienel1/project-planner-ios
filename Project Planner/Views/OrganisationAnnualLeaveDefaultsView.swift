@@ -19,7 +19,7 @@ struct OrganisationAnnualLeaveDefaultsView: View {
 
     var body: some View {
         Form {
-            Section("Annual Leave / Bank Holiday Region") {
+            Section("Bank holiday region") {
                 Picker("Region", selection: $bankHolidayRegionId) {
                     ForEach(BankHolidayRegionDirectory.groupedRegions(), id: \.group) { group in
                         Section(group.group) {
@@ -29,7 +29,7 @@ struct OrganisationAnnualLeaveDefaultsView: View {
                         }
                     }
                 }
-                Text("Bank holidays are shown on annual leave calendars for all users. Weekends are always blocked. Data is cached offline for this year and the next two years.")
+                Text("Bank holidays on annual leave calendars use this region only — not the company country in Company details. Choose England & Wales, Scotland, Northern Ireland, or another supported region. Data is cached offline.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -90,7 +90,7 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             endMonth = defaults.endMonth
             carriesOver = defaults.carriesOver
             bankHolidayRegionId = firebaseBackend.currentOrganization?.settings.bankHolidayRegionId
-                ?? BankHolidayRegionDirectory.defaultRegionId
+                ?? BankHolidayRegionDirectory.defaultRegion(forCountryCode: firebaseBackend.currentOrganization?.countryCode ?? "GB").id
         }
     }
 
@@ -115,7 +115,7 @@ struct OrganisationAnnualLeaveDefaultsView: View {
         do {
             try await firebaseBackend.updateOrganizationAnnualLeaveDefaults(defaults)
             try await firebaseBackend.updateOrganizationBankHolidayRegion(bankHolidayRegionId)
-            let region = BankHolidayRegionDirectory.region(id: bankHolidayRegionId, fallbackCountryCode: "GB")
+            let region = BankHolidayRegionDirectory.region(id: bankHolidayRegionId) ?? BankHolidayRegionDirectory.defaultRegion(forCountryCode: "GB")
             await BankHolidayService.shared.ensureLoaded(region: region)
             dismiss()
         } catch {

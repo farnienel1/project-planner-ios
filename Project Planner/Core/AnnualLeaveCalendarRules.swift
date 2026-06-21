@@ -22,10 +22,10 @@ enum AnnualLeaveCalendarRules {
         calendar: Calendar = .current
     ) -> AnnualLeaveDayBlockReason? {
         let day = calendar.startOfDay(for: date)
-        if isWeekend(day, calendar: calendar) { return .weekend }
-        if let holiday = bankHolidays[BankHolidayDay.dayKey(for: day)] {
+        if let holiday = bankHolidays[BankHolidayDay.dayKey(for: day, calendar: calendar)] {
             return .bankHoliday(name: holiday.name)
         }
+        if isWeekend(day, calendar: calendar) { return .weekend }
         return nil
     }
 
@@ -48,7 +48,7 @@ enum AnnualLeaveCalendarRules {
         var day = calendar.startOfDay(for: booking.startDate)
         let end = calendar.startOfDay(for: booking.endDate)
         while day <= end {
-            if bankHolidays[BankHolidayDay.dayKey(for: day)] != nil { return true }
+            if bankHolidays[BankHolidayDay.dayKey(for: day, calendar: calendar)] != nil { return true }
             guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
             day = next
         }

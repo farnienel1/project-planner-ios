@@ -671,6 +671,8 @@ struct OrganizationSettings: Codable, Hashable {
     var myScheduleOptions: MyScheduleOptions
     /// Region used for bank holiday calendars (Nager.Date + UK subdivisions).
     var bankHolidayRegionId: String?
+    /// ISO 4217 currency code for org-wide money display (e.g. GBP).
+    var currencyCode: String?
     
     init(
         allowSelfRegistration: Bool = true,
@@ -684,7 +686,8 @@ struct OrganizationSettings: Codable, Hashable {
         invoicing: OrganizationInvoicingSettings = .default,
         annualLeaveDefaults: OrganizationAnnualLeaveDefaults = .default,
         myScheduleOptions: MyScheduleOptions = MyScheduleOptions(),
-        bankHolidayRegionId: String? = BankHolidayRegionDirectory.defaultRegionId
+        bankHolidayRegionId: String? = BankHolidayRegionDirectory.defaultRegionId,
+        currencyCode: String? = OrganizationCurrencyCatalog.defaultCode
     ) {
         self.allowSelfRegistration = allowSelfRegistration
         self.requireEmailVerification = requireEmailVerification
@@ -698,6 +701,7 @@ struct OrganizationSettings: Codable, Hashable {
         self.annualLeaveDefaults = annualLeaveDefaults
         self.myScheduleOptions = myScheduleOptions
         self.bankHolidayRegionId = bankHolidayRegionId
+        self.currencyCode = currencyCode
     }
 
     enum CodingKeys: String, CodingKey {
@@ -709,6 +713,7 @@ struct OrganizationSettings: Codable, Hashable {
         case annualLeaveDefaults
         case myScheduleOptions
         case bankHolidayRegionId
+        case currencyCode
     }
 
     init(from decoder: Decoder) throws {
@@ -725,6 +730,7 @@ struct OrganizationSettings: Codable, Hashable {
         annualLeaveDefaults = try c.decodeIfPresent(OrganizationAnnualLeaveDefaults.self, forKey: .annualLeaveDefaults) ?? .default
         myScheduleOptions = try c.decodeIfPresent(MyScheduleOptions.self, forKey: .myScheduleOptions) ?? MyScheduleOptions()
         bankHolidayRegionId = try c.decodeIfPresent(String.self, forKey: .bankHolidayRegionId)
+        currencyCode = try c.decodeIfPresent(String.self, forKey: .currencyCode)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -741,6 +747,7 @@ struct OrganizationSettings: Codable, Hashable {
         try c.encode(annualLeaveDefaults, forKey: .annualLeaveDefaults)
         try c.encode(myScheduleOptions, forKey: .myScheduleOptions)
         try c.encodeIfPresent(bankHolidayRegionId, forKey: .bankHolidayRegionId)
+        try c.encodeIfPresent(currencyCode, forKey: .currencyCode)
     }
 }
 

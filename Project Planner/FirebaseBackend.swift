@@ -781,6 +781,14 @@ class FirebaseBackend: ObservableObject {
                   !regionId.isEmpty {
             settings.bankHolidayRegionId = regionId
         }
+        if let settingsDict = data["settings"] as? [String: Any],
+           let currency = (settingsDict["currencyCode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !currency.isEmpty {
+            settings.currencyCode = currency.uppercased()
+        } else if let currency = (data["currencyCode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !currency.isEmpty {
+            settings.currencyCode = currency.uppercased()
+        }
         return settings
     }
 
@@ -3629,6 +3637,37 @@ class FirebaseBackend: ObservableObject {
         )
         guard var org = currentOrganization else { return }
         org.settings.bankHolidayRegionId = trimmed
+        org.updatedAt = Date()
+        currentOrganization = org
+        storeOrganizationLocally(org)
+    }
+
+    /// Admin: organisation currency for rates, reports, and invoicing.
+    func updateOrganizationCurrencyCode(_ code: String) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
+            )
+        }
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard OrganizationCurrencyCatalog.all.contains(where: { $0.code == trimmed }) else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Select a supported currency."]
+            )
+        }
+        try await db.collection("organizations").document(orgId).setData(
+            [
+                "settings.currencyCode": trimmed,
+                "updatedAt": Timestamp(date: Date()),
+            ],
+            merge: true
+        )
+        guard var org = currentOrganization else { return }
+        org.settings.currencyCode = trimmed
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
