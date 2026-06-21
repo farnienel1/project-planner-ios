@@ -106,12 +106,7 @@ struct SettingsView: View {
         .alert("Sign Out", isPresented: $showingSignOutAlert) {
             Button("Cancel", role: .cancel) { }
             Button("Sign Out", role: .destructive) {
-                userStore.clearOnSignOut()
-                do {
-                    try firebaseBackend.signOut()
-                } catch {
-                    print("🔥🔥🔥 DEBUG: Error signing out: \(error.localizedDescription)")
-                }
+                AppSignOut.perform(firebaseBackend: firebaseBackend, userStore: userStore)
             }
         } message: {
             Text("Are you sure you want to sign out?")

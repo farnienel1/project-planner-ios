@@ -183,6 +183,10 @@ struct ContentView: View {
                     showingHolidaySheet = true
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .mainMenuSignOut)) { _ in
+                showMoreMenuSheet = false
+                AppSignOut.perform(firebaseBackend: firebaseBackend, userStore: userStore)
+            }
             .onReceive(NotificationCenter.default.publisher(for: .qualificationExpiryScheduleRefresh)) { _ in
                 Task { await notificationService.refreshQualificationExpiryReminders() }
             }

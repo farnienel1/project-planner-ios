@@ -318,10 +318,6 @@ struct HomeView: View {
                 Task { try? await firebaseBackend.resetPassword(email: email) }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .mainMenuSignOut)) { _ in
-            userStore.clearOnSignOut()
-            try? firebaseBackend.signOut()
-        }
         .sheet(isPresented: $showingQuickMenu) {
             QuickMenuSheet()
                 .environmentObject(userStore)
