@@ -411,6 +411,7 @@ struct OperativeAnnualLeaveCalendarView: View {
     @State private var showSuccess = false
     @StateObject private var bankHolidayService = BankHolidayService.shared
     @State private var bankHolidayTooltip: String?
+    @State private var bankHolidayAlertTitle = "Annual leave calendar"
 
     private let calendar = Calendar.current
 
@@ -468,7 +469,7 @@ struct OperativeAnnualLeaveCalendarView: View {
         } message: {
             if let successMessage { Text(successMessage) }
         }
-        .alert("Annual leave calendar", isPresented: Binding(
+        .alert(bankHolidayAlertTitle, isPresented: Binding(
             get: { bankHolidayTooltip != nil },
             set: { if !$0 { bankHolidayTooltip = nil } }
         )) {
@@ -479,6 +480,16 @@ struct OperativeAnnualLeaveCalendarView: View {
         .task {
             await holidayStore.loadData()
             await bankHolidayService.ensureLoaded(region: bankHolidayRegion)
+        }
+        .onChange(of: displayedMonth) { _, newMonth in
+            Task {
+                await bankHolidayService.ensureLoaded(region: bankHolidayRegion, referenceDate: newMonth)
+            }
+        }
+        .onChange(of: firebaseBackend.currentOrganization?.settings.bankHolidayRegionId) { _, _ in
+            Task {
+                await bankHolidayService.ensureLoaded(region: bankHolidayRegion)
+            }
         }
     }
 
@@ -807,9 +818,11 @@ struct OperativeAnnualLeaveCalendarView: View {
             if let blockReason {
                 switch blockReason {
                 case .weekend:
+                    bankHolidayAlertTitle = "Annual leave calendar"
                     bankHolidayTooltip = "Weekends cannot be booked as annual leave."
                 case .bankHoliday(let name):
-                    bankHolidayTooltip = "\(name) — bank holidays cannot be booked as annual leave."
+                    bankHolidayAlertTitle = name
+                    bankHolidayTooltip = "Bank holidays cannot be booked as annual leave."
                 }
                 return
             }
@@ -839,7 +852,6 @@ struct OperativeAnnualLeaveCalendarView: View {
                 .clipShape(Circle())
         }
         .buttonStyle(.plain)
-        .disabled(blockReason != nil)
     }
 
     @ViewBuilder

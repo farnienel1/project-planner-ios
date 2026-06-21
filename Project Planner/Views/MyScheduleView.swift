@@ -790,6 +790,10 @@ struct ManagerScheduleContentView: View {
         }
     }
 
+    private func hasScheduleDot(on date: Date) -> Bool {
+        !managerScheduleStore.myBookings(on: date).isEmpty || !myOperativeBookings(on: date).isEmpty
+    }
+
     private func myHolidayBookings(on day: Date) -> [HolidayBooking] {
         guard let uid = firebaseBackend.currentUser?.uid else { return [] }
         let targetDay = calendar.startOfDay(for: day)
@@ -840,6 +844,14 @@ struct ManagerScheduleContentView: View {
         .onAppear {
             weekStart = Date()
             selectedDate = calendar.startOfDay(for: Date())
+            managerScheduleStore.loadData()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .bookingStoreDidChange)) { _ in
+            // Operative project bookings refresh via @Published bookingStore; reload manager rows too.
+            managerScheduleStore.loadData(force: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
+            managerScheduleStore.loadData(force: true)
         }
         .sheet(item: $customHoursContext) { ctx in
             ManagerCustomHoursSheet(
@@ -921,7 +933,10 @@ struct ManagerScheduleContentView: View {
                     updated.isBreakRemoved = isBreakRemoved
                     updated.otMultiplierOverride = otMult
                     updated.updatedAt = Date()
-                    Task { await bookingStore.updateBooking(updated) }
+                    Task {
+                        await bookingStore.updateBooking(updated)
+                        ScheduleChangeNotifier.postBookingStoreDidChange()
+                    }
                 },
                 onCancel: { operativeBookingEditTarget = nil }
             )
@@ -1414,7 +1429,7 @@ struct ManagerScheduleContentView: View {
     private func dayButton(date: Date) -> some View {
         let isSelected = calendar.isDate(date, inSameDayAs: selectedDate ?? .distantPast)
         let isMultiSelected = selectedDates.contains(calendar.startOfDay(for: date))
-        let hasBooking = !managerScheduleStore.myBookings(on: date).isEmpty
+        let hasBooking = hasScheduleDot(on: date)
         let hasAnnualLeave = annualLeaveDisplayLabel(on: date) != nil
         return Button(action: { selectedDate = date }) {
             VStack(spacing: 4) {

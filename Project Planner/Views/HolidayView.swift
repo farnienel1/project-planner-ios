@@ -62,6 +62,7 @@ struct HolidayView: View {
     @State private var halfDayBookingEditor: HolidayBooking?
     @StateObject private var bankHolidayService = BankHolidayService.shared
     @State private var bankHolidayTooltip: String?
+    @State private var bankHolidayAlertTitle = "Annual leave calendar"
 
     enum HolidaySection: String, CaseIterable {
         case calendar = "Book"
@@ -354,7 +355,17 @@ struct HolidayView: View {
                 await bankHolidayService.ensureLoaded(region: bankHolidayRegion)
             }
         }
-        .alert("Annual leave calendar", isPresented: Binding(
+        .onChange(of: displayedMonth) { _, newMonth in
+            Task {
+                await bankHolidayService.ensureLoaded(region: bankHolidayRegion, referenceDate: newMonth)
+            }
+        }
+        .onChange(of: firebaseBackend.currentOrganization?.settings.bankHolidayRegionId) { _, _ in
+            Task {
+                await bankHolidayService.ensureLoaded(region: bankHolidayRegion)
+            }
+        }
+        .alert(bankHolidayAlertTitle, isPresented: Binding(
             get: { bankHolidayTooltip != nil },
             set: { if !$0 { bankHolidayTooltip = nil } }
         )) {
@@ -710,9 +721,11 @@ struct HolidayView: View {
             if let blockReason {
                 switch blockReason {
                 case .weekend:
+                    bankHolidayAlertTitle = "Annual leave calendar"
                     bankHolidayTooltip = "Weekends cannot be booked as annual leave."
                 case .bankHoliday(let name):
-                    bankHolidayTooltip = "\(name) — bank holidays cannot be booked as annual leave."
+                    bankHolidayAlertTitle = name
+                    bankHolidayTooltip = "Bank holidays cannot be booked as annual leave."
                 }
                 return
             }
@@ -793,7 +806,7 @@ struct HolidayView: View {
                 .clipShape(Circle())
         }
         .buttonStyle(PlainButtonStyle())
-        .disabled(approvedFullDayLocksCell || blockReason != nil)
+        .disabled(approvedFullDayLocksCell)
     }
 
     private func daysInDisplayedMonth() -> [Date?] {

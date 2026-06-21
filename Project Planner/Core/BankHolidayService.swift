@@ -13,13 +13,12 @@ struct BankHolidayDay: Hashable, Codable, Sendable, Identifiable {
     let date: Date
     let name: String
 
-    static func dayKey(for date: Date) -> String {
-        let f = DateFormatter()
-        f.calendar = Calendar(identifier: .gregorian)
-        f.locale = Locale(identifier: "en_GB")
-        f.timeZone = TimeZone(secondsFromGMT: 0)
-        f.dateFormat = "yyyy-MM-dd"
-        return f.string(from: date)
+    static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
+        let day = calendar.startOfDay(for: date)
+        let y = calendar.component(.year, from: day)
+        let m = calendar.component(.month, from: day)
+        let d = calendar.component(.day, from: day)
+        return String(format: "%04d-%02d-%02d", y, m, d)
     }
 }
 
@@ -33,7 +32,8 @@ final class BankHolidayService: ObservableObject {
 
     private var activeRegionId: String?
     private let calendar = Calendar.current
-    private let cacheFileName = "bank-holiday-cache-v1.json"
+    /// Bumped when filtering / parsing rules change so stale caches are refetched.
+    private let cacheFileName = "bank-holiday-cache-v2.json"
     private let urlSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 20
@@ -64,11 +64,11 @@ final class BankHolidayService: ObservableObject {
     }
 
     func holiday(on day: Date) -> BankHolidayDay? {
-        holidaysByDayKey[BankHolidayDay.dayKey(for: calendar.startOfDay(for: day))]
+        holidaysByDayKey[BankHolidayDay.dayKey(for: calendar.startOfDay(for: day), calendar: calendar)]
     }
 
     func ensureLoaded(region: BankHolidayRegion, referenceDate: Date = Date()) async {
-        let years = Self.prefetchYears(for: referenceDate)
+        let years = Self.prefetchYears(for: referenceDate, calendar: calendar)
         if activeRegionId == region.id,
            years.allSatisfy({ yearHasCachedHolidays(regionId: region.id, year: $0) }) {
             loadMergedCache(regionId: region.id, years: years)
@@ -95,10 +95,10 @@ final class BankHolidayService: ObservableObject {
         loadMergedCache(regionId: region.id, years: years)
     }
 
-    /// Current year plus two years ahead (supports leave years that cross calendar years).
+    /// Prior year plus current and two years ahead (leave years often span calendar years).
     static func prefetchYears(for referenceDate: Date, calendar: Calendar = .current) -> [Int] {
         let year = calendar.component(.year, from: referenceDate)
-        return [year, year + 1, year + 2]
+        return [year - 1, year, year + 1, year + 2]
     }
 
     private func yearHasCachedHolidays(regionId: String, year: Int) -> Bool {
@@ -129,25 +129,31 @@ final class BankHolidayService: ObservableObject {
             throw URLError(.badServerResponse)
         }
         let decoded = try JSONDecoder().decode([NagerHolidayDTO].self, from: data)
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_GB")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd"
 
         return decoded.compactMap { dto -> BankHolidayDay? in
             guard matchesRegion(dto, region: region) else { return nil }
-            guard let rawDate = formatter.date(from: dto.date) else { return nil }
-            let sod = calendar.startOfDay(for: rawDate)
+            guard let sod = Self.parseHolidayDateString(dto.date, calendar: calendar) else { return nil }
             let label = dto.localName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? dto.name : dto.localName
             return BankHolidayDay(date: sod, name: label)
         }
         .sorted { $0.date < $1.date }
     }
 
+    /// Parses `"yyyy-MM-dd"` as a local calendar day (avoids UTC day-shift bugs).
+    private static func parseHolidayDateString(_ string: String, calendar: Calendar) -> Date? {
+        let parts = string.split(separator: "-")
+        guard parts.count == 3,
+              let y = Int(parts[0]),
+              let m = Int(parts[1]),
+              let d = Int(parts[2]) else { return nil }
+        return calendar.date(from: DateComponents(year: y, month: m, day: d)).map { calendar.startOfDay(for: $0) }
+    }
+
     private func matchesRegion(_ dto: NagerHolidayDTO, region: BankHolidayRegion) -> Bool {
         guard dto.countryCode.uppercased() == region.countryCode.uppercased() else { return false }
         guard let countyCodes = region.countyCodes, !countyCodes.isEmpty else { return true }
+        // Nationwide holidays from Nager (`global: true`, often with no county list) apply to all UK subdivisions.
+        if dto.global { return true }
         guard let counties = dto.counties, !counties.isEmpty else { return false }
         return !Set(countyCodes).isDisjoint(with: Set(counties))
     }

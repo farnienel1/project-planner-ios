@@ -29,6 +29,8 @@ private enum WorkingHoursPalette {
 
 struct OrganisationWorkingHoursView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft = OrgPayrollTimePolicy.default
@@ -935,8 +937,17 @@ struct OrganisationWorkingHoursView: View {
         isSaving = true
         errorMessage = nil
         saveSucceeded = false
+        let priorPolicy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let effectiveDay = Calendar.current.startOfDay(for: Date())
         do {
             try await firebaseBackend.applyOrganizationPayrollTimePolicyImmediately(draft)
+            await PayrollPolicyBookingRecalibrator.apply(
+                effectiveDay: effectiveDay,
+                priorPolicy: priorPolicy,
+                newPolicy: draft,
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore
+            )
             await MainActor.run {
                 isSaving = false
                 baselineDraft = draft
