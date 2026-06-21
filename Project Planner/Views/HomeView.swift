@@ -1258,7 +1258,8 @@ struct HomeView: View {
         showingWarningsDetail = true
     }
 
-    /// Rebuild Up Next + warning count off the main thread; Home does not observe `WarningsService` (avoids full-tree redraws).
+    /// Rebuild Up Next + overview metrics; warnings refresh stays off the main thread via `WarningsRefreshHelper`.
+    @MainActor
     private func refreshHomeDerivedData() async {
         guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
         guard !Task.isCancelled else { return }
@@ -1288,38 +1289,34 @@ struct HomeView: View {
         let liveProjects = projectStore.liveProjects
         let smallWorks = projectStore.smallWorks
 
-        async let upNextTask: [HomeUpNextDaySection] = Task { @MainActor in
-            HomeUpNextSupport.upcomingDaySections(
-                minDistinctDays: 2,
-                mergeRowLimit: 48,
-                now: Date(),
-                authUserId: authUserId,
-                currentUserEmail: userEmail,
-                operatives: operatives,
-                bookings: bookings,
-                managerBookings: managerBookings,
-                allProjects: projects,
-                organizationUsers: users,
-                accentBlue: accentBlue,
-                accentPurple: accentPurple,
-                payrollTimePolicy: policy
-            )
-        }.value
+        async let upNextTask = HomeUpNextSupport.upcomingDaySections(
+            minDistinctDays: 2,
+            mergeRowLimit: 48,
+            now: Date(),
+            authUserId: authUserId,
+            currentUserEmail: userEmail,
+            operatives: operatives,
+            bookings: bookings,
+            managerBookings: managerBookings,
+            allProjects: projects,
+            organizationUsers: users,
+            accentBlue: accentBlue,
+            accentPurple: accentPurple,
+            payrollTimePolicy: policy
+        )
 
-        async let metricsTask = Task { @MainActor in
-            HomeOverviewMetrics.compute(
-                tasks: tasks,
-                userEmail: userEmail,
-                isOperativeMode: isOperativeMode,
-                operatives: operatives,
-                managers: managers,
-                bookings: bookings,
-                managerBookings: managerBookings,
-                holidays: holidays,
-                organizationUsers: users,
-                liveProjectCount: liveProjects.count + smallWorks.count
-            )
-        }.value
+        async let metricsTask = HomeOverviewMetrics.compute(
+            tasks: tasks,
+            userEmail: userEmail,
+            isOperativeMode: isOperativeMode,
+            operatives: operatives,
+            managers: managers,
+            bookings: bookings,
+            managerBookings: managerBookings,
+            holidays: holidays,
+            organizationUsers: users,
+            liveProjectCount: liveProjects.count + smallWorks.count
+        )
 
         if userStore.hasAdminAccess(), !storesStillLoading {
             async let warningsTask: Void = WarningsRefreshHelper.refreshSharedWarnings(
