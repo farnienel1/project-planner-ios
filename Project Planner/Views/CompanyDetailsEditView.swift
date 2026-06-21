@@ -52,9 +52,9 @@ struct CompanyDetailsEditView: View {
                             .foregroundStyle(.secondary)
                     }
                 } header: {
-                    Text("Office & region")
+                    Text("Office & country")
                 } footer: {
-                    Text("Country is always required. If there is no office address, the site map centres on the capital (London for the UK).")
+                    Text("Country is always required. Bank holidays for annual leave are set separately under Organisation → Annual leave. If there is no office address, the site map centres on the capital (London for the UK).")
                 }
 
                 Section {

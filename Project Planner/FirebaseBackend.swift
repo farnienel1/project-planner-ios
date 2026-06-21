@@ -715,14 +715,31 @@ class FirebaseBackend: ObservableObject {
         }
         
         if let uuid = UUID(uuidString: organizationId) {
+            var settings = OrganizationSettings()
+            if let regionId = UserDefaults.standard.string(forKey: Self.bankHolidayRegionDefaultsKey(organizationId)),
+               !regionId.isEmpty {
+                settings.bankHolidayRegionId = regionId
+            }
+            if let currencyCode = UserDefaults.standard.string(forKey: Self.currencyCodeDefaultsKey(organizationId)),
+               !currencyCode.isEmpty {
+                settings.currencyCode = currencyCode
+            }
             return Organization(
                 id: uuid,
                 firestoreDocumentId: organizationId,
                 name: organizationName,
-                settings: OrganizationSettings()
+                settings: settings
             )
         }
         return nil
+    }
+
+    private static func bankHolidayRegionDefaultsKey(_ organizationId: String) -> String {
+        "org_bank_holiday_region_\(organizationId)"
+    }
+
+    private static func currencyCodeDefaultsKey(_ organizationId: String) -> String {
+        "org_currency_code_\(organizationId)"
     }
     
     /// Store organization locally
@@ -730,6 +747,12 @@ class FirebaseBackend: ObservableObject {
     private func storeOrganizationLocally(_ organization: Organization) {
         storeOrganizationIdLocally(organization.firestoreDocumentId)
         UserDefaults.standard.set(organization.name, forKey: organizationNameKey)
+        if let regionId = organization.settings.bankHolidayRegionId, !regionId.isEmpty {
+            UserDefaults.standard.set(regionId, forKey: Self.bankHolidayRegionDefaultsKey(organization.firestoreDocumentId))
+        }
+        if let currencyCode = organization.settings.currencyCode, !currencyCode.isEmpty {
+            UserDefaults.standard.set(currencyCode, forKey: Self.currencyCodeDefaultsKey(organization.firestoreDocumentId))
+        }
         print("🔥🔥🔥 DEBUG: ✅ Stored organization locally: \(organization.name)")
     }
     
@@ -3630,7 +3653,10 @@ class FirebaseBackend: ObservableObject {
         }
         try await db.collection("organizations").document(orgId).setData(
             [
-                "settings.bankHolidayRegionId": trimmed,
+                "bankHolidayRegionId": trimmed,
+                "settings": [
+                    "bankHolidayRegionId": trimmed,
+                ],
                 "updatedAt": Timestamp(date: Date()),
             ],
             merge: true
@@ -3661,7 +3687,10 @@ class FirebaseBackend: ObservableObject {
         }
         try await db.collection("organizations").document(orgId).setData(
             [
-                "settings.currencyCode": trimmed,
+                "currencyCode": trimmed,
+                "settings": [
+                    "currencyCode": trimmed,
+                ],
                 "updatedAt": Timestamp(date: Date()),
             ],
             merge: true

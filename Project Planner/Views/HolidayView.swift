@@ -60,9 +60,10 @@ struct HolidayView: View {
     @State private var selectedHolidayTimeSlot: HolidayTimeSlot = .fullDay
     @State private var showSelfServeBookedAnnualLeaveSheet = false
     @State private var halfDayBookingEditor: HolidayBooking?
-    @StateObject private var bankHolidayService = BankHolidayService.shared
+    @ObservedObject private var bankHolidayService = BankHolidayService.shared
     @State private var bankHolidayTooltip: String?
     @State private var bankHolidayAlertTitle = "Annual leave calendar"
+    @State private var bankHolidayCalendarTick = 0
 
     enum HolidaySection: String, CaseIterable {
         case calendar = "Book"
@@ -105,6 +106,15 @@ struct HolidayView: View {
 
     private var bankHolidayRegion: BankHolidayRegion {
         BankHolidayRegionDirectory.resolvedRegion(for: firebaseBackend.currentOrganization)
+    }
+
+    private func reloadBankHolidays(referenceDate: Date = Date(), forceRefresh: Bool = false) async {
+        await bankHolidayService.ensureLoaded(
+            region: bankHolidayRegion,
+            referenceDate: referenceDate,
+            forceRefresh: forceRefresh
+        )
+        bankHolidayCalendarTick += 1
     }
 
     private var selfBookedApprovedHolidayBookings: [HolidayBooking] {
@@ -348,18 +358,17 @@ struct HolidayView: View {
             }
             Task {
                 await holidayStore.loadData()
-                await bankHolidayService.ensureLoaded(region: bankHolidayRegion)
+                await reloadBankHolidays(forceRefresh: false)
             }
         }
         .onChange(of: displayedMonth) { _, newMonth in
-            Task {
-                await bankHolidayService.ensureLoaded(region: bankHolidayRegion, referenceDate: newMonth)
-            }
+            Task { await reloadBankHolidays(referenceDate: newMonth) }
         }
         .onChange(of: firebaseBackend.currentOrganization?.settings.bankHolidayRegionId) { _, _ in
-            Task {
-                await bankHolidayService.ensureLoaded(region: bankHolidayRegion)
-            }
+            Task { await reloadBankHolidays(forceRefresh: true) }
+        }
+        .onChange(of: bankHolidayService.holidaysByDayKey.count) { _, _ in
+            bankHolidayCalendarTick += 1
         }
         .alert(bankHolidayAlertTitle, isPresented: Binding(
             get: { bankHolidayTooltip != nil },
@@ -625,9 +634,18 @@ struct HolidayView: View {
                         .foregroundStyle(HolidayChrome.muted)
                 }
             }
-            Text("Holidays: \(bankHolidayRegion.title)")
+            Text("Holidays: \(bankHolidayRegion.title) · \(bankHolidayService.holidaysByDayKey.count) loaded")
                 .font(.caption2)
                 .foregroundStyle(HolidayChrome.muted)
+            if bankHolidayService.isLoading {
+                Text("Loading bank holidays…")
+                    .font(.caption2)
+                    .foregroundStyle(HolidayChrome.muted)
+            } else if let error = bankHolidayService.lastErrorMessage, bankHolidayService.holidaysByDayKey.isEmpty {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red.opacity(0.85))
+            }
         }
     }
 
@@ -688,6 +706,7 @@ struct HolidayView: View {
                     }
                 }
             }
+            .id(bankHolidayCalendarTick)
         }
         .padding(12)
         .background(

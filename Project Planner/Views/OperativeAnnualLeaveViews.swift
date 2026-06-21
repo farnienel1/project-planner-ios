@@ -409,14 +409,24 @@ struct OperativeAnnualLeaveCalendarView: View {
     @State private var showError = false
     @State private var successMessage: String?
     @State private var showSuccess = false
-    @StateObject private var bankHolidayService = BankHolidayService.shared
+    @ObservedObject private var bankHolidayService = BankHolidayService.shared
     @State private var bankHolidayTooltip: String?
     @State private var bankHolidayAlertTitle = "Annual leave calendar"
+    @State private var bankHolidayCalendarTick = 0
 
     private let calendar = Calendar.current
 
     private var bankHolidayRegion: BankHolidayRegion {
         BankHolidayRegionDirectory.resolvedRegion(for: firebaseBackend.currentOrganization)
+    }
+
+    private func reloadBankHolidays(referenceDate: Date = Date(), forceRefresh: Bool = false) async {
+        await bankHolidayService.ensureLoaded(
+            region: bankHolidayRegion,
+            referenceDate: referenceDate,
+            forceRefresh: forceRefresh
+        )
+        bankHolidayCalendarTick += 1
     }
 
     var body: some View {
@@ -475,17 +485,16 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
         .task {
             await holidayStore.loadData()
-            await bankHolidayService.ensureLoaded(region: bankHolidayRegion)
+            await reloadBankHolidays(forceRefresh: false)
         }
         .onChange(of: displayedMonth) { _, newMonth in
-            Task {
-                await bankHolidayService.ensureLoaded(region: bankHolidayRegion, referenceDate: newMonth)
-            }
+            Task { await reloadBankHolidays(referenceDate: newMonth) }
         }
         .onChange(of: firebaseBackend.currentOrganization?.settings.bankHolidayRegionId) { _, _ in
-            Task {
-                await bankHolidayService.ensureLoaded(region: bankHolidayRegion)
-            }
+            Task { await reloadBankHolidays(forceRefresh: true) }
+        }
+        .onChange(of: bankHolidayService.holidaysByDayKey.count) { _, _ in
+            bankHolidayCalendarTick += 1
         }
     }
 
@@ -722,6 +731,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                     }
                 }
             }
+            .id(bankHolidayCalendarTick)
         }
         .padding(12)
         .background(Color.white)

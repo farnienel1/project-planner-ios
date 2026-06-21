@@ -9,9 +9,18 @@ import Combine
 import Foundation
 
 struct BankHolidayDay: Hashable, Codable, Sendable, Identifiable {
-    var id: String { Self.dayKey(for: date) }
+    /// Stable `yyyy-MM-dd` key used for calendar lookups (stored explicitly for cache round-trips).
+    let dayKey: String
     let date: Date
     let name: String
+
+    var id: String { dayKey }
+
+    init(dayKey: String, date: Date, name: String) {
+        self.dayKey = dayKey
+        self.date = date
+        self.name = name
+    }
 
     static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
         let day = calendar.startOfDay(for: date)
@@ -32,8 +41,8 @@ final class BankHolidayService: ObservableObject {
 
     private var activeRegionId: String?
     private let calendar = Calendar.current
-    /// Bumped when filtering / parsing rules change so stale caches are refetched.
-    private let cacheFileName = "bank-holiday-cache-v3.json"
+    private let cacheSchemaVersion = 4
+    private let cacheFileName = "bank-holiday-cache-v4.json"
     private let urlSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 20
@@ -43,8 +52,24 @@ final class BankHolidayService: ObservableObject {
 
     private struct CacheFile: Codable {
         var regionId: String
+        var schemaVersion: Int
         var years: [String: [BankHolidayDay]]
         var updatedAt: Date
+
+        init(regionId: String, schemaVersion: Int, years: [String: [BankHolidayDay]], updatedAt: Date) {
+            self.regionId = regionId
+            self.schemaVersion = schemaVersion
+            self.years = years
+            self.updatedAt = updatedAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            regionId = try c.decode(String.self, forKey: .regionId)
+            schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 0
+            years = try c.decode([String: [BankHolidayDay]].self, forKey: .years)
+            updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        }
     }
 
     private struct NagerHolidayDTO: Decodable {
@@ -67,10 +92,31 @@ final class BankHolidayService: ObservableObject {
         holidaysByDayKey[BankHolidayDay.dayKey(for: calendar.startOfDay(for: day), calendar: calendar)]
     }
 
-    func ensureLoaded(region: BankHolidayRegion, referenceDate: Date = Date()) async {
+    func invalidateCache(for regionId: String) {
+        let url = cacheFileURL(regionId: regionId)
+        try? FileManager.default.removeItem(at: url)
+        if activeRegionId == regionId {
+            activeRegionId = nil
+            holidaysByDayKey = [:]
+        }
+    }
+
+    func ensureLoaded(
+        region: BankHolidayRegion,
+        referenceDate: Date = Date(),
+        forceRefresh: Bool = false
+    ) async {
         let years = Self.prefetchYears(for: referenceDate, calendar: calendar)
-        if activeRegionId == region.id,
-           years.allSatisfy({ yearHasCachedHolidays(regionId: region.id, year: $0) }) {
+
+        if forceRefresh {
+            invalidateCache(for: region.id)
+        }
+
+        let cacheValid = !forceRefresh
+            && activeRegionId == region.id
+            && years.allSatisfy({ yearHasUsableCachedHolidays(regionId: region.id, year: $0) })
+
+        if cacheValid {
             loadMergedCache(regionId: region.id, years: years)
             return
         }
@@ -79,20 +125,36 @@ final class BankHolidayService: ObservableObject {
         lastErrorMessage = nil
         defer { isLoading = false }
 
-        var cache = readCache(regionId: region.id) ?? CacheFile(regionId: region.id, years: [:], updatedAt: Date())
-        for year in years where cache.years[String(year)] == nil {
+        var cache = readCache(regionId: region.id)
+            ?? CacheFile(regionId: region.id, schemaVersion: cacheSchemaVersion, years: [:], updatedAt: Date())
+
+        if cache.schemaVersion < cacheSchemaVersion {
+            cache = CacheFile(regionId: region.id, schemaVersion: cacheSchemaVersion, years: [:], updatedAt: Date())
+        }
+
+        for year in years {
+            let yearKey = String(year)
+            let existing = cache.years[yearKey] ?? []
+            let needsFetch = forceRefresh || existing.isEmpty
+            guard needsFetch else { continue }
             do {
                 let fetched = try await fetchYear(region: region, year: year)
-                cache.years[String(year)] = fetched
+                cache.years[yearKey] = fetched
             } catch {
                 lastErrorMessage = error.localizedDescription
                 print("🔥🔥🔥 DEBUG: Bank holiday fetch failed for \(region.id) \(year): \(error.localizedDescription)")
             }
         }
+
+        cache.schemaVersion = cacheSchemaVersion
         cache.updatedAt = Date()
         writeCache(cache)
         activeRegionId = region.id
         loadMergedCache(regionId: region.id, years: years)
+
+        if holidaysByDayKey.isEmpty, lastErrorMessage == nil {
+            lastErrorMessage = "No bank holidays could be loaded for \(region.title). Check your connection and try again."
+        }
     }
 
     /// Prior year plus current and two years ahead (leave years often span calendar years).
@@ -101,20 +163,23 @@ final class BankHolidayService: ObservableObject {
         return [year - 1, year, year + 1, year + 2]
     }
 
-    private func yearHasCachedHolidays(regionId: String, year: Int) -> Bool {
+    private func yearHasUsableCachedHolidays(regionId: String, year: Int) -> Bool {
         guard let cache = readCache(regionId: regionId) else { return false }
-        return cache.years[String(year)] != nil
+        guard cache.schemaVersion >= cacheSchemaVersion else { return false }
+        guard let yearHolidays = cache.years[String(year)] else { return false }
+        return !yearHolidays.isEmpty
     }
 
     private func loadMergedCache(regionId: String, years: [Int]) {
-        guard let cache = readCache(regionId: regionId) else {
+        guard let cache = readCache(regionId: regionId),
+              cache.schemaVersion >= cacheSchemaVersion else {
             holidaysByDayKey = [:]
             return
         }
         var merged: [String: BankHolidayDay] = [:]
         for year in years {
             for day in cache.years[String(year)] ?? [] {
-                merged[day.id] = day
+                merged[day.dayKey] = day
             }
         }
         holidaysByDayKey = merged
@@ -133,8 +198,9 @@ final class BankHolidayService: ObservableObject {
         return decoded.compactMap { dto -> BankHolidayDay? in
             guard matchesRegion(dto, region: region) else { return nil }
             guard let sod = Self.parseHolidayDateString(dto.date, calendar: calendar) else { return nil }
+            let key = BankHolidayDay.dayKey(for: sod, calendar: calendar)
             let label = dto.localName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? dto.name : dto.localName
-            return BankHolidayDay(date: sod, name: label)
+            return BankHolidayDay(dayKey: key, date: sod, name: label)
         }
         .sorted { $0.date < $1.date }
     }
@@ -152,7 +218,6 @@ final class BankHolidayService: ObservableObject {
     private func matchesRegion(_ dto: NagerHolidayDTO, region: BankHolidayRegion) -> Bool {
         guard dto.countryCode.uppercased() == region.countryCode.uppercased() else { return false }
         guard let countyCodes = region.countyCodes, !countyCodes.isEmpty else { return true }
-        // Nationwide holidays from Nager (`global: true`, often with no county list) apply to all UK subdivisions.
         if dto.global { return true }
         guard let counties = dto.counties, !counties.isEmpty else { return false }
         return !Set(countyCodes).isDisjoint(with: Set(counties))

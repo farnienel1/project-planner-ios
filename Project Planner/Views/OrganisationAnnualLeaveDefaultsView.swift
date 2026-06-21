@@ -116,7 +116,8 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             try await firebaseBackend.updateOrganizationAnnualLeaveDefaults(defaults)
             try await firebaseBackend.updateOrganizationBankHolidayRegion(bankHolidayRegionId)
             let region = BankHolidayRegionDirectory.region(id: bankHolidayRegionId) ?? BankHolidayRegionDirectory.defaultRegion(forCountryCode: "GB")
-            await BankHolidayService.shared.ensureLoaded(region: region)
+            BankHolidayService.shared.invalidateCache(for: region.id)
+            await BankHolidayService.shared.ensureLoaded(region: region, forceRefresh: true)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
