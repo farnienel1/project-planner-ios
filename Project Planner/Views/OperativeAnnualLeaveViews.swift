@@ -483,12 +483,14 @@ struct OperativeAnnualLeaveCalendarView: View {
         } message: {
             if let bankHolidayTooltip { Text(bankHolidayTooltip) }
         }
-        .task {
-            await holidayStore.loadData()
+        .task(id: bankHolidayRegion.id) {
             await reloadBankHolidays(forceRefresh: false)
         }
-        .onChange(of: displayedMonth) { _, newMonth in
-            Task { await reloadBankHolidays(referenceDate: newMonth) }
+        .task(id: displayedMonth) {
+            await reloadBankHolidays(referenceDate: displayedMonth)
+        }
+        .task {
+            await holidayStore.loadData()
         }
         .onChange(of: firebaseBackend.currentOrganization?.settings.bankHolidayRegionId) { _, _ in
             Task { await reloadBankHolidays(forceRefresh: true) }

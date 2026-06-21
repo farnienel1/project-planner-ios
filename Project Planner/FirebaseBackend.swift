@@ -3654,9 +3654,7 @@ class FirebaseBackend: ObservableObject {
         try await db.collection("organizations").document(orgId).setData(
             [
                 "bankHolidayRegionId": trimmed,
-                "settings": [
-                    "bankHolidayRegionId": trimmed,
-                ],
+                "settings.bankHolidayRegionId": trimmed,
                 "updatedAt": Timestamp(date: Date()),
             ],
             merge: true
@@ -3688,9 +3686,7 @@ class FirebaseBackend: ObservableObject {
         try await db.collection("organizations").document(orgId).setData(
             [
                 "currencyCode": trimmed,
-                "settings": [
-                    "currencyCode": trimmed,
-                ],
+                "settings.currencyCode": trimmed,
                 "updatedAt": Timestamp(date: Date()),
             ],
             merge: true

@@ -339,6 +339,7 @@ struct HolidayView: View {
                         }
                         await holidayStore.loadData()
                         await notificationService.loadNotifications()
+                        await reloadBankHolidays(forceRefresh: true)
                     }
                     }
                 }
@@ -347,6 +348,12 @@ struct HolidayView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
+        .task(id: bankHolidayRegion.id) {
+            await reloadBankHolidays(forceRefresh: false)
+        }
+        .task(id: displayedMonth) {
+            await reloadBankHolidays(referenceDate: displayedMonth)
+        }
         .onAppear {
             if showRequests { activeSection = .requests }
             // Segmented control hidden for this mode — stay on Book so we never drive a Picker with a stale selection.
@@ -358,11 +365,7 @@ struct HolidayView: View {
             }
             Task {
                 await holidayStore.loadData()
-                await reloadBankHolidays(forceRefresh: false)
             }
-        }
-        .onChange(of: displayedMonth) { _, newMonth in
-            Task { await reloadBankHolidays(referenceDate: newMonth) }
         }
         .onChange(of: firebaseBackend.currentOrganization?.settings.bankHolidayRegionId) { _, _ in
             Task { await reloadBankHolidays(forceRefresh: true) }

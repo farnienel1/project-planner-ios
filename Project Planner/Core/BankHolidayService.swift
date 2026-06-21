@@ -22,6 +22,28 @@ struct BankHolidayDay: Hashable, Codable, Sendable, Identifiable {
         self.name = name
     }
 
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        date = try c.decode(Date.self, forKey: .date)
+        name = try c.decode(String.self, forKey: .name)
+        if let storedKey = try c.decodeIfPresent(String.self, forKey: .dayKey), !storedKey.isEmpty {
+            dayKey = storedKey
+        } else {
+            dayKey = Self.dayKey(for: date)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case dayKey, date, name
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(dayKey, forKey: .dayKey)
+        try c.encode(date, forKey: .date)
+        try c.encode(name, forKey: .name)
+    }
+
     static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
         let day = calendar.startOfDay(for: date)
         let y = calendar.component(.year, from: day)
@@ -183,6 +205,7 @@ final class BankHolidayService: ObservableObject {
             }
         }
         holidaysByDayKey = merged
+        objectWillChange.send()
     }
 
     private func fetchYear(region: BankHolidayRegion, year: Int) async throws -> [BankHolidayDay] {
