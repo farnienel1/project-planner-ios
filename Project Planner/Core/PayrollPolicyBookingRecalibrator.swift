@@ -117,8 +117,8 @@ enum PayrollPolicyBookingRecalibrator {
             let mid = sMin + (eMin - sMin) / 2
             return OperativeDayBookingChoice(
                 timeSlot: .morning,
-                workStartTime: PayrollHoursEngine.formatMinutes(sMin),
-                workEndTime: PayrollHoursEngine.formatMinutes(mid),
+                workStartTime: ManagerScheduleInterval.formatMinutes(sMin),
+                workEndTime: ManagerScheduleInterval.formatMinutes(mid),
                 isBreakRemoved: breakRemoved,
                 otMultiplierOverride: nil
             )
@@ -126,8 +126,8 @@ enum PayrollPolicyBookingRecalibrator {
             let mid = sMin + (eMin - sMin) / 2
             return OperativeDayBookingChoice(
                 timeSlot: .afternoon,
-                workStartTime: PayrollHoursEngine.formatMinutes(mid),
-                workEndTime: PayrollHoursEngine.formatMinutes(eMin),
+                workStartTime: ManagerScheduleInterval.formatMinutes(mid),
+                workEndTime: ManagerScheduleInterval.formatMinutes(eMin),
                 isBreakRemoved: breakRemoved,
                 otMultiplierOverride: nil
             )
@@ -138,8 +138,8 @@ enum PayrollPolicyBookingRecalibrator {
             }
             return OperativeDayBookingChoice(
                 timeSlot: .evening,
-                workStartTime: PayrollHoursEngine.formatMinutes(eMin),
-                workEndTime: PayrollHoursEngine.formatMinutes(endEvening),
+                workStartTime: ManagerScheduleInterval.formatMinutes(eMin),
+                workEndTime: ManagerScheduleInterval.formatMinutes(endEvening),
                 isBreakRemoved: breakRemoved,
                 otMultiplierOverride: nil
             )
@@ -151,8 +151,8 @@ enum PayrollPolicyBookingRecalibrator {
             }
             return OperativeDayBookingChoice(
                 timeSlot: .overtime,
-                workStartTime: PayrollHoursEngine.formatMinutes(startOT),
-                workEndTime: PayrollHoursEngine.formatMinutes(endOT),
+                workStartTime: ManagerScheduleInterval.formatMinutes(startOT),
+                workEndTime: ManagerScheduleInterval.formatMinutes(endOT),
                 isBreakRemoved: breakRemoved,
                 otMultiplierOverride: nil
             )
@@ -191,10 +191,10 @@ enum PayrollPolicyBookingRecalibrator {
             return (.customHours, start, end, breakRemoved)
         case .morning:
             let mid = sMin + (eMin - sMin) / 2
-            return (.morning, PayrollHoursEngine.formatMinutes(sMin), PayrollHoursEngine.formatMinutes(mid), breakRemoved)
+            return (.morning, ManagerScheduleInterval.formatMinutes(sMin), ManagerScheduleInterval.formatMinutes(mid), breakRemoved)
         case .afternoon:
             let mid = sMin + (eMin - sMin) / 2
-            return (.afternoon, PayrollHoursEngine.formatMinutes(mid), PayrollHoursEngine.formatMinutes(eMin), breakRemoved)
+            return (.afternoon, ManagerScheduleInterval.formatMinutes(mid), ManagerScheduleInterval.formatMinutes(eMin), breakRemoved)
         }
     }
 }
