@@ -183,6 +183,25 @@ struct ScheduleOperativeView: View {
             .onAppear {
                 scheduleBookingOnAppear()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .organizationDidLoad)) { _ in
+                refreshDefaultHoursFromOrgPolicy()
+            }
+    }
+
+    private func refreshDefaultHoursFromOrgPolicy() {
+        guard !didApplyEditingBookingPrefill, !didApplyEditingGroupPrefill else { return }
+        let p = primarySelectedDatePolicy
+        sharedBulkChoice = OperativeDayBookingChoice(
+            timeSlot: .customHours,
+            workStartTime: p.standardDayStart,
+            workEndTime: p.standardDayEnd,
+            isBreakRemoved: false,
+            otMultiplierOverride: nil
+        )
+        didApplyOrgDefaultHours = true
+        if !selectedDates.isEmpty {
+            syncSharedBulkToAllSelectedDates()
+        }
     }
 
     private var baseNavigationView: some View {
@@ -306,15 +325,7 @@ struct ScheduleOperativeView: View {
             managerScheduleStore.loadData()
         }
         if !didApplyOrgDefaultHours {
-            let p = payrollTimePolicy
-            sharedBulkChoice = OperativeDayBookingChoice(
-                timeSlot: .customHours,
-                workStartTime: p.standardDayStart,
-                workEndTime: p.standardDayEnd,
-                isBreakRemoved: false,
-                otMultiplierOverride: nil
-            )
-            didApplyOrgDefaultHours = true
+            refreshDefaultHoursFromOrgPolicy()
         }
         if let b = editingBooking, !didApplyEditingBookingPrefill {
             didApplyEditingBookingPrefill = true
@@ -356,7 +367,7 @@ struct ScheduleOperativeView: View {
         guard !selectedOperatives.isEmpty, !selectedDates.isEmpty, !isBooking else { return false }
         guard ScheduleDateSelectionPolicy.saturdaySundaySelectionAllowed(
             selected: selectedDates,
-            policy: payrollTimePolicy
+            policy: primarySelectedDatePolicy
         ) else { return false }
         return ScheduleBookingConflictEngine.allActionableRowsResolved(
             people: bookablePeople,
@@ -368,7 +379,7 @@ struct ScheduleOperativeView: View {
             bookingStore: bookingStore,
             managerScheduleStore: managerScheduleStore,
             holidayStore: holidayStore,
-            policy: payrollTimePolicy,
+            policy: primarySelectedDatePolicy,
             excludingBookingIds: excludingBookingIds,
             manuallyExcludedDaysByOperative: autoExcludedDaysByOperative,
             acknowledgedRowIds: acknowledgedConflictIds,
@@ -388,7 +399,7 @@ struct ScheduleOperativeView: View {
                 bookingStore: bookingStore,
                 managerScheduleStore: managerScheduleStore,
                 holidayStore: holidayStore,
-                policy: payrollTimePolicy,
+                policy: primarySelectedDatePolicy,
                 excludingBookingIds: excludingBookingIds
             )
             map[person.operativeId] = Set(rows.filter { $0.kind == .approvedAnnualLeave }.map { Calendar.current.startOfDay(for: $0.date) })
@@ -407,7 +418,7 @@ struct ScheduleOperativeView: View {
             bookingStore: bookingStore,
             managerScheduleStore: managerScheduleStore,
             holidayStore: holidayStore,
-            policy: payrollTimePolicy,
+            policy: primarySelectedDatePolicy,
             excludingBookingIds: excludingBookingIds,
             manuallyExcludedDays: autoExcludedDaysByOperative[person.operativeId] ?? [],
             acknowledgedRowIds: acknowledgedConflictIds,
@@ -1015,7 +1026,18 @@ struct ScheduleOperativeView: View {
                     .background(ProjectWorksRevampColors.canvas)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
-                scheduleHoursTimelineBarWithStandardWindow(day: refDay, policy: p, workStart: start, workEnd: end, centerLabel: formatHoursOneDecimal(paidH) + "h")
+                ScheduleHoursTimelineBar(
+                    day: refDay,
+                    policy: p,
+                    workIntervals: [],
+                    workStart: start,
+                    workEnd: end,
+                    breakIncluded: !choice.isBreakRemoved,
+                    centerLabel: formatHoursOneDecimal(paidH) + "h",
+                    clipLo: 6 * 60,
+                    clipHi: 21 * 60,
+                    barHeight: 22
+                )
                 HStack {
                     ForEach(["6", "9", "12", "15", "18", "21"], id: \.self) { t in
                         Text(t)
@@ -1053,80 +1075,6 @@ struct ScheduleOperativeView: View {
             .background(otH < 0.05 ? Color(red: 0.882, green: 0.961, blue: 0.933) : Color(red: 0.98, green: 0.933, blue: 0.855))
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
-    }
-
-    /// Timeline 06:00–21:00: org standard window in blue, work outside that window in orange (before/after).
-    private func scheduleHoursTimelineBarWithStandardWindow(day: Date, policy: OrgPayrollTimePolicy, workStart: String, workEnd: String, centerLabel: String) -> some View {
-        let clipLo = 6 * 60
-        let clipHi = 21 * 60
-        let sm = ManagerScheduleInterval.parseMinutes(workStart) ?? clipLo
-        let em = ManagerScheduleInterval.parseMinutes(workEnd) ?? (clipLo + 1)
-        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
-        let ds = timeline.standardWindowStartMinutes ?? (7 * 60 + 30)
-        let de = timeline.standardWindowEndMinutes ?? (16 * 60)
-        let orange = Color(red: 0.95, green: 0.55, blue: 0.2)
-        return GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-            let xPos: (Int) -> CGFloat = { minutes in
-                let clipped = min(clipHi, max(clipLo, minutes))
-                return CGFloat(clipped - clipLo) / CGFloat(clipHi - clipLo) * w
-            }
-            let w0 = max(sm, clipLo)
-            let w1 = min(em, clipHi)
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
-                if timeline.allHoursAtMultiplier {
-                    if w1 > w0 {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(orange.opacity(0.92))
-                            .frame(width: max(4, xPos(w1) - xPos(w0)), height: h)
-                            .offset(x: xPos(w0))
-                    }
-                } else {
-                    let s0 = max(ds, clipLo)
-                    let s1 = min(de, clipHi)
-                    let midLeft = max(w0, s0)
-                    let midRight = min(w1, s1)
-                    let leftOt0 = w0
-                    let leftOt1 = min(w1, s0)
-                    let rightOt0 = max(w0, s1)
-                    let rightOt1 = w1
-                    if leftOt1 > leftOt0 {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(orange.opacity(0.92))
-                            .frame(width: max(4, xPos(leftOt1) - xPos(leftOt0)), height: h)
-                            .offset(x: xPos(leftOt0))
-                    }
-                    if midRight > midLeft {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .frame(width: max(4, xPos(midRight) - xPos(midLeft)), height: h)
-                            .offset(x: xPos(midLeft))
-                    }
-                    if rightOt1 > rightOt0 {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(orange.opacity(0.92))
-                            .frame(width: max(4, xPos(rightOt1) - xPos(rightOt0)), height: h)
-                            .offset(x: xPos(rightOt0))
-                    }
-                }
-                Text(centerLabel)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.25), radius: 1, x: 0, y: 0)
-                    .padding(.leading, 6)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .frame(height: 22)
     }
 
     private var scheduleBookingCalendarCardCompact: some View {
@@ -1346,7 +1294,7 @@ struct ScheduleOperativeView: View {
         if let message = ScheduleDateSelectionPolicy.toggle(
             date: date,
             selected: &next,
-            policy: payrollTimePolicy,
+            policy: payrollPolicy(for: normalizedDate),
             calendar: calendar
         ) {
             dateSelectionAlertMessage = message
@@ -1480,8 +1428,8 @@ struct ScheduleOperativeView: View {
         guard let operative = selectableOperatives.first(where: { $0.id == operativeId }) else { return [] }
         var clashes: [BookingClash] = []
         let dates = Array(selectedDates.sorted())
-        let policy = payrollTimePolicy
         for date in dates {
+            let policy = payrollPolicy(for: date)
             let choice = resolvedChoice(operativeId: operative.id, date: date)
             let probeNew = choice.bookingProbe(
                 operativeId: operative.id,

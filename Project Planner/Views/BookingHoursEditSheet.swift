@@ -145,16 +145,13 @@ private enum BookingHoursTimelineLayout {
         endMinutes: Int,
         breakIncluded: Bool
     ) -> (Int, Int)? {
-        guard breakIncluded,
-              PayrollTimePolicyCatalog.isWeekday(day),
-              let ds = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
-              let de = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd) else { return nil }
-        let breakCenter = (ds + de) / 2
-        let breakHalf = max(1, Int(policy.standardUnpaidBreakHours * 30))
-        let b0 = max(startMinutes, breakCenter - breakHalf)
-        let b1 = min(endMinutes, breakCenter + breakHalf)
-        guard b1 > b0 else { return nil }
-        return (b0, b1)
+        ScheduleHoursTimelineSupport.breakRange(
+            policy: policy,
+            day: day,
+            workStart: startMinutes,
+            workEnd: endMinutes,
+            breakIncluded: breakIncluded
+        )
     }
 }
 
