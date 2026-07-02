@@ -1772,7 +1772,7 @@ struct ProjectDetailView: View {
     }
     
     private func bookingsForDate(_ date: Date) -> [Booking] {
-        let policy = payrollTimePolicy
+        let policy = firebaseBackend.payrollPolicy(for: date)
         return bookingStore.bookings.filter { booking in
             Calendar.current.isDate(booking.date, inSameDayAs: date) &&
             booking.projectId == project.id &&
@@ -1789,7 +1789,7 @@ struct ProjectDetailView: View {
     }
     
     private func managerBookingsForDate(_ date: Date) -> [ManagerSiteBooking] {
-        let policy = payrollTimePolicy
+        let policy = firebaseBackend.payrollPolicy(for: date)
         return managerScheduleStore.managerSiteBookings.filter { booking in
             Calendar.current.isDate(booking.date, inSameDayAs: date) &&
             booking.locationId == project.id &&
