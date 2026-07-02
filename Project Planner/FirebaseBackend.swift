@@ -192,6 +192,12 @@ class FirebaseBackend: ObservableObject {
 
     @MainActor
     private func setCurrentOrganizationFromRecovery(orgId: String, orgData: [String: Any], fallbackRole: String = "member") {
+        if OrganizationTrialPolicy.isAccessBlocked(orgData) {
+            errorMessage = OrganizationTrialPolicy.blockedMessage(from: orgData)
+            currentOrganization = nil
+            clearLocalOrganizationCache()
+            return
+        }
         let resolvedName = (orgData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let orgSettings = Self.organizationSettingsFromOrgDocument(orgData)
         organizationHasFirestoreMyScheduleOptions = Self.organizationHasMyScheduleOptionsInDocument(orgData)
@@ -757,7 +763,7 @@ class FirebaseBackend: ObservableObject {
     }
     
     /// Builds `OrganizationSettings` from a Firestore `organizations/{id}` document, including `payrollTimePolicy`.
-    private static func organizationSettingsFromOrgDocument(_ data: [String: Any]) -> OrganizationSettings {
+    static func organizationSettingsFromOrgDocument(_ data: [String: Any]) -> OrganizationSettings {
         var settings = OrganizationSettings()
         if let settingsDict = data["settings"] as? [String: Any],
            let uiLabelsDict = settingsDict["uiLabels"] as? [String: Any],
@@ -816,7 +822,7 @@ class FirebaseBackend: ObservableObject {
     }
 
     /// Reads current/prior/scheduled payroll policy fields and promotes due scheduled changes.
-    private static func applyPayrollPolicyFields(from data: [String: Any], to organization: inout Organization) {
+    static func applyPayrollPolicyFields(from data: [String: Any], to organization: inout Organization) {
         let current = organization.settings.payrollTimePolicy
         var prior: OrgPayrollTimePolicy?
         if let priorDict = data["payrollTimePolicyPrior"] as? [String: Any] {
@@ -843,7 +849,7 @@ class FirebaseBackend: ObservableObject {
         organization.payrollTimePolicyScheduled = applied.scheduled
     }
 
-    private static func organizationHasMyScheduleOptionsInDocument(_ data: [String: Any]) -> Bool {
+    static func organizationHasMyScheduleOptionsInDocument(_ data: [String: Any]) -> Bool {
         guard let settingsDict = data["settings"] as? [String: Any] else { return false }
         return settingsDict["myScheduleOptions"] != nil
     }
@@ -1110,6 +1116,11 @@ class FirebaseBackend: ObservableObject {
                 errorMessage = "Organization data is empty. Please contact support."
                 self.currentOrganization = nil
                 clearLocalOrganizationCache()
+                return
+            }
+
+            if await rejectTrialBlockedOrganizationIfNeeded(organizationId: organizationId, orgData: data) {
+                print("🔥🔥🔥 DEBUG: ❌ Trial access blocked for organisation: \(organizationId)")
                 return
             }
             
@@ -6083,94 +6094,13 @@ class FirebaseBackend: ObservableObject {
     /// Use this if you know the organization ID and want to force the link
     @MainActor
     func manuallyLinkToOrganization(organizationId: String) async -> Bool {
-        guard let userId = currentUser?.uid,
-              let userEmail = currentUser?.email else {
-            print("🔥🔥🔥 DEBUG: ❌ Cannot link - user not authenticated")
-            errorMessage = "User not authenticated"
-            return false
-        }
-        
-        print("🔥🔥🔥 DEBUG: 🔧 Manually linking user to organization: \(organizationId)")
-        
         do {
-            // First, verify the organization exists
-            let orgDoc = try await db.collection("organizations").document(organizationId).getDocument()
-            guard orgDoc.exists, let orgData = orgDoc.data() else {
-                print("🔥🔥🔥 DEBUG: ❌ Organization does not exist: \(organizationId)")
-                errorMessage = "Organization not found"
-                return false
-            }
-            
-            let orgName = orgData["name"] as? String ?? "Unknown Organization"
-            print("🔥🔥🔥 DEBUG: ✅ Organization exists: \(orgName)")
-            
-            // Check if user document exists
-            let userDocRef = db.collection("users").document(userId)
-            let userDoc = try await userDocRef.getDocument()
-            
-            if userDoc.exists {
-                // Update existing user document
-                print("🔥🔥🔥 DEBUG: User document exists - updating organizationId")
-                try await userDocRef.updateData([
-                    "organizationId": organizationId,
-                    "updatedAt": Timestamp(date: Date())
-                ])
-            } else {
-                // Create user document
-                print("🔥🔥🔥 DEBUG: User document does NOT exist - creating it with organizationId")
-                try await userDocRef.setData([
-                    "email": userEmail,
-                    "organizationId": organizationId,
-                    "role": "admin",
-                    "isSuperAdmin": true,
-                    "isActive": true,
-                    "createdAt": Timestamp(date: Date()),
-                    "updatedAt": Timestamp(date: Date())
-                ])
-            }
-            
-            // Also ensure user is in organization's members field
-            let orgRef = db.collection("organizations").document(organizationId)
-            let orgDocData = try await orgRef.getDocument().data() ?? [:]
-            var members = orgDocData["members"] as? [String: String] ?? [:]
-            members[userId] = "admin"
-            
-            try await orgRef.updateData([
-                "members": members,
-                "updatedAt": Timestamp(date: Date())
-            ])
-            
-            print("🔥🔥🔥 DEBUG: ✅ Successfully linked user to organization")
-            
-            // Store organization locally
-            let organization = Organization(
-                id: UUID(uuidString: organizationId) ?? UUID(),
-                firestoreDocumentId: organizationId,
-                name: orgName,
-                settings: OrganizationSettings(),
-                officeAddressLine1: orgDocData["officeAddressLine1"] as? String,
-                officeCity: orgDocData["officeCity"] as? String,
-                officePostcode: orgDocData["officePostcode"] as? String,
-                countryCode: (orgDocData["countryCode"] as? String)?.uppercased() ?? "GB",
-                defaultLatitude: orgDocData["defaultLatitude"] as? Double,
-                defaultLongitude: orgDocData["defaultLongitude"] as? Double
-            )
-            storeOrganizationLocally(organization)
-            
-            // Load organization
-            self.currentOrganization = organization
-            self.userRole = .admin
-            self.errorMessage = nil
-            
-            // Post notification to reload all data
-            NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
-            
-            print("🔥🔥🔥 DEBUG: ✅✅✅ Organization loaded: \(orgName)")
+            try await switchActiveOrganization(to: organizationId)
+            print("🔥🔥🔥 DEBUG: ✅✅✅ Organization loaded via manual link")
             return true
-            
         } catch {
             print("🔥🔥🔥 DEBUG: ❌ Error linking to organization: \(error.localizedDescription)")
-            errorMessage = "Failed to link to organization: \(error.localizedDescription)"
+            errorMessage = error.localizedDescription
             return false
         }
     }
