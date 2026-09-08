@@ -79,8 +79,9 @@ class NotificationService: ObservableObject {
 
     func refreshDailyMaterialCutOffReminder() async {
         materialCutoffRefreshTask?.cancel()
-        let task = Task {
-            try? await Task.sleep(nanoseconds: 150_000_000)
+        let task = Task { @MainActor in
+            // Coalesce rapid launch/settings churn — only the last call within ~1s should schedule.
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !Task.isCancelled else { return }
             await performDailyMaterialCutOffReminderRefresh()
         }
