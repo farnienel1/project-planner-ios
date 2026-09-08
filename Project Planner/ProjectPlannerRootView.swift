@@ -115,9 +115,14 @@ enum PlannerStoreWiring {
         async let subs: Void = subcontractorStore.loadData()
         async let tasks: Void = taskStore.loadData()
         async let holidays: Void = holidayStore.loadData()
-        async let notifications: Void = notificationService.loadNotifications()
-        _ = await (subs, tasks, holidays, notifications)
+        _ = await (subs, tasks, holidays)
         print("🔥🔥🔥 DEBUG: ✅ Org data bootstrap requests finished")
+
+        // Notifications are large (100+ docs) — keep them off the launch critical path.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            await notificationService.loadNotifications()
+        }
     }
 }
 

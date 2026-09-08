@@ -289,14 +289,13 @@ class FirebaseBackend: ObservableObject {
                 if let user = user {
                     print("🔥🔥🔥 Firebase user signed in: \(user.email ?? "N/A")")
 
-                    if self.currentOrganization != nil {
-                        print("🔥🔥🔥 DEBUG: Organization already set, skipping reload from auth listener")
-                        self.broadcastOrganizationDidLoadIfNeeded()
-                    } else {
+                    if self.currentOrganization == nil {
                         Task { [weak self] in
                             await self?.loadUserOrganizationWithRecovery(userId: user.uid)
                         }
                     }
+                    // Do not broadcast organizationDidLoad here when org is already set.
+                    // Sign-in + org-load + bootstrap were each kicking full store loads (Simulator jetsam).
 
                     NotificationCenter.default.post(name: .userDidSignIn, object: user.email)
                 } else {
@@ -971,16 +970,15 @@ class FirebaseBackend: ObservableObject {
         organizationLoadInProgress = true
         defer { organizationLoadInProgress = false }
         
-        // Do not return early when currentOrganization is set — it can be stale (wrong org id → Firestore permission denied on projects).
-        // Optionally hydrate name from cache while Firebase loads; Firebase result always wins.
-        if let cachedOrganization = loadOrganizationFromLocalStorage() {
-            print("🔥🔥🔥 DEBUG: ✅ Found organization in local storage: \(cachedOrganization.name) (will verify against users/\(userId) in Firebase)")
-            if currentOrganization == nil {
-                self.currentOrganization = cachedOrganization
+            // Optionally keep cached name for offline display only AFTER Firebase fails —
+            // assigning currentOrganization here used to trigger ContentView bootstrap
+            // before the server org was verified, stacking with auth/bootstrap loads.
+            if let cachedOrganization = loadOrganizationFromLocalStorage() {
+                print("🔥🔥🔥 DEBUG: ✅ Found organization in local storage: \(cachedOrganization.name) (will verify against users/\(userId) in Firebase)")
+                _ = cachedOrganization
             }
-        }
-        
-        await loadUserOrganizationFromFirebase(userId: userId)
+            
+            await loadUserOrganizationFromFirebase(userId: userId)
     }
 
     private func getDocumentWithServerTimeoutAndCacheFallback(

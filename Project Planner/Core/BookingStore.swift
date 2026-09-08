@@ -31,10 +31,13 @@ class BookingStore: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard self.firebaseBackend?.hasBootstrappedOrgDataLoad == true else {
+                    print("🔥🔥🔥 DEBUG: BookingStore skipping organizationDidLoad reload (pre-bootstrap)")
+                    return
+                }
                 print("🔥🔥🔥 DEBUG: BookingStore received organizationDidLoad notification - reloading data")
-                self?.loadData()
-                // Avoid auto-syncing every booking on org load; this creates large startup write storms.
-                // Booking saves still happen on user actions and offline sync notifications.
+                self.loadData()
             }
         }
         

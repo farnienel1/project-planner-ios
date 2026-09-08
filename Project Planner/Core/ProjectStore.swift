@@ -41,9 +41,11 @@ class ProjectStore: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
+            // Persistence key only — do not loadData here. Launch/org bootstrap owns the first load.
+            // Calling loadData on sign-in + organizationDidLoad + bootstrap triple-loads and jetsams Simulator.
             if let userId = notification.object as? String {
                 Task { @MainActor [weak self] in
-                    self?.setCurrentUser(userId)
+                    self?.persistenceService.setCurrentUser(userId)
                 }
             }
         }
@@ -64,10 +66,15 @@ class ProjectStore: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
+                guard let self else { return }
+                // Initial launch: PlannerStoreWiring.bootstrapOrgDataIfNeeded owns the first load.
+                // Reloading here too stacks duplicate Firebase reads and jetsams the Simulator.
+                guard self.firebaseBackend?.hasBootstrappedOrgDataLoad == true else {
+                    print("🔥🔥🔥 DEBUG: ProjectStore skipping organizationDidLoad reload (pre-bootstrap)")
+                    return
+                }
                 print("🔥🔥🔥 DEBUG: ProjectStore received organizationDidLoad notification - reloading data")
-                self?.loadData()
-                // Do not auto-sync local data during startup organization hydration.
-                // Permission-denied writes here can trigger retry loops and degrade first-load UX.
+                self.loadData()
             }
         }
         
@@ -150,9 +157,11 @@ class ProjectStore: ObservableObject {
                     isLoading = false
                     if pendingReloadAfterCurrentLoad {
                         pendingReloadAfterCurrentLoad = false
+                        // Coalesce follow-ups: one delayed reload max, and only after bootstrap.
+                        guard firebaseBackend?.hasBootstrappedOrgDataLoad == true else { return }
                         print("🔥🔥🔥 DEBUG: ProjectStore running queued follow-up reload")
                         Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 750_000_000)
+                            try? await Task.sleep(nanoseconds: 1_200_000_000)
                             self.loadData()
                         }
                     }

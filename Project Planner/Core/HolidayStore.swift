@@ -23,7 +23,9 @@ class HolidayStore: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                await self?.loadData()
+                guard let self else { return }
+                guard self.firebaseBackend?.hasBootstrappedOrgDataLoad == true else { return }
+                await self.loadData()
             }
         }
     }

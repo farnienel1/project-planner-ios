@@ -28,19 +28,6 @@ class OperativeStore: ObservableObject {
     private var loadGeneration = 0
     
     init() {
-        // Listen for user sign in/out notifications
-        NotificationCenter.default.addObserver(
-            forName: .userDidSignIn,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            if let userId = notification.object as? String {
-                Task { @MainActor [weak self] in
-                    await self?.setCurrentUser(userId)
-                }
-            }
-        }
-        
         NotificationCenter.default.addObserver(
             forName: .userDidSignOut,
             object: nil,
@@ -57,11 +44,13 @@ class OperativeStore: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard self.firebaseBackend?.hasBootstrappedOrgDataLoad == true else {
+                    print("🔥🔥🔥 DEBUG: OperativeStore skipping organizationDidLoad reload (pre-bootstrap)")
+                    return
+                }
                 print("🔥🔥🔥 DEBUG: OperativeStore received organizationDidLoad notification - reloading data")
-                self?.loadData()
-                // Do not auto-sync local rows here: on some roles/org setups this can hit permission-denied
-                // during startup and create noisy retry loops that look like the app is "stuck loading".
-                // Sync still happens on explicit user actions and offline-change sync events.
+                self.loadData()
             }
         }
         
@@ -168,8 +157,9 @@ class OperativeStore: ObservableObject {
                     isLoading = false
                     if pendingReloadAfterCurrentLoad {
                         pendingReloadAfterCurrentLoad = false
+                        guard firebaseBackend?.hasBootstrappedOrgDataLoad == true else { return }
                         Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 750_000_000)
+                            try? await Task.sleep(nanoseconds: 1_200_000_000)
                             self.loadData()
                         }
                     }
