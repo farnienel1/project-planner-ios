@@ -138,10 +138,11 @@ enum Permission: String, CaseIterable {
 
 struct UserPermissions: Codable, Hashable {
     var adminAccess: Bool  // Can add/manage users
-    var manager: Bool      // Manager - can schedule operatives, create clients, skills, qualifications, view warnings, manage tasks
+    var manager: Bool      // Manager - can schedule operatives, create clients, view warnings, manage tasks
     var operatives: Bool   // Can see operatives list and details on home screen (Operative Management)
-    var skills: Bool       // Can create/alter skills
-    var qualifications: Bool // Can create/alter qualifications
+    /// Deprecated — skills catalogue removed from the product. Always persisted as false.
+    var skills: Bool
+    var qualifications: Bool // Manage organisation qualification templates (admins always; managers when enabled)
     var materials: Bool    // Operative materials visibility/access inside project detail
     var projects: Bool     // Can create and manage projects
     var smallWorks: Bool   // Can create and manage small works
@@ -307,7 +308,7 @@ enum RoleTestingPreset: String, CaseIterable, Identifiable {
         case .admin:
             return "Administrator UI without super-admin-only controls."
         case .manager:
-            return "Typical manager: scheduling, clients, skills, no user administration."
+            return "Typical manager: scheduling, clients, qualifications, no user administration."
         case .operative:
             return "Limited operative home, projects/small works, schedule, holiday — no admin areas."
         }

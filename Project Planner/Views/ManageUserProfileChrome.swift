@@ -368,7 +368,7 @@ struct ManageUserExpandablePermissionToggleRow: View {
     }
 }
 
-/// Tappable row with subtitle + trailing chevron (e.g. Skills & qualifications).
+/// Tappable row with subtitle + trailing chevron (e.g. Qualifications).
 struct ManageUserNavigationSubtitleRow: View {
     let iconName: String
     let iconBackground: Color

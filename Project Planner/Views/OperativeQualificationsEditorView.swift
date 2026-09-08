@@ -3,10 +3,13 @@ import UniformTypeIdentifiers
 
 /// How the qualifications editor is presented: full catalog (manage users) vs. my profile flow.
 enum OperativeQualificationsPresentation: Equatable {
-    /// Lists every organisation qualification and skills (admin/manager editing an operative).
-    case manageSkillsAndQualifications
-    /// Only assigned qualifications on the main screen; add via catalog sheet (operative "My Qualifications").
+    /// Admin/manager editing a staff member's assigned qualifications.
+    case manageQualifications
+    /// Only assigned qualifications on the main screen; add via catalog sheet ("My Qualifications").
     case myQualifications
+
+    /// Legacy alias used by older call sites.
+    static let manageSkillsAndQualifications = manageQualifications
 }
 
 struct OperativeQualificationsEditorView: View {
@@ -17,10 +20,11 @@ struct OperativeQualificationsEditorView: View {
     let operative: Operative
     let title: String
     let canEditAssignments: Bool
-    var presentation: OperativeQualificationsPresentation = .manageSkillsAndQualifications
+    var presentation: OperativeQualificationsPresentation = .manageQualifications
+    /// When false, content is embedded in a parent `NavigationStack` (Qualifications hub).
+    var usesOwnNavigationStack: Bool = true
 
     @State private var selectedQualifications: Set<Qualification>
-    @State private var selectedSkills: Set<String>
     @State private var qualificationExpiryDates: [UUID: Date]
     @State private var qualificationCertificateURLs: [UUID: String]
     @State private var certificateUploadTargets: [UUID: URL] = [:]
@@ -28,34 +32,29 @@ struct OperativeQualificationsEditorView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
 
-    @State private var baselineSkills: Set<String>
     @State private var baselineQualifications: Set<Qualification>
     @State private var baselineExpiry: [UUID: Date]
     @State private var baselineCerts: [UUID: String]
 
     @State private var showingAssignQualificationsPicker = false
-    @State private var showingOrgSkills = false
     @State private var showingListFilters = false
     @State private var qualificationSearchText = ""
-    @State private var skillSearchText = ""
-    /// Empty string means all trades.
-    @State private var skillTradeFilter: String = ""
 
     init(
         operative: Operative,
-        title: String = "Skills & Qualifications",
+        title: String = "Qualifications",
         canEditAssignments: Bool,
-        presentation: OperativeQualificationsPresentation = .manageSkillsAndQualifications
+        presentation: OperativeQualificationsPresentation = .manageQualifications,
+        usesOwnNavigationStack: Bool = true
     ) {
         self.operative = operative
         self.title = title
         self.canEditAssignments = canEditAssignments
         self.presentation = presentation
+        self.usesOwnNavigationStack = usesOwnNavigationStack
         _selectedQualifications = State(initialValue: operative.qualifications)
-        _selectedSkills = State(initialValue: operative.skills)
         _qualificationExpiryDates = State(initialValue: operative.qualificationExpiryDates)
         _qualificationCertificateURLs = State(initialValue: operative.qualificationCertificateURLs)
-        _baselineSkills = State(initialValue: operative.skills)
         _baselineQualifications = State(initialValue: operative.qualifications)
         _baselineExpiry = State(initialValue: operative.qualificationExpiryDates)
         _baselineCerts = State(initialValue: operative.qualificationCertificateURLs)
@@ -67,24 +66,14 @@ struct OperativeQualificationsEditorView: View {
 
     private var hasUnsavedChanges: Bool {
         if !certificateUploadTargets.isEmpty { return true }
-        if selectedSkills != baselineSkills { return true }
         if selectedQualifications != baselineQualifications { return true }
         if qualificationExpiryDates != baselineExpiry { return true }
         if qualificationCertificateURLs != baselineCerts { return true }
         return false
     }
 
-    private var skillTradePickerOptions: [String] {
-        let trades = Set(operativeStore.organizationSkills.map(\.trade))
-        return trades.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-    }
-
     private var qualificationFilterTrimmed: String {
         qualificationSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var skillFilterTrimmed: String {
-        skillSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var filteredSelectedQualifications: [Qualification] {
@@ -94,150 +83,131 @@ struct OperativeQualificationsEditorView: View {
         return base.filter { $0.name.localizedCaseInsensitiveContains(q) }
     }
 
-    private var selectedSkillTokensSorted: [String] {
-        Array(selectedSkills).sorted()
-    }
-
-    private func skillMatchesFilters(skill: OrganizationSkill) -> Bool {
-        if !skillFilterTrimmed.isEmpty {
-            let inName = skill.name.localizedCaseInsensitiveContains(skillFilterTrimmed)
-            let inTrade = skill.trade.localizedCaseInsensitiveContains(skillFilterTrimmed)
-            if !inName && !inTrade { return false }
-        }
-        if !skillTradeFilter.isEmpty, skill.trade != skillTradeFilter {
-            return false
-        }
-        return true
-    }
-
-    private var filteredSelectedSkillTokens: [String] {
-        selectedSkillTokensSorted.filter { token in
-            guard let s = operativeStore.skillCatalogEntry(skillId: token) else {
-                if !skillFilterTrimmed.isEmpty {
-                    return token.localizedCaseInsensitiveContains(skillFilterTrimmed)
-                }
-                return skillTradeFilter.isEmpty
-            }
-            return skillMatchesFilters(skill: s)
-        }
-    }
-
     var body: some View {
-        NavigationStack {
-            Form {
-                if isMyQualifications {
-                    myQualificationsQualSection
-                    skillsSections
-                } else {
-                    manageQualificationsSections
-                    skillsSections
-                }
-
-                if let errorMessage {
-                    Section {
-                        Text(errorMessage)
-                            .foregroundColor(.red)
-                    }
-                }
-            }
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        showingListFilters = true
-                    } label: {
-                        Image(systemName: "line.3.horizontal.decrease.circle")
-                    }
-                }
-                if isMyQualifications {
-                    ToolbarItem(placement: .cancellationAction) {
-                        if hasUnsavedChanges {
-                            Button("Cancel") {
-                                revertToBaseline()
-                            }
-                        } else {
-                            Button("Done") {
-                                dismiss()
-                            }
-                        }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button(isSaving ? "Saving…" : "Save") {
-                            Task { await saveChanges(dismissAfterSave: false, mergeAdditions: nil) }
-                        }
-                        .disabled(isSaving || !canEditAssignments || !hasUnsavedChanges)
-                        .foregroundColor(
-                            hasUnsavedChanges && canEditAssignments && !isSaving ? .blue : .gray
-                        )
-                    }
-                } else {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button(isSaving ? "Saving…" : "Save") {
-                            Task { _ = await saveChanges(dismissAfterSave: true, mergeAdditions: nil) }
-                        }
-                        .disabled(isSaving || !canEditAssignments)
-                    }
-                }
-            }
-            .fileImporter(
-                isPresented: Binding(
-                    get: { selectedUploadQualificationId != nil },
-                    set: { if !$0 { selectedUploadQualificationId = nil } }
-                ),
-                allowedContentTypes: [.image, .pdf]
-            ) { result in
-                guard let qualificationId = selectedUploadQualificationId else { return }
-                switch result {
-                case .success(let url):
-                    certificateUploadTargets[qualificationId] = url
-                    errorMessage = nil
-                case .failure(let error):
-                    errorMessage = "Could not select file: \(error.localizedDescription)"
-                }
-                selectedUploadQualificationId = nil
-            }
-            .sheet(isPresented: $showingAssignQualificationsPicker) {
-                AssignQualificationsPickerView(selectedQualifications: $selectedQualifications)
-                    .environmentObject(operativeStore)
-            }
-            .sheet(isPresented: $showingOrgSkills) {
-                SkillsManagementView(assignmentSkillIds: $selectedSkills)
-                    .environmentObject(operativeStore)
-            }
-            .sheet(isPresented: $showingListFilters) {
+        Group {
+            if usesOwnNavigationStack {
                 NavigationStack {
-                    Form {
-                        Section("Qualifications") {
-                            TextField("Search qualifications", text: $qualificationSearchText)
-                                .textInputAutocapitalization(.never)
-                        }
-                        Section("Skills") {
-                            TextField("Search skills or trade", text: $skillSearchText)
-                                .textInputAutocapitalization(.never)
-                            Picker("Trade", selection: $skillTradeFilter) {
-                                Text("All trades").tag("")
-                                ForEach(skillTradePickerOptions, id: \.self) { t in
-                                    Text(t).tag(t)
-                                }
-                            }
-                        }
+                    editorForm
+                        .navigationTitle(title)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar { editorToolbar }
+                }
+            } else {
+                editorForm
+                    .toolbar { editorToolbar }
+            }
+        }
+        .fileImporter(
+            isPresented: Binding(
+                get: { selectedUploadQualificationId != nil },
+                set: { if !$0 { selectedUploadQualificationId = nil } }
+            ),
+            allowedContentTypes: [.image, .pdf]
+        ) { result in
+            guard let qualificationId = selectedUploadQualificationId else { return }
+            switch result {
+            case .success(let url):
+                certificateUploadTargets[qualificationId] = url
+                errorMessage = nil
+            case .failure(let error):
+                errorMessage = "Could not select file: \(error.localizedDescription)"
+            }
+            selectedUploadQualificationId = nil
+        }
+        .sheet(isPresented: $showingAssignQualificationsPicker) {
+            AssignQualificationsPickerView(selectedQualifications: $selectedQualifications)
+                .environmentObject(operativeStore)
+        }
+        .sheet(isPresented: $showingListFilters) {
+            NavigationStack {
+                Form {
+                    Section("Qualifications") {
+                        TextField("Search qualifications", text: $qualificationSearchText)
+                            .textInputAutocapitalization(.never)
                     }
-                    .navigationTitle("Filter lists")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showingListFilters = false }
-                        }
+                }
+                .navigationTitle("Filter list")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingListFilters = false }
                     }
                 }
             }
-            .onChange(of: operative.updatedAt) { _, _ in
-                guard isMyQualifications, !hasUnsavedChanges else { return }
-                applyOperativeSnapshot(operative)
+        }
+        .onChange(of: operative.updatedAt) { _, _ in
+            guard isMyQualifications, !hasUnsavedChanges else { return }
+            applyOperativeSnapshot(operative)
+        }
+    }
+
+    private var editorForm: some View {
+        Form {
+            if isMyQualifications {
+                myQualificationsQualSection
+            } else {
+                manageQualificationsSections
+            }
+
+            if let errorMessage {
+                Section {
+                    Text(errorMessage)
+                        .foregroundColor(.red)
+                }
+            }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var editorToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button {
+                showingListFilters = true
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+            }
+        }
+        if isMyQualifications {
+            if usesOwnNavigationStack {
+                ToolbarItem(placement: .cancellationAction) {
+                    if hasUnsavedChanges {
+                        Button("Cancel") {
+                            revertToBaseline()
+                        }
+                    } else {
+                        Button("Done") {
+                            dismiss()
+                        }
+                    }
+                }
+            } else if hasUnsavedChanges {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        revertToBaseline()
+                    }
+                }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button(isSaving ? "Saving…" : "Save") {
+                    Task { await saveChanges(dismissAfterSave: false, mergeAdditions: nil) }
+                }
+                .disabled(isSaving || !canEditAssignments || !hasUnsavedChanges)
+                .foregroundColor(
+                    hasUnsavedChanges && canEditAssignments && !isSaving ? .blue : .gray
+                )
+            }
+        } else {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button(isSaving ? "Saving…" : "Save") {
+                    Task { _ = await saveChanges(dismissAfterSave: true, mergeAdditions: nil) }
+                }
+                .disabled(isSaving || !canEditAssignments || !hasUnsavedChanges)
+                .foregroundColor(
+                    hasUnsavedChanges && canEditAssignments && !isSaving ? .blue : .gray
+                )
             }
         }
     }
@@ -248,7 +218,7 @@ struct OperativeQualificationsEditorView: View {
     private var manageQualificationsSections: some View {
         Section {
             if operativeStore.qualifications.isEmpty {
-                Text("No qualifications available yet. Tap Add qualifications to open the organisation list and create templates.")
+                Text("No qualifications available yet. Ask an admin to add organisation qualification templates first.")
                     .foregroundStyle(.secondary)
             } else if filteredSelectedQualifications.isEmpty {
                 Text(qualificationFilterTrimmed.isEmpty ? "No qualifications assigned yet." : "No qualifications match this filter.")
@@ -267,58 +237,6 @@ struct OperativeQualificationsEditorView: View {
             .disabled(!canEditAssignments)
         } header: {
             Text("Current qualifications")
-        }
-    }
-
-    @ViewBuilder
-    private var skillsSections: some View {
-        Section {
-            if operativeStore.organizationSkills.isEmpty {
-                Text("No organisation skills yet. Add skills under organisation skills management.")
-                    .foregroundStyle(.secondary)
-            } else if filteredSelectedSkillTokens.isEmpty {
-                Text(skillFilterTrimmed.isEmpty && skillTradeFilter.isEmpty ? "No skills assigned yet." : "No assigned skills match this filter.")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(filteredSelectedSkillTokens, id: \.self) { token in
-                    if let skill = operativeStore.skillCatalogEntry(skillId: token) {
-                        HStack(alignment: .top, spacing: 10) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(skill.name)
-                                    .font(.body.weight(.medium))
-                                Text(skill.trade)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.blue)
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            guard canEditAssignments else { return }
-                            selectedSkills.remove(token)
-                        }
-                    } else {
-                        HStack {
-                            Text(token)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Image(systemName: "exclamationmark.triangle")
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                }
-            }
-
-            Button {
-                showingOrgSkills = true
-            } label: {
-                Label("Add skills", systemImage: "plus.circle.fill")
-            }
-            .disabled(!canEditAssignments)
-        } header: {
-            Text("Current skills")
         }
     }
 
@@ -441,7 +359,6 @@ struct OperativeQualificationsEditorView: View {
     }
 
     private func revertToBaseline() {
-        selectedSkills = baselineSkills
         selectedQualifications = baselineQualifications
         qualificationExpiryDates = baselineExpiry
         qualificationCertificateURLs = baselineCerts
@@ -450,7 +367,6 @@ struct OperativeQualificationsEditorView: View {
     }
 
     private func syncBaselineFromWorkingState() {
-        baselineSkills = selectedSkills
         baselineQualifications = selectedQualifications
         baselineExpiry = qualificationExpiryDates
         baselineCerts = qualificationCertificateURLs
@@ -458,7 +374,6 @@ struct OperativeQualificationsEditorView: View {
 
     private func applyOperativeSnapshot(_ op: Operative) {
         selectedQualifications = op.qualifications
-        selectedSkills = op.skills
         qualificationExpiryDates = op.qualificationExpiryDates
         qualificationCertificateURLs = op.qualificationCertificateURLs
         certificateUploadTargets = [:]
@@ -533,7 +448,8 @@ struct OperativeQualificationsEditorView: View {
         }
 
         var updatedOperative = operative
-        updatedOperative.skills = selectedSkills
+        // Preserve any legacy skill ids on the record; skills UI has been removed.
+        updatedOperative.skills = operative.skills
         updatedOperative.qualifications = selectedQualifications
         updatedOperative.qualificationExpiryDates = qualificationExpiryDates.filter { entry in
             selectedQualifications.contains(where: { $0.id == entry.key })

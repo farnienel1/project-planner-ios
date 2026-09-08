@@ -29,12 +29,12 @@ struct ManagersView: View {
         case mobileNumber = "Mobile Number"
     }
     
-    // Get managers from users - includes admins (who are automatically managers) and users with manager permission
+    // Get managers from users — exclude administrators (they appear under Admins / Manage Users).
     private var allManagers: [AppUser] {
         userStore.organizationUsers.filter { user in
             guard !user.permissions.operativeMode else { return false }
-            // Match Manage Users → Managers tab: admins and manager-role accounts only
-            return (user.permissions.adminAccess || user.isSuperAdmin) || user.permissions.manager
+            guard !user.permissions.adminAccess, !user.isSuperAdmin else { return false }
+            return user.permissions.manager
         }
     }
     

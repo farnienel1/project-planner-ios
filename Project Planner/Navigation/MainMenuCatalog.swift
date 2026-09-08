@@ -203,17 +203,6 @@ enum MainMenuCatalog {
             ),
 
             MainMenuRowSpec(
-                id: "skills",
-                section: .tools,
-                title: "Skills",
-                detail: nil,
-                icon: "wrench.and.screwdriver.fill",
-                iconBackground: Color(red: 0.98, green: 0.925, blue: 0.906),
-                iconTint: Color(red: 0.6, green: 0.235, blue: 0.114),
-                isEligible: { u, _, _ in u.canManageSkills() },
-                action: .openSurface(.skills)
-            ),
-            MainMenuRowSpec(
                 id: "qualifications",
                 section: .tools,
                 title: "Qualifications",
@@ -221,7 +210,7 @@ enum MainMenuCatalog {
                 icon: "graduationcap.fill",
                 iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
                 iconTint: ProjectWorksRevampColors.blue,
-                isEligible: { u, _, _ in u.canManageQualifications() },
+                isEligible: { u, _, _ in u.canAccessQualificationsHub() },
                 action: .openSurface(.qualifications)
             ),
             MainMenuRowSpec(

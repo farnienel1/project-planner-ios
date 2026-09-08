@@ -430,9 +430,11 @@ struct ManageUsersView: View {
         case 0:
             return userStore.organizationUsers.filter { $0.permissions.adminAccess || $0.isSuperAdmin }
         case 1:
+            // Managers only — administrators belong on the Admins tab.
             return userStore.organizationUsers.filter { user in
                 guard !user.permissions.operativeMode else { return false }
-                return user.permissions.adminAccess || user.isSuperAdmin || user.permissions.manager
+                guard !user.permissions.adminAccess, !user.isSuperAdmin else { return false }
+                return user.permissions.manager
             }
         default:
             return userStore.organizationUsers.filter { $0.permissions.operativeMode }
@@ -1102,7 +1104,7 @@ private struct EditUserDialogModifier: ViewModifier {
                 if let operative = operativeForSkillsEditor ?? linkedOperative {
                     OperativeQualificationsEditorView(
                         operative: operative,
-                        title: "Skills & Qualifications",
+                        title: "Qualifications",
                         canEditAssignments: canEditPermissionsMatrix
                     )
                     .environmentObject(operativeStore)
@@ -1529,7 +1531,6 @@ struct EditUserView: View {
         case .manager:
             return managerSelfBookDraft == permissions.annualLeaveSelfBook
                 && managerTransitionOperatives == permissions.operatives
-                && managerTransitionSkills == permissions.skills
                 && managerTransitionQualifications == permissions.qualifications
                 && managerTransitionWeeklyReports == permissions.weeklyReports
                 && managerTransitionDailyOverview == permissions.dailyOverview
@@ -1954,20 +1955,11 @@ struct EditUserView: View {
                             )
                             ManageUserCardDivider()
                             ManageUserExpandablePermissionToggleRow(
-                                iconName: "wrench.and.screwdriver.fill",
-                                iconBackground: ManageUserProfilePalette.chipPinkBg,
-                                iconForeground: ManageUserProfilePalette.chipPinkFg,
-                                title: "Skills",
-                                description: "Can create and alter existing skills.",
-                                isOn: $managerTransitionSkills
-                            )
-                            ManageUserCardDivider()
-                            ManageUserExpandablePermissionToggleRow(
                                 iconName: "rosette",
                                 iconBackground: ManageUserProfilePalette.chipPinkBg,
                                 iconForeground: ManageUserProfilePalette.chipPinkFg,
-                                title: "Qualifications",
-                                description: "Can create and alter existing qualifications.",
+                                title: "Manage Qualifications",
+                                description: "When on, this manager can edit Organisation Qualifications. When off, Qualifications in the app shows only My Qualifications.",
                                 isOn: $managerTransitionQualifications
                             )
                             ManageUserCardDivider()
@@ -2106,7 +2098,7 @@ struct EditUserView: View {
                 ? ManagerUserTypeTransitionConfig(
                     annualLeaveSelfBook: managerSelfBookDraft,
                     operatives: managerTransitionOperatives,
-                    skills: managerTransitionSkills,
+                    skills: false,
                     qualifications: managerTransitionQualifications,
                     weeklyReports: managerTransitionWeeklyReports,
                     dailyOverview: managerTransitionDailyOverview,
@@ -2117,8 +2109,8 @@ struct EditUserView: View {
                 : ManagerUserTypeTransitionConfig(
                     annualLeaveSelfBook: managerSelfBookDraft,
                     operatives: permissions.operatives,
-                    skills: permissions.skills,
-                    qualifications: permissions.qualifications,
+                    skills: false,
+                    qualifications: true,
                     weeklyReports: permissions.weeklyReports,
                     dailyOverview: permissions.dailyOverview,
                     subContractors: permissions.subContractors,
@@ -2438,8 +2430,8 @@ struct EditUserView: View {
                         iconName: "graduationcap.fill",
                         iconBackground: ManageUserProfilePalette.chipBlueBg,
                         iconForeground: ManageUserProfilePalette.chipBlueFg,
-                        title: "Skills & qualifications",
-                        subtitle: openingSkillsEditor ? "Opening…" : "Manage certifications",
+                        title: "Qualifications",
+                        subtitle: openingSkillsEditor ? "Opening…" : "Manage assigned qualifications",
                         action: { openSkillsAndQualifications() }
                     )
                     .disabled(openingSkillsEditor)
@@ -2663,7 +2655,7 @@ struct EditUserView: View {
                 if op != nil {
                     showingQualificationsEditor = true
                 } else {
-                    saveErrorMessage = "Could not create a linked operative profile for skills. Check email and try again."
+                    saveErrorMessage = "Could not create a linked operative profile for qualifications. Check email and try again."
                 }
             }
         }
@@ -3095,23 +3087,11 @@ struct EditUserView: View {
             ManageUserCardDivider()
 
             ManageUserExpandablePermissionToggleRow(
-                iconName: "wrench.and.screwdriver.fill",
-                iconBackground: ManageUserProfilePalette.chipPinkBg,
-                iconForeground: ManageUserProfilePalette.chipPinkFg,
-                title: "Skills",
-                description: "Can create and alter existing skills.",
-                isOn: $permissions.skills,
-                isDisabled: false
-            )
-
-            ManageUserCardDivider()
-
-            ManageUserExpandablePermissionToggleRow(
                 iconName: "rosette",
                 iconBackground: ManageUserProfilePalette.chipPinkBg,
                 iconForeground: ManageUserProfilePalette.chipPinkFg,
-                title: "Qualifications",
-                description: "Can create and alter existing qualifications.",
+                title: "Manage Qualifications",
+                description: "When on, this manager can edit Organisation Qualifications. When off, Qualifications in the app shows only My Qualifications.",
                 isOn: $permissions.qualifications,
                 isDisabled: false
             )

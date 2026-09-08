@@ -598,6 +598,11 @@ class OperativeStore: ObservableObject {
     }
     
     // MARK: - Qualifications Operations
+    //
+    // Organisation templates live in `organizations/{orgId}/qualifications` and are
+    // shared org data. Only explicit add/update/delete below mutate that catalogue.
+    // Turning a manager's `permissions.qualifications` off must never call these
+    // methods and never clear staff My Qualifications assignments.
     
     func addQualification(_ qualification: Qualification) async {
         let normalized = qualification.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

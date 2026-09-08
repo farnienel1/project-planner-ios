@@ -676,8 +676,8 @@ struct AddUserView: View {
                             )
                             invitePermissionDivider
                             PermissionToggle(
-                                title: "Skills & Qualifications (org)",
-                                description: "Can maintain organisation skills and qualifications catalogues.",
+                                title: "Manage Qualifications",
+                                description: "Can maintain the organisation qualifications catalogue.",
                                 isOn: .constant(true),
                                 isDisabled: true,
                                 style: .plainInset
@@ -760,10 +760,10 @@ struct AddUserView: View {
                             )
                             invitePermissionDivider
                             PermissionToggle(
-                                title: "Skills & Qualifications (org)",
-                                description: "Managers can maintain skills and qualifications unless you change this later in Manage Users.",
-                                isOn: .constant(true),
-                                isDisabled: true,
+                                title: "Manage Qualifications",
+                                description: "When on, this manager can edit Organisation Qualifications. When off, they only see My Qualifications.",
+                                isOn: $permissions.qualifications,
+                                isDisabled: false,
                                 style: .plainInset
                             )
                             invitePermissionDivider
@@ -1020,7 +1020,7 @@ struct AddUserView: View {
                 adminAccess: true,
                 manager: true,
                 operatives: true,
-                skills: true,
+                skills: false,
                 qualifications: true,
                 materials: true,
                 projects: true,
@@ -1034,7 +1034,7 @@ struct AddUserView: View {
                 adminAccess: false,
                 manager: true,
                 operatives: false,
-                skills: true,
+                skills: false,
                 qualifications: true,
                 materials: true,
                 projects: false,
@@ -1107,8 +1107,7 @@ struct AddUserView: View {
             ("Admin Access", permissions.adminAccess),
             ("Manager", permissions.manager),
             ("Operative Management", permissions.operatives),
-            ("Skills (org)", permissions.skills),
-            ("Qualifications (org)", permissions.qualifications),
+            ("Manage Qualifications", permissions.qualifications),
             ("Materials", permissions.materials),
             ("Projects", permissions.projects),
             ("Small Works", permissions.smallWorks),

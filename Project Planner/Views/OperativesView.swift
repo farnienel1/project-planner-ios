@@ -34,9 +34,15 @@ struct OperativesView: View {
         case surname = "Surname"
         case email = "Email"
         case startDate = "Start Date"
+        /// Retained for legacy filter state; not shown in pickers (skills UI removed).
         case skills = "Skills"
         case qualifications = "Qualifications"
         case dayRate = "Day Rate"
+
+        /// Filter options shown in the UI. `.skills` stays on the enum but is hidden.
+        static var pickerCases: [FilterType] {
+            allCases.filter { $0 != .skills }
+        }
     }
     
     var body: some View {
@@ -439,7 +445,7 @@ struct OperativeFilterOptionsView: View {
     var body: some View {
         NavigationView {
             List {
-                ForEach(OperativesView.FilterType.allCases, id: \.self) { type in
+                ForEach(OperativesView.FilterType.allCases.filter { $0 != .skills }, id: \.self) { type in
                     Button(action: {
                         selectedFilter = type
                         dismiss()
@@ -520,37 +526,7 @@ struct OperativeDetailRowView: View {
                 }
             }
             
-            // Skills
-            if !operative.skills.isEmpty {
-                let _ = print("🔥🔥🔥 DEBUG: Displaying skills for \(operative.name): \(Array(operative.skills))")
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Skills")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.secondary)
-                    
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 4) {
-                        ForEach(Array(operative.skills.prefix(4)), id: \.self) { skillToken in
-                            Text(operativeStore.skillCatalogEntry(skillId: skillToken)?.listTitle ?? skillToken)
-                                .font(.caption)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color(.systemGray5))
-                                .cornerRadius(4)
-                        }
-                        
-                        if operative.skills.count > 4 {
-                            Text("+\(operative.skills.count - 4) more")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color(.systemGray5))
-                                .cornerRadius(4)
-                        }
-                    }
-                }
-            }
+            // Skills catalogue removed from product — do not show skill chips on roster cards.
             
             // Qualifications
             if !operative.qualifications.isEmpty {
@@ -607,7 +583,6 @@ struct AddOperativeView: View {
     @State private var email = ""
     @State private var phone = ""
     @State private var startDate = Date()
-    @State private var selectedSkills: Set<String> = []
     @State private var selectedQualifications: Set<Qualification> = []
     @State private var hourlyRate = ""
     @State private var notes = ""
@@ -626,33 +601,6 @@ struct AddOperativeView: View {
                     TextField("Phone", text: $phone)
                         .keyboardType(.phonePad)
                     DatePicker("Start Date", selection: $startDate, displayedComponents: .date)
-                }
-                
-                Section("Skills") {
-                    if operativeStore.organizationSkills.isEmpty {
-                        Text("No skills added yet.")
-                            .foregroundColor(.secondary)
-                            .font(.subheadline)
-                    } else {
-                        ForEach(operativeStore.organizationSkills) { skill in
-                            HStack {
-                                Text(skill.listTitle)
-                                Spacer()
-                                if selectedSkills.contains(skill.id) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                if selectedSkills.contains(skill.id) {
-                                    selectedSkills.remove(skill.id)
-                                } else {
-                                    selectedSkills.insert(skill.id)
-                                }
-                            }
-                        }
-                    }
                 }
                 
                 Section("Qualifications") {
@@ -748,7 +696,7 @@ struct AddOperativeView: View {
             email: email.trimmingCharacters(in: .whitespaces),
             phone: phone.isEmpty ? nil : phone.trimmingCharacters(in: .whitespaces),
             startDate: startDate,
-            skills: selectedSkills,
+            skills: [],
             qualifications: Array(selectedQualifications),
             hourlyRate: parsedRate.amount,
             dayRate: parsedRate.amount,
@@ -806,7 +754,6 @@ struct EditOperativeView: View {
     @State private var email: String
     @State private var phone: String
     @State private var startDate: Date
-    @State private var selectedSkills: Set<String>
     @State private var selectedQualifications: Set<Qualification>
     @State private var dayRate: String
     @State private var notes: String
@@ -822,7 +769,6 @@ struct EditOperativeView: View {
         self._email = State(initialValue: operative.email)
         self._phone = State(initialValue: operative.phone ?? "")
         self._startDate = State(initialValue: operative.startDate)
-        self._selectedSkills = State(initialValue: operative.skills)
         self._selectedQualifications = State(initialValue: operative.qualifications)
         self._dayRate = State(initialValue: {
             let amount = operative.dayRate ?? operative.hourlyRate
@@ -851,7 +797,7 @@ struct EditOperativeView: View {
                     .font(.headline)
                     .padding()
                 
-                Text("Skills: \(operativeStore.organizationSkills.count), Qualifications: \(operativeStore.qualifications.count)")
+                Text("Qualifications available: \(operativeStore.qualifications.count)")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.bottom)
@@ -873,33 +819,6 @@ struct EditOperativeView: View {
                         DatePicker("Start Date", selection: $startDate, displayedComponents: .date)
                         Toggle("Active", isOn: $isActive)
                     }
-                
-                Section("Skills") {
-                    if operativeStore.organizationSkills.isEmpty {
-                        Text("No skills added yet.")
-                            .foregroundColor(.secondary)
-                            .font(.subheadline)
-                    } else {
-                        ForEach(operativeStore.organizationSkills) { skill in
-                            HStack {
-                                Text(skill.listTitle)
-                                Spacer()
-                                if selectedSkills.contains(skill.id) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                if selectedSkills.contains(skill.id) {
-                                    selectedSkills.remove(skill.id)
-                                } else {
-                                    selectedSkills.insert(skill.id)
-                                }
-                            }
-                        }
-                    }
-                }
                 
                 Section("Qualifications") {
                     if operativeStore.qualifications.isEmpty {
@@ -1022,7 +941,7 @@ struct EditOperativeView: View {
         updatedOperative.email = email.trimmingCharacters(in: .whitespaces)
         updatedOperative.phone = phone.isEmpty ? nil : phone.trimmingCharacters(in: .whitespaces)
         updatedOperative.startDate = startDate
-        updatedOperative.skills = selectedSkills
+        updatedOperative.skills = operative.skills  // skills UI removed; preserve existing
         updatedOperative.qualifications = selectedQualifications
         updatedOperative.dayRate = parsedRate.amount
         updatedOperative.hourlyRate = parsedRate.amount
@@ -1194,7 +1113,7 @@ struct FilterOptionsView: View {
             Form {
                 Section("Filter By") {
                     Picker("Filter Type", selection: $selectedFilter) {
-                        ForEach(OperativesView.FilterType.allCases, id: \.self) { type in
+                        ForEach(OperativesView.FilterType.allCases.filter { $0 != .skills }, id: \.self) { type in
                             Text(type.rawValue).tag(type)
                         }
                     }
