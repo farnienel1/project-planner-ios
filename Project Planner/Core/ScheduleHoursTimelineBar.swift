@@ -8,11 +8,13 @@
 
 import SwiftUI
 
-struct ScheduleWorkInterval: Identifiable, Equatable {
-    let id = UUID()
+struct ScheduleWorkInterval: Identifiable, Equatable, Hashable {
     let startMinute: Int
     let endMinute: Int
     var breakRemoved: Bool = false
+
+    /// Stable identity — never use a random UUID here (ForEach would thrash / crash on redraw).
+    var id: String { "\(startMinute)-\(endMinute)-\(breakRemoved ? 1 : 0)" }
 }
 
 enum ScheduleHoursTimelineSupport {
@@ -20,10 +22,14 @@ enum ScheduleHoursTimelineSupport {
     static let defaultClipHi = 18 * 60
 
     static func xFraction(_ minutes: Int, clipLo: Int, clipHi: Int) -> CGFloat {
+        let span = max(1, clipHi - clipLo)
         let clipped = min(clipHi, max(clipLo, minutes))
-        let span = CGFloat(clipHi - clipLo)
-        guard span > 0 else { return 0 }
-        return CGFloat(clipped - clipLo) / span
+        return CGFloat(clipped - clipLo) / CGFloat(span)
+    }
+
+    static func safeWidth(_ value: CGFloat, minimum: CGFloat = 2) -> CGFloat {
+        guard value.isFinite else { return minimum }
+        return max(minimum, value)
     }
 
     static func breakRange(
@@ -53,11 +59,13 @@ enum ScheduleHoursTimelineSupport {
     ) -> [ScheduleWorkInterval] {
         var out: [ScheduleWorkInterval] = []
         for booking in manager {
-            guard let iv = ManagerScheduleInterval.clashInterval(for: booking, policy: policy) else { continue }
+            guard let iv = ManagerScheduleInterval.clashInterval(for: booking, policy: policy),
+                  iv.1 > iv.0 else { continue }
             out.append(ScheduleWorkInterval(startMinute: iv.0, endMinute: iv.1, breakRemoved: booking.isBreakRemoved))
         }
         for booking in operative {
-            guard let iv = OperativeBookingInterval.clashInterval(for: booking, policy: policy) else { continue }
+            guard let iv = OperativeBookingInterval.clashInterval(for: booking, policy: policy),
+                  iv.1 > iv.0 else { continue }
             out.append(ScheduleWorkInterval(startMinute: iv.0, endMinute: iv.1, breakRemoved: booking.isBreakRemoved))
         }
         return out
@@ -95,19 +103,27 @@ struct ScheduleHoursTimelineBar: View {
         breakIncluded && resolvedIntervals.contains { !$0.breakRemoved }
     }
 
+    private var mergedWorkSpan: (Int, Int)? {
+        let starts = resolvedIntervals.map(\.startMinute)
+        let ends = resolvedIntervals.map(\.endMinute)
+        guard let lo = starts.min(), let hi = ends.max(), hi > lo else { return nil }
+        return (lo, hi)
+    }
+
     var body: some View {
         GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
+            let w = max(0, geo.size.width.isFinite ? geo.size.width : 0)
+            let h = max(0, geo.size.height.isFinite ? geo.size.height : barHeight)
             let xPos: (Int) -> CGFloat = { minutes in
                 ScheduleHoursTimelineSupport.xFraction(minutes, clipLo: clipLo, clipHi: clipHi) * w
             }
+
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
 
                 ForEach(resolvedIntervals) { interval in
-                    workIntervalLayers(interval, xPos: xPos, height: h)
+                    intervalLayers(interval, xPos: xPos, height: h)
                 }
 
                 if showBreakStripe,
@@ -120,7 +136,7 @@ struct ScheduleHoursTimelineBar: View {
                        breakIncluded: true
                    ) {
                     let bl = xPos(br.0)
-                    let bw = max(2, xPos(br.1) - bl)
+                    let bw = ScheduleHoursTimelineSupport.safeWidth(xPos(br.1) - bl, minimum: 2)
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
                         .fill(Self.breakOrange.opacity(0.95))
                         .frame(width: bw, height: max(4, h - 6))
@@ -140,60 +156,62 @@ struct ScheduleHoursTimelineBar: View {
         .frame(height: barHeight)
     }
 
-    private var mergedWorkSpan: (Int, Int)? {
-        let starts = resolvedIntervals.map(\.startMinute)
-        let ends = resolvedIntervals.map(\.endMinute)
-        guard let lo = starts.min(), let hi = ends.max(), hi > lo else { return nil }
-        return (lo, hi)
-    }
-
     @ViewBuilder
-    private func workIntervalLayers(_ interval: ScheduleWorkInterval, xPos: (Int) -> CGFloat, height: CGFloat) -> some View {
+    private func intervalLayers(_ interval: ScheduleWorkInterval, xPos: (Int) -> CGFloat, height: CGFloat) -> some View {
         let w0 = max(interval.startMinute, clipLo)
         let w1 = min(interval.endMinute, clipHi)
-        guard w1 > w0 else { return }
+        if w1 > w0 {
+            if timeline.allHoursAtMultiplier {
+                segmentBar(from: w0, to: w1, xPos: xPos, height: height, color: Self.overtimeOrange.opacity(0.92))
+            } else {
+                let ds = timeline.standardWindowStartMinutes ?? (7 * 60 + 30)
+                let de = timeline.standardWindowEndMinutes ?? (16 * 60)
+                let s0 = max(ds, clipLo)
+                let s1 = min(de, clipHi)
+                let midLeft = max(w0, s0)
+                let midRight = min(w1, s1)
+                let leftOt0 = w0
+                let leftOt1 = min(w1, s0)
+                let rightOt0 = max(w0, s1)
+                let rightOt1 = w1
 
-        if timeline.allHoursAtMultiplier {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Self.overtimeOrange.opacity(0.92))
-                .frame(width: max(4, xPos(w1) - xPos(w0)), height: height)
-                .offset(x: xPos(w0))
-        } else {
-            let ds = timeline.standardWindowStartMinutes ?? (7 * 60 + 30)
-            let de = timeline.standardWindowEndMinutes ?? (16 * 60)
-            let s0 = max(ds, clipLo)
-            let s1 = min(de, clipHi)
-            let midLeft = max(w0, s0)
-            let midRight = min(w1, s1)
-            let leftOt0 = w0
-            let leftOt1 = min(w1, s0)
-            let rightOt0 = max(w0, s1)
-            let rightOt1 = w1
-
-            if leftOt1 > leftOt0 {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Self.overtimeOrange.opacity(0.92))
-                    .frame(width: max(4, xPos(leftOt1) - xPos(leftOt0)), height: height)
-                    .offset(x: xPos(leftOt0))
-            }
-            if midRight > midLeft {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
+                if leftOt1 > leftOt0 {
+                    segmentBar(from: leftOt0, to: leftOt1, xPos: xPos, height: height, color: Self.overtimeOrange.opacity(0.92))
+                }
+                if midRight > midLeft {
+                    segmentBar(
+                        from: midLeft,
+                        to: midRight,
+                        xPos: xPos,
+                        height: height,
+                        gradient: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight]
                     )
-                    .frame(width: max(4, xPos(midRight) - xPos(midLeft)), height: height)
-                    .offset(x: xPos(midLeft))
-            }
-            if rightOt1 > rightOt0 {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Self.overtimeOrange.opacity(0.92))
-                    .frame(width: max(4, xPos(rightOt1) - xPos(rightOt0)), height: height)
-                    .offset(x: xPos(rightOt0))
+                }
+                if rightOt1 > rightOt0 {
+                    segmentBar(from: rightOt0, to: rightOt1, xPos: xPos, height: height, color: Self.overtimeOrange.opacity(0.92))
+                }
             }
         }
+    }
+
+    private func segmentBar(
+        from start: Int,
+        to end: Int,
+        xPos: (Int) -> CGFloat,
+        height: CGFloat,
+        color: Color? = nil,
+        gradient: [Color]? = nil
+    ) -> some View {
+        let width = ScheduleHoursTimelineSupport.safeWidth(xPos(end) - xPos(start), minimum: 4)
+        return RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: gradient ?? [color ?? Self.overtimeOrange, color ?? Self.overtimeOrange],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .frame(width: width, height: height)
+            .offset(x: xPos(start))
     }
 }
