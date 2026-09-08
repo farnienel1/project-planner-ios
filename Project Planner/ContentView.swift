@@ -278,6 +278,8 @@ struct ContentView: View {
             let newOrgId = newValue?.firestoreDocumentId
             if let newOrgId, newOrgId != oldOrgId {
                 print("🔥🔥🔥 DEBUG: Organization changed to \(newOrgId) - reloading all data once")
+                lastLoadedOrganizationId = nil
+                firebaseBackend.hasBootstrappedOrgDataLoad = false
                 Task {
                     await performInitialDataLoadIfNeeded(force: true)
                 }
