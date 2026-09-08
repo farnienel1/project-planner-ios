@@ -25,6 +25,7 @@ class ProjectStore: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var didAttemptOrgAutoSwitch = false
     private var pendingReloadAfterCurrentLoad = false
+    private var loadGeneration = 0
 
     private func isPermissionDeniedError(_ error: Error?) -> Bool {
         guard let nsError = error as NSError? else { return false }
@@ -129,12 +130,14 @@ class ProjectStore: ObservableObject {
         isLoading = true
         errorMessage = nil
         pendingReloadAfterCurrentLoad = false
+        loadGeneration += 1
+        let generation = loadGeneration
         
         Task {
             // Add timeout to prevent infinite loading
             let timeoutTask = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
-                if isLoading {
+                if isLoading && loadGeneration == generation {
                     print("🔥🔥🔥 DEBUG: ⚠️ ProjectStore load timeout - forcing completion")
                     isLoading = false
                     errorMessage = "Loading timed out. Please try 'Force Reload Data' in Settings."
@@ -143,11 +146,16 @@ class ProjectStore: ObservableObject {
             
             defer {
                 timeoutTask.cancel()
-                isLoading = false
-                if pendingReloadAfterCurrentLoad {
-                    pendingReloadAfterCurrentLoad = false
-                    print("🔥🔥🔥 DEBUG: ProjectStore running queued follow-up reload")
-                    self.loadData()
+                if loadGeneration == generation {
+                    isLoading = false
+                    if pendingReloadAfterCurrentLoad {
+                        pendingReloadAfterCurrentLoad = false
+                        print("🔥🔥🔥 DEBUG: ProjectStore running queued follow-up reload")
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 750_000_000)
+                            self.loadData()
+                        }
+                    }
                 }
             }
             

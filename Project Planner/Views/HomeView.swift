@@ -535,7 +535,7 @@ struct HomeView: View {
         }
         .task(id: homeDataRefreshTrigger) {
             // Coalesce rapid store updates while Firebase batches load.
-            try? await Task.sleep(nanoseconds: 400_000_000)
+            try? await Task.sleep(nanoseconds: 700_000_000)
             guard !Task.isCancelled else { return }
             await refreshHomeDerivedData()
         }
@@ -1314,7 +1314,9 @@ struct HomeView: View {
             liveProjectCount: liveProjects.count + smallWorks.count
         )
 
-        if userStore.hasAdminAccess(), !storesStillLoading {
+        if userStore.hasAdminAccess(),
+           !storesStillLoading,
+           firebaseBackend.hasBootstrappedOrgDataLoad {
             async let warningsTask: Void = WarningsRefreshHelper.refreshSharedWarnings(
                 operativeStore: operativeStore,
                 bookingStore: bookingStore,

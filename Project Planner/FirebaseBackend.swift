@@ -2653,13 +2653,20 @@ class FirebaseBackend: ObservableObject {
         }
         print("🔥🔥🔥 DEBUG: [LOAD OPERATIVES] Found \(snapshot.documents.count) operative documents")
         
-        // Filter out legacy INITIAL-PLACEHOLDER documents
-        return snapshot.documents.compactMap { (doc: QueryDocumentSnapshot) -> Operative? in
+        // Filter out legacy INITIAL-PLACEHOLDER documents and junk seed rows
+        let loaded = snapshot.documents.compactMap { (doc: QueryDocumentSnapshot) -> Operative? in
             // Skip legacy placeholder documents
             if doc.documentID == "INITIAL-PLACEHOLDER" {
                 return nil
             }
             let data = doc.data()
+            let nameLower = (data["name"] as? String ?? "").lowercased()
+            let emailLower = (data["email"] as? String ?? "").lowercased()
+            if nameLower.contains("placeholder")
+                || emailLower.contains("placeholder")
+                || nameLower.contains("initial operative") {
+                return nil
+            }
             
             guard let startDate = (data["startDate"] as? Timestamp)?.dateValue(),
                   let skillsArray = data["skills"] as? [String] else {
@@ -2764,8 +2771,12 @@ class FirebaseBackend: ObservableObject {
                     updatedAt: (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
                 )
                 
-                print("🔥🔥🔥 DEBUG: Loaded operative: \(operative.name), skills: \(Array(operative.skills))")
                 return operative
+        }
+        .filter { operative in
+            let name = operative.name.lowercased()
+            let email = operative.email.lowercased()
+            return !name.contains("placeholder") && !email.contains("placeholder") && !name.contains("initial")
         }
     }
     
