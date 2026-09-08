@@ -59,7 +59,7 @@ enum UserRoleTransitionPolicy {
             return ManagerUserTypeTransitionConfig(
                 annualLeaveSelfBook: current.annualLeaveSelfBook,
                 operatives: current.operatives,
-                skills: current.skills,
+                skills: false,
                 qualifications: current.qualifications,
                 weeklyReports: current.weeklyReports,
                 dailyOverview: current.dailyOverview,
@@ -71,7 +71,7 @@ enum UserRoleTransitionPolicy {
             return ManagerUserTypeTransitionConfig(
                 annualLeaveSelfBook: current.annualLeaveSelfBook,
                 operatives: current.operatives,
-                skills: current.skills,
+                skills: false,
                 qualifications: current.qualifications,
                 weeklyReports: current.weeklyReports,
                 dailyOverview: current.dailyOverview,
@@ -84,7 +84,7 @@ enum UserRoleTransitionPolicy {
             return ManagerUserTypeTransitionConfig(
                 annualLeaveSelfBook: false,
                 operatives: false,
-                skills: true,
+                skills: false,
                 qualifications: true,
                 weeklyReports: false,
                 dailyOverview: true,
@@ -136,7 +136,7 @@ enum UserRoleTransitionPolicy {
             let m = manager ?? ManagerUserTypeTransitionConfig(
                 annualLeaveSelfBook: current.annualLeaveSelfBook,
                 operatives: true,
-                skills: true,
+                skills: false,
                 qualifications: true,
                 weeklyReports: current.weeklyReports,
                 dailyOverview: current.dailyOverview,
@@ -148,7 +148,7 @@ enum UserRoleTransitionPolicy {
                 adminAccess: false,
                 manager: true,
                 operatives: m.operatives,
-                skills: m.skills,
+                skills: false,
                 qualifications: m.qualifications,
                 materials: true,
                 projects: m.projects,
@@ -166,7 +166,7 @@ enum UserRoleTransitionPolicy {
                 adminAccess: true,
                 manager: true,
                 operatives: true,
-                skills: true,
+                skills: false,
                 qualifications: true,
                 materials: true,
                 projects: true,

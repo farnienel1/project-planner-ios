@@ -29,7 +29,6 @@ struct HomeView: View {
     @State private var showingCreateSmallWorks = false
     @State private var showingCreateOperative = false
     @State private var showingCreateManager = false
-    @State private var showingSkillsManagement = false
     @State private var showingQualificationsManagement = false
     @State private var showingJobTypesManagement = false
     @State private var showingAddUser = false
@@ -133,13 +132,11 @@ struct HomeView: View {
             CreateManagerView()
                 .environmentObject(operativeStore)
         }
-        .sheet(isPresented: $showingSkillsManagement) {
-            SkillsManagementView()
-                .environmentObject(operativeStore)
-        }
         .sheet(isPresented: $showingQualificationsManagement) {
             QualificationsManagementView()
                 .environmentObject(operativeStore)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingOperativeQualifications) {
             OperativeQualificationsReadOnlyView()
@@ -292,7 +289,7 @@ struct HomeView: View {
             case .clients: showingClientsView = true
             case .createProject: showingCreateProject = true
             case .createSmallWorks: showingCreateSmallWorks = true
-            case .skills: showingSkillsManagement = true
+            case .skills: break
             case .qualifications: showingQualificationsManagement = true
             case .myQualifications: showingOperativeQualifications = true
             case .jobTypes: showingJobTypesManagement = true
@@ -959,7 +956,7 @@ struct HomeView: View {
         case HomeQuickActionID.staffCreateSmallWorks.rawValue:
             showingCreateSmallWorks = true
         case HomeQuickActionID.staffSkills.rawValue:
-            showingSkillsManagement = true
+            break
         case HomeQuickActionID.staffQualifications.rawValue:
             showingQualificationsManagement = true
         case HomeQuickActionID.staffMyQualifications.rawValue:
@@ -1844,11 +1841,6 @@ private struct HomeProfileCardSheet: View {
 
     private var initials: String { PlannerUIInitials.from(displayName) }
 
-    private var skillsText: String {
-        guard let operative, !operative.skills.isEmpty else { return "None added" }
-        return operative.skills.joined(separator: ", ")
-    }
-
     private var qualificationsText: String {
         guard let operative, !operative.qualifications.isEmpty else { return "None added" }
         return operative.qualifications.map(\.name).joined(separator: ", ")
@@ -1908,7 +1900,6 @@ private struct HomeProfileCardSheet: View {
                     profileRow("Employment type", user?.employmentType(on: Date()).title ?? "—")
                     profileRow("VAT number", user?.trimmedVATNumber ?? "Not set")
                     profileRow("UTR number", user?.trimmedUTRNumber ?? "Not set")
-                    profileRow("Skills", skillsText)
                     profileRow("Qualifications", qualificationsText)
                 }
                 .padding(16)

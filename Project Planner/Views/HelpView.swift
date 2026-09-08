@@ -475,7 +475,7 @@ enum HelpCategory: String, Identifiable, CaseIterable {
         switch self {
         case .projects: return "Learn how to create, manage, and track projects"
         case .smallWorks: return "Create and manage small works jobs separately"
-        case .operatives: return "Add and manage operatives, skills, and qualifications"
+        case .operatives: return "Add and manage operatives and qualifications"
         case .managers: return "Manage project managers and their assignments"
         case .bookings: return "Schedule operatives to projects and manage bookings"
         case .clients: return "Add and manage client information"
@@ -506,9 +506,9 @@ enum HelpCategory: String, Identifiable, CaseIterable {
             return [
                 HelpStep(title: "View Operatives", description: "Go to the 'More' menu (tap the three dots at bottom right), then tap 'Operatives' to see all your operatives."),
                 HelpStep(title: "Filter by Status", description: "Use the 'Active' and 'Inactive' toggle at the top to filter operatives by their status."),
-                HelpStep(title: "Add New Operative", description: "Tap the + button in the top right, then fill in first name, last name, email, phone, start date, and optionally skills and qualifications."),
-                HelpStep(title: "Edit Operative", description: "Tap on an operative card, then tap the settings cog icon to edit their information, skills, qualifications, and hourly rate."),
-                HelpStep(title: "Add Skills", description: "When creating or editing an operative, tap 'Manage Skills' to add or remove skills from the operative's profile."),
+                HelpStep(title: "Add New Operative", description: "Tap the + button in the top right, then fill in first name, last name, email, phone, start date, and trade type."),
+                HelpStep(title: "Edit Operative", description: "Tap on an operative card, then tap the settings cog icon to edit their information, qualifications, and day rate."),
+                HelpStep(title: "Qualifications", description: "Use Qualifications in the main menu (or Manage Users → Qualifications) to assign templates, expiry dates, and certificates."),
                 HelpStep(title: "Add Qualifications", description: "Tap 'Manage Qualifications' to add qualifications with issue dates and expiry dates. The app tracks which qualifications are expired."),
                 HelpStep(title: "Delete Operative", description: "From the edit view, tap the delete button to remove an operative. This action cannot be undone.")
             ]
@@ -564,7 +564,7 @@ enum HelpCategory: String, Identifiable, CaseIterable {
             ]
         case .operatives:
             return [
-                "Add skills that match job requirements for better scheduling",
+                "Keep qualification templates up to date so staff can assign them on My Qualifications",
                 "Track qualification expiry dates to ensure compliance",
                 "Set hourly rates for accurate cost tracking",
                 "Deactivate operatives instead of deleting them to preserve history",
@@ -633,8 +633,8 @@ extension HelpView {
                 answer: "First, check that you're logged in and your organization is linked. If data is missing, go to Settings > Diagnose Missing Data. You can also try Settings > Force Reload Data. If issues persist, use Settings > Manually Link Organization with your Organization ID."
             ),
             FAQ(
-                question: "How do I add skills or qualifications to an operative?",
-                answer: "Edit the operative by tapping on their card, then the settings cog icon. Tap 'Manage Skills' or 'Manage Qualifications' to add or remove items. For qualifications, you'll need to set issue and expiry dates."
+                question: "How do I add qualifications to an operative?",
+                answer: "From Manage Users open the person and tap Qualifications, or use Qualifications → My Qualifications for your own. Assign organisation templates, then set expiry dates and upload certificates. Organisation templates are managed under Qualifications → Organisation Qualifications (admins, or managers with Manage Qualifications on)."
             ),
             FAQ(
                 question: "Can I delete a project or operative?",

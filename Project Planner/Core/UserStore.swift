@@ -71,7 +71,7 @@ class UserStore: ObservableObject {
         }
     }
 
-    /// Ensures an `operatives` roster row exists for this app user (matched by email) so skills/qualifications can attach.
+    /// Ensures an `operatives` roster row exists for this app user (matched by email) so qualifications can attach.
     func ensureOperativeProfileForAppUser(_ user: AppUser, operativeStore: OperativeStore) async -> Operative? {
         let emailNorm = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !emailNorm.isEmpty else { return nil }
@@ -126,7 +126,7 @@ class UserStore: ObservableObject {
                 adminAccess: true,
                 manager: true,
                 operatives: true,
-                skills: true,
+                skills: false,
                 qualifications: true,
                 materials: true,
                 projects: true,
@@ -141,7 +141,7 @@ class UserStore: ObservableObject {
                 adminAccess: true,
                 manager: true,
                 operatives: true,
-                skills: true,
+                skills: false,
                 qualifications: true,
                 materials: true,
                 projects: true,
@@ -156,7 +156,7 @@ class UserStore: ObservableObject {
                 adminAccess: false,
                 manager: true,
                 operatives: true,
-                skills: true,
+                skills: false,
                 qualifications: true,
                 materials: true,
                 projects: true,
@@ -214,7 +214,7 @@ class UserStore: ObservableObject {
                         let superAdminPermissions = UserPermissions(
                             adminAccess: true,
                             operatives: true,
-                            skills: true,
+                            skills: false,
                             qualifications: true,
                             materials: true,
                             projects: true,
@@ -342,7 +342,7 @@ class UserStore: ObservableObject {
                 adminAccess: true,
                 manager: true,
                 operatives: true,
-                skills: true,
+                skills: false,
                 qualifications: true,
                 materials: true,
                 projects: true,
@@ -513,14 +513,42 @@ class UserStore: ObservableObject {
         return u.permissions.manager && u.permissions.wholesalersOrderHistory
     }
 
+    /// Skills catalogue management has been removed from the product.
     func canManageSkills() -> Bool {
-        if isOperativeMode() { return false }
-        return hasAdminAccess() || hasPermission { $0.permissions.skills }
+        false
+    }
+
+    /// Organisation qualification templates (add / rename / delete).
+    /// Admins always can; managers only when `permissions.qualifications` is on.
+    ///
+    /// **Permission scope (important):** toggling `permissions.qualifications` only
+    /// changes who may open the Organisation Qualifications editor. It must never
+    /// delete or rewrite:
+    /// - `organizations/{orgId}/qualifications` (org catalogue — shared org data)
+    /// - any staff member's assigned qualifications / expiry / certificates on
+    ///   their operative profile (including the manager's own My Qualifications)
+    /// Templates someone created while they had manage access remain org property.
+    func canManageOrganisationQualifications() -> Bool {
+        QualificationsAccessPolicy.canManageOrganisationCatalogue(
+            user: displayUser,
+            isOperativeMode: isOperativeMode(),
+            hasAdminAccess: hasAdminAccess()
+        )
+    }
+
+    /// Opens the Qualifications hub (org templates and/or My Qualifications).
+    /// Admins and managers always get at least My Qualifications; operatives use `my_qualifications`.
+    /// Losing manage-org access still leaves this true for managers so My Qualifications remains available.
+    func canAccessQualificationsHub() -> Bool {
+        QualificationsAccessPolicy.canOpenQualificationsHub(
+            user: displayUser,
+            isOperativeMode: isOperativeMode(),
+            hasAdminAccess: hasAdminAccess()
+        )
     }
     
     func canManageQualifications() -> Bool {
-        if isOperativeMode() { return false }
-        return hasAdminAccess() || hasPermission { $0.permissions.qualifications }
+        canManageOrganisationQualifications()
     }
     
     func canViewProjects() -> Bool {
@@ -668,21 +696,21 @@ class UserStore: ObservableObject {
     }
     
     func canViewSkills() -> Bool {
-        return canManageSkills()
+        false
     }
     
     func canEditSkills() -> Bool {
-        return canManageSkills()
+        false
     }
     
     func canViewQualifications() -> Bool {
         if isOperativeMode() { return true }
-        return canManageQualifications()
+        return canAccessQualificationsHub()
     }
     
     func canEditQualifications() -> Bool {
-        if isOperativeMode() { return false }
-        return canManageQualifications()
+        if isOperativeMode() { return true }
+        return canAccessQualificationsHub()
     }
     
     func canBookWork() -> Bool {
@@ -800,12 +828,12 @@ class UserStore: ObservableObject {
             return """
             \(previewNote)Role: Operative (limited view)
             Can see: Home, Projects (assigned only), Small Works (assigned only), My Schedule (view only), Settings
-            Cannot see: Managers, Operatives list, Manage Users, Add User, Skills, Qualifications, Wholesalers, Help tab, Create project/small works, Book work, Reports, Daily/Weekly overview
+            Cannot see: Managers, Operatives list, Manage Users, Add User, Qualifications admin, Wholesalers, Help tab, Create project/small works, Book work, Reports, Daily/Weekly overview
             """
         }
         var lines: [String] = [previewNote + "Role: " + (u.isSuperAdmin ? "Super Admin" : (u.permissions.adminAccess ? "Admin" : (u.permissions.manager ? "Manager" : "User")))]
         if hasAdminAccess() {
-            lines.append("Can: Manage users, managers list, manage operatives, skills, qualifications, projects/small works, book work, reports")
+            lines.append("Can: Manage users, managers list, manage operatives, qualifications, projects/small works, book work, reports")
         } else if canViewOperatives() {
             lines.append("Can: Manage operatives (roster), projects/small works (as permitted), book work")
         } else {
@@ -1496,13 +1524,19 @@ class UserStore: ObservableObject {
                              return false
                          }
 
-                        updatedUser.permissions = permissions
+                        // Skills catalogue is retired — never persist the flag as enabled.
+                        var sanitized = permissions
+                        sanitized.skills = false
+                        // `sanitized.qualifications` is UI access only for the org catalogue.
+                        // This method must not load/save organisations/.../qualifications or
+                        // rewrite operative.qualifications when that flag changes.
+                        updatedUser.permissions = sanitized
 
-                        if permissions.adminAccess {
+                        if sanitized.adminAccess {
                             updatedUser.role = .admin
-                        } else if permissions.manager {
+                        } else if sanitized.manager {
                             updatedUser.role = .manager
-                        } else if permissions.operativeMode {
+                        } else if sanitized.operativeMode {
                             updatedUser.role = .operative
                         } else {
                             updatedUser.role = .viewer
@@ -1514,7 +1548,7 @@ class UserStore: ObservableObject {
                          if let holidayStore,
                             UserRoleTransitionPolicy.shouldClearPendingAnnualLeave(
                                 old: previousPermissions,
-                                new: permissions,
+                                new: sanitized,
                                 oldHasNoLineManager: organizationUsers[index].hasNoLineManager,
                                 newHasNoLineManager: organizationUsers[index].hasNoLineManager
                             ) {
@@ -1527,7 +1561,7 @@ class UserStore: ObservableObject {
                          if let holidayStore,
                             UserRoleTransitionPolicy.shouldClearSelfBookedAnnualLeave(
                                 old: previousPermissions,
-                                new: permissions,
+                                new: sanitized,
                                 oldHasNoLineManager: organizationUsers[index].hasNoLineManager,
                                 newHasNoLineManager: organizationUsers[index].hasNoLineManager
                             ) {

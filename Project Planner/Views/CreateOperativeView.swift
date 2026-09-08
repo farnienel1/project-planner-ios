@@ -20,7 +20,6 @@ struct CreateOperativeView: View {
     @State private var operativeDayRate = ""
     @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
     @State private var tradeCustomText = ""
-    @State private var selectedSkills: Set<String> = []
     @State private var isLoading = false
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -73,48 +72,6 @@ struct CreateOperativeView: View {
                         TextField("Day Rate (Optional)", text: $operativeDayRate)
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.decimalPad)
-                        
-                        // Skills Selection
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Skills")
-                                .font(.headline)
-                            
-                            if operativeStore.organizationSkills.isEmpty {
-                                Text("No skills available. Add skills in the Skills Management section.")
-                                    .foregroundColor(.secondary)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                                    .background(Color.gray.opacity(0.1))
-                                    .cornerRadius(8)
-                            } else {
-                                LazyVGrid(columns: [
-                                    GridItem(.adaptive(minimum: 120))
-                                ], spacing: 8) {
-                                    ForEach(operativeStore.organizationSkills) { skill in
-                                        Button(action: {
-                                            if selectedSkills.contains(skill.id) {
-                                                selectedSkills.remove(skill.id)
-                                            } else {
-                                                selectedSkills.insert(skill.id)
-                                            }
-                                        }) {
-                                            HStack {
-                                                Image(systemName: selectedSkills.contains(skill.id) ? "checkmark.circle.fill" : "circle")
-                                                    .foregroundColor(selectedSkills.contains(skill.id) ? .blue : .gray)
-                                                Text(skill.listTitle)
-                                                    .font(.caption)
-                                                    .foregroundColor(selectedSkills.contains(skill.id) ? .blue : .primary)
-                                                    .multilineTextAlignment(.leading)
-                                            }
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 6)
-                                            .background(selectedSkills.contains(skill.id) ? Color.blue.opacity(0.1) : Color.gray.opacity(0.1))
-                                            .cornerRadius(8)
-                                        }
-                                    }
-                                }
-                            }
-                        }
                     }
                     .padding(.horizontal)
                     
@@ -186,7 +143,7 @@ struct CreateOperativeView: View {
             email: operativeEmail.trimmingCharacters(in: .whitespaces),
             phone: operativePhone.trimmingCharacters(in: .whitespaces),
             startDate: Date(),
-            skills: selectedSkills,
+            skills: [],
             hourlyRate: parsedRate,
             dayRate: parsedRate,
             tradeTypePreset: tp.isEmpty ? nil : tp,

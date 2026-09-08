@@ -202,7 +202,8 @@ enum HomeQuickActionRegistry {
         case HomeQuickActionID.staffCreateSmallWorks.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "hammer.fill", title: "Create\nsmall works", tint: brown)
         case HomeQuickActionID.staffSkills.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "wrench.and.screwdriver.fill", title: "Skills", tint: purple)
+            // Skills catalogue removed — keep ID for persisted layouts; never surface a title.
+            return nil
         case HomeQuickActionID.staffQualifications.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "graduationcap.fill", title: "Qualifi-\ncations", tint: blue)
         case HomeQuickActionID.staffMyQualifications.rawValue:
@@ -280,9 +281,9 @@ enum HomeQuickActionRegistry {
         case HomeQuickActionID.staffCreateSmallWorks.rawValue:
             return !userStore.isOperativeMode() && canCreateSmallWorks(userStore)
         case HomeQuickActionID.staffSkills.rawValue:
-            return !userStore.isOperativeMode() && userStore.canManageSkills()
+            return false
         case HomeQuickActionID.staffQualifications.rawValue:
-            return !userStore.isOperativeMode() && userStore.canManageQualifications()
+            return !userStore.isOperativeMode() && userStore.canAccessQualificationsHub()
         case HomeQuickActionID.staffMyQualifications.rawValue:
             return userStore.isOperativeMode()
         case HomeQuickActionID.staffJobTypes.rawValue:
