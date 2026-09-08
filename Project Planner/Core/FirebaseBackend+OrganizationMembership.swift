@@ -10,44 +10,52 @@ import FirebaseAuth
 import FirebaseFirestore
 
 extension FirebaseBackend {
+    /// Loads only organisations the signed-in user belongs to.
+    /// Must never scan the full `organizations` collection — that jetsams the Simulator
+    /// once the project has more than a handful of orgs.
     @MainActor
     func fetchOrganizationsForCurrentUser() async -> [OrgMembershipSummary] {
         guard let userId = currentUser?.uid else { return [] }
 
         do {
-            let snapshot = try await db.collection("organizations").getDocuments(source: FirestoreSource.server)
-            var results: [OrgMembershipSummary] = []
+            var byId: [String: (data: [String: Any], role: String)] = [:]
 
-            for doc in snapshot.documents {
+            // Orgs where this uid is present in the members map.
+            let memberField = FieldPath(["members", userId])
+            let memberSnapshot = try await db.collection("organizations")
+                .whereField(memberField, isNotEqualTo: "")
+                .getDocuments(source: FirestoreSource.server)
+            for doc in memberSnapshot.documents {
                 let data = doc.data()
                 let members = data["members"] as? [String: String] ?? [:]
-                let creatorUserId = data["creatorUserId"] as? String
-                let role: String?
-                if let memberRole = members[userId] {
-                    role = memberRole
-                } else if creatorUserId == userId {
-                    role = "admin"
-                } else {
-                    role = nil
-                }
-                guard let role else { continue }
+                let role = members[userId] ?? "member"
+                byId[doc.documentID] = (data, role)
+            }
 
-                results.append(
-                    OrganizationTrialPolicy.membershipSummary(
-                        organizationId: doc.documentID,
-                        orgData: data,
-                        roleInOrg: role
-                    )
+            // Orgs this user created (may not yet be listed under members).
+            let creatorSnapshot = try await db.collection("organizations")
+                .whereField("creatorUserId", isEqualTo: userId)
+                .getDocuments(source: FirestoreSource.server)
+            for doc in creatorSnapshot.documents {
+                if byId[doc.documentID] != nil { continue }
+                let data = doc.data()
+                byId[doc.documentID] = (data, "admin")
+            }
+
+            let results: [OrgMembershipSummary] = byId.map { orgId, value in
+                OrganizationTrialPolicy.membershipSummary(
+                    organizationId: orgId,
+                    orgData: value.data,
+                    roleInOrg: value.role
                 )
             }
 
             let activeId = currentOrganization?.firestoreDocumentId
-            let sorted = results.sorted { lhs, rhs in
+            return results.sorted { lhs, rhs in
                 if lhs.id == activeId { return true }
                 if rhs.id == activeId { return false }
                 return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
-            return sorted
         } catch {
             print("🔥🔥🔥 DEBUG: [OrgMembership] Failed to list organisations: \(error.localizedDescription)")
             return []
@@ -127,6 +135,20 @@ extension FirebaseBackend {
 
     @MainActor
     func rejectTrialBlockedOrganizationIfNeeded(organizationId: String, orgData: [String: Any]) async -> Bool {
+        // Fast path: locked org does not need a memberships query.
+        if OrganizationTrialPolicy.isAccessBlocked(orgData) {
+            errorMessage = OrganizationTrialPolicy.blockedMessage(from: orgData)
+            currentOrganization = nil
+            clearLocalOrganizationCache()
+            try? auth.signOut()
+            return true
+        }
+
+        // Multi-trial rule only applies to trial orgs — skip the memberships fetch otherwise.
+        guard OrganizationTrialPolicy.isTrialOrganization(orgData) else {
+            return false
+        }
+
         let memberships = await fetchOrganizationsForCurrentUser()
         guard let message = OrganizationTrialPolicy.loginBlockMessage(
             organizationId: organizationId,

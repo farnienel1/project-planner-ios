@@ -6121,21 +6121,19 @@ class FirebaseBackend: ObservableObject {
     @MainActor
     func autoSwitchToOrganizationWithWorkData(userId: String, currentOrganizationId: String) async -> Bool {
         do {
-            print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] Scanning organizations for user work data...")
-            let orgsSnapshot = try await db.collection("organizations").getDocuments(source: .server)
+            print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] Scanning user memberships for work data...")
+            let memberships = await fetchOrganizationsForCurrentUser()
+            guard !memberships.isEmpty else {
+                print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] No accessible organizations found for user")
+                return false
+            }
 
             var bestOrganization: Organization?
             var bestScore = -1
             let normalizedCurrentOrgId = currentOrganizationId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
-            for orgDoc in orgsSnapshot.documents {
-                let orgId = orgDoc.documentID
-                let orgData = orgDoc.data()
-                let members = orgData["members"] as? [String: String] ?? [:]
-                let creatorUserId = orgData["creatorUserId"] as? String
-                let isUserInOrg = members[userId] != nil || creatorUserId == userId
-                if !isUserInOrg { continue }
-
+            for membership in memberships {
+                let orgId = membership.id
                 let orgRef = db.collection("organizations").document(orgId)
                 let projectsCount: Int
                 let smallWorksCount: Int
@@ -6161,15 +6159,8 @@ class FirebaseBackend: ObservableObject {
                     bestOrganization = Organization(
                         id: UUID(uuidString: orgId) ?? UUID(),
                         firestoreDocumentId: orgId,
-                        name: orgData["name"] as? String ?? "Unknown Organization",
-                        settings: OrganizationSettings(),
-                        officeAddressLine1: orgData["officeAddressLine1"] as? String,
-                        officeCity: orgData["officeCity"] as? String,
-                        officePostcode: orgData["officePostcode"] as? String,
-                        countryCode: (orgData["countryCode"] as? String)?.uppercased() ?? "GB",
-                        defaultLatitude: orgData["defaultLatitude"] as? Double,
-                        defaultLongitude: orgData["defaultLongitude"] as? Double,
-                        creatorUserId: creatorUserId
+                        name: membership.name,
+                        settings: OrganizationSettings()
                     )
                 }
             }
