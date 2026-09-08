@@ -204,6 +204,21 @@ struct SettingsView: View {
     private var settingsHubPersonalGroup: some View {
         VStack(spacing: 0) {
             NavigationLink {
+                SwitchOrganisationView()
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(userStore)
+            } label: {
+                settingsHubRow(
+                    icon: "building.2.fill",
+                    iconBg: ProjectWorksRevampColors.blue.opacity(0.12),
+                    iconFg: ProjectWorksRevampColors.blue,
+                    title: "Switch organisation",
+                    subtitle: settingsHubOrgLine
+                )
+            }
+            .buttonStyle(.plain)
+            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            NavigationLink {
                 SettingsProfileDetailView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
