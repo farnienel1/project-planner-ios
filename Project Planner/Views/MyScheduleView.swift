@@ -41,13 +41,14 @@ fileprivate struct CustomHoursEditorContext: Identifiable {
 
 // MARK: - Hours / overtime (project_planner_hours_and_overtime_system.html)
 
-fileprivate func segmentHoursForManager(_ b: ManagerSiteBooking, policy: OrgPayrollTimePolicy) -> (early: Double, mid: Double, late: Double) {
+fileprivate func segmentHoursForManager(_ b: ManagerSiteBooking, day: Date, policy: OrgPayrollTimePolicy) -> (early: Double, mid: Double, late: Double) {
     guard let iv = ManagerScheduleInterval.clashInterval(for: b, policy: policy) else {
         return (0, b.totalBookedHours(policy: policy), 0)
     }
     let sm = iv.0, em = iv.1
-    guard let ds = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
-          let de = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd), de > ds else {
+    let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
+    guard let ds = timeline.standardWindowStartMinutes,
+          let de = timeline.standardWindowEndMinutes, de > ds else {
         return (0, Double(em - sm) / 60.0, 0)
     }
     let earlyM = max(0, min(em, ds) - sm)
@@ -56,13 +57,14 @@ fileprivate func segmentHoursForManager(_ b: ManagerSiteBooking, policy: OrgPayr
     return (Double(earlyM) / 60.0, Double(midM) / 60.0, Double(lateM) / 60.0)
 }
 
-fileprivate func segmentHoursForOperative(_ b: Booking, policy: OrgPayrollTimePolicy) -> (early: Double, mid: Double, late: Double) {
+fileprivate func segmentHoursForOperative(_ b: Booking, day: Date, policy: OrgPayrollTimePolicy) -> (early: Double, mid: Double, late: Double) {
     guard let iv = OperativeBookingInterval.clashInterval(for: b, policy: policy) else {
         return (0, b.totalBookedHours(policy: policy), 0)
     }
     let sm = iv.0, em = iv.1
-    guard let ds = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
-          let de = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd), de > ds else {
+    let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
+    guard let ds = timeline.standardWindowStartMinutes,
+          let de = timeline.standardWindowEndMinutes, de > ds else {
         return (0, Double(em - sm) / 60.0, 0)
     }
     let earlyM = max(0, min(em, ds) - sm)
@@ -83,11 +85,12 @@ fileprivate struct DayHoursSegmentTotals {
 fileprivate func mergedDaySegments(
     manager: [ManagerSiteBooking],
     operative: [Booking],
+    day: Date,
     policy: OrgPayrollTimePolicy
 ) -> DayHoursSegmentTotals {
     var early: Double = 0, mid: Double = 0, late: Double = 0, ot: Double = 0, paidSum: Double = 0
     for b in manager {
-        let s = segmentHoursForManager(b, policy: policy)
+        let s = segmentHoursForManager(b, day: day, policy: policy)
         early += s.early
         mid += s.mid
         late += s.late
@@ -95,7 +98,7 @@ fileprivate func mergedDaySegments(
         ot += b.overtimeHoursBeyondPaidStandard(policy: policy)
     }
     for b in operative {
-        let s = segmentHoursForOperative(b, policy: policy)
+        let s = segmentHoursForOperative(b, day: day, policy: policy)
         early += s.early
         mid += s.mid
         late += s.late
@@ -281,6 +284,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
     let day: Date
     let policy: OrgPayrollTimePolicy
     let segments: DayHoursSegmentTotals
+    let workIntervals: [ScheduleWorkInterval]
     var annualLeaveLabel: String? = nil
     var annualLeaveTimeSlot: HolidayTimeSlot? = nil
 
@@ -373,10 +377,6 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                     .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
             )
         } else {
-            let ttl = max(0.01, segments.early + segments.mid + segments.late)
-            let eF = CGFloat(segments.early / ttl)
-            let mF = CGFloat(segments.mid / ttl)
-            let lF = CGFloat(segments.late / ttl)
             let ot = segments.otReported
             let paidSum = segments.totalPaidHours
             let paidStd = policy.standardPaidHours
@@ -407,62 +407,28 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                         }
                     }
                 }
-                GeometryReader { geo in
-                    let w = geo.size.width
-                    let h = geo.size.height
-                    let hatchEarly = Color(red: 0.902, green: 0.945, blue: 0.984)
-                    let hatchLate = Color(red: 0.98, green: 0.933, blue: 0.855)
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
-                        if eF > 0.02 {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(hatchEarly)
-                                .frame(width: max(6, w * eF), height: h)
-                        }
-                        if mF > 0.02 {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                                .frame(width: max(8, w * mF), height: h)
-                                .offset(x: w * eF)
-                                .overlay(alignment: .leading) {
-                                    if w * mF > 72 {
-                                        Text("\(ScheduleCoverageFormat.hours(segments.mid)) hrs standard")
-                                            .font(.system(size: 10, weight: .medium))
-                                            .foregroundStyle(.white)
-                                            .padding(.leading, 8)
-                                    }
-                                }
-                        }
-                        if lF > 0.02 {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(hatchLate)
-                                .frame(width: max(6, w * lF), height: h)
-                                .offset(x: w * (eF + mF))
-                            if lF * w > 40 {
-                                Text(multCaption)
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundStyle(Color(red: 0.522, green: 0.310, blue: 0.043))
-                                    .frame(width: w * lF, alignment: .trailing)
-                                    .offset(x: w * (eF + mF))
-                            }
-                        }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .frame(height: 28)
+                ScheduleHoursTimelineBar(
+                    day: day,
+                    policy: policy,
+                    workIntervals: workIntervals,
+                    centerLabel: paidSum > 0.05 ? "\(ScheduleCoverageFormat.hours(paidSum))h" : nil
+                )
                 HStack {
                     ForEach(["6:00", "9:00", "12:00", "15:00", "18:00"], id: \.self) { t in
                         Text(t)
                             .font(.system(size: 9))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                             .frame(maxWidth: .infinity)
+                    }
+                }
+                if policy.unpaidBreakMinutes > 0, !policy.breakPaid, workIntervals.contains(where: { !$0.breakRemoved }) {
+                    HStack(spacing: 6) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color(red: 0.98, green: 0.65, blue: 0.15))
+                            .frame(width: 14, height: 4)
+                        Text("\(policy.unpaidBreakMinutes)-minute unpaid break (\(policy.breakWindowStart)–\(policy.breakWindowEnd))")
+                            .font(.system(size: 10))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
                     }
                 }
             }
@@ -474,12 +440,6 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                     .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
             )
         }
-    }
-
-    private var multCaption: String {
-        let m = timeline.outsideMultiplier
-        let s = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
-        return "\(s)×"
     }
 }
 
@@ -775,8 +735,8 @@ struct ManagerScheduleContentView: View {
         }
     }
 
-    private var payrollTimePolicy: OrgPayrollTimePolicy {
-        firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+    private func payrollPolicy(for day: Date) -> OrgPayrollTimePolicy {
+        firebaseBackend.payrollPolicy(for: day)
     }
 
     /// Some admins/managers also have an operative profile and can be booked onto projects/small works.
@@ -854,9 +814,10 @@ struct ManagerScheduleContentView: View {
             managerScheduleStore.loadData(force: true)
         }
         .sheet(item: $customHoursContext) { ctx in
+            let policyDay = ctx.days.first ?? selectedDate ?? Date()
             ManagerCustomHoursSheet(
                 context: ctx,
-                policy: payrollTimePolicy,
+                policy: payrollPolicy(for: policyDay),
                 onSave: { start, end, breakRemoved in
                     let captured = ctx
                     customHoursContext = nil
@@ -877,9 +838,10 @@ struct ManagerScheduleContentView: View {
             )
         }
         .sheet(isPresented: $showAddBookingSheet) {
+            let bookingDay = selectedDate ?? Date()
             ManagerSelfBookingLocationPickerSheet(
-                day: selectedDate ?? Date(),
-                policy: payrollTimePolicy,
+                day: bookingDay,
+                policy: payrollPolicy(for: bookingDay),
                 companyCustomLocations: appSettings.settings.myScheduleOptions.customItems.filter {
                     appSettings.settings.myScheduleOptions.customItemEnabled[$0] ?? true
                 },
@@ -1032,7 +994,7 @@ struct ManagerScheduleContentView: View {
     }
 
     private func wouldClashProbe(on date: Date, probe: ManagerSiteBooking, ignoringBookingId: UUID? = nil) -> Bool {
-        let policy = payrollTimePolicy
+        let policy = payrollPolicy(for: date)
         let existing = managerScheduleStore.myBookings(on: date).filter { $0.id != ignoringBookingId }
         return existing.contains { ManagerScheduleInterval.bookingsOverlap(probe, $0, policy: policy) }
     }
@@ -1076,10 +1038,10 @@ struct ManagerScheduleContentView: View {
         return "Site"
     }
 
-    private func newBookingSummaryLabel(timeSlot: ManagerTimeSlot, workStart: String?, workEnd: String?, breakRemoved: Bool) -> String {
+    private func newBookingSummaryLabel(timeSlot: ManagerTimeSlot, workStart: String?, workEnd: String?, breakRemoved: Bool, day: Date) -> String {
         let probe = bookingProbe(
             userId: "",
-            day: Date(),
+            day: day,
             timeSlot: timeSlot,
             workStart: workStart,
             workEnd: workEnd,
@@ -1088,11 +1050,11 @@ struct ManagerScheduleContentView: View {
             locationId: nil,
             customLocationName: nil
         )
-        return probe.scheduleLabel(policy: payrollTimePolicy)
+        return probe.scheduleLabel(policy: payrollPolicy(for: day))
     }
 
-    private func secondBookingMessage(existing: [ManagerSiteBooking], newLabel: String) -> String {
-        let policy = payrollTimePolicy
+    private func secondBookingMessage(existing: [ManagerSiteBooking], newLabel: String, day: Date) -> String {
+        let policy = payrollPolicy(for: day)
         let lines = existing.map { "• \($0.scheduleLabel(policy: policy)) — \(locationNameString(for: $0))" }.joined(separator: "\n")
         return "You already have:\n\(lines)\n\nAdd: \(newLabel)?"
     }
@@ -1158,7 +1120,8 @@ struct ManagerScheduleContentView: View {
                         timeSlot: timeSlot,
                         workStart: workStart,
                         workEnd: workEnd,
-                        breakRemoved: breakRemoved
+                        breakRemoved: breakRemoved,
+                        day: day
                     )
                     detailLines.append("New booking: \(newLabel) — \(locationNameString(for: holidayProbe))")
                     presentOverlapWarning(
@@ -1188,7 +1151,7 @@ struct ManagerScheduleContentView: View {
                     customLocationName: customLocationName
                 )
                 if wouldClashProbe(on: day, probe: probe, ignoringBookingId: replaceBookingId) {
-                    let policy = payrollTimePolicy
+                    let policy = payrollPolicy(for: day)
                     let existing = managerScheduleStore.myBookings(on: day)
                         .filter { $0.id != replaceBookingId }
                         .filter { ManagerScheduleInterval.bookingsOverlap(probe, $0, policy: policy) }
@@ -1199,7 +1162,8 @@ struct ManagerScheduleContentView: View {
                         timeSlot: timeSlot,
                         workStart: workStart,
                         workEnd: workEnd,
-                        breakRemoved: breakRemoved
+                        breakRemoved: breakRemoved,
+                        day: day
                     )
                     detailLines.append("New booking: \(newLabel) — \(locationNameString(for: probe))")
                     presentOverlapWarning(
@@ -1248,11 +1212,12 @@ struct ManagerScheduleContentView: View {
                     timeSlot: timeSlot,
                     workStart: workStart,
                     workEnd: workEnd,
-                    breakRemoved: breakRemoved
+                    breakRemoved: breakRemoved,
+                    day: only
                 )
                 secondBookingDialog = SecondBookingDialog(
                     title: "Another booking this day",
-                    message: secondBookingMessage(existing: existing, newLabel: newLabel),
+                    message: secondBookingMessage(existing: existing, newLabel: newLabel, day: only),
                     onConfirm: commit
                 )
                 return
@@ -1377,7 +1342,7 @@ struct ManagerScheduleContentView: View {
 
     private func beginEditManagerBooking(_ b: ManagerSiteBooking) {
         let day = calendar.startOfDay(for: b.date)
-        let p = payrollTimePolicy
+        let p = payrollPolicy(for: day)
         let ws: String
         let we: String
         if let s = b.workStartTime, let e = b.workEndTime, !s.isEmpty, !e.isEmpty {
@@ -1526,7 +1491,12 @@ struct ManagerScheduleContentView: View {
                     MyScheduleTodaysHoursCard(
                         day: day,
                         policy: policy,
-                        segments: mergedDaySegments(manager: bookings, operative: operativeBookings, policy: policy),
+                        segments: mergedDaySegments(manager: bookings, operative: operativeBookings, day: day, policy: policy),
+                        workIntervals: ScheduleHoursTimelineSupport.workIntervals(
+                            manager: bookings,
+                            operative: operativeBookings,
+                            policy: policy
+                        ),
                         annualLeaveLabel: annualLeaveLabel,
                         annualLeaveTimeSlot: annualLeaveSlotForDay
                     )
@@ -1621,7 +1591,7 @@ struct ManagerScheduleContentView: View {
     }
 
     private func bookingRow(b: ManagerSiteBooking) -> some View {
-        let p = payrollTimePolicy
+        let p = payrollPolicy(for: b.date)
         return MyScheduleBookingStripeRow(
             stripeColor: myScheduleLocationStripeColor(b.locationType),
             title: locationNameString(for: b),
@@ -1853,9 +1823,10 @@ struct ManagerScheduleContentView: View {
     private func performAddToCalendar(eventStore: EKEventStore) {
         var added = 0
         for b in myManagerBookingsThisWeek {
+            let policy = payrollPolicy(for: b.date)
             let event = EKEvent(eventStore: eventStore)
-            event.title = "\(locationNameString(for: b)) – \(b.scheduleLabel(policy: payrollTimePolicy))"
-            let block = b.calendarBlock(on: b.date, policy: payrollTimePolicy)
+            event.title = "\(locationNameString(for: b)) – \(b.scheduleLabel(policy: policy))"
+            let block = b.calendarBlock(on: b.date, policy: policy)
             event.startDate = block.start
             event.endDate = block.end
             event.calendar = eventStore.defaultCalendarForNewEvents
@@ -1870,9 +1841,10 @@ struct ManagerScheduleContentView: View {
         for b in myOperativeBookingsThisWeek {
             guard let project = projectStore.projects.first(where: { $0.id == b.projectId }) ??
                     projectStore.smallWorks.first(where: { $0.id == b.projectId }) else { continue }
+            let policy = payrollPolicy(for: b.date)
             let event = EKEvent(eventStore: eventStore)
-            event.title = "\(project.jobNumber) \(project.siteName) – \(b.scheduleLabel(policy: payrollTimePolicy))"
-            let block = b.calendarBlock(on: b.date, policy: payrollTimePolicy)
+            event.title = "\(project.jobNumber) \(project.siteName) – \(b.scheduleLabel(policy: policy))"
+            let block = b.calendarBlock(on: b.date, policy: policy)
             event.startDate = block.start
             event.endDate = block.end
             event.calendar = eventStore.defaultCalendarForNewEvents
@@ -2252,29 +2224,14 @@ fileprivate struct ManagerSelfBookingEntryView: View {
             Text(selectedSlot == .customHours ? "Custom hours" : selectedSlot.displayName)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(ProjectWorksRevampColors.ink)
-            GeometryReader { geo in
-                let width = geo.size.width
-                let startM = minutesFromMidnight(startTime)
-                let endM = minutesFromMidnight(endTime)
-                let total = CGFloat(24 * 60)
-                let left = CGFloat(startM) / total
-                let seg = CGFloat(max(0, endM - startM)) / total
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .frame(width: max(8, width * seg), height: 28)
-                        .offset(x: width * left)
-                }
-            }
-            .frame(height: 28)
+            ScheduleHoursTimelineBar(
+                day: day,
+                policy: policy,
+                workIntervals: [],
+                workStart: hhmm(startTime),
+                workEnd: hhmm(endTime),
+                breakIncluded: selectedSlot != .customHours || !policy.breakPaid
+            )
             HStack {
                 ForEach(["6:00", "9:00", "12:00", "15:00", "18:00"], id: \.self) { tick in
                     Text(tick)
@@ -2524,8 +2481,8 @@ struct OperativeScheduleContentView: View {
         }
     }
 
-    private var payrollTimePolicy: OrgPayrollTimePolicy {
-        firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+    private func payrollPolicy(for day: Date) -> OrgPayrollTimePolicy {
+        firebaseBackend.payrollPolicy(for: day)
     }
 
     private func managerSelfBookingTitle(_ b: ManagerSiteBooking) -> String {
@@ -2677,20 +2634,15 @@ struct OperativeScheduleContentView: View {
                     MyScheduleTodaysHoursCard(
                         day: date,
                         policy: policy,
-                        segments: mergedDaySegments(manager: dayManagerBookings, operative: dayBookings, policy: policy),
+                        segments: mergedDaySegments(manager: dayManagerBookings, operative: dayBookings, day: date, policy: policy),
+                        workIntervals: ScheduleHoursTimelineSupport.workIntervals(
+                            manager: dayManagerBookings,
+                            operative: dayBookings,
+                            policy: policy
+                        ),
                         annualLeaveLabel: annualLeaveLabel,
                         annualLeaveTimeSlot: annualLeaveSlotForDay
                     )
-                    if policy.unpaidBreakMinutes > 0 {
-                        HStack(spacing: 6) {
-                            Image(systemName: "pause.circle")
-                                .font(.system(size: 11, weight: .medium))
-                            Text("\(policy.unpaidBreakMinutes)-minute unpaid break window (\(policy.breakWindowStart)–\(policy.breakWindowEnd))")
-                                .font(.system(size: 10, weight: .medium))
-                        }
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                        .padding(.horizontal, 2)
-                    }
                 }
                 if !dayManagerBookings.isEmpty {
                     Text("Your attendance")
@@ -2797,9 +2749,10 @@ struct OperativeScheduleContentView: View {
         var added = 0
         for b in myBookingsThisWeek {
             guard let project = projectStore.projects.first(where: { $0.id == b.projectId }) else { continue }
+            let policy = payrollPolicy(for: b.date)
             let event = EKEvent(eventStore: eventStore)
-            event.title = "\(project.jobNumber) \(project.siteName) – \(b.scheduleLabel(policy: payrollTimePolicy))"
-            let block = b.calendarBlock(on: b.date, policy: payrollTimePolicy)
+            event.title = "\(project.jobNumber) \(project.siteName) – \(b.scheduleLabel(policy: policy))"
+            let block = b.calendarBlock(on: b.date, policy: policy)
             event.startDate = block.start
             event.endDate = block.end
             event.calendar = eventStore.defaultCalendarForNewEvents
@@ -2812,9 +2765,10 @@ struct OperativeScheduleContentView: View {
             }
         }
         for b in myManagerAttendanceThisWeek {
+            let policy = payrollPolicy(for: b.date)
             let event = EKEvent(eventStore: eventStore)
-            event.title = "\(managerSelfBookingTitle(b)) – \(b.scheduleLabel(policy: payrollTimePolicy))"
-            let block = b.calendarBlock(on: b.date, policy: payrollTimePolicy)
+            event.title = "\(managerSelfBookingTitle(b)) – \(b.scheduleLabel(policy: policy))"
+            let block = b.calendarBlock(on: b.date, policy: policy)
             event.startDate = block.start
             event.endDate = block.end
             event.calendar = eventStore.defaultCalendarForNewEvents

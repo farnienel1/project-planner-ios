@@ -13,6 +13,8 @@ class LocalNotificationService {
     static let shared = LocalNotificationService()
     static let dailyMaterialCutoffIdentifierPrefix = "daily-material-order-cutoff"
     static let qualificationExpiryIdentifierPrefix = "qual-exp-v2-"
+
+    private var lastMaterialCutoffScheduleKey: String?
     
     private init() {}
     
@@ -147,6 +149,7 @@ class LocalNotificationService {
 
     /// Removes every pending material cut-off request (current + legacy identifiers).
     func removeAllMaterialCutOffReminders() async {
+        lastMaterialCutoffScheduleKey = nil
         let center = UNUserNotificationCenter.current()
         let pending = await center.pendingNotificationRequests()
         let ids = Set(
@@ -167,6 +170,11 @@ class LocalNotificationService {
         includeSaturday: Bool = false,
         includeSunday: Bool = false
     ) async {
+        let scheduleKey = "\(hour):\(minute):\(includeSaturday):\(includeSunday)"
+        if lastMaterialCutoffScheduleKey == scheduleKey {
+            return
+        }
+
         let authorized = await requestAuthorization()
         guard authorized else {
             print("🔥🔥🔥 DEBUG: Notification permission not granted")
@@ -199,6 +207,7 @@ class LocalNotificationService {
                 print("🔥🔥🔥 DEBUG: Error scheduling daily material cut off reminder (weekday \(weekday)): \(error)")
             }
         }
+        lastMaterialCutoffScheduleKey = scheduleKey
         print("✅ Material cut off reminders scheduled for \(weekdays.count) day(s) at \(hour):\(String(format: "%02d", minute))")
     }
 

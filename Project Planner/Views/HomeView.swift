@@ -327,7 +327,10 @@ struct HomeView: View {
                 .environmentObject(operativeStore)
         }
         .onAppear {
-            managerScheduleStore.loadData()
+            // Bootstrap already loads manager schedule once — only top up if empty.
+            if managerScheduleStore.managerSiteBookings.isEmpty {
+                managerScheduleStore.loadData()
+            }
             loadPersistedQuickActionsIfNeeded()
         }
         .onChange(of: userStore.currentUser?.id) { _, _ in
@@ -535,7 +538,7 @@ struct HomeView: View {
         }
         .task(id: homeDataRefreshTrigger) {
             // Coalesce rapid store updates while Firebase batches load.
-            try? await Task.sleep(nanoseconds: 400_000_000)
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !Task.isCancelled else { return }
             await refreshHomeDerivedData()
         }
@@ -1314,28 +1317,29 @@ struct HomeView: View {
             liveProjectCount: liveProjects.count + smallWorks.count
         )
 
-        if userStore.hasAdminAccess(), !storesStillLoading {
-            async let warningsTask: Void = WarningsRefreshHelper.refreshSharedWarnings(
-                operativeStore: operativeStore,
-                bookingStore: bookingStore,
-                projectStore: projectStore,
-                userStore: userStore,
-                managerScheduleStore: managerScheduleStore,
-                holidayStore: holidayStore,
-                firebaseBackend: firebaseBackend,
-                appSettings: appSettings
-            )
-            cachedOverviewMetrics = await metricsTask
-            cachedUpNextSections = await upNextTask
-            await warningsTask
-            guard !Task.isCancelled else { return }
-            homeWarningCount = WarningsService.shared.warningCount
-        } else {
-            cachedOverviewMetrics = await metricsTask
-            cachedUpNextSections = await upNextTask
-            if userStore.hasAdminAccess(), storesStillLoading {
+        // Paint Home first. Warnings are heavy (main-actor snapshot + scan) — never block first frame on them.
+        cachedOverviewMetrics = await metricsTask
+        cachedUpNextSections = await upNextTask
+        guard !Task.isCancelled else { return }
+
+        if userStore.hasAdminAccess(),
+           !storesStillLoading,
+           firebaseBackend.hasBootstrappedOrgDataLoad {
+            Task { @MainActor in
+                await WarningsRefreshHelper.refreshSharedWarnings(
+                    operativeStore: operativeStore,
+                    bookingStore: bookingStore,
+                    projectStore: projectStore,
+                    userStore: userStore,
+                    managerScheduleStore: managerScheduleStore,
+                    holidayStore: holidayStore,
+                    firebaseBackend: firebaseBackend,
+                    appSettings: appSettings
+                )
                 homeWarningCount = WarningsService.shared.warningCount
             }
+        } else if userStore.hasAdminAccess() {
+            homeWarningCount = WarningsService.shared.warningCount
         }
     }
 

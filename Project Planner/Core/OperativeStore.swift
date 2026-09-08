@@ -25,6 +25,7 @@ class OperativeStore: ObservableObject {
     private var smartCache: SmartCacheService?
     private var cancellables = Set<AnyCancellable>()
     private var pendingReloadAfterCurrentLoad = false
+    private var loadGeneration = 0
     
     init() {
         // Listen for user sign in/out notifications
@@ -146,12 +147,15 @@ class OperativeStore: ObservableObject {
         }
         isLoading = true
         errorMessage = nil
+        pendingReloadAfterCurrentLoad = false
+        loadGeneration += 1
+        let generation = loadGeneration
         
         Task {
             // Add timeout to prevent infinite loading
             let timeoutTask = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
-                if isLoading {
+                if isLoading && loadGeneration == generation {
                     print("🔥🔥🔥 DEBUG: ⚠️ OperativeStore load timeout - forcing completion")
                     isLoading = false
                     errorMessage = "Loading timed out. Please try 'Force Reload Data' in Settings."
@@ -160,10 +164,15 @@ class OperativeStore: ObservableObject {
             
             defer {
                 timeoutTask.cancel()
-                isLoading = false
-                if pendingReloadAfterCurrentLoad {
-                    pendingReloadAfterCurrentLoad = false
-                    loadData()
+                if loadGeneration == generation {
+                    isLoading = false
+                    if pendingReloadAfterCurrentLoad {
+                        pendingReloadAfterCurrentLoad = false
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 750_000_000)
+                            self.loadData()
+                        }
+                    }
                 }
             }
             
@@ -228,13 +237,19 @@ class OperativeStore: ObservableObject {
                         }
                         self.organizationSkills = firebaseSkills
                         let normalizedOperatives = Self.normalizeOperativeSkillTokens(operatives: firebaseOperatives, catalog: firebaseSkills)
-                        self.operatives = normalizedOperatives
+                        // Drop seed/placeholder rows before caching so Home/warnings stay light.
+                        let realOperatives = normalizedOperatives.filter { operative in
+                            let name = operative.name.lowercased()
+                            let email = operative.email.lowercased()
+                            return !name.contains("placeholder") && !email.contains("placeholder") && !name.contains("initial")
+                        }
+                        self.operatives = realOperatives
                         if let smartCache = smartCache {
                             smartCache.cacheOrganizationSkills(firebaseSkills)
-                            smartCache.cacheOperatives(normalizedOperatives)
+                            smartCache.cacheOperatives(realOperatives)
                         }
                         
-                        print("🔥🔥🔥 DEBUG: ✅ Loaded \(firebaseOperatives.count) operatives, \(realManagers.count) managers from Firebase (filtered from \(firebaseManagers.count) docs)")
+                        print("🔥🔥🔥 DEBUG: ✅ Loaded \(realOperatives.count) operatives, \(realManagers.count) managers from Firebase (filtered from \(firebaseOperatives.count) docs)")
                         isOffline = false
                     } else {
                         // Organization still nil after recovery attempt - use cached data

@@ -7,7 +7,8 @@ import Foundation
 
 enum WarningsRefreshHelper {
     @MainActor private static var lastRefreshAt: Date?
-    private static let minRefreshInterval: TimeInterval = 2
+    @MainActor private static var inFlightTask: Task<Void, Never>?
+    private static let minRefreshInterval: TimeInterval = 5
 
     @MainActor
     static func refreshSharedWarnings(
@@ -23,23 +24,57 @@ enum WarningsRefreshHelper {
     ) async {
         guard userStore.hasAdminAccess() else { return }
 
-        if managerScheduleStore.managerSiteBookings.isEmpty && !managerScheduleStore.isLoading {
-            managerScheduleStore.loadData(force: true)
-        }
-
+        // Do not kick a fresh manager-schedule load here during Home bootstrap —
+        // that re-enters the store load storm and can jetsam the simulator.
         if !force {
-            if bookingStore.isLoading || operativeStore.isLoading || holidayStore.isLoading {
+            if bookingStore.isLoading || operativeStore.isLoading || holidayStore.isLoading || projectStore.isLoading {
+                return
+            }
+            if !firebaseBackend.hasBootstrappedOrgDataLoad {
                 return
             }
             let now = Date()
             if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < minRefreshInterval {
                 return
             }
-            lastRefreshAt = now
-        } else {
-            lastRefreshAt = Date()
         }
 
+        if let inFlightTask {
+            await inFlightTask.value
+            if !force { return }
+        }
+
+        let task = Task { @MainActor in
+            await performRefresh(
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                projectStore: projectStore,
+                userStore: userStore,
+                managerScheduleStore: managerScheduleStore,
+                holidayStore: holidayStore,
+                firebaseBackend: firebaseBackend,
+                appSettings: appSettings
+            )
+        }
+        inFlightTask = task
+        lastRefreshAt = Date()
+        await task.value
+        if inFlightTask == task {
+            inFlightTask = nil
+        }
+    }
+
+    @MainActor
+    private static func performRefresh(
+        operativeStore: OperativeStore,
+        bookingStore: BookingStore,
+        projectStore: ProjectStore,
+        userStore: UserStore,
+        managerScheduleStore: ManagerScheduleStore,
+        holidayStore: HolidayStore,
+        firebaseBackend: FirebaseBackend,
+        appSettings: AppSettingsStore
+    ) async {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
@@ -57,6 +92,9 @@ enum WarningsRefreshHelper {
         let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
         let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
         let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
+
+        // Yield so Home can finish painting before the heavy snapshot work.
+        await Task.yield()
 
         await WarningsService.shared.updateWarningsAsync(
             operatives: activeOperatives,
