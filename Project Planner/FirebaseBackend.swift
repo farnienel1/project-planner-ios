@@ -43,7 +43,8 @@ private func organizationIdsMatch(_ lhs: String?, _ rhs: String?) -> Bool {
     return left == right
 }
 
-private func normalizedOrganizationId(_ organizationId: String) -> String {
+/// Shared by `FirebaseBackend` and its membership extension (separate file).
+func normalizedOrganizationId(_ organizationId: String) -> String {
     organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
@@ -72,8 +73,9 @@ class FirebaseBackend: ObservableObject {
     @Published var hasBootstrappedOrgDataLoad = false
     
     /// Lazy so `FirebaseBackend` can be constructed before `application(_:didFinishLaunchingWithOptions:)` calls `FirebaseApp.configure()`.
-    private lazy var auth: Auth = Auth.auth()
-    private lazy var db: Firestore = Firestore.firestore()
+    /// `internal` so `FirebaseBackend+OrganizationMembership` (separate file) can use the same clients.
+    lazy var auth: Auth = Auth.auth()
+    lazy var db: Firestore = Firestore.firestore()
     #if canImport(FirebaseStorage)
     private lazy var storage: Storage = Storage.storage()
     #endif
@@ -102,7 +104,8 @@ class FirebaseBackend: ObservableObject {
     private var lastOrganizationDidLoadBroadcastAt: Date?
     private var organizationDocumentListener: ListenerRegistration?
     /// True when `organizations/{orgId}.settings.myScheduleOptions` exists in Firestore.
-    private(set) var organizationHasFirestoreMyScheduleOptions = false
+    /// Writable from membership helpers in `FirebaseBackend+OrganizationMembership`.
+    var organizationHasFirestoreMyScheduleOptions = false
 
     /// Ensures org id is non-empty and org document is readable before subcollection reads.
     private func ensureReadableOrganization(_ organizationId: String) async throws -> String {
@@ -136,7 +139,7 @@ class FirebaseBackend: ObservableObject {
     }
 
     @MainActor
-    private func broadcastOrganizationDidLoadIfNeeded(force: Bool = false) {
+    func broadcastOrganizationDidLoadIfNeeded(force: Bool = false) {
         guard let orgId = currentOrganization?.firestoreDocumentId else { return }
         let now = Date()
         if !force,
@@ -683,7 +686,7 @@ class FirebaseBackend: ObservableObject {
     
     /// Clears cached org id/name so a new sign-in never reuses another account's organization path (avoids permission denied on projects).
     @MainActor
-    private func clearLocalOrganizationCache() {
+    func clearLocalOrganizationCache() {
         UserDefaults.standard.removeObject(forKey: organizationIdKey)
         UserDefaults.standard.removeObject(forKey: organizationNameKey)
         print("🔥🔥🔥 DEBUG: ✅ Cleared local organization cache (sign-out or recovery)")
@@ -750,7 +753,7 @@ class FirebaseBackend: ObservableObject {
     
     /// Store organization locally
     @MainActor
-    private func storeOrganizationLocally(_ organization: Organization) {
+    func storeOrganizationLocally(_ organization: Organization) {
         storeOrganizationIdLocally(organization.firestoreDocumentId)
         UserDefaults.standard.set(organization.name, forKey: organizationNameKey)
         if let regionId = organization.settings.bankHolidayRegionId, !regionId.isEmpty {

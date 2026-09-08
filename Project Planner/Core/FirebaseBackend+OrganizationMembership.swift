@@ -15,7 +15,7 @@ extension FirebaseBackend {
         guard let userId = currentUser?.uid else { return [] }
 
         do {
-            let snapshot = try await db.collection("organizations").getDocuments(source: .server)
+            let snapshot = try await db.collection("organizations").getDocuments(source: FirestoreSource.server)
             var results: [OrgMembershipSummary] = []
 
             for doc in snapshot.documents {
@@ -66,7 +66,7 @@ extension FirebaseBackend {
             throw OrganizationSwitchError.organizationNotFound
         }
 
-        let orgDoc = try await db.collection("organizations").document(trimmedId).getDocument(source: .server)
+        let orgDoc = try await db.collection("organizations").document(trimmedId).getDocument(source: FirestoreSource.server)
         guard orgDoc.exists, let orgData = orgDoc.data() else {
             throw OrganizationSwitchError.organizationNotFound
         }
