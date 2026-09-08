@@ -2770,14 +2770,11 @@ class FirebaseBackend: ObservableObject {
                     createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
                     updatedAt: (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
                 )
-                
                 return operative
-        }
-        .filter { operative in
-            let name = operative.name.lowercased()
-            let email = operative.email.lowercased()
-            return !name.contains("placeholder") && !email.contains("placeholder") && !name.contains("initial")
-        }
+            }
+
+        print("🔥🔥🔥 DEBUG: [LOAD OPERATIVES] Keeping \(loaded.count) real operatives (placeholders skipped)")
+        return loaded
     }
     
     // MARK: - Debug Functions
