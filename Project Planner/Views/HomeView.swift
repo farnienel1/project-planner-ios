@@ -99,11 +99,6 @@ struct HomeView: View {
             NotificationsView()
                 .environmentObject(notificationService)
         }
-        .task {
-            // Defer slightly so Home can render before task work.
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            await taskStore.loadData()
-        }
         .sheet(isPresented: $showingCreateClient) {
             CreateClientView()
                 .environmentObject(projectStore)
@@ -323,8 +318,9 @@ struct HomeView: View {
                 .environmentObject(operativeStore)
         }
         .onAppear {
-            // Bootstrap already loads manager schedule once — only top up if empty.
-            if managerScheduleStore.managerSiteBookings.isEmpty {
+            // Bootstrap already loads manager schedule once — only top up after bootstrap if still empty.
+            if firebaseBackend.hasBootstrappedOrgDataLoad,
+               managerScheduleStore.managerSiteBookings.isEmpty {
                 managerScheduleStore.loadData()
             }
             loadPersistedQuickActionsIfNeeded()

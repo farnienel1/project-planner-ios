@@ -48,6 +48,8 @@ class NotificationService: ObservableObject {
     private var dismissedSyntheticNotificationIds: Set<UUID> = []
     private var dismissedSyntheticStableKeys: Set<String> = []
     private var dismissedSyntheticLoadedForUserId: String?
+    /// True after a launch-time badge warm or an explicit inbox load.
+    private var hasLoadedNotificationsThisSession = false
     private static let dismissedSyntheticKeyPrefix = "NotificationService.dismissedSyntheticKey."
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {
@@ -836,12 +838,19 @@ class NotificationService: ObservableObject {
 
     // MARK: - Notification Management
     
+    /// Lightweight post-idle unread badge warm. Skips if inbox already loaded this session.
+    func warmUnreadBadgeIfNeeded() async {
+        guard !hasLoadedNotificationsThisSession else { return }
+        await loadNotifications()
+    }
+
     func loadNotifications() async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
               let currentUser = userStore?.currentUser else { return }
 
-        let fetched = try? await firebaseBackend.loadNotifications(organizationId: organizationId)
+        hasLoadedNotificationsThisSession = true
+        let fetched = try? await firebaseBackend.loadNotifications(organizationId: organizationId, limit: 50)
         let fallbackExisting = notifications.filter { $0.requiresPermission != "syntheticAnnualLeave" }
         let allNotifications = fetched ?? fallbackExisting
         print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] currentUser=\(currentUser.id) totalLoaded=\(allNotifications.count)")
@@ -1040,7 +1049,7 @@ class NotificationService: ObservableObject {
             .document(organizationId)
             .collection("notifications")
             .order(by: "createdAt", descending: true)
-            .limit(to: 250)
+            .limit(to: 50)
             .addSnapshotListener { [weak self] snapshot, error in
                 guard let self else { return }
                 if let error {

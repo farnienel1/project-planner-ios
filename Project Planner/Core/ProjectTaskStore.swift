@@ -16,12 +16,19 @@ class ProjectTaskStore: ObservableObject {
     
     private var firebaseBackend: FirebaseBackend?
     private var cancellables = Set<AnyCancellable>()
+    private var pendingReloadAfterCurrentLoad = false
     
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         self.firebaseBackend = backend
     }
     
     func loadData() async {
+        if isLoading {
+            pendingReloadAfterCurrentLoad = true
+            print("🔥🔥🔥 DEBUG: TaskStore loadData ignored (already loading); queued one follow-up reload")
+            return
+        }
+
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
             print("🔥🔥🔥 DEBUG: TaskStore - Organization not set. firebaseBackend: \(firebaseBackend != nil), organization: \(firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "nil")")
@@ -34,6 +41,16 @@ class ProjectTaskStore: ObservableObject {
         isLoading = true
         errorMessage = nil
         
+        defer {
+            isLoading = false
+            if pendingReloadAfterCurrentLoad {
+                pendingReloadAfterCurrentLoad = false
+                Task { @MainActor in
+                    await self.loadData()
+                }
+            }
+        }
+
         do {
             let loadedTasks = try await firebaseBackend.loadProjectTasks(organizationId: organizationId)
             print("🔥🔥🔥 DEBUG: TaskStore - Loaded \(loadedTasks.count) tasks from Firebase")
@@ -41,10 +58,8 @@ class ProjectTaskStore: ObservableObject {
             let loadedIds = Set(loadedTasks.map(\.id))
             let pendingLocal = tasks.filter { !loadedIds.contains($0.id) }
             tasks = (loadedTasks + pendingLocal).sorted { $0.createdAt > $1.createdAt }
-            isLoading = false
         } catch {
             print("🔥🔥🔥 DEBUG: TaskStore - Error loading tasks: \(error.localizedDescription)")
-            isLoading = false
             errorMessage = "Failed to load tasks: \(error.localizedDescription)"
         }
     }

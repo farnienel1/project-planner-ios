@@ -32,12 +32,15 @@ class BookingStore: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                // Bootstrap / ContentView org-switch own the first loads. Reloading again here
+                // after hasBootstrapped flips true can double-fetch every collection and jetsam.
                 guard self.firebaseBackend?.hasBootstrappedOrgDataLoad == true else {
                     print("🔥🔥🔥 DEBUG: BookingStore skipping organizationDidLoad reload (pre-bootstrap)")
                     return
                 }
-                print("🔥🔥🔥 DEBUG: BookingStore received organizationDidLoad notification - reloading data")
-                self.loadData()
+                // Ignore routine org-did-load; only Settings force-reload clears the bootstrap flag
+                // and ContentView re-runs bootstrap. Avoid a second full bookings fetch on launch.
+                print("🔥🔥🔥 DEBUG: BookingStore ignoring organizationDidLoad reload (bootstrap owns loads)")
             }
         }
         

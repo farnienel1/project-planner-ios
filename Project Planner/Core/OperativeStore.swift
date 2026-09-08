@@ -49,8 +49,7 @@ class OperativeStore: ObservableObject {
                     print("🔥🔥🔥 DEBUG: OperativeStore skipping organizationDidLoad reload (pre-bootstrap)")
                     return
                 }
-                print("🔥🔥🔥 DEBUG: OperativeStore received organizationDidLoad notification - reloading data")
-                self.loadData()
+                print("🔥🔥🔥 DEBUG: OperativeStore ignoring organizationDidLoad reload (bootstrap owns loads)")
             }
         }
         

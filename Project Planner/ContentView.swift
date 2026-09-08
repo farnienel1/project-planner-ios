@@ -259,11 +259,6 @@ struct ContentView: View {
             }
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         }
-        .task(id: firebaseBackend.isAuthenticated) {
-            guard firebaseBackend.isAuthenticated else { return }
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            await notificationService.loadNotifications()
-        }
         .onChange(of: notificationService.bookingToastMessage) { _, newValue in
             guard let text = newValue, !text.isEmpty else { return }
             bookingToastText = text
@@ -277,11 +272,21 @@ struct ContentView: View {
             let oldOrgId = oldValue?.firestoreDocumentId
             let newOrgId = newValue?.firestoreDocumentId
             if let newOrgId, newOrgId != oldOrgId {
-                print("🔥🔥🔥 DEBUG: Organization changed to \(newOrgId) - reloading all data once")
-                lastLoadedOrganizationId = nil
-                firebaseBackend.hasBootstrappedOrgDataLoad = false
-                Task {
-                    await performInitialDataLoadIfNeeded(force: true)
+                if oldOrgId != nil {
+                    // Real org switch — reset and reload once.
+                    print("🔥🔥🔥 DEBUG: Organization switched to \(newOrgId) - reloading all data once")
+                    lastLoadedOrganizationId = nil
+                    firebaseBackend.hasBootstrappedOrgDataLoad = false
+                    Task {
+                        await performInitialDataLoadIfNeeded(force: true)
+                    }
+                } else {
+                    // First org assignment: RootView owns store bootstrap. Do not clear the
+                    // bootstrap flag or force a second full-collection storm.
+                    print("🔥🔥🔥 DEBUG: Organization assigned \(newOrgId) - finishing ContentView side work only")
+                    Task {
+                        await performInitialDataLoadIfNeeded(force: false)
+                    }
                 }
             } else if oldValue != nil && newValue == nil {
                 print("🔥🔥🔥 DEBUG: ⚠️ Organization was lost, attempting recovery...")
@@ -294,7 +299,9 @@ struct ContentView: View {
             }
         }
         .onChange(of: userStore.currentUser?.id) { _, _ in
+            // Reminder scheduling hits UNUserNotificationCenter + org users — keep off first paint.
             Task {
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
                 await notificationService.refreshDailyMaterialCutOffReminder()
                 await notificationService.refreshQualificationExpiryReminders()
             }
@@ -303,8 +310,8 @@ struct ContentView: View {
             if phase == .active {
                 Task {
                     await userStore.recordCurrentUserLastSeenIfDue()
-                    await notificationService.refreshQualificationExpiryReminders()
-                    await notificationService.loadNotifications()
+                    // Do not reload the full notifications inbox on every foreground —
+                    // that alone can jetsam Simulator orgs with 100+ notification docs.
                 }
             }
         }
@@ -360,9 +367,14 @@ struct ContentView: View {
 
         await userStore.loadCurrentUser()
         appSettings.loadSettings()
-        await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
-        await notificationService.refreshDailyMaterialCutOffReminder()
-        await notificationService.refreshQualificationExpiryReminders()
+
+        // Defer non-UI sync / local reminder work so launch memory peaks stay lower.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
+            await notificationService.refreshDailyMaterialCutOffReminder()
+            await notificationService.refreshQualificationExpiryReminders()
+        }
 
         if let organizationId {
             lastLoadedOrganizationId = organizationId

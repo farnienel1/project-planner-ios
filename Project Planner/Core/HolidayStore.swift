@@ -25,7 +25,7 @@ class HolidayStore: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 guard self.firebaseBackend?.hasBootstrappedOrgDataLoad == true else { return }
-                await self.loadData()
+                // Bootstrap owns holiday loads; avoid a post-bootstrap duplicate fetch.
             }
         }
     }

@@ -73,8 +73,7 @@ class ProjectStore: ObservableObject {
                     print("🔥🔥🔥 DEBUG: ProjectStore skipping organizationDidLoad reload (pre-bootstrap)")
                     return
                 }
-                print("🔥🔥🔥 DEBUG: ProjectStore received organizationDidLoad notification - reloading data")
-                self.loadData()
+                print("🔥🔥🔥 DEBUG: ProjectStore ignoring organizationDidLoad reload (bootstrap owns loads)")
             }
         }
         

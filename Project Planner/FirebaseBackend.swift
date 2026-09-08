@@ -4448,17 +4448,31 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: [FIREBASE SAVE NOTIFICATION OK] org=\(organizationId) id=\(notification.id.uuidString) type=\(notification.type.rawValue) target=\(notification.userId ?? "broadcast")")
     }
     
-    func loadNotifications(organizationId: String) async throws -> [AppNotification] {
+    func loadNotifications(organizationId: String, limit: Int = 50) async throws -> [AppNotification] {
         let notificationsRef = db.collection("organizations").document(organizationId).collection("notifications")
+        // Always bound the read — unbounded getDocuments() jetsams Simulator on large inboxes.
+        let boundedQuery = notificationsRef
+            .order(by: "createdAt", descending: true)
+            .limit(to: max(1, limit))
         let snapshot: QuerySnapshot
         do {
-            snapshot = try await notificationsRef.getDocuments(source: .server)
+            snapshot = try await boundedQuery.getDocuments(source: .server)
         } catch {
             let nsError = error as NSError
             if (nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7) || isOfflineNetworkError(error) {
-                snapshot = try await notificationsRef.getDocuments(source: .cache)
+                snapshot = try await boundedQuery.getDocuments(source: .cache)
             } else {
-                throw error
+                // Fallback without order if the index is missing — still keep a hard limit.
+                do {
+                    snapshot = try await notificationsRef.limit(to: max(1, limit)).getDocuments(source: .server)
+                } catch {
+                    let fallbackError = error as NSError
+                    if (fallbackError.domain == "FIRFirestoreErrorDomain" && fallbackError.code == 7) || isOfflineNetworkError(error) {
+                        snapshot = try await notificationsRef.limit(to: max(1, limit)).getDocuments(source: .cache)
+                    } else {
+                        throw error
+                    }
+                }
             }
         }
         
@@ -5866,6 +5880,9 @@ class FirebaseBackend: ObservableObject {
         isLoading = true
         errorMessage = nil
         
+        // Allow PlannerStoreWiring to run a fresh single-flight bootstrap after reload.
+        hasBootstrappedOrgDataLoad = false
+
         // Clear current organization to force fresh load
         currentOrganization = nil
         clearLocalOrganizationCache()

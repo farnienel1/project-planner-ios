@@ -100,6 +100,8 @@ struct NotificationsView: View {
                 Button("Cancel", role: .cancel) {}
             }
             .task {
+                // Inbox is intentionally not loaded on app launch (jetsam risk). Load here on demand.
+                await notificationService.loadNotifications()
                 await notificationService.markAllAsRead()
             }
             .onDisappear {

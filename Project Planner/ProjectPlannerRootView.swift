@@ -108,20 +108,30 @@ enum PlannerStoreWiring {
         firebaseBackend.hasBootstrappedOrgDataLoad = true
         print("🔥🔥🔥 DEBUG: ✅ Organization loaded, starting single-flight data bootstrap...")
 
+        // Home-critical stores first (projects / operatives / bookings). Secondary collections
+        // are staggered so Simulator does not jetsam under a parallel full-collection storm.
         projectStore.loadData()
         operativeStore.loadData()
         bookingStore.loadData()
+
+        try? await Task.sleep(nanoseconds: 500_000_000)
         managerScheduleStore.loadData()
-        async let subs: Void = subcontractorStore.loadData()
-        async let tasks: Void = taskStore.loadData()
-        async let holidays: Void = holidayStore.loadData()
-        _ = await (subs, tasks, holidays)
+        await taskStore.loadData()
+
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        await holidayStore.loadData()
+
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        await subcontractorStore.loadData()
+
         print("🔥🔥🔥 DEBUG: ✅ Org data bootstrap requests finished")
 
-        // Notifications are large (100+ docs) — keep them off the launch critical path.
+        // Do NOT load the full notifications collection here. Large orgs (100–200+ docs)
+        // plus a live listener jetsam the Simulator on launch. Notifications load on demand
+        // from NotificationsView; unread badge warms after a long idle delay.
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
-            await notificationService.loadNotifications()
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            await notificationService.warmUnreadBadgeIfNeeded()
         }
     }
 }
