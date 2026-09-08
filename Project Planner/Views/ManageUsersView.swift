@@ -1025,7 +1025,7 @@ private struct EditUserDialogModifier: ViewModifier {
     @Binding var pendingPayeDayRateText: String?
     @Binding var showingDayRateEffectiveChoice: Bool
     @Binding var showingQualificationsEditor: Bool
-    @Binding var operativeForSkillsEditor: Operative?
+    @Binding var operativeForQualificationsEditor: Operative?
     let linkedOperative: Operative?
     let canEditPermissionsMatrix: Bool
     let operativeStore: OperativeStore
@@ -1100,8 +1100,8 @@ private struct EditUserDialogModifier: ViewModifier {
             } message: {
                 Text("When the day rate is changed, the weekly report and invoicing (invoicing will be available in a future update) use the new rate from the working day you choose. If you want the new rate to apply from tomorrow, choose Tomorrow.")
             }
-            .sheet(isPresented: $showingQualificationsEditor, onDismiss: { operativeForSkillsEditor = nil }) {
-                if let operative = operativeForSkillsEditor ?? linkedOperative {
+            .sheet(isPresented: $showingQualificationsEditor, onDismiss: { operativeForQualificationsEditor = nil }) {
+                if let operative = operativeForQualificationsEditor ?? linkedOperative {
                     OperativeQualificationsEditorView(
                         operative: operative,
                         title: "Qualifications",
@@ -1249,8 +1249,8 @@ struct EditUserView: View {
     @State private var dayRateText: String
     @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
     @State private var showingQualificationsEditor = false
-    @State private var operativeForSkillsEditor: Operative?
-    @State private var openingSkillsEditor = false
+    @State private var operativeForQualificationsEditor: Operative?
+    @State private var openingQualificationsEditor = false
     @State private var showingDayRateEffectiveChoice = false
     @State private var tradePresetRaw: String
     @State private var tradeCustomText: String
@@ -1737,7 +1737,7 @@ struct EditUserView: View {
             pendingPayeDayRateText: $pendingPayeDayRateText,
             showingDayRateEffectiveChoice: $showingDayRateEffectiveChoice,
             showingQualificationsEditor: $showingQualificationsEditor,
-            operativeForSkillsEditor: $operativeForSkillsEditor,
+            operativeForQualificationsEditor: $operativeForQualificationsEditor,
             linkedOperative: linkedOperativeForUser,
             canEditPermissionsMatrix: canEditPermissionsMatrix,
             operativeStore: operativeStore,
@@ -2430,10 +2430,10 @@ struct EditUserView: View {
                         iconBackground: ManageUserProfilePalette.chipBlueBg,
                         iconForeground: ManageUserProfilePalette.chipBlueFg,
                         title: "Qualifications",
-                        subtitle: openingSkillsEditor ? "Opening…" : "Manage assigned qualifications",
-                        action: { openSkillsAndQualifications() }
+                        subtitle: openingQualificationsEditor ? "Opening…" : "Manage assigned qualifications",
+                        action: { openQualificationsEditor() }
                     )
-                    .disabled(openingSkillsEditor)
+                    .disabled(openingQualificationsEditor)
                 }
             }
         }
@@ -2637,9 +2637,9 @@ struct EditUserView: View {
         return false
     }
 
-    private func openSkillsAndQualifications() {
+    private func openQualificationsEditor() {
         guard canEditPermissionsMatrix else { return }
-        openingSkillsEditor = true
+        openingQualificationsEditor = true
         Task {
             let subject = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
             let op: Operative?
@@ -2649,8 +2649,8 @@ struct EditUserView: View {
                 op = await userStore.ensureOperativeProfileForAppUser(subject, operativeStore: operativeStore)
             }
             await MainActor.run {
-                openingSkillsEditor = false
-                operativeForSkillsEditor = op
+                openingQualificationsEditor = false
+                operativeForQualificationsEditor = op
                 if op != nil {
                     showingQualificationsEditor = true
                 } else {

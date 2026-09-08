@@ -175,7 +175,8 @@ struct UserPermissions: Codable, Hashable {
         self.adminAccess = adminAccess
         self.manager = manager
         self.operatives = operatives
-        self.skills = skills
+        self.skills = false
+        _ = skills
         self.qualifications = qualifications
         self.materials = materials
         self.projects = projects
@@ -212,7 +213,8 @@ struct UserPermissions: Codable, Hashable {
         adminAccess = try c.decodeIfPresent(Bool.self, forKey: .adminAccess) ?? false
         manager = try c.decodeIfPresent(Bool.self, forKey: .manager) ?? false
         operatives = try c.decodeIfPresent(Bool.self, forKey: .operatives) ?? false
-        skills = try c.decodeIfPresent(Bool.self, forKey: .skills) ?? false
+        _ = try c.decodeIfPresent(Bool.self, forKey: .skills)
+        skills = false
         qualifications = try c.decodeIfPresent(Bool.self, forKey: .qualifications) ?? false
         materials = try c.decodeIfPresent(Bool.self, forKey: .materials) ?? false
         projects = try c.decodeIfPresent(Bool.self, forKey: .projects) ?? false
@@ -231,7 +233,7 @@ struct UserPermissions: Codable, Hashable {
         try c.encode(adminAccess, forKey: .adminAccess)
         try c.encode(manager, forKey: .manager)
         try c.encode(operatives, forKey: .operatives)
-        try c.encode(skills, forKey: .skills)
+        try c.encode(false, forKey: .skills)
         try c.encode(qualifications, forKey: .qualifications)
         try c.encode(materials, forKey: .materials)
         try c.encode(projects, forKey: .projects)

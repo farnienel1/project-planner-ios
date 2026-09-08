@@ -49,7 +49,7 @@ struct PrivacyPolicyView: View {
                             BulletPoint(text: "Job role, permissions, and access levels")
                             BulletPoint(text: "Project and task information")
                             BulletPoint(text: "Booking and scheduling data")
-                            BulletPoint(text: "Operative skills, qualifications, and work history")
+                            BulletPoint(text: "Qualifications and work history")
                             BulletPoint(text: "Client and project details")
                             BulletPoint(text: "Images and files uploaded in relation to tasks")
                             BulletPoint(text: "Location data for project sites")

@@ -7,9 +7,6 @@ enum OperativeQualificationsPresentation: Equatable {
     case manageQualifications
     /// Only assigned qualifications on the main screen; add via catalog sheet ("My Qualifications").
     case myQualifications
-
-    /// Legacy alias used by older call sites.
-    static let manageSkillsAndQualifications = manageQualifications
 }
 
 struct OperativeQualificationsEditorView: View {

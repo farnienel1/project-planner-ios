@@ -53,7 +53,8 @@ enum HomeQuickActionID: String, CaseIterable {
     static let barredFromHome: Set<String> = [
         "account-reset-password",
         "account-sign-out",
-        "staff-holiday"
+        "staff-holiday",
+        "staff-skills"
     ]
 }
 

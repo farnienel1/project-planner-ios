@@ -289,7 +289,6 @@ struct HomeView: View {
             case .clients: showingClientsView = true
             case .createProject: showingCreateProject = true
             case .createSmallWorks: showingCreateSmallWorks = true
-            case .skills: break
             case .qualifications: showingQualificationsManagement = true
             case .myQualifications: showingOperativeQualifications = true
             case .jobTypes: showingJobTypesManagement = true

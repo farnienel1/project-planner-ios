@@ -256,6 +256,12 @@ class UserStore: ObservableObject {
                         needsUpdate = true
                     }
                     
+                    // Skills catalogue is retired — clear the flag on load so it cannot resurface.
+                    if updatedUser.permissions.skills {
+                        updatedUser.permissions.skills = false
+                        needsUpdate = true
+                    }
+
                     // CRITICAL: Operative-first hierarchy – if operativeMode is true, clear admin/manager flags so UI never shows full access
                     // Run this FIRST so we never elevate an operative to super admin in later steps.
                     if updatedUser.permissions.operativeMode {

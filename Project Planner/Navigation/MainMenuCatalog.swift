@@ -25,7 +25,6 @@ enum MainMenuSurfaceRoute: String, CaseIterable {
     case clients
     case createProject
     case createSmallWorks
-    case skills
     case qualifications
     case myQualifications
     case jobTypes
