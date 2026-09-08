@@ -625,6 +625,9 @@ class OperativeStore: ObservableObject {
     }
     
     func deleteQualification(_ qualification: Qualification) async {
+        // Explicit org-catalogue delete only. Call sites must be Organisation Qualifications
+        // UI actions — never permission toggles, and never `saveQualifications` with an empty
+        // list used as a side effect of turning `permissions.qualifications` off.
         qualifications.removeAll { $0.id == qualification.id }
         _ = await saveDataWithRetry(description: "deleting qualification \(qualification.name)")
     }

@@ -445,7 +445,7 @@ struct OperativeFilterOptionsView: View {
     var body: some View {
         NavigationView {
             List {
-                ForEach(OperativesView.FilterType.allCases.filter { $0 != .skills }, id: \.self) { type in
+                ForEach(OperativesView.FilterType.pickerCases, id: \.self) { type in
                     Button(action: {
                         selectedFilter = type
                         dismiss()
@@ -1113,7 +1113,7 @@ struct FilterOptionsView: View {
             Form {
                 Section("Filter By") {
                     Picker("Filter Type", selection: $selectedFilter) {
-                        ForEach(OperativesView.FilterType.allCases.filter { $0 != .skills }, id: \.self) { type in
+                        ForEach(OperativesView.FilterType.pickerCases, id: \.self) { type in
                             Text(type.rawValue).tag(type)
                         }
                     }

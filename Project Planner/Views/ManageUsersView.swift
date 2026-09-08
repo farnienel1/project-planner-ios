@@ -949,7 +949,7 @@ struct ManageUserRowView: View {
                         "adminAccess": user.permissions.adminAccess,
                         "manager": user.permissions.manager,
                         "operatives": user.permissions.operatives,
-                        "skills": user.permissions.skills,
+                        "skills": false,
                         "qualifications": user.permissions.qualifications,
                         "materials": user.permissions.materials,
                         "projects": user.permissions.projects,
@@ -1268,7 +1268,6 @@ struct EditUserView: View {
     @State private var changeUserTypeDraft: ManagedAccountKind = .operative
     @State private var managerSelfBookDraft = false
     @State private var managerTransitionOperatives = false
-    @State private var managerTransitionSkills = true
     @State private var managerTransitionQualifications = true
     @State private var managerTransitionWeeklyReports = false
     @State private var managerTransitionDailyOverview = true
@@ -1546,7 +1545,6 @@ struct EditUserView: View {
         if let m = UserRoleTransitionPolicy.managerConfigForSheet(current: permissions, selectedKind: changeUserTypeDraft) {
             managerSelfBookDraft = m.annualLeaveSelfBook
             managerTransitionOperatives = m.operatives
-            managerTransitionSkills = m.skills
             managerTransitionQualifications = m.qualifications
             managerTransitionWeeklyReports = m.weeklyReports
             managerTransitionDailyOverview = m.dailyOverview
@@ -2121,12 +2119,13 @@ struct EditUserView: View {
         let operativeConfig: OperativeUserTypeTransitionConfig? = changeUserTypeDraft == .operative
             ? OperativeUserTypeTransitionConfig(materials: operativeTransitionMaterials, siteAudit: operativeTransitionSiteAudit)
             : nil
-        let newPerms = UserRoleTransitionPolicy.permissions(
+        var newPerms = UserRoleTransitionPolicy.permissions(
             for: changeUserTypeDraft,
             carryingFrom: permissions,
             manager: managerConfig,
             operative: operativeConfig
         )
+        newPerms.skills = false
         let ok = await userStore.updateUserPermissions(
             userId: user.id,
             permissions: newPerms,
@@ -3237,6 +3236,7 @@ struct EditUserView: View {
                 didPersistPermissions = true
                 var outgoing = subjectUser.permissions
                 outgoing.annualLeaveSelfBook = permissions.annualLeaveSelfBook
+                outgoing.skills = false
                 permissionsSuccess = await userStore.updateUserPermissions(
                     userId: user.id,
                     permissions: outgoing,
@@ -3248,6 +3248,7 @@ struct EditUserView: View {
             if canUseAdminAccountTools && permissions != subjectUser.permissions {
                 didPersistPermissions = true
                 var outgoing = permissions
+                outgoing.skills = false
                 if !outgoing.adminAccess && !outgoing.operativeMode {
                     outgoing.manager = true
                 }
@@ -3263,6 +3264,7 @@ struct EditUserView: View {
                 var merged = subjectUser.permissions
                 merged.materials = permissions.materials
                 merged.siteAudit = permissions.siteAudit
+                merged.skills = false
                 permissionsSuccess = await userStore.updateUserPermissions(
                     userId: user.id,
                     permissions: merged,
@@ -3505,7 +3507,7 @@ struct EditUserView: View {
                 "adminAccess": permissions.adminAccess,
                 "manager": permissions.manager,
                 "operatives": permissions.operatives,
-                "skills": permissions.skills,
+                "skills": false,
                 "qualifications": permissions.qualifications,
                 "materials": permissions.materials,
                 "projects": permissions.projects,
@@ -3576,7 +3578,7 @@ struct EditUserView: View {
                         "adminAccess": user.permissions.adminAccess,
                         "manager": user.permissions.manager,
                         "operatives": user.permissions.operatives,
-                        "skills": user.permissions.skills,
+                        "skills": false,
                         "qualifications": user.permissions.qualifications,
                         "materials": user.permissions.materials,
                         "projects": user.permissions.projects,

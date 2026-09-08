@@ -71,7 +71,7 @@ class UserStore: ObservableObject {
         }
     }
 
-    /// Ensures an `operatives` roster row exists for this app user (matched by email) so skills/qualifications can attach.
+    /// Ensures an `operatives` roster row exists for this app user (matched by email) so qualifications can attach.
     func ensureOperativeProfileForAppUser(_ user: AppUser, operativeStore: OperativeStore) async -> Operative? {
         let emailNorm = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !emailNorm.isEmpty else { return nil }
@@ -126,7 +126,7 @@ class UserStore: ObservableObject {
                 adminAccess: true,
                 manager: true,
                 operatives: true,
-                skills: true,
+                skills: false,
                 qualifications: true,
                 materials: true,
                 projects: true,
@@ -141,7 +141,7 @@ class UserStore: ObservableObject {
                 adminAccess: true,
                 manager: true,
                 operatives: true,
-                skills: true,
+                skills: false,
                 qualifications: true,
                 materials: true,
                 projects: true,
@@ -156,7 +156,7 @@ class UserStore: ObservableObject {
                 adminAccess: false,
                 manager: true,
                 operatives: true,
-                skills: true,
+                skills: false,
                 qualifications: true,
                 materials: true,
                 projects: true,
@@ -214,7 +214,7 @@ class UserStore: ObservableObject {
                         let superAdminPermissions = UserPermissions(
                             adminAccess: true,
                             operatives: true,
-                            skills: true,
+                            skills: false,
                             qualifications: true,
                             materials: true,
                             projects: true,
@@ -342,7 +342,7 @@ class UserStore: ObservableObject {
                 adminAccess: true,
                 manager: true,
                 operatives: true,
-                skills: true,
+                skills: false,
                 qualifications: true,
                 materials: true,
                 projects: true,
@@ -828,12 +828,12 @@ class UserStore: ObservableObject {
             return """
             \(previewNote)Role: Operative (limited view)
             Can see: Home, Projects (assigned only), Small Works (assigned only), My Schedule (view only), Settings
-            Cannot see: Managers, Operatives list, Manage Users, Add User, Skills, Qualifications, Wholesalers, Help tab, Create project/small works, Book work, Reports, Daily/Weekly overview
+            Cannot see: Managers, Operatives list, Manage Users, Add User, Qualifications admin, Wholesalers, Help tab, Create project/small works, Book work, Reports, Daily/Weekly overview
             """
         }
         var lines: [String] = [previewNote + "Role: " + (u.isSuperAdmin ? "Super Admin" : (u.permissions.adminAccess ? "Admin" : (u.permissions.manager ? "Manager" : "User")))]
         if hasAdminAccess() {
-            lines.append("Can: Manage users, managers list, manage operatives, skills, qualifications, projects/small works, book work, reports")
+            lines.append("Can: Manage users, managers list, manage operatives, qualifications, projects/small works, book work, reports")
         } else if canViewOperatives() {
             lines.append("Can: Manage operatives (roster), projects/small works (as permitted), book work")
         } else {
