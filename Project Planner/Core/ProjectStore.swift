@@ -158,11 +158,12 @@ class ProjectStore: ObservableObject {
                     if pendingReloadAfterCurrentLoad {
                         pendingReloadAfterCurrentLoad = false
                         // Coalesce follow-ups: one delayed reload max, and only after bootstrap.
-                        guard firebaseBackend?.hasBootstrappedOrgDataLoad == true else { return }
-                        print("🔥🔥🔥 DEBUG: ProjectStore running queued follow-up reload")
-                        Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 1_200_000_000)
-                            self.loadData()
+                        if firebaseBackend?.hasBootstrappedOrgDataLoad == true {
+                            print("🔥🔥🔥 DEBUG: ProjectStore running queued follow-up reload")
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                                self.loadData()
+                            }
                         }
                     }
                 }

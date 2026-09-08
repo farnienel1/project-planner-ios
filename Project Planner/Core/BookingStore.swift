@@ -97,8 +97,9 @@ class BookingStore: ObservableObject {
                 self.isLoading = false
                 if self.pendingReloadAfterCurrentLoad {
                     self.pendingReloadAfterCurrentLoad = false
-                    guard self.firebaseBackend?.hasBootstrappedOrgDataLoad == true else { return }
-                    self.loadData()
+                    if self.firebaseBackend?.hasBootstrappedOrgDataLoad == true {
+                        self.loadData()
+                    }
                 }
             }
             do {

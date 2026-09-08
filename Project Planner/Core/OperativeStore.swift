@@ -157,10 +157,11 @@ class OperativeStore: ObservableObject {
                     isLoading = false
                     if pendingReloadAfterCurrentLoad {
                         pendingReloadAfterCurrentLoad = false
-                        guard firebaseBackend?.hasBootstrappedOrgDataLoad == true else { return }
-                        Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 1_200_000_000)
-                            self.loadData()
+                        if firebaseBackend?.hasBootstrappedOrgDataLoad == true {
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                                self.loadData()
+                            }
                         }
                     }
                 }
