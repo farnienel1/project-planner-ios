@@ -45,6 +45,15 @@ struct WarningsDetailView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") { dismiss() }
                 }
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 1) {
+                        Text("Warnings")
+                            .font(.headline)
+                        Text("build wfix-1984509")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 if userStore.hasAdminAccess() {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button {

@@ -178,7 +178,9 @@ struct HomeView: View {
             presentTasksDetail()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToWarnings"))) { _ in
-            Task { await openWarningsDetail() }
+            print("🔥🔥🔥 DEBUG: WARNINGS_NAVIGATE_SYNC build=wfix-1984509")
+            showingTasksDetail = false
+            showingWarningsDetail = true
         }
         .fullScreenCover(isPresented: $showingClientsView) {
             ClientsView()
@@ -550,28 +552,11 @@ struct HomeView: View {
             print("🔥🔥🔥 DEBUG: Home derived refresh finished")
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
+            // Do not recompute warnings here — that raced launch quiet / deferred loads
+            // and jetsamed Simulator. Badge updates when Warnings sheet refreshes or
+            // when `.warningsDidRecompute` is posted.
             guard userStore.hasAdminAccess() else { return }
-            guard !firebaseBackend.isBootstrappingOrgDataLoad else { return }
-            if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil { return }
-            let now = Date()
-            if let lastManagerWarningsRefreshAt,
-               now.timeIntervalSince(lastManagerWarningsRefreshAt) < 2 {
-                return
-            }
-            lastManagerWarningsRefreshAt = now
-            Task {
-                await WarningsRefreshHelper.refreshSharedWarnings(
-                    operativeStore: operativeStore,
-                    bookingStore: bookingStore,
-                    projectStore: projectStore,
-                    userStore: userStore,
-                    managerScheduleStore: managerScheduleStore,
-                    holidayStore: holidayStore,
-                    firebaseBackend: firebaseBackend,
-                    appSettings: appSettings
-                )
-                homeWarningCount = WarningsService.shared.warningCount
-            }
+            homeWarningCount = WarningsService.shared.warningCount
         }
         .onReceive(NotificationCenter.default.publisher(for: .warningsDidRecompute)) { notification in
             if let count = notification.userInfo?["count"] as? Int {
@@ -750,7 +735,10 @@ struct HomeView: View {
                     title: "Warnings",
                     value: homeWarningCount == 0 ? "All clear" : "\(homeWarningCount) active"
                 ) {
-                    Task { await openWarningsDetail() }
+                    // Sync log proves this binary includes the Warnings open fix.
+                    print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON_SYNC build=wfix-1984509")
+                    showingTasksDetail = false
+                    showingWarningsDetail = true
                 }
                 .frame(maxWidth: .infinity)
             }
