@@ -756,6 +756,11 @@ private struct MyTimesheetsHubView: View {
             for week in TimesheetPayrollPolicy.previousPayPeriods(count: 120, settings: settings) {
                 guard week.start != current.start else { continue }
                 byStart[week.start] = week
+            }
+
+            // Soft-refresh only the most recent periods from cloud (listing is local/policy; avoid 120 network hits).
+            let recentToRefresh = byStart.values.sorted(by: { $0.start > $1.start }).prefix(24)
+            for week in recentToRefresh {
                 _ = await TimesheetDraftStore.refreshFromCloud(
                     userId: userId,
                     weekStart: week.start,
