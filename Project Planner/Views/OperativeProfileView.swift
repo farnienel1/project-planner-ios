@@ -89,6 +89,21 @@ struct OperativeProfileView: View {
         return "Not set"
     }
 
+    private var dayRateLabel: String {
+        let standardHours = firebaseBackend.currentOrganization?.settings.payrollTimePolicy.standardPaidHours ?? 8
+        let resolved = PayrollRateResolver.resolveCurrentProfileRate(
+            user: displayedUser,
+            operative: linkedOperative,
+            standardDayHours: max(standardHours, 0.01)
+        )
+        switch resolved.basis {
+        case .hourly where resolved.hasRate:
+            return "Hourly rate"
+        default:
+            return "Day rate"
+        }
+    }
+
     private var qualificationRows: [(id: UUID, title: String, detail: String?, certificateURL: URL?)] {
         guard let operative = linkedOperative else { return [] }
         let sorted = operative.qualifications.sorted {
@@ -317,7 +332,7 @@ struct OperativeProfileView: View {
                         iconName: "banknote.fill",
                         iconBackground: ManageUserProfilePalette.chipAmberBg,
                         iconForeground: ManageUserProfilePalette.chipAmberFg,
-                        label: "Day rate",
+                        label: dayRateLabel,
                         value: dayRateValue
                     )
                 }

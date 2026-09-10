@@ -1643,13 +1643,14 @@ struct EditUserView: View {
         let tradeChanged = dayRateEligible && (trimmedTradeP != origTradeP || trimmedTradeC != origTradeC)
         let billingChanged = normalizedVATDraft != displayedUser.vatNumber || normalizedUTRDraft != displayedUser.utrNumber
         let timesheetsChanged = timesheetsEnabledDraft != displayedUser.timesheetsEnabled
+        let payrollRateDirty = isPayrollRateDirty(versus: user)
         let operativeProfileChanged = (permissions.operativeMode || permissions.manager || permissions.adminAccess) && (
             Set(selectedLineManagerUserIds) != Set(user.lineManagerUserIds) ||
             hasNoLineManagerDraft != user.hasNoLineManager ||
-            parseDayRate(dayRateText) != user.dayRate
+            payrollRateDirty
         )
         let staffDayRateChanged = !permissions.operativeMode && (permissions.manager || permissions.adminAccess)
-            && parseDayRate(dayRateText) != user.dayRate
+            && payrollRateDirty
         if canUseAdminAccountTools {
             return identityDirty ||
                 permissions != user.permissions ||
@@ -2452,7 +2453,7 @@ struct EditUserView: View {
                     .onChange(of: dayRateText) { _, newValue in
                         guard employmentTypeDraft == .paye else { return }
                         guard parseDayRate(newValue) != nil else { return }
-                        guard parseDayRate(newValue) != displayedUser.dayRate else { return }
+                        guard parseDayRate(newValue) != displayedPayrollRate(for: displayedUser) else { return }
                         pendingPayeDayRateText = newValue
                         showingPayeDayRateWarning = true
                     }
@@ -2678,10 +2679,21 @@ struct EditUserView: View {
 
     private func shouldPromptDayRateEffectiveChoice(subjectUser: AppUser) -> Bool {
         guard canEditPermissionsMatrix else { return false }
-        guard parseDayRate(dayRateText) != subjectUser.dayRate else { return false }
+        guard isPayrollRateDirty(versus: subjectUser) else { return false }
         if permissions.operativeMode { return true }
         if !permissions.operativeMode && (permissions.manager || permissions.adminAccess) { return true }
         return false
+    }
+
+    /// Single edit field shows day or hourly — dirty must compare against whichever is currently displayed.
+    private func displayedPayrollRate(for user: AppUser) -> Double? {
+        if let day = user.dayRate, day > 0 { return day }
+        if let hourly = user.hourlyRate, hourly > 0 { return hourly }
+        return nil
+    }
+
+    private func isPayrollRateDirty(versus user: AppUser) -> Bool {
+        parseDayRate(dayRateText) != displayedPayrollRate(for: user)
     }
 
     private func openQualificationsEditor() {
@@ -3329,7 +3341,7 @@ struct EditUserView: View {
         var operativeDetailsSuccess = true
         let managerAssignmentChanged = Set(selectedLineManagerUserIds) != Set(subjectUser.lineManagerUserIds)
         let hasNoLineManagerChanged = hasNoLineManagerDraft != subjectUser.hasNoLineManager
-        let operativeDayRateChanged = parseDayRate(dayRateText) != subjectUser.dayRate
+        let operativeDayRateChanged = isPayrollRateDirty(versus: subjectUser)
         let operativeProfileChanged =
             (permissions.operativeMode && (managerAssignmentChanged || operativeDayRateChanged || hasNoLineManagerChanged))
             || ((permissions.manager || permissions.adminAccess) && (managerAssignmentChanged || hasNoLineManagerChanged))
@@ -3368,7 +3380,7 @@ struct EditUserView: View {
 
         var managerDayRateSuccess = true
         let staffDayRateChanged = !permissions.operativeMode && (permissions.manager || permissions.adminAccess)
-            && parseDayRate(dayRateText) != subjectUser.dayRate
+            && isPayrollRateDirty(versus: subjectUser)
         if canEditPermissionsMatrix && staffDayRateChanged {
             let parsed = parseDayRate(dayRateText)
             let effective = dayRateEffectiveAt ?? calendarStartOfDay(Date())

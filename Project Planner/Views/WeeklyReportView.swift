@@ -28,6 +28,7 @@ struct WeeklyReportView: View {
     @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var taskStore: ProjectTaskStore
 
     @StateObject private var warningsService = WarningsService()
     @State private var showingWarningsDetail = false
@@ -166,6 +167,8 @@ struct WeeklyReportView: View {
             .environmentObject(appSettings)
             .environmentObject(holidayStore)
             .environmentObject(notificationService)
+            .environmentObject(subcontractorStore)
+            .environmentObject(taskStore)
     }
 
     // MARK: - UI sections

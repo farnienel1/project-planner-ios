@@ -1796,6 +1796,17 @@ class UserStore: ObservableObject {
                         )
                     }
                     clearOperativeProfileOverride(for: updatedUser.id)
+                    // Keep cloud fallback in sync so a later loadOrganizationUsers() cannot
+                    // re-apply a stale day rate after the user cleared the settings field.
+                    // Use 0 as an explicit clear sentinel (nil would only delete the field).
+                    if updateDayRate {
+                        try? await firebaseBackend.saveOperativeProfileMetadataFallback(
+                            organizationId: updatedUser.organizationId,
+                            userId: updatedUser.id,
+                            assignedManagerUserId: updatedUser.assignedManagerUserId,
+                            dayRate: dayRate ?? 0
+                        )
+                    }
                     organizationUsers[index] = updatedUser
                     if let operativeStore {
                         await syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
@@ -1810,7 +1821,7 @@ class UserStore: ObservableObject {
                                 organizationId: updatedUser.organizationId,
                                 userId: updatedUser.id,
                                 assignedManagerUserId: assignedManagerUserId,
-                                dayRate: dayRate
+                                dayRate: dayRate ?? 0
                             )
                             clearOperativeProfileOverride(for: updatedUser.id)
                             organizationUsers[index] = updatedUser
@@ -1825,7 +1836,7 @@ class UserStore: ObservableObject {
                             saveOperativeProfileOverride(
                                 for: updatedUser.id,
                                 assignedManagerUserId: assignedManagerUserId,
-                                dayRate: dayRate
+                                dayRate: dayRate ?? 0
                             )
                             organizationUsers[index] = updatedUser
                             errorMessage = "Cloud permissions blocked this update. Saved locally on this device."
@@ -1970,6 +1981,15 @@ class UserStore: ObservableObject {
                     effectiveAt: effective
                 )
             }
+            clearOperativeProfileOverride(for: updatedUser.id)
+            // Mirror clear/set into cloud fallback so profile cards cannot resurrect a blanked rate.
+            // 0 = explicit clear sentinel for applyCloudOperativeProfileOverrides.
+            try? await firebaseBackend.saveOperativeProfileMetadataFallback(
+                organizationId: updatedUser.organizationId,
+                userId: updatedUser.id,
+                assignedManagerUserId: updatedUser.assignedManagerUserId,
+                dayRate: dayRate ?? 0
+            )
             organizationUsers[index] = updatedUser
             if let operativeStore {
                 await syncOperativeDayRateFromStaffUser(updatedUser, operativeStore: operativeStore)
@@ -1990,8 +2010,11 @@ class UserStore: ObservableObject {
                   $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
               }) else { return }
         var op = operativeStore.operatives[idx]
-        guard op.dayRate != user.dayRate else { return }
-        op.dayRate = user.dayRate
+        let targetDay = (user.dayRate ?? 0) > 0 ? user.dayRate : nil
+        let targetHourly = (user.hourlyRate ?? 0) > 0 ? user.hourlyRate : nil
+        guard op.dayRate != targetDay || op.hourlyRate != targetHourly else { return }
+        op.dayRate = targetDay
+        op.hourlyRate = targetHourly
         op.updatedAt = Date()
         await operativeStore.updateOperative(op)
     }
@@ -2143,6 +2166,15 @@ class UserStore: ObservableObject {
                     op.hourlyRate = nil
                     changed = true
                 }
+            } else if let hr = user.hourlyRate, hr > 0 {
+                if op.hourlyRate != hr {
+                    op.hourlyRate = hr
+                    changed = true
+                }
+                if op.dayRate != nil {
+                    op.dayRate = nil
+                    changed = true
+                }
             } else if op.dayRate != nil || op.hourlyRate != nil {
                 // Account rate blank — clear stale roster rates so profile/timesheets don't inherit them.
                 op.dayRate = nil
@@ -2195,8 +2227,20 @@ class UserStore: ObservableObject {
         return users.map { user in
             guard let override = overrides[user.id] else { return user }
             var updated = user
-            updated.assignedManagerUserId = override.assignedManagerUserId
-            updated.dayRate = override.dayRate
+            if let managerId = override.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !managerId.isEmpty {
+                updated.assignedManagerUserId = managerId
+            }
+            // Fallback dayRate: >0 restores a rate; <=0 is an explicit clear sentinel.
+            if let rate = override.dayRate {
+                if rate > 0 {
+                    updated.dayRate = rate
+                    updated.hourlyRate = nil
+                } else {
+                    updated.dayRate = nil
+                    updated.hourlyRate = nil
+                }
+            }
             return updated
         }
     }
@@ -2209,8 +2253,20 @@ class UserStore: ObservableObject {
         return users.map { user in
             guard let override = overrides[user.id] else { return user }
             var updated = user
-            updated.assignedManagerUserId = override.assignedManagerUserId
-            updated.dayRate = override.dayRate
+            if let managerId = override.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !managerId.isEmpty {
+                updated.assignedManagerUserId = managerId
+            }
+            // Positive fallback restores a rate; 0 clears so blank settings stay blank.
+            if let rate = override.dayRate {
+                if rate > 0 {
+                    updated.dayRate = rate
+                    updated.hourlyRate = nil
+                } else {
+                    updated.dayRate = nil
+                    updated.hourlyRate = nil
+                }
+            }
             return updated
         }
     }

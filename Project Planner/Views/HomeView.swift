@@ -218,6 +218,7 @@ struct HomeView: View {
                 .environmentObject(subcontractorStore)
                 .environmentObject(appSettings)
                 .environmentObject(notificationService)
+                .environmentObject(taskStore)
         }
         .sheet(isPresented: $showingOrgSitesMap) {
             OrgSitesMapView()

@@ -503,6 +503,8 @@ struct MaterialOrderRequest: Codable {
     var senderPhone: String?
     var senderCompany: String
     var companyLogoURL: String?
+    /// When true, email body is plain text (same facts as the HTML template).
+    var sendAsPlainText: Bool
     
     enum RequestType: String, Codable {
         case quote = "Quote"
@@ -523,7 +525,8 @@ struct MaterialOrderRequest: Codable {
         senderEmail: String,
         senderPhone: String? = nil,
         senderCompany: String = "",
-        companyLogoURL: String? = nil
+        companyLogoURL: String? = nil,
+        sendAsPlainText: Bool = false
     ) {
         self.projectId = projectId
         self.projectNumber = projectNumber
@@ -539,6 +542,51 @@ struct MaterialOrderRequest: Codable {
         self.senderPhone = senderPhone
         self.senderCompany = senderCompany
         self.companyLogoURL = companyLogoURL
+        self.sendAsPlainText = sendAsPlainText
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case projectId, projectNumber, projectName, siteAddress, materials, requestType
+        case sentBy, sentAt, recipientContacts, senderName, senderEmail, senderPhone
+        case senderCompany, companyLogoURL, sendAsPlainText
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        projectId = try c.decode(UUID.self, forKey: .projectId)
+        projectNumber = try c.decode(String.self, forKey: .projectNumber)
+        projectName = try c.decode(String.self, forKey: .projectName)
+        siteAddress = try c.decode(String.self, forKey: .siteAddress)
+        materials = try c.decode([MaterialItem].self, forKey: .materials)
+        requestType = try c.decode(RequestType.self, forKey: .requestType)
+        sentBy = try c.decode(String.self, forKey: .sentBy)
+        sentAt = try c.decode(Date.self, forKey: .sentAt)
+        recipientContacts = try c.decode([WholesalerContact].self, forKey: .recipientContacts)
+        senderName = try c.decode(String.self, forKey: .senderName)
+        senderEmail = try c.decode(String.self, forKey: .senderEmail)
+        senderPhone = try c.decodeIfPresent(String.self, forKey: .senderPhone)
+        senderCompany = try c.decodeIfPresent(String.self, forKey: .senderCompany) ?? ""
+        companyLogoURL = try c.decodeIfPresent(String.self, forKey: .companyLogoURL)
+        sendAsPlainText = try c.decodeIfPresent(Bool.self, forKey: .sendAsPlainText) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(projectId, forKey: .projectId)
+        try c.encode(projectNumber, forKey: .projectNumber)
+        try c.encode(projectName, forKey: .projectName)
+        try c.encode(siteAddress, forKey: .siteAddress)
+        try c.encode(materials, forKey: .materials)
+        try c.encode(requestType, forKey: .requestType)
+        try c.encode(sentBy, forKey: .sentBy)
+        try c.encode(sentAt, forKey: .sentAt)
+        try c.encode(recipientContacts, forKey: .recipientContacts)
+        try c.encode(senderName, forKey: .senderName)
+        try c.encode(senderEmail, forKey: .senderEmail)
+        try c.encodeIfPresent(senderPhone, forKey: .senderPhone)
+        try c.encode(senderCompany, forKey: .senderCompany)
+        try c.encodeIfPresent(companyLogoURL, forKey: .companyLogoURL)
+        try c.encode(sendAsPlainText, forKey: .sendAsPlainText)
     }
 }
 

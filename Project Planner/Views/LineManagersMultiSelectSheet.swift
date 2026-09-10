@@ -25,6 +25,13 @@ struct LineManagersMultiSelectSheet: View {
         hasNoLineManager || !selectedIds.isEmpty
     }
 
+    private var validationMessage: String {
+        if allowNoLineManager {
+            return "Either No line manager must be selected, or select a line manager/s from the list below."
+        }
+        return "Select a line manager/s from the list below."
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -53,6 +60,10 @@ struct LineManagersMultiSelectSheet: View {
                     Button("Clear all") {
                         selectedIds.removeAll()
                         hasNoLineManager = false
+                        // Defer so SwiftUI presents the alert after the list selection updates.
+                        DispatchQueue.main.async {
+                            showingClearValidationAlert = true
+                        }
                     }
                     .foregroundStyle(.red)
                 }
@@ -90,17 +101,16 @@ struct LineManagersMultiSelectSheet: View {
                             showingClearValidationAlert = true
                         }
                     }
+                    .fontWeight(.semibold)
                 }
             }
-            .alert("Line manager required", isPresented: $showingClearValidationAlert) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                if allowNoLineManager {
-                    Text("Either No line manager must be selected, or select a line manager/s from the list below.")
-                } else {
-                    Text("Select a line manager/s from the list below.")
-                }
-            }
+            // Prevent swipe-dismiss leaving an invalid empty selection.
+            .interactiveDismissDisabled(!hasValidSelection)
+        }
+        .alert("Line manager required", isPresented: $showingClearValidationAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(validationMessage)
         }
     }
 }

@@ -35,6 +35,7 @@ struct MaterialsSendListSheet: View {
     @State private var resendDialog: ResendDialogState?
     @State private var sendConfirmation: SendConfirmationState?
     @State private var expandedWholesalerIds: Set<UUID> = []
+    @State private var sendAsPlainText = false
 
     struct ResendDialogState: Identifiable {
         let id = UUID()
@@ -344,6 +345,18 @@ struct MaterialsSendListSheet: View {
 
     private var footerBar: some View {
         VStack(spacing: 9) {
+            Toggle(isOn: $sendAsPlainText) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Send Material List in Plain Text")
+                        .font(.system(size: 13, weight: .medium))
+                    Text(sendAsPlainText
+                         ? "Email will be plain text (no styled layout)."
+                         : "Email will use the styled HTML layout.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                }
+            }
+            .tint(MaterialsOrderingTheme.primary)
             HStack {
                 Text("\(selectedMaterialIds.count) items · \(recipientCount) recipients")
                     .font(.system(size: 11))
@@ -445,7 +458,8 @@ struct MaterialsSendListSheet: View {
             senderEmail: userEmail,
             senderPhone: userPhone?.isEmpty == false ? userPhone : nil,
             senderCompany: orgName,
-            companyLogoURL: firebaseBackend.currentOrganization?.companyLogoURL
+            companyLogoURL: firebaseBackend.currentOrganization?.companyLogoURL,
+            sendAsPlainText: sendAsPlainText
         )
         let recipientSnapshots = buildRecipientSnapshots(for: contacts)
         let calendar = Calendar.current
