@@ -277,6 +277,7 @@ struct ContentView: View {
                     print("🔥🔥🔥 DEBUG: Organization switched to \(newOrgId) - reloading all data once")
                     lastLoadedOrganizationId = nil
                     firebaseBackend.hasBootstrappedOrgDataLoad = false
+                    firebaseBackend.isBootstrappingOrgDataLoad = false
                     Task {
                         await performInitialDataLoadIfNeeded(force: true)
                     }

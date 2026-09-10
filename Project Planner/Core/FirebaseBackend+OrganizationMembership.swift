@@ -130,6 +130,7 @@ extension FirebaseBackend {
         errorMessage = nil
         storeOrganizationLocally(organization)
         hasBootstrappedOrgDataLoad = false
+        isBootstrappingOrgDataLoad = false
         broadcastOrganizationDidLoadIfNeeded(force: true)
     }
 
