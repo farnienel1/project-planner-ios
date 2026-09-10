@@ -732,7 +732,7 @@ struct HomeView: View {
                     iconTint: Color(red: 0.64, green: 0.18, blue: 0.18),
                     iconBackground: Color(red: 0.99, green: 0.92, blue: 0.92),
                     title: WarningsBuildStamp.homePillTitle,
-                    value: homeWarningCount == 0 ? "All clear" : "\(homeWarningCount) active"
+                    value: WarningsBuildStamp.homePillValue(activeCount: homeWarningCount)
                 ) {
                     // Sync log proves this binary includes the Warnings open fix.
                     print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON_SYNC \(WarningsBuildStamp.id)")
