@@ -448,9 +448,13 @@ private enum TimesheetApprovalPolicy {
         guard !requiresLineManagerCounterSign(for: user) else { return }
         guard draft.operativeSignedAt != nil else { return }
         // Clear any stale manager signature fields so UI doesn't imply a counter-sign is pending.
-        if draft.managerSignedAt != nil || draft.managerSignedByName != nil || draft.managerSignatureImageBase64 != nil {
+        if draft.managerSignedAt != nil
+            || draft.managerSignedByName != nil
+            || draft.managerSignedByUserId != nil
+            || draft.managerSignatureImageBase64 != nil {
             draft.managerSignedAt = nil
             draft.managerSignedByName = nil
+            draft.managerSignedByUserId = nil
             draft.managerSignatureImageBase64 = nil
         }
     }
@@ -461,7 +465,9 @@ private enum TimesheetApprovalPolicy {
         draft.operativeSignatureImageBase64 = nil
         draft.managerSignedAt = nil
         draft.managerSignedByName = nil
+        draft.managerSignedByUserId = nil
         draft.managerSignatureImageBase64 = nil
+        draft.exportedAt = nil
         draft.payrollLineReviews = [:]
         for index in draft.expenseEntries.indices {
             draft.expenseEntries[index].managerDecision = .approved
@@ -540,6 +546,7 @@ private enum TimesheetDraftStore {
             "operativeSignatureImageBase64": draft.operativeSignatureImageBase64 ?? "",
             "managerSignedAt": draft.managerSignedAt.map(Timestamp.init(date:)) as Any,
             "managerSignedByName": draft.managerSignedByName ?? "",
+            "managerSignedByUserId": draft.managerSignedByUserId ?? "",
             "managerSignatureImageBase64": draft.managerSignatureImageBase64 ?? "",
             "exportedAt": draft.exportedAt.map(Timestamp.init(date:)) as Any,
             "expenseEntries": draft.expenseEntries.map { e in
@@ -589,6 +596,8 @@ private enum TimesheetDraftStore {
         output.managerSignedAt = (map["managerSignedAt"] as? Timestamp)?.dateValue()
         let signedBy = (map["managerSignedByName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         output.managerSignedByName = signedBy.isEmpty ? nil : signedBy
+        let signedByUserId = (map["managerSignedByUserId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        output.managerSignedByUserId = signedByUserId.isEmpty ? nil : signedByUserId
         let managerSignature = (map["managerSignatureImageBase64"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         output.managerSignatureImageBase64 = managerSignature.isEmpty ? nil : managerSignature
         output.exportedAt = (map["exportedAt"] as? Timestamp)?.dateValue()
@@ -810,9 +819,9 @@ private struct MyTimesheetsHubView: View {
                         ForEach(pendingWeeks, id: \.start) { week in
                             hubCard(
                                 title: week.title,
-                                subtitle: "Awaiting line manager sign-off",
-                                detail: "You signed — waiting for your line manager.",
-                                symbol: "clock.badge.exclamationmark",
+                                subtitle: "Timesheet pending manager signature",
+                                detail: "You signed — waiting for your line manager to counter-sign.",
+                                symbol: "clock.fill",
                                 tint: .orange
                             ) {
                                 MyTimesheetView(settings: settings, week: week)
@@ -887,6 +896,9 @@ private struct MyTimesheetsHubView: View {
         let draft = TimesheetDraftStore.load(userId: user.id, weekStart: week.start)
         if draft.exportedAt != nil { return "Exported" }
         if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) { return "Signed off" }
+        if TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user) {
+            return "Timesheet pending manager signature"
+        }
         if draft.operativeSignedAt != nil { return "Partially signed" }
         return "Saved draft"
     }
@@ -1274,6 +1286,9 @@ private struct MyTimesheetView: View {
                             signerName: userStore.displayUser?.fullName.isEmpty == false
                                 ? (userStore.displayUser?.fullName ?? "Operative")
                                 : (userStore.displayUser?.email ?? "Operative"),
+                            requiresLineManagerCounterSign: userStore.displayUser.map {
+                                TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0)
+                            } ?? false,
                             onApprove: { signatureImageData in
                                 markTimesheetSigned(signatureImageData: signatureImageData)
                             }
@@ -1367,9 +1382,8 @@ private struct MyTimesheetView: View {
                             .foregroundStyle(.red)
                             .frame(maxWidth: .infinity, alignment: .center)
                     }
-                } else if let currentUser = userStore.displayUser,
-                          draft.operativeSignedAt != nil,
-                          !TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: currentUser) {
+                } else {
+                    // Always visible: grey until fully approved (self-sign if no LM, else manager counter-sign).
                     Text("Generate Invoice")
                         .frame(maxWidth: .infinity)
                         .fontWeight(.semibold)
@@ -1377,28 +1391,28 @@ private struct MyTimesheetView: View {
                         .background(Color(.systemGray4))
                         .foregroundStyle(.secondary)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser) {
-                        Text("Invoice unlocks after your line manager signs off.")
+                    if let currentUser = userStore.displayUser {
+                        if draft.operativeSignedAt == nil {
+                            Text(
+                                TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser)
+                                ? "Add any expenses or price work, then sign your timesheet. Your line manager will counter-sign before you can invoice."
+                                : "Add any expenses or price work, then confirm and approve your timesheet to unlock Generate Invoice."
+                            )
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
-                    } else {
-                        Text("Re-sign your timesheet to generate an invoice.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
+                        } else if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser) {
+                            Text("Timesheet pending manager signature — Generate Invoice unlocks after your line manager counter-signs.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        } else {
+                            Text("Re-sign your timesheet to generate an invoice.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
                     }
-                } else if let currentUser = userStore.displayUser,
-                          !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser) {
-                    Text("Invoice generation unlocks after you sign your timesheet.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                } else {
-                    Text("Invoice generation unlocks after operative and manager signatures.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
                 }
 
                 if false {
@@ -2146,6 +2160,8 @@ private struct OperativeTimesheetsView: View {
     @State private var isExporting = false
     @State private var exportMessage: String?
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
+    @State private var exportedHistory: [ExportedTimesheetHistoryRow] = []
+    @State private var isLoadingExportedHistory = false
 
     private var isAdminViewer: Bool {
         guard let u = userStore.displayUser else { return false }
@@ -2206,7 +2222,74 @@ private struct OperativeTimesheetsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                if let exportMessage {
+                    Text(exportMessage)
+                        .font(.caption)
+                        .foregroundStyle(exportMessage.contains("Failed") ? .red : .green)
+                }
+
                 VStack(spacing: 0) {
+                    if selectedTab == .exported {
+                        if isLoadingExportedHistory && exportedHistory.isEmpty {
+                            ProgressView("Loading exported timesheets…")
+                                .padding()
+                        } else if exportedHistory.isEmpty {
+                            ContentUnavailableView(
+                                "No Exported Timesheets",
+                                systemImage: "tray",
+                                description: Text("Exported timesheets stay here for years after you email them.")
+                            )
+                            .padding()
+                        } else {
+                            ForEach(exportedHistory) { row in
+                                NavigationLink {
+                                    OperativeTimesheetReviewView(operative: row.user, settings: settings, week: row.week)
+                                        .environmentObject(firebaseBackend)
+                                        .environmentObject(userStore)
+                                        .environmentObject(bookingStore)
+                                        .environmentObject(operativeStore)
+                                        .environmentObject(projectStore)
+                                        .environmentObject(managerScheduleStore)
+                                        .environmentObject(notificationService)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Circle()
+                                            .fill(Color.blue.opacity(0.85))
+                                            .frame(width: 38, height: 38)
+                                            .overlay(
+                                                Text(initials(for: row.user))
+                                                    .font(.caption.weight(.bold))
+                                                    .foregroundStyle(.white)
+                                            )
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(row.user.fullName.isEmpty ? row.user.email : row.user.fullName)
+                                                .font(.subheadline.weight(.semibold))
+                                                .foregroundStyle(.primary)
+                                            Text(row.week.title)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                            if let exportedAt = row.draft.exportedAt {
+                                                Text("Exported \(exportedAt.formatted(date: .abbreviated, time: .shortened))")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
+                                        Spacer()
+                                        statusPill(for: row.draft, user: row.user)
+                                        Image(systemName: "chevron.right")
+                                            .font(.footnote.weight(.semibold))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 10)
+                                }
+                                .buttonStyle(.plain)
+                                if row.id != exportedHistory.last?.id {
+                                    Divider().padding(.leading, 60)
+                                }
+                            }
+                        }
+                    } else {
                     ForEach(filteredReports, id: \.id) { operative in
                         NavigationLink {
                             OperativeTimesheetReviewView(operative: operative, settings: settings, week: week)
@@ -2243,7 +2326,10 @@ private struct OperativeTimesheetsView: View {
                                     }
                                 }
                                 Spacer()
-                                statusPill(for: TimesheetDraftStore.load(userId: operative.id, weekStart: week.start))
+                                statusPill(
+                                    for: TimesheetDraftStore.load(userId: operative.id, weekStart: week.start),
+                                    user: operative
+                                )
                                 Image(systemName: "chevron.right")
                                     .font(.footnote.weight(.semibold))
                                     .foregroundStyle(.secondary)
@@ -2256,22 +2342,18 @@ private struct OperativeTimesheetsView: View {
                             Divider().padding(.leading, 60)
                         }
                     }
+                    }
                 }
                 .padding(8)
                 .background(Color(.systemBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                 if selectedTab == .signedOff && !filteredReports.isEmpty {
-                    if let exportMessage {
-                        Text(exportMessage)
-                            .font(.caption)
-                            .foregroundStyle(exportMessage.contains("Failed") ? .red : .green)
-                    }
                     Button {
                         Task { await exportSignedTimesheets() }
                     } label: {
                         Label(
-                            isExporting ? "Sending timesheets…" : "Export & email \(filteredReports.count) timesheets",
+                            isExporting ? "Sending timesheets…" : "Email and export \(filteredReports.count) timesheets",
                             systemImage: "envelope.fill"
                         )
                             .frame(maxWidth: .infinity)
@@ -2292,21 +2374,27 @@ private struct OperativeTimesheetsView: View {
         .task {
             await refreshFromCloud()
             await loadDayRateHistory()
+            await loadExportedHistory()
+        }
+        .onChange(of: selectedTab) { _, tab in
+            if tab == .exported {
+                Task { await loadExportedHistory() }
+            }
         }
     }
 
     @ViewBuilder
-    private func statusPill(for draft: TimesheetDraft) -> some View {
+    private func statusPill(for draft: TimesheetDraft, user: AppUser) -> some View {
         if draft.exportedAt != nil {
-            Text("Exported")
+            Label("Exported", systemImage: "tray.and.arrow.up.fill")
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(Color.secondary.opacity(0.14))
                 .foregroundStyle(.secondary)
                 .clipShape(Capsule())
-        } else if draft.managerSignedAt != nil {
-            Text("Signed off")
+        } else if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) {
+            Label("Signed off", systemImage: "checkmark.circle.fill")
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -2314,7 +2402,7 @@ private struct OperativeTimesheetsView: View {
                 .foregroundStyle(.green)
                 .clipShape(Capsule())
         } else if draft.operativeSignedAt != nil {
-            Text("Signed")
+            Label("Pending", systemImage: "clock.fill")
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -2322,7 +2410,7 @@ private struct OperativeTimesheetsView: View {
                 .foregroundStyle(.orange)
                 .clipShape(Capsule())
         } else {
-            Text("Pending")
+            Label("Not signed", systemImage: "circle")
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -2364,8 +2452,19 @@ private struct OperativeTimesheetsView: View {
         exportMessage = nil
         defer { isExporting = false }
 
+        guard let exporter = userStore.displayUser else {
+            exportMessage = "Failed: no signed-in manager/admin to receive the export email."
+            return
+        }
+        let recipientEmail = exporter.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !recipientEmail.isEmpty else {
+            exportMessage = "Failed: your account has no email address for the timesheet export."
+            return
+        }
+
         let orgName = firebaseBackend.currentOrganization?.name ?? "Organization"
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
         let targets = filteredReports
         let result = await TimesheetExportHelper.exportAndEmail(
             operatives: targets,
@@ -2378,11 +2477,21 @@ private struct OperativeTimesheetsView: View {
             dayRateHistory: dayRateHistoryCollection,
             payrollPolicy: policy,
             organization: firebaseBackend.currentOrganization,
-            organizationName: orgName
+            organizationName: orgName,
+            scheduleOptions: scheduleOptions,
+            recipientEmail: recipientEmail,
+            recipientName: exporter.fullName.isEmpty ? exporter.email : exporter.fullName
         )
 
+        guard result.emailSent else {
+            exportMessage = result.failed.isEmpty
+                ? "Failed to send timesheet export email to \(recipientEmail)."
+                : "Failed to send timesheet export email. \(result.failed.joined(separator: ", "))."
+            return
+        }
+
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            exportMessage = "Exported \(result.emailed) timesheet\(result.emailed == 1 ? "" : "s"), but could not mark them exported (no organization)."
+            exportMessage = "Emailed \(result.emailed) timesheet\(result.emailed == 1 ? "" : "s") to \(recipientEmail), but could not mark them exported (no organization)."
             return
         }
 
@@ -2401,11 +2510,99 @@ private struct OperativeTimesheetsView: View {
         }
 
         refreshVersion += 1
+        await loadExportedHistory()
+        selectedTab = .exported
         if result.failed.isEmpty {
-            exportMessage = "Emailed \(result.emailed) timesheet\(result.emailed == 1 ? "" : "s") to each user's email address."
+            exportMessage = "Emailed \(result.emailed) timesheet PDF\(result.emailed == 1 ? "" : "s") to \(recipientEmail) for filing."
         } else {
-            exportMessage = "Emailed \(result.emailed). Failed for: \(result.failed.joined(separator: ", "))."
+            exportMessage = "Emailed \(result.emailed) to \(recipientEmail). Skipped: \(result.failed.joined(separator: ", "))."
         }
+    }
+
+    /// Keep exported timesheets discoverable across many pay periods (not just the current filter week).
+    private func loadExportedHistory() async {
+        await MainActor.run { isLoadingExportedHistory = true }
+
+        let users = usersForExportedHistory()
+        guard !users.isEmpty else {
+            await MainActor.run {
+                exportedHistory = []
+                isLoadingExportedHistory = false
+            }
+            return
+        }
+
+        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
+        var byId: [String: ExportedTimesheetHistoryRow] = [:]
+
+        for user in users {
+            var weekStarts = Set(TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id))
+            for period in TimesheetPayrollPolicy.previousPayPeriods(count: 260, settings: settings) {
+                weekStarts.insert(period.start)
+            }
+            weekStarts.insert(week.start)
+
+            if let orgId,
+               let cloudRows = try? await firebaseBackend.listTimesheetStates(
+                   organizationId: orgId,
+                   userId: user.id,
+                   limit: 400
+               ) {
+                for row in cloudRows {
+                    guard let weekStart = (row["weekStart"] as? Timestamp)?.dateValue() else { continue }
+                    let day = Calendar.current.startOfDay(for: weekStart)
+                    weekStarts.insert(day)
+                    if let decoded = TimesheetDraftStore.decodeFirestoreMap(row), decoded.exportedAt != nil {
+                        TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day)
+                    }
+                }
+            }
+
+            for start in weekStarts {
+                let draft = TimesheetDraftStore.load(userId: user.id, weekStart: start)
+                guard draft.exportedAt != nil else { continue }
+                let period = TimesheetPayrollPolicy.periodMatchingStoredStart(start, settings: settings)
+                let rowId = "\(user.id)|\(Int(period.start.timeIntervalSince1970))"
+                byId[rowId] = ExportedTimesheetHistoryRow(
+                    id: rowId,
+                    user: user,
+                    week: period,
+                    draft: draft
+                )
+            }
+        }
+
+        let sorted = byId.values.sorted { lhs, rhs in
+            let l = lhs.draft.exportedAt ?? .distantPast
+            let r = rhs.draft.exportedAt ?? .distantPast
+            if l != r { return l > r }
+            return lhs.user.fullName.localizedCaseInsensitiveCompare(rhs.user.fullName) == .orderedAscending
+        }
+        await MainActor.run {
+            exportedHistory = sorted
+            isLoadingExportedHistory = false
+        }
+    }
+
+    private func usersForExportedHistory() -> [AppUser] {
+        guard let currentUser = userStore.displayUser else { return [] }
+        if isAdminViewer {
+            return userStore.organizationUsers
+                .filter { user in
+                    user.isActive
+                    && (user.permissions.operativeMode
+                        || user.permissions.manager
+                        || user.permissions.adminAccess
+                        || user.role == .manager
+                        || user.role == .admin)
+                }
+                .sorted(by: { $0.fullName < $1.fullName })
+        }
+        return userStore.organizationUsers
+            .filter { user in
+                user.isActive && user.isLineManager(currentUser.id)
+            }
+            .sorted(by: { $0.fullName < $1.fullName })
     }
 
     private func operativeSummary(for user: AppUser, draft: TimesheetDraft) -> (hours: Double, overtimeHours: Double, priceWork: Double, expenses: Double) {
@@ -2452,6 +2649,13 @@ private struct OperativeTimesheetsView: View {
     }
 }
 
+private struct ExportedTimesheetHistoryRow: Identifiable {
+    let id: String
+    let user: AppUser
+    let week: WeekRange
+    let draft: TimesheetDraft
+}
+
 private enum ManagerTimesheetListTab {
     case awaiting
     case signedOff
@@ -2460,11 +2664,11 @@ private enum ManagerTimesheetListTab {
     var helpText: String {
         switch self {
         case .awaiting:
-            return "Signed by operative, waiting for your sign-off."
+            return "Operative signed — yellow pending clock until you counter-sign."
         case .signedOff:
-            return "Ready to export and email."
+            return "Counter-signed and ready. Email and export sends timesheet PDFs to your email for filing."
         case .exported:
-            return "Already exported records."
+            return "Exported timesheets stay here for years and remain openable."
         }
     }
 }
@@ -3227,6 +3431,7 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                 draft.managerSignedByName = userStore.displayUser?.fullName.isEmpty == false
                     ? userStore.displayUser?.fullName
                     : userStore.displayUser?.email
+                draft.managerSignedByUserId = userStore.displayUser?.id
                 draft.managerSignatureImageBase64 = signatureImageData.base64EncodedString()
                 onSaveDraft()
                 let signer = draft.managerSignedByName ?? "Line manager"
@@ -3384,10 +3589,18 @@ private struct SignTimesheetView: View {
     let priceWorkAmount: Double
     let expensesAmount: Double
     let signerName: String
+    /// When true, confirm sends the timesheet to line managers for counter-sign.
+    let requiresLineManagerCounterSign: Bool
     let onApprove: (Data) -> Void
     @State private var signatureImageData: Data?
 
     var total: Double { hoursAmount + priceWorkAmount + expensesAmount }
+
+    private var confirmButtonTitle: String {
+        requiresLineManagerCounterSign
+            ? "Confirm and send to line managers"
+            : "Confirm Signature and Approve"
+    }
 
     var body: some View {
         ScrollView {
@@ -3448,7 +3661,7 @@ private struct SignTimesheetView: View {
                     onApprove(signatureImageData)
                     dismiss()
                 } label: {
-                    Label("Approve timesheet & send to manager", systemImage: "checkmark")
+                    Label(confirmButtonTitle, systemImage: "checkmark")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
                         .foregroundStyle(.white)
@@ -4496,10 +4709,18 @@ private enum InvoicePDFBuilder {
         let lineItems: [InvoiceLineItem]
         let totalAmount: Double
         let rateChangeNotes: [String]
+        /// "Invoice" or "Timesheet"
+        var documentTitle: String = "Invoice"
+        /// Optional override for the on-disk PDF filename.
+        var preferredFileName: String? = nil
+        var periodMetaLabel: String = "INVOICE PERIOD"
+        var totalLabel: String = "Total invoice amount"
+        var emptyStateMessage: String = "No work entries were found for this invoice period."
     }
 
     static func makePDF(context: Context) -> URL? {
-        let fileName = "Invoice-\(context.userName.replacingOccurrences(of: " ", with: "_"))-\(Int(Date().timeIntervalSince1970)).pdf"
+        let defaultName = "\(context.documentTitle)-\(context.userName.replacingOccurrences(of: " ", with: "_"))-\(Int(Date().timeIntervalSince1970)).pdf"
+        let fileName = sanitizeFileName(context.preferredFileName ?? defaultName)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
         let pageRect = CGRect(x: 0, y: 0, width: 595, height: 842)
         let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
@@ -4527,11 +4748,18 @@ private enum InvoicePDFBuilder {
         }
     }
 
+    private static func sanitizeFileName(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let invalid = CharacterSet(charactersIn: "/:\\?%*|\"<>")
+        let cleaned = trimmed.components(separatedBy: invalid).joined(separator: "-")
+        return cleaned.isEmpty ? "Timesheet.pdf" : cleaned
+    }
+
     private static func drawTitleBlock(context: Context, at origin: CGPoint, width: CGFloat) -> CGFloat {
         let navy = UIColor(red: 0.055, green: 0.122, blue: 0.2, alpha: 1)
         let cyan = UIColor(red: 0.169, green: 0.733, blue: 0.937, alpha: 1)
 
-        ("Invoice" as NSString).draw(at: origin, withAttributes: [
+        (context.documentTitle as NSString).draw(at: origin, withAttributes: [
             .font: UIFont.systemFont(ofSize: 31, weight: .bold),
             .foregroundColor: navy
         ])
@@ -4569,7 +4797,7 @@ private enum InvoicePDFBuilder {
         drawMeta(label: "COMPANY", value: context.organizationName, x: leftX, y: metaTop)
         drawMeta(label: "NAME", value: context.userName, x: rightX, y: metaTop)
         drawMeta(label: "GENERATED", value: context.generatedAt.formatted(date: .abbreviated, time: .shortened), x: leftX, y: metaTop + 40)
-        drawMeta(label: "INVOICE PERIOD", value: context.periodDateRange, x: rightX, y: metaTop + 40)
+        drawMeta(label: context.periodMetaLabel, value: context.periodDateRange, x: rightX, y: metaTop + 40)
 
         var nextRowY = metaTop + 80
         if let vat = context.vatNumber {
@@ -4616,7 +4844,7 @@ private enum InvoicePDFBuilder {
         y += 24
 
         if context.lineItems.isEmpty {
-            ("No work entries were found for this invoice period." as NSString).draw(
+            (context.emptyStateMessage as NSString).draw(
                 in: CGRect(x: margin, y: y, width: contentWidth, height: 30),
                 withAttributes: [
                     .font: UIFont.systemFont(ofSize: 11),
@@ -4684,7 +4912,7 @@ private enum InvoicePDFBuilder {
             ctx.drawLinearGradient(grad, start: CGPoint(x: boxRect.minX, y: boxRect.midY), end: CGPoint(x: boxRect.maxX, y: boxRect.midY), options: [])
             ctx.restoreGState()
         }
-        ("Total invoice amount" as NSString).draw(
+        (context.totalLabel as NSString).draw(
             at: CGPoint(x: boxRect.minX + 14, y: boxRect.minY + 16),
             withAttributes: [.font: UIFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: UIColor(red: 0.62, green: 0.72, blue: 0.82, alpha: 1)]
         )
@@ -4741,7 +4969,13 @@ private enum TimesheetExportHelper {
     struct Result {
         let emailedUserIds: Set<String>
         let failed: [String]
+        let emailSent: Bool
         var emailed: Int { emailedUserIds.count }
+    }
+
+    struct PDFAttachment {
+        let fileName: String
+        let data: Data
     }
 
     static func exportAndEmail(
@@ -4755,36 +4989,37 @@ private enum TimesheetExportHelper {
         dayRateHistory: OperativeDayRateHistoryCollection,
         payrollPolicy: OrgPayrollTimePolicy,
         organization: Organization?,
-        organizationName: String
+        organizationName: String,
+        scheduleOptions: MyScheduleOptions = MyScheduleOptions(),
+        recipientEmail: String,
+        recipientName: String
     ) async -> Result {
         var emailedUserIds = Set<String>()
         var failed: [String] = []
-        let resend = ResendEmailService()
+        var attachments: [PDFAttachment] = []
+        let paymentRunStamp = paymentRunDateStamp(for: week)
+        let periodRangeText = "\(paymentRunStamp.replacingOccurrences(of: " ", with: " – "))"
 
         for operative in operatives {
-            let email = operative.email.trimmingCharacters(in: .whitespacesAndNewlines)
             let userName = operative.fullName.isEmpty ? operative.email : operative.fullName
-            guard !email.isEmpty else {
-                failed.append(userName)
-                continue
-            }
-
+            let draft = draftForUser(operative)
             let rows = buildLineItems(
                 for: operative,
                 week: week,
+                draft: draft,
                 bookingStore: bookingStore,
                 managerScheduleStore: managerScheduleStore,
                 operativeStore: operativeStore,
                 projectStore: projectStore,
                 dayRateHistory: dayRateHistory,
                 payrollPolicy: payrollPolicy,
-                organization: organization
+                organization: organization,
+                scheduleOptions: scheduleOptions
             )
-            let draft = draftForUser(operative)
-            let workTotal = rows.reduce(0) { $0 + $1.amount }
-            let grandTotal = workTotal + draft.additionalTotal
+            let grandTotal = rows.reduce(0) { $0 + $1.amount }
+            let fileName = timesheetPDFFileName(userName: userName, paymentRunStamp: paymentRunStamp)
 
-            let pdfURL = InvoicePDFBuilder.makePDF(
+            guard let pdfURL = InvoicePDFBuilder.makePDF(
                 context: InvoicePDFBuilder.Context(
                     organizationName: organizationName,
                     userName: userName,
@@ -4792,43 +5027,82 @@ private enum TimesheetExportHelper {
                     utrNumber: operative.trimmedUTRNumber,
                     generatedAt: Date(),
                     periodTitle: "Signed timesheet",
-                    periodDateRange: week.title,
+                    periodDateRange: periodRangeText,
                     lineItems: rows,
                     totalAmount: grandTotal,
-                    rateChangeNotes: []
+                    rateChangeNotes: signatureNotes(for: draft),
+                    documentTitle: "Timesheet",
+                    preferredFileName: fileName,
+                    periodMetaLabel: "PAYMENT RUN",
+                    totalLabel: "Total timesheet amount",
+                    emptyStateMessage: "No work entries were found for this timesheet period."
                 )
-            )
-            let pdfData = pdfURL.flatMap { try? Data(contentsOf: $0) }
-            let html = timesheetEmailHTML(
-                operativeName: userName,
-                weekTitle: week.title,
-                organizationName: organizationName,
-                rows: rows,
-                extras: draft.additionalTotal,
-                grandTotal: grandTotal
-            )
-
-            let sent = await resend.sendTimesheetExportEmail(
-                to: email,
-                subject: "Your timesheet — \(week.title)",
-                htmlContent: html,
-                pdfAttachment: pdfData,
-                pdfFileName: "Timesheet.pdf",
-                fromName: organizationName
-            )
-            if sent {
-                emailedUserIds.insert(operative.id)
-            } else {
+            ), let pdfData = try? Data(contentsOf: pdfURL) else {
                 failed.append(userName)
+                continue
             }
+
+            attachments.append(PDFAttachment(fileName: fileName, data: pdfData))
+            emailedUserIds.insert(operative.id)
         }
 
-        return Result(emailedUserIds: emailedUserIds, failed: failed)
+        guard !attachments.isEmpty else {
+            return Result(emailedUserIds: [], failed: failed.isEmpty ? ["No timesheet PDFs could be built"] : failed, emailSent: false)
+        }
+
+        let html = managerExportEmailHTML(
+            recipientName: recipientName,
+            weekTitle: week.title,
+            paymentRunStamp: paymentRunStamp,
+            organizationName: organizationName,
+            attachmentNames: attachments.map(\.fileName),
+            timesheetCount: attachments.count
+        )
+        let resend = ResendEmailService()
+        let sent = await resend.sendTimesheetExportEmail(
+            to: recipientEmail,
+            subject: "Signed timesheets for filing — \(paymentRunStamp) — \(organizationName)",
+            htmlContent: html,
+            pdfAttachments: attachments.map { ($0.fileName, $0.data) },
+            fromName: organizationName
+        )
+
+        if sent {
+            return Result(emailedUserIds: emailedUserIds, failed: failed, emailSent: true)
+        }
+        return Result(
+            emailedUserIds: [],
+            failed: failed + ["Email delivery to \(recipientEmail) failed"],
+            emailSent: false
+        )
+    }
+
+    static func paymentRunDateStamp(for week: WeekRange) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "dd.MM.yy"
+        return "\(formatter.string(from: week.start)) \(formatter.string(from: week.end))"
+    }
+
+    private static func timesheetPDFFileName(userName: String, paymentRunStamp: String) -> String {
+        "\(userName) timesheet for payment run date \(paymentRunStamp).pdf"
+    }
+
+    private static func signatureNotes(for draft: TimesheetDraft) -> [String] {
+        var notes: [String] = []
+        if let name = draft.operativeSignedByName, let at = draft.operativeSignedAt {
+            notes.append("Operative signed by \(name) on \(at.formatted(date: .abbreviated, time: .shortened)).")
+        }
+        if let name = draft.managerSignedByName, let at = draft.managerSignedAt {
+            notes.append("Line manager counter-signed by \(name) on \(at.formatted(date: .abbreviated, time: .shortened)).")
+        }
+        return notes
     }
 
     private static func buildLineItems(
         for user: AppUser,
         week: WeekRange,
+        draft: TimesheetDraft,
         bookingStore: BookingStore,
         managerScheduleStore: ManagerScheduleStore,
         operativeStore: OperativeStore,
@@ -4851,75 +5125,72 @@ private enum TimesheetExportHelper {
             organization: organization,
             scheduleOptions: scheduleOptions
         )
-        return summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
-    }
+        var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
 
-    private static func projectLabel(for id: UUID, projectStore: ProjectStore) -> (jobNumber: String, siteName: String) {
-        if let project = projectStore.projects.first(where: { $0.id == id }) {
-            return (project.jobNumber, project.siteName)
+        for entry in draft.priceWorkEntries {
+            let amount = entry.managerRevisedAmount ?? entry.amount
+            guard entry.managerDecision != .declined else { continue }
+            rows.append(
+                InvoiceLineItem(
+                    lineId: "pw-\(entry.id.uuidString)",
+                    date: entry.startDate,
+                    jobNumber: entry.jobNumber,
+                    projectName: "Price work",
+                    details: entry.title,
+                    paidHours: 0,
+                    payrollBasis: .dayRate,
+                    dayRate: 0,
+                    hourlyRate: nil,
+                    amount: amount,
+                    isPayeDay: user.employmentType(on: entry.startDate) == .paye
+                )
+            )
         }
-        if let project = projectStore.smallWorks.first(where: { $0.id == id }) {
-            return (project.jobNumber, project.siteName)
+        for entry in draft.expenseEntries {
+            let amount = entry.managerRevisedAmount ?? entry.amount
+            guard entry.managerDecision != .declined else { continue }
+            rows.append(
+                InvoiceLineItem(
+                    lineId: "exp-\(entry.id.uuidString)",
+                    date: entry.date,
+                    jobNumber: entry.jobNumber.isEmpty ? "—" : entry.jobNumber,
+                    projectName: "Expense",
+                    details: entry.title,
+                    paidHours: 0,
+                    payrollBasis: .dayRate,
+                    dayRate: 0,
+                    hourlyRate: nil,
+                    amount: amount,
+                    isPayeDay: user.employmentType(on: entry.date) == .paye
+                )
+            )
         }
-        return ("—", "Unknown Project")
-    }
 
-    private static func managerBookingLabels(for booking: ManagerSiteBooking, projectStore: ProjectStore) -> (jobNumber: String, siteName: String) {
-        switch booking.locationType {
-        case .project, .smallWork:
-            if let locationId = booking.locationId {
-                return projectLabel(for: locationId, projectStore: projectStore)
+        return rows.sorted {
+            if $0.date == $1.date {
+                return $0.projectName < $1.projectName
             }
-            return ("—", "Site")
-        case .office:
-            return ("—", "Office")
-        case .workingFromHome:
-            return ("—", "Working from home")
-        case .siteSurvey:
-            return ("—", "Site survey")
-        case .custom:
-            let name = booking.customLocationName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return ("—", name.isEmpty ? "Custom location" : name)
+            return $0.date < $1.date
         }
     }
 
-    private static func timesheetEmailHTML(
-        operativeName: String,
+    private static func managerExportEmailHTML(
+        recipientName: String,
         weekTitle: String,
+        paymentRunStamp: String,
         organizationName: String,
-        rows: [InvoiceLineItem],
-        extras: Double,
-        grandTotal: Double
+        attachmentNames: [String],
+        timesheetCount: Int
     ) -> String {
-        let rowHTML = rows.map { row in
-            """
-            <tr>
-              <td style="padding:8px;border-bottom:1px solid #eee;">\(row.date.formatted(date: .abbreviated, time: .omitted))</td>
-              <td style="padding:8px;border-bottom:1px solid #eee;">\(row.jobNumber) \(row.projectName)</td>
-              <td style="padding:8px;border-bottom:1px solid #eee;">\(row.details)</td>
-              <td style="padding:8px;border-bottom:1px solid #eee;">\(String(format: "%.1f", row.paidHours))h · \(row.timesheetRateAnnotation)</td>
-              <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">£\(String(format: "%.2f", row.amount))</td>
-            </tr>
-            """
-        }.joined()
-
+        let list = attachmentNames.map { "<li>\($0)</li>" }.joined()
         return """
         <html><body style="font-family:Arial,sans-serif;max-width:720px;margin:0 auto;padding:20px;">
-        <h2 style="color:#007AFF;">Signed timesheet</h2>
-        <p>Hello \(operativeName),</p>
-        <p>Your signed timesheet for <strong>\(weekTitle)</strong> from <strong>\(organizationName)</strong> is attached as a PDF when supported. Summary:</p>
-        <table style="width:100%;border-collapse:collapse;font-size:13px;">
-        <thead><tr style="background:#f4f4f5;">
-          <th align="left" style="padding:8px;">Date</th>
-          <th align="left" style="padding:8px;">Project</th>
-          <th align="left" style="padding:8px;">Details</th>
-          <th align="left" style="padding:8px;">Hours</th>
-          <th align="right" style="padding:8px;">Amount</th>
-        </tr></thead>
-        <tbody>\(rowHTML)</tbody>
-        </table>
-        <p style="margin-top:16px;"><strong>Extras:</strong> £\(String(format: "%.2f", extras))<br>
-        <strong>Total:</strong> £\(String(format: "%.2f", grandTotal))</p>
+        <h2 style="color:#0D67ED;">Signed timesheets for filing</h2>
+        <p>Hello \(recipientName),</p>
+        <p>\(timesheetCount) signed-off timesheet PDF\(timesheetCount == 1 ? "" : "s") for payment run <strong>\(paymentRunStamp)</strong> (\(weekTitle)) from <strong>\(organizationName)</strong> \(timesheetCount == 1 ? "is" : "are") attached for your records.</p>
+        <p>Each file is named: <em>User Name timesheet for payment run date \(paymentRunStamp)</em>.</p>
+        <ul>\(list)</ul>
+        <p style="color:#666;font-size:13px;">These timesheets were counter-signed and exported from Operative Timesheets → Signed off.</p>
         </body></html>
         """
     }

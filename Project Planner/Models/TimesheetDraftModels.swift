@@ -54,6 +54,7 @@ struct TimesheetDraft: Codable {
     var operativeSignatureImageBase64: String?
     var managerSignedAt: Date?
     var managerSignedByName: String?
+    var managerSignedByUserId: String?
     var managerSignatureImageBase64: String?
     var exportedAt: Date?
 

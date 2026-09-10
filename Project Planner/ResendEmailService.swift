@@ -92,13 +92,32 @@ class ResendEmailService: ObservableObject {
         pdfFileName: String,
         fromName: String?
     ) async -> Bool {
+        var attachments: [(fileName: String, data: Data)] = []
+        if let pdfAttachment, !pdfFileName.isEmpty {
+            attachments.append((pdfFileName, pdfAttachment))
+        }
+        return await sendTimesheetExportEmail(
+            to: email,
+            subject: subject,
+            htmlContent: htmlContent,
+            pdfAttachments: attachments,
+            fromName: fromName
+        )
+    }
+
+    func sendTimesheetExportEmail(
+        to email: String,
+        subject: String,
+        htmlContent: String,
+        pdfAttachments: [(fileName: String, data: Data)],
+        fromName: String?
+    ) async -> Bool {
         await sendEmail(
             to: email,
             subject: subject,
             htmlContent: htmlContent,
             fromName: fromName,
-            pdfAttachment: pdfAttachment,
-            pdfFileName: pdfFileName
+            pdfAttachments: pdfAttachments
         )
     }
     
@@ -110,11 +129,17 @@ class ResendEmailService: ObservableObject {
         replyTo: String? = nil,
         fromName: String? = nil,
         pdfAttachment: Data? = nil,
-        pdfFileName: String? = nil
+        pdfFileName: String? = nil,
+        pdfAttachments: [(fileName: String, data: Data)] = []
     ) async -> Bool {
         await MainActor.run {
             self.isLoading = true
             self.errorMessage = nil
+        }
+
+        var attachments = pdfAttachments
+        if let pdfAttachment, let pdfFileName, !pdfFileName.isEmpty {
+            attachments.append((pdfFileName, pdfAttachment))
         }
         
         // Production path: always use server-side secret via Firebase Function.
@@ -125,8 +150,7 @@ class ResendEmailService: ObservableObject {
             cc: cc,
             replyTo: replyTo,
             fromName: fromName,
-            pdfAttachment: pdfAttachment,
-            pdfFileName: pdfFileName
+            pdfAttachments: attachments
         )
         if sentViaFunction {
             await MainActor.run { self.isLoading = false }
@@ -144,8 +168,7 @@ class ResendEmailService: ObservableObject {
                 cc: cc,
                 replyTo: replyTo,
                 fromName: fromName,
-                pdfAttachment: pdfAttachment,
-                pdfFileName: pdfFileName
+                pdfAttachments: attachments
             )
             await MainActor.run { self.isLoading = false }
             return directSuccess
@@ -164,8 +187,7 @@ class ResendEmailService: ObservableObject {
         cc: String?,
         replyTo: String?,
         fromName: String?,
-        pdfAttachment: Data? = nil,
-        pdfFileName: String? = nil
+        pdfAttachments: [(fileName: String, data: Data)] = []
     ) async -> Bool {
         guard let url = URL(string: "https://api.resend.com/emails") else { return false }
         
@@ -185,11 +207,13 @@ class ResendEmailService: ObservableObject {
         if let cc, !cc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             emailData["cc"] = [cc]
         }
-        if let pdfAttachment, let pdfFileName, !pdfFileName.isEmpty {
-            emailData["attachments"] = [[
-                "filename": pdfFileName,
-                "content": pdfAttachment.base64EncodedString(),
-            ]]
+        if !pdfAttachments.isEmpty {
+            emailData["attachments"] = pdfAttachments.map { attachment in
+                [
+                    "filename": attachment.fileName,
+                    "content": attachment.data.base64EncodedString(),
+                ]
+            }
         }
         
         do {
@@ -217,8 +241,7 @@ class ResendEmailService: ObservableObject {
         cc: String?,
         replyTo: String?,
         fromName: String?,
-        pdfAttachment: Data? = nil,
-        pdfFileName: String? = nil
+        pdfAttachments: [(fileName: String, data: Data)] = []
     ) async -> Bool {
         guard let projectId = FirebaseApp.app()?.options.projectID,
               let url = URL(string: "https://us-central1-\(projectId).cloudfunctions.net/sendProjectPlannerEmail") else {
@@ -242,11 +265,13 @@ class ResendEmailService: ObservableObject {
         if let fromName, !fromName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             payload["fromName"] = fromName
         }
-        if let pdfAttachment, let pdfFileName, !pdfFileName.isEmpty {
-            payload["attachments"] = [[
-                "filename": pdfFileName,
-                "content": pdfAttachment.base64EncodedString(),
-            ]]
+        if !pdfAttachments.isEmpty {
+            payload["attachments"] = pdfAttachments.map { attachment in
+                [
+                    "filename": attachment.fileName,
+                    "content": attachment.data.base64EncodedString(),
+                ]
+            }
         }
         
         var request = URLRequest(url: url)
