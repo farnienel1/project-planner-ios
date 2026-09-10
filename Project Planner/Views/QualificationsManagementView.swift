@@ -25,6 +25,7 @@ struct QualificationsManagementView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var notificationService: NotificationService
     @Environment(\.dismiss) private var dismiss
 
     @State private var mode: QualificationsHubMode = .organisation
@@ -161,6 +162,7 @@ struct QualificationsManagementView: View {
             )
             .environmentObject(operativeStore)
             .environmentObject(firebaseBackend)
+            .environmentObject(notificationService)
         } else if isResolvingMyProfile {
             ProgressView("Loading your qualifications…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -437,4 +439,5 @@ struct EditOrganisationQualificationView: View {
         .environmentObject(OperativeStore())
         .environmentObject(UserStore())
         .environmentObject(FirebaseBackend())
+        .environmentObject(NotificationService())
 }

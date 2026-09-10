@@ -27,8 +27,10 @@ struct WeeklyReportView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var taskStore: ProjectTaskStore
 
-    @StateObject private var warningsService = WarningsService()
+    @ObservedObject private var warningsService = WarningsService.shared
     @State private var showingWarningsDetail = false
     @State private var startDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var endDate: Date = Calendar.current.startOfDay(for: Date())
@@ -60,7 +62,9 @@ struct WeeklyReportView: View {
         let cal = Calendar.current
         let start = cal.startOfDay(for: startDate)
         let end = cal.startOfDay(for: endDate)
-        return start...end
+        let lower = min(start, end)
+        let upper = max(start, end)
+        return lower...upper
     }
 
     private var hasReportWarnings: Bool {
@@ -155,15 +159,20 @@ struct WeeklyReportView: View {
     }
 
     private var warningsDetailSheet: some View {
-        WarningsDetailView(warningsService: warningsService)
-            .environmentObject(projectStore)
-            .environmentObject(userStore)
-            .environmentObject(operativeStore)
-            .environmentObject(bookingStore)
-            .environmentObject(managerScheduleStore)
-            .environmentObject(firebaseBackend)
-            .environmentObject(appSettings)
-            .environmentObject(holidayStore)
+        WarningsDetailView(
+            warningsService: warningsService,
+            projectStore: projectStore,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings,
+            holidayStore: holidayStore,
+            notificationService: notificationService,
+            subcontractorStore: subcontractorStore,
+            taskStore: taskStore
+        )
     }
 
     // MARK: - UI sections

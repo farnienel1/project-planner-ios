@@ -15,8 +15,8 @@ struct ProjectsView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var firebaseBackend: FirebaseBackend
-    /// Default to all projects so completed / past jobs are not hidden (Active only includes jobs whose dates span today).
-    @State private var selectedStatus: ProjectStatus? = nil
+    /// Default to Active so the list opens on current jobs; use All / Completed chips for older work.
+    @State private var selectedStatus: ProjectStatus? = .active
     @State private var navigationPath = NavigationPath()
     @State private var searchText = ""
     @State private var showingCreateProject = false
@@ -90,12 +90,12 @@ struct ProjectsView: View {
                    tab == 1 {
                     // Reset navigation when Projects tab is selected
                     navigationPath.removeLast(navigationPath.count)
-                    selectedStatus = nil
+                    selectedStatus = .active
                 }
             }
             .onAppear {
-                // Ensure active or All is selected (Inactive filter removed from UI)
-                if selectedStatus == .inactive {
+                // Ensure Active is selected (Inactive filter removed from UI)
+                if selectedStatus == .inactive || selectedStatus == nil {
                     selectedStatus = .active
                 }
             }

@@ -225,11 +225,18 @@ struct SettingsProfileDetailView: View {
                         .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                 }
             }
-            if let dayRate = userStore.currentUser?.dayRate {
+            if let dayRate = userStore.currentUser?.dayRate, dayRate > 0 {
                 HStack {
                     Text("Day rate")
                     Spacer()
                     Text(String(format: "£%.2f", dayRate))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                }
+            } else if let hourly = userStore.currentUser?.hourlyRate, hourly > 0 {
+                HStack {
+                    Text("Hourly rate")
+                    Spacer()
+                    Text(String(format: "£%.2f", hourly))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
                 }
             }

@@ -4152,8 +4152,10 @@ class FirebaseBackend: ObservableObject {
         if updateDayRate {
             if let dayRate {
                 payload["dayRate"] = dayRate
+                payload["hourlyRate"] = FieldValue.delete()
             } else {
                 payload["dayRate"] = FieldValue.delete()
+                payload["hourlyRate"] = FieldValue.delete()
             }
         }
         try await db.collection("users").document(userId).updateData(payload)
@@ -4165,8 +4167,10 @@ class FirebaseBackend: ObservableObject {
         ]
         if let dayRate {
             payload["dayRate"] = dayRate
+            payload["hourlyRate"] = FieldValue.delete()
         } else {
             payload["dayRate"] = FieldValue.delete()
+            payload["hourlyRate"] = FieldValue.delete()
         }
         try await db.collection("users").document(userId).updateData(payload)
     }
@@ -7557,9 +7561,14 @@ extension FirebaseBackend {
         let logoURL = request.companyLogoURL ?? currentOrganization?.companyLogoURL
 
         for contact in request.recipientContacts {
-            let supplierFirst = contact.name.split(separator: " ").first.map(String.init) ?? contact.name
+            let contactName = contact.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let supplierFirst = contactName.split(separator: " ").first.map(String.init) ?? contactName
+            // Plain-text emails use the full wholesaler contact name; HTML keeps the short greeting.
+            let supplierGreeting = request.sendAsPlainText
+                ? (contactName.isEmpty ? supplierFirst : contactName)
+                : supplierFirst
             let emailContext = MaterialRequestEmailBuilder.Context(
-                supplierName: supplierFirst,
+                supplierName: supplierGreeting,
                 userName: senderName,
                 userEmail: senderEmail,
                 userPhone: request.senderPhone,
@@ -7573,9 +7582,15 @@ extension FirebaseBackend {
                 materials: request.materials,
                 sentAt: request.sentAt
             )
-            let emailBody = isQuote
-                ? MaterialRequestEmailBuilder.buildQuoteEmail(context: emailContext)
-                : MaterialRequestEmailBuilder.buildOrderEmail(context: emailContext)
+            let emailBody: String
+            if request.sendAsPlainText {
+                let plain = MaterialRequestEmailBuilder.buildPlainTextEmail(context: emailContext, isQuote: isQuote)
+                emailBody = MaterialRequestEmailBuilder.plainTextAsSimpleHTML(plain)
+            } else {
+                emailBody = isQuote
+                    ? MaterialRequestEmailBuilder.buildQuoteEmail(context: emailContext)
+                    : MaterialRequestEmailBuilder.buildOrderEmail(context: emailContext)
+            }
             let subject = isQuote
                 ? MaterialRequestEmailBuilder.quoteSubject(jobNumber: request.projectNumber, company: company)
                 : MaterialRequestEmailBuilder.orderSubject(jobNumber: request.projectNumber, company: company)

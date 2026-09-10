@@ -33,6 +33,92 @@ enum MaterialRequestEmailBuilder {
         renderTemplate(orderTemplate, context: context, isQuote: false)
     }
 
+    /// Plain-text body for quote/order — same facts as the HTML email, without styling.
+    static func buildPlainTextEmail(context: Context, isQuote: Bool) -> String {
+        let supplier = context.supplierName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let contact = supplier.isEmpty ? "there" : supplier
+        let phone = context.userPhone?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let address = context.deliveryAddress?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let siteName = context.siteName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let lead = isQuote
+            ? "Can I get a quote for the items below?"
+            : "Please can I place an order for the items below?"
+        let confirm: String = {
+            if isQuote {
+                if phone.isEmpty {
+                    return "Once the quote is ready, please can you confirm lead times. Please note, this is only a quote request."
+                }
+                return "Once the quote is ready, please can you confirm lead times. Please note, this is only a quote request. My number is \(phone)."
+            }
+            if phone.isEmpty {
+                return "Please confirm any long lead times before processing this order."
+            }
+            return "Please confirm any long lead times before processing this order. My number is \(phone)."
+        }()
+        let materialLines: String = {
+            if context.materials.isEmpty { return "- (No materials listed)" }
+            return context.materials.enumerated().map { index, item in
+                let qty = "\(item.quantity) \(item.unit.quantityLabel(for: item.quantity))"
+                let details = [
+                    item.brand.map { "Brand: \($0)" },
+                    item.productCode.map { "Code: \($0)" },
+                    item.formattedLengthSpecification.isEmpty ? nil : "Length: \(item.formattedLengthSpecification)",
+                    item.notes.map { "Details: \($0)" }
+                ]
+                .compactMap { value -> String? in
+                    guard let value else { return nil }
+                    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed.isEmpty ? nil : trimmed
+                }
+                .joined(separator: "; ")
+                let prefix = "\(index + 1). \(item.material) — qty \(qty)"
+                if details.isEmpty { return prefix }
+                return "\(prefix)\n   \(details)"
+            }.joined(separator: "\n")
+        }()
+        let siteLine: String = {
+            if address.isEmpty && siteName.isEmpty { return "Site address: (not set)" }
+            if address.isEmpty { return "Site: \(siteName)" }
+            if siteName.isEmpty { return "Site address: \(address)" }
+            return "Site: \(siteName)\nSite address: \(address)"
+        }()
+        let thankYou = isQuote
+            ? "Thank you for taking the time to quote these materials."
+            : "Thank you for processing this order."
+
+        return """
+        Hi \(contact),
+
+        \(lead)
+
+        \(siteLine)
+
+        \(confirm)
+
+        Job number: \(context.jobNumber)
+
+        Material list:
+        \(materialLines)
+
+        \(thankYou)
+
+        \(context.userName)
+        """
+    }
+
+    /// Minimal HTML wrapper so the existing html-only email pipeline can deliver readable plain content.
+    static func plainTextAsSimpleHTML(_ plainText: String) -> String {
+        let escaped = escapeHTML(plainText)
+        return """
+        <!DOCTYPE html>
+        <html>
+        <body style="margin:0;padding:20px;background:#ffffff;">
+        <pre style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#111111;white-space:pre-wrap;word-wrap:break-word;">\(escaped)</pre>
+        </body>
+        </html>
+        """
+    }
+
     static func quoteSubject(jobNumber: String, company: String) -> String {
         "Quote request — \(jobNumber) — \(company)"
     }

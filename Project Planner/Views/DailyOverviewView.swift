@@ -1426,7 +1426,8 @@ struct OnHolidayRowView: View {
         ]
         var hasher = Hasher()
         hasher.combine(displayName)
-        let index = abs(hasher.finalize()) % palettes.count
+        let hash = hasher.finalize()
+        let index = ((hash % palettes.count) + palettes.count) % palettes.count
         return palettes[index]
     }
     
@@ -1830,7 +1831,8 @@ struct ProjectBookingCard: View {
         ]
         var hasher = Hasher()
         hasher.combine(name)
-        let idx = abs(hasher.finalize()) % palettes.count
+        let hash = hasher.finalize()
+        let idx = ((hash % palettes.count) + palettes.count) % palettes.count
         return palettes[idx]
     }
 

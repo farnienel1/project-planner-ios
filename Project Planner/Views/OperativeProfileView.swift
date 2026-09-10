@@ -22,6 +22,7 @@ struct OperativeProfileView: View {
 
     @State private var showingEdit = false
     @State private var profileRefreshToken = 0
+    @State private var certificateViewerURL: IdentifiableURL?
 
     /// Admins, or managers with the Operatives permission — same gate as Manage Operatives.
     private var canOpenOperativeSettings: Bool {
@@ -77,11 +78,9 @@ struct OperativeProfileView: View {
 
     private var dayRateValue: String {
         let standardHours = firebaseBackend.currentOrganization?.settings.payrollTimePolicy.standardPaidHours ?? 8
-        let resolved = PayrollRateResolver.resolve(
+        let resolved = PayrollRateResolver.resolveCurrentProfileRate(
             user: displayedUser,
             operative: linkedOperative,
-            on: Date(),
-            history: .empty,
             standardDayHours: max(standardHours, 0.01)
         )
         if let label = resolved.displayRateLabel(currencySymbol: "£") {
@@ -90,7 +89,22 @@ struct OperativeProfileView: View {
         return "Not set"
     }
 
-    private var qualificationRows: [(id: UUID, title: String, detail: String?)] {
+    private var dayRateLabel: String {
+        let standardHours = firebaseBackend.currentOrganization?.settings.payrollTimePolicy.standardPaidHours ?? 8
+        let resolved = PayrollRateResolver.resolveCurrentProfileRate(
+            user: displayedUser,
+            operative: linkedOperative,
+            standardDayHours: max(standardHours, 0.01)
+        )
+        switch resolved.basis {
+        case .hourly where resolved.hasRate:
+            return "Hourly rate"
+        default:
+            return "Day rate"
+        }
+    }
+
+    private var qualificationRows: [(id: UUID, title: String, detail: String?, certificateURL: URL?)] {
         guard let operative = linkedOperative else { return [] }
         let sorted = operative.qualifications.sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
@@ -106,7 +120,10 @@ struct OperativeProfileView: View {
             } else {
                 detail = nil
             }
-            return (qualification.id, qualification.name, detail)
+            let certString = operative.qualificationCertificateURLs[qualification.id]?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let certURL = certString.isEmpty ? nil : URL(string: certString)
+            return (qualification.id, qualification.name, detail, certURL)
         }
     }
 
@@ -157,6 +174,9 @@ struct OperativeProfileView: View {
                     .environmentObject(holidayStore)
                     .environmentObject(firebaseBackend)
                     .environmentObject(notificationService)
+            }
+            .sheet(item: $certificateViewerURL) { item in
+                InAppRemoteDocumentViewer(remoteURL: item.url, title: "Certificate")
             }
         }
     }
@@ -312,7 +332,7 @@ struct OperativeProfileView: View {
                         iconName: "banknote.fill",
                         iconBackground: ManageUserProfilePalette.chipAmberBg,
                         iconForeground: ManageUserProfilePalette.chipAmberFg,
-                        label: "Day rate",
+                        label: dayRateLabel,
                         value: dayRateValue
                     )
                 }
@@ -362,6 +382,12 @@ struct OperativeProfileView: View {
                                         Text(detail)
                                             .font(.system(size: 11))
                                             .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                                    }
+                                    if let certificateURL = row.certificateURL {
+                                        Button("View certificate") {
+                                            certificateViewerURL = IdentifiableURL(certificateURL)
+                                        }
+                                        .font(.system(size: 12, weight: .medium))
                                     }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)

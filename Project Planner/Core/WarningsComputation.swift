@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct WarningsComputationInput {
+struct WarningsComputationInput: @unchecked Sendable {
     let operatives: [Operative]
     let bookings: [Booking]
     let projects: [Project]
@@ -145,7 +145,9 @@ struct WarningsComputationSnapshot: Sendable {
 }
 
 enum WarningsComputation {
-    static func makeSnapshot(from input: WarningsComputationInput) -> WarningsComputationSnapshot {
+    /// Builds the sendable snapshot. Must stay off the main actor — payroll/clash
+    /// interval work over all bookings freezes/jetsams Simulator when run on MainActor.
+    nonisolated static func makeSnapshot(from input: WarningsComputationInput) -> WarningsComputationSnapshot {
         let cal = Calendar.current
 
         let operatives: [WarningsComputationSnapshot.OperativeSnapshot] = input.operatives.map { operative in
@@ -855,9 +857,9 @@ private struct WarningsScheduleIndex {
             if isExcluded(userId: user.id) { continue }
             let linked = operativesByEmail[user.emailLowercased]
             if hasHoliday(userId: user.id, operativeId: linked?.id) { continue }
-            if let oid = linked?.id {
-                let paid = operativePaidTotal(oid) + managerPaidTotal(user.id)
-                appendIfUnderBooked(name: linked!.name, emailKey: user.emailLowercased, paid: paid)
+            if let linked {
+                let paid = operativePaidTotal(linked.id) + managerPaidTotal(user.id)
+                appendIfUnderBooked(name: linked.name, emailKey: user.emailLowercased, paid: paid)
             } else {
                 let paid = managerPaidTotal(user.id)
                 appendIfUnderBooked(name: user.displayName, emailKey: user.emailLowercased, paid: paid)

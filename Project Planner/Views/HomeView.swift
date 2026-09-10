@@ -61,7 +61,6 @@ struct HomeView: View {
     @State private var persistedAdminOverviewMetricIds: [HomeOverviewMetricID] = []
     @State private var hasLoadedAdminOverviewMetrics = false
     @State private var showingHomeProfileCard = false
-    @State private var lastManagerWarningsRefreshAt: Date?
     
     var body: some View {
         ScrollView {
@@ -75,15 +74,20 @@ struct HomeView: View {
         .toolbar(.hidden, for: .navigationBar)
         .background(homeCanvasBackground.ignoresSafeArea(edges: .top))
         .sheet(isPresented: $showingWarningsDetail) {
-            WarningsDetailView(warningsService: WarningsService.shared)
-                .environmentObject(projectStore)
-                .environmentObject(userStore)
-                .environmentObject(operativeStore)
-                .environmentObject(bookingStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(appSettings)
-                .environmentObject(holidayStore)
+            WarningsDetailView(
+                warningsService: WarningsService.shared,
+                projectStore: projectStore,
+                userStore: userStore,
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                firebaseBackend: firebaseBackend,
+                appSettings: appSettings,
+                holidayStore: holidayStore,
+                notificationService: notificationService,
+                subcontractorStore: subcontractorStore,
+                taskStore: taskStore
+            )
         }
         .sheet(isPresented: $showingTasksDetail) {
             TasksDetailView()
@@ -173,7 +177,9 @@ struct HomeView: View {
             presentTasksDetail()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToWarnings"))) { _ in
-            Task { await openWarningsDetail() }
+            print("🔥🔥🔥 DEBUG: WARNINGS_NAVIGATE_SYNC \(WarningsBuildStamp.id)")
+            showingTasksDetail = false
+            showingWarningsDetail = true
         }
         .fullScreenCover(isPresented: $showingClientsView) {
             ClientsView()
@@ -214,6 +220,8 @@ struct HomeView: View {
                 .environmentObject(firebaseBackend)
                 .environmentObject(subcontractorStore)
                 .environmentObject(appSettings)
+                .environmentObject(notificationService)
+                .environmentObject(taskStore)
         }
         .sheet(isPresented: $showingOrgSitesMap) {
             OrgSitesMapView()
@@ -543,28 +551,11 @@ struct HomeView: View {
             print("🔥🔥🔥 DEBUG: Home derived refresh finished")
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
+            // Do not recompute warnings here — that raced launch quiet / deferred loads
+            // and jetsamed Simulator. Badge updates when Warnings sheet refreshes or
+            // when `.warningsDidRecompute` is posted.
             guard userStore.hasAdminAccess() else { return }
-            guard !firebaseBackend.isBootstrappingOrgDataLoad else { return }
-            if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil { return }
-            let now = Date()
-            if let lastManagerWarningsRefreshAt,
-               now.timeIntervalSince(lastManagerWarningsRefreshAt) < 2 {
-                return
-            }
-            lastManagerWarningsRefreshAt = now
-            Task {
-                await WarningsRefreshHelper.refreshSharedWarnings(
-                    operativeStore: operativeStore,
-                    bookingStore: bookingStore,
-                    projectStore: projectStore,
-                    userStore: userStore,
-                    managerScheduleStore: managerScheduleStore,
-                    holidayStore: holidayStore,
-                    firebaseBackend: firebaseBackend,
-                    appSettings: appSettings
-                )
-                homeWarningCount = WarningsService.shared.warningCount
-            }
+            homeWarningCount = WarningsService.shared.warningCount
         }
         .onReceive(NotificationCenter.default.publisher(for: .warningsDidRecompute)) { notification in
             if let count = notification.userInfo?["count"] as? Int {
@@ -740,10 +731,13 @@ struct HomeView: View {
                     icon: "exclamationmark.triangle.fill",
                     iconTint: Color(red: 0.64, green: 0.18, blue: 0.18),
                     iconBackground: Color(red: 0.99, green: 0.92, blue: 0.92),
-                    title: "Warnings",
+                    title: WarningsBuildStamp.homePillTitle,
                     value: homeWarningCount == 0 ? "All clear" : "\(homeWarningCount) active"
                 ) {
-                    Task { await openWarningsDetail() }
+                    // Sync log proves this binary includes the Warnings open fix.
+                    print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON_SYNC \(WarningsBuildStamp.id)")
+                    showingTasksDetail = false
+                    showingWarningsDetail = true
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -1328,31 +1322,13 @@ struct HomeView: View {
         if userStore.hasAdminAccess(),
            !storesStillLoading,
            firebaseBackend.hasBootstrappedOrgDataLoad {
-            // Do not auto-run warnings on Home after every store refresh — that MainActor
-            // snapshot freezes/crashes Simulator. Badge stays at last known count; opening
-            // Warnings detail still force-refreshes.
+            // Do not auto-run warnings on Home after every store refresh — that used to
+            // freeze/crash Simulator. Badge stays at last known count; opening Warnings
+            // refreshes off the main actor (and never during bootstrap/quiet).
             homeWarningCount = WarningsService.shared.warningCount
         } else if userStore.hasAdminAccess() {
             homeWarningCount = WarningsService.shared.warningCount
         }
-    }
-
-    private func openWarningsDetail() async {
-        if userStore.hasAdminAccess() {
-            await WarningsRefreshHelper.refreshSharedWarnings(
-                operativeStore: operativeStore,
-                bookingStore: bookingStore,
-                projectStore: projectStore,
-                userStore: userStore,
-                managerScheduleStore: managerScheduleStore,
-                holidayStore: holidayStore,
-                firebaseBackend: firebaseBackend,
-                appSettings: appSettings,
-                force: true
-            )
-            homeWarningCount = WarningsService.shared.warningCount
-        }
-        presentWarningsDetail()
     }
     
     private var assignedTasksCount: Int {
@@ -1691,6 +1667,7 @@ struct OperativeQualificationsReadOnlyView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var notificationService: NotificationService
     @State private var isRepairingLink = false
     @State private var repairMessage: String?
     
@@ -1713,6 +1690,7 @@ struct OperativeQualificationsReadOnlyView: View {
                 )
                 .environmentObject(operativeStore)
                 .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
             } else {
                 NavigationStack {
                     ContentUnavailableView(
@@ -1844,12 +1822,10 @@ private struct HomeProfileCardSheet: View {
     }
 
     private var dayRateText: String {
-        guard let user else { return "£0.00" }
-        let resolved = PayrollRateResolver.resolve(
+        guard let user else { return "Not set" }
+        let resolved = PayrollRateResolver.resolveCurrentProfileRate(
             user: user,
             operative: operative,
-            on: Date(),
-            history: .empty,
             standardDayHours: 8
         )
         if let label = resolved.displayRateLabel() {

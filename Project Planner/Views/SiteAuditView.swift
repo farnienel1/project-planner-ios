@@ -1529,6 +1529,7 @@ struct SiteAuditDetailView: View {
     @State private var selectedImageURL: String?
     @State private var pdfURL: URL?
     @State private var showShare = false
+    @State private var isPreparingSharePDF = false
     @State private var showingEdit = false
 
     init(audit: SiteAudit, project: Project? = nil, onAuditUpdated: (() -> Void)? = nil) {
@@ -1559,16 +1560,15 @@ struct SiteAuditDetailView: View {
                         SiteAuditAuditListCard(audit: displayAudit, showsChevron: false)
                     }
                     HStack(spacing: 8) {
-                        SiteAuditPrimaryButton(title: "Share", systemImage: "square.and.arrow.up", style: .primary) {
-                            Task {
-                                if pdfURL == nil {
-                                    await buildPDFPreview()
-                                }
-                                if pdfURL != nil {
-                                    showShare = true
-                                }
-                            }
+                        SiteAuditPrimaryButton(
+                            title: isPreparingSharePDF ? "Preparing…" : "Share",
+                            systemImage: "square.and.arrow.up",
+                            style: .primary
+                        ) {
+                            Task { await shareAuditPDF() }
                         }
+                        .disabled(isPreparingSharePDF)
+                        .opacity(isPreparingSharePDF ? 0.7 : 1)
                         if canEdit {
                             SiteAuditPrimaryButton(title: "Edit Site Audit", systemImage: "square.and.pencil", style: .greyFilled) {
                                 showingEdit = true
@@ -1715,6 +1715,16 @@ struct SiteAuditDetailView: View {
         } catch {
             print("Site audit reload error: \(error.localizedDescription)")
         }
+    }
+
+    private func shareAuditPDF() async {
+        if pdfURL == nil {
+            isPreparingSharePDF = true
+            await buildPDFPreview()
+            isPreparingSharePDF = false
+        }
+        guard pdfURL != nil else { return }
+        showShare = true
     }
 
     private func buildPDFPreview() async {

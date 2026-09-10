@@ -223,7 +223,7 @@ struct SubcontractorsView: View {
             }
             if !previewContacts.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(previewContacts.enumerated()), id: \.element.id) { idx, contact in
+                    ForEach(Array(previewContacts.enumerated()), id: \.offset) { idx, contact in
                         HStack(spacing: 8) {
                             Text(initials(for: contact.name))
                                 .font(.system(size: 8, weight: .semibold))
@@ -322,13 +322,14 @@ struct SubcontractorsView: View {
                 [Color(red: 0.05, green: 0.52, blue: 0.55), Color(red: 0.10, green: 0.68, blue: 0.72)]
             )
         default:
-            let hash = abs(key.hashValue)
             let palette: [(Color, Color, [Color])] = [
                 (Color(red: 0.33, green: 0.29, blue: 0.72), Color(red: 0.92, green: 0.91, blue: 0.98), [Color(red: 0.33, green: 0.29, blue: 0.72), Color(red: 0.50, green: 0.47, blue: 0.87)]),
                 (Color(red: 0.09, green: 0.37, blue: 0.65), Color(red: 0.90, green: 0.94, blue: 0.99), [Color(red: 0.09, green: 0.37, blue: 0.65), Color(red: 0.20, green: 0.50, blue: 0.80)]),
                 (Color(red: 0.55, green: 0.32, blue: 0.08), Color(red: 0.99, green: 0.93, blue: 0.85), [Color(red: 0.71, green: 0.33, blue: 0.04), Color(red: 0.85, green: 0.47, blue: 0.10)])
             ]
-            let pick = palette[hash % palette.count]
+            // Avoid `abs(hashValue)` — abs(Int.min) traps and crashes the app.
+            let idx = ((key.hashValue % palette.count) + palette.count) % palette.count
+            let pick = palette[idx]
             return (pick.0, pick.1, pick.2)
         }
     }
@@ -391,6 +392,9 @@ private struct SubcontractorFirmDetailView: View {
             if let subcontractor {
                 SubcontractorFirmEditorView(existingSubcontractor: subcontractor)
                     .environmentObject(subcontractorStore)
+            } else {
+                ProgressView("Loading…")
+                    .padding()
             }
         }
         .sheet(isPresented: $showingAddOperative) {
@@ -398,6 +402,9 @@ private struct SubcontractorFirmDetailView: View {
                 SubcontractorOperativeEditorSheet(firmName: subcontractor.name) { newContact in
                     appendOperative(newContact)
                 }
+            } else {
+                ProgressView("Loading…")
+                    .padding()
             }
         }
         .sheet(item: $editingContact) { contact in
@@ -408,6 +415,9 @@ private struct SubcontractorFirmDetailView: View {
                 ) { updatedContact in
                     upsertOperative(updatedContact)
                 }
+            } else {
+                ProgressView("Loading…")
+                    .padding()
             }
         }
     }
@@ -490,7 +500,7 @@ private struct SubcontractorFirmDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
             } else {
-                ForEach(Array(subcontractor.contacts.enumerated()), id: \.element.id) { idx, contact in
+                ForEach(Array(subcontractor.contacts.enumerated()), id: \.offset) { idx, contact in
                     Button {
                         editingContact = contact
                     } label: {
