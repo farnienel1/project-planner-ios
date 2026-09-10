@@ -7,6 +7,8 @@ struct LineManagersMultiSelectSheet: View {
     var allowNoLineManager: Bool = false
     @Binding var hasNoLineManager: Bool
 
+    @State private var showingClearValidationAlert = false
+
     init(
         candidates: [AppUser],
         selectedIds: Binding<Set<String>>,
@@ -17,6 +19,10 @@ struct LineManagersMultiSelectSheet: View {
         self._selectedIds = selectedIds
         self.allowNoLineManager = allowNoLineManager
         self._hasNoLineManager = hasNoLineManager
+    }
+
+    private var hasValidSelection: Bool {
+        hasNoLineManager || !selectedIds.isEmpty
     }
 
     var body: some View {
@@ -77,7 +83,22 @@ struct LineManagersMultiSelectSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        if hasValidSelection {
+                            dismiss()
+                        } else {
+                            showingClearValidationAlert = true
+                        }
+                    }
+                }
+            }
+            .alert("Line manager required", isPresented: $showingClearValidationAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                if allowNoLineManager {
+                    Text("Either No line manager must be selected, or select a line manager/s from the list below.")
+                } else {
+                    Text("Select a line manager/s from the list below.")
                 }
             }
         }

@@ -27,7 +27,9 @@ struct OperativeQualificationsEditorView: View {
     @State private var qualificationCertificateURLs: [UUID: String]
     /// Local temp copies of security-scoped picks, ready to upload on Save.
     @State private var certificateUploadTargets: [UUID: URL] = [:]
-    @State private var selectedUploadQualificationId: UUID?
+    /// Kept separate from the importer presented flag so dismissing the picker cannot clear the target id before the result arrives.
+    @State private var pendingUploadQualificationId: UUID?
+    @State private var showingCertificateImporter = false
     @State private var certificateViewerURL: IdentifiableURL?
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -39,6 +41,9 @@ struct OperativeQualificationsEditorView: View {
     @State private var showingAssignQualificationsPicker = false
     @State private var showingListFilters = false
     @State private var qualificationSearchText = ""
+
+    private static let maxCertificateBytes = 10 * 1024 * 1024
+    private static let allowedCertificateTypes: [UTType] = [.pdf, .jpeg]
 
     init(
         operative: Operative,
@@ -98,26 +103,29 @@ struct OperativeQualificationsEditorView: View {
             }
         }
         .fileImporter(
-            isPresented: Binding(
-                get: { selectedUploadQualificationId != nil },
-                set: { if !$0 { selectedUploadQualificationId = nil } }
-            ),
-            allowedContentTypes: [.image, .pdf]
+            isPresented: $showingCertificateImporter,
+            allowedContentTypes: Self.allowedCertificateTypes,
+            allowsMultipleSelection: false
         ) { result in
-            guard let qualificationId = selectedUploadQualificationId else { return }
+            let qualificationId = pendingUploadQualificationId
+            pendingUploadQualificationId = nil
+            guard let qualificationId else { return }
             switch result {
-            case .success(let url):
+            case .success(let urls):
+                guard let url = urls.first else {
+                    errorMessage = "No file was selected."
+                    return
+                }
                 do {
-                    let localCopy = try Self.copySecurityScopedFileToTemp(url)
+                    let localCopy = try Self.copySecurityScopedCertificateToTemp(url)
                     certificateUploadTargets[qualificationId] = localCopy
                     errorMessage = nil
                 } catch {
-                    errorMessage = "Could not read selected file: \(error.localizedDescription)"
+                    errorMessage = error.localizedDescription
                 }
             case .failure(let error):
                 errorMessage = "Could not select file: \(error.localizedDescription)"
             }
-            selectedUploadQualificationId = nil
         }
         .sheet(isPresented: $showingAssignQualificationsPicker) {
             AssignQualificationsPickerView(selectedQualifications: $selectedQualifications)
@@ -319,11 +327,16 @@ struct OperativeQualificationsEditorView: View {
                     Spacer()
 
                     Button("Upload Certificate") {
-                        selectedUploadQualificationId = qualification.id
+                        pendingUploadQualificationId = qualification.id
+                        showingCertificateImporter = true
                     }
                     .disabled(!canEditAssignments)
                 }
                 .font(.caption)
+
+                Text("PDF or JPEG only · max 10MB")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
 
                 if let pendingFile = certificateUploadTargets[qualification.id] {
                     Text("Ready to upload: \(pendingFile.lastPathComponent)")
@@ -401,7 +414,7 @@ struct OperativeQualificationsEditorView: View {
     }
 
     /// FileImporter URLs are security-scoped; copy immediately so Save can still read the bytes.
-    private static func copySecurityScopedFileToTemp(_ url: URL) throws -> URL {
+    private static func copySecurityScopedCertificateToTemp(_ url: URL) throws -> URL {
         let didStart = url.startAccessingSecurityScopedResource()
         defer {
             if didStart {
@@ -410,22 +423,101 @@ struct OperativeQualificationsEditorView: View {
         }
 
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-        if let size = attrs[.size] as? Int64, size > 10 * 1024 * 1024 {
+        if let size = attrs[.size] as? Int64, size > maxCertificateBytes {
             throw NSError(
                 domain: "OperativeQualificationsEditor",
                 code: 413,
-                userInfo: [NSLocalizedDescriptionKey: "File is too large. Please choose a file smaller than 10MB."]
+                userInfo: [NSLocalizedDescriptionKey: "File is too large. Please choose a PDF or JPEG smaller than 10MB."]
             )
         }
 
-        let fileName = url.lastPathComponent
+        let data = try Data(contentsOf: url)
+        guard !data.isEmpty else {
+            throw NSError(
+                domain: "OperativeQualificationsEditor",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "The selected file was empty."]
+            )
+        }
+
+        let kind = try detectCertificateKind(data: data, pathExtension: url.pathExtension)
+        let fileName = sanitizedFileName(url.lastPathComponent, kind: kind)
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("qual-cert-\(UUID().uuidString)-\(fileName)")
         if FileManager.default.fileExists(atPath: tempURL.path) {
             try FileManager.default.removeItem(at: tempURL)
         }
-        try FileManager.default.copyItem(at: url, to: tempURL)
+        try data.write(to: tempURL, options: .atomic)
         return tempURL
+    }
+
+    private enum CertificateKind {
+        case pdf
+        case jpeg
+
+        var pathExtension: String {
+            switch self {
+            case .pdf: return "pdf"
+            case .jpeg: return "jpg"
+            }
+        }
+
+        var contentType: String {
+            switch self {
+            case .pdf: return "application/pdf"
+            case .jpeg: return "image/jpeg"
+            }
+        }
+    }
+
+    private static func detectCertificateKind(data: Data, pathExtension: String) throws -> CertificateKind {
+        if isPDF(data) { return .pdf }
+        if isJPEG(data) { return .jpeg }
+        let ext = pathExtension.lowercased()
+        if ext == "pdf" {
+            throw NSError(
+                domain: "OperativeQualificationsEditor",
+                code: 415,
+                userInfo: [NSLocalizedDescriptionKey: "That file doesn’t look like a valid PDF."]
+            )
+        }
+        if ext == "jpg" || ext == "jpeg" {
+            throw NSError(
+                domain: "OperativeQualificationsEditor",
+                code: 415,
+                userInfo: [NSLocalizedDescriptionKey: "That file doesn’t look like a valid JPEG."]
+            )
+        }
+        throw NSError(
+            domain: "OperativeQualificationsEditor",
+            code: 415,
+            userInfo: [NSLocalizedDescriptionKey: "Only PDF or JPEG certificates are allowed."]
+        )
+    }
+
+    private static func isPDF(_ data: Data) -> Bool {
+        guard data.count >= 4 else { return false }
+        return data[0] == 0x25 && data[1] == 0x50 && data[2] == 0x44 && data[3] == 0x46
+    }
+
+    private static func isJPEG(_ data: Data) -> Bool {
+        guard data.count >= 3 else { return false }
+        return data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF
+    }
+
+    private static func sanitizedFileName(_ raw: String, kind: CertificateKind) -> String {
+        let base = (raw as NSString).deletingPathExtension
+        let cleaned = base
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "/", with: "_")
+        let safe = cleaned.isEmpty ? "certificate" : cleaned
+        return "\(safe).\(kind.pathExtension)"
+    }
+
+    private static func contentType(for fileURL: URL) -> String {
+        let ext = fileURL.pathExtension.lowercased()
+        if ext == "pdf" { return CertificateKind.pdf.contentType }
+        return CertificateKind.jpeg.contentType
     }
 
     @MainActor
@@ -468,20 +560,14 @@ struct OperativeQualificationsEditorView: View {
         for (qualificationId, fileURL) in certificateUploadTargets {
             do {
                 let data = try Data(contentsOf: fileURL)
-                let contentType: String
-                if fileURL.pathExtension.lowercased() == "pdf" {
-                    contentType = "application/pdf"
-                } else {
-                    contentType = "image/jpeg"
-                }
-
+                let kind = try Self.detectCertificateKind(data: data, pathExtension: fileURL.pathExtension)
                 let uploadedURL = try await firebaseBackend.uploadQualificationDocument(
                     data: data,
                     organizationId: organizationId,
                     operativeId: operative.id,
                     qualificationId: qualificationId,
                     fileName: fileURL.lastPathComponent,
-                    contentType: contentType
+                    contentType: kind.contentType
                 )
                 updatedCertificateURLs[qualificationId] = uploadedURL
             } catch {
@@ -511,7 +597,6 @@ struct OperativeQualificationsEditorView: View {
         certificateUploadTargets = [:]
         syncBaselineFromWorkingState()
 
-        // Reschedule local expiry reminders (3m / 1m / 1w / 1d) for this user and line managers.
         await notificationService.refreshQualificationExpiryReminders()
 
         if dismissAfterSave {

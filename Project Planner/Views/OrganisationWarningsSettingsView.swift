@@ -86,7 +86,8 @@ struct OrganisationWarningsSettingsView: View {
                     Task { await save() }
                 }
                 .fontWeight(.semibold)
-                .disabled(isSaving)
+                .disabled(isSaving || !userHasEdited)
+                .foregroundStyle((userHasEdited && !isSaving) ? Color.accentColor : Color.secondary)
             }
         }
         .onAppear { syncDraftFromOrganization(force: true) }

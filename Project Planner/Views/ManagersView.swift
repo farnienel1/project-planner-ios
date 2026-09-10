@@ -13,6 +13,8 @@ struct ManagersView: View {
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var appSettings: AppSettingsStore
     @Environment(\.dismiss) private var dismiss
     @State private var selectedUser: AppUser?
@@ -111,6 +113,8 @@ struct ManagersView: View {
                     .environmentObject(bookingStore)
                     .environmentObject(operativeStore)
                     .environmentObject(holidayStore)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(notificationService)
             }
             .sheet(isPresented: $showingFilterOptions) {
                 ManagerFilterOptionsView(selectedFilter: $selectedFilterType, filterText: $filterText)
@@ -331,4 +335,10 @@ struct ManagerFilterOptionsView: View {
 #Preview {
     ManagersView()
         .environmentObject(UserStore())
+        .environmentObject(BookingStore())
+        .environmentObject(OperativeStore())
+        .environmentObject(HolidayStore())
+        .environmentObject(FirebaseBackend())
+        .environmentObject(NotificationService())
+        .environmentObject(AppSettingsStore())
 }

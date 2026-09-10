@@ -1752,6 +1752,10 @@ class UserStore: ObservableObject {
                     updatedUser.setLineManagerUserIds(managerIds)
                 }
                 updatedUser.dayRate = dayRate
+                if updateDayRate {
+                    // Single rate field in Manage Users — clearing/setting day rate also clears hourly.
+                    updatedUser.hourlyRate = nil
+                }
 
                 do {
                     let previousDayRate = organizationUsers[index].dayRate
@@ -1772,7 +1776,7 @@ class UserStore: ObservableObject {
                         })?.id
                         let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
                         let merged = collection.mergedEntries(userId: updatedUser.id, operativeId: linkedOperativeId)
-                        if merged.isEmpty, let previousDayRate {
+                        if merged.isEmpty, let previousDayRate, previousDayRate > 0 {
                             try? await firebaseBackend.recordOperativeDayRateChange(
                                 organizationId: orgId,
                                 userId: updatedUser.id,
@@ -1781,16 +1785,15 @@ class UserStore: ObservableObject {
                                 effectiveAt: updatedUser.createdAt
                             )
                         }
-                        if let newRate = dayRate {
-                            let effective = dayRateEffectiveAt ?? Date()
-                            try? await firebaseBackend.recordOperativeDayRateChange(
-                                organizationId: orgId,
-                                userId: updatedUser.id,
-                                operativeId: linkedOperativeId,
-                                dayRate: newRate,
-                                effectiveAt: effective
-                            )
-                        }
+                        let effective = dayRateEffectiveAt ?? Date()
+                        // dayRate nil / <= 0 records a clear sentinel so history stops applying old rates.
+                        try? await firebaseBackend.recordOperativeDayRateChange(
+                            organizationId: orgId,
+                            userId: updatedUser.id,
+                            operativeId: linkedOperativeId,
+                            dayRate: dayRate ?? 0,
+                            effectiveAt: effective
+                        )
                     }
                     clearOperativeProfileOverride(for: updatedUser.id)
                     organizationUsers[index] = updatedUser
@@ -1941,6 +1944,7 @@ class UserStore: ObservableObject {
         let previousDayRate = updatedUser.dayRate
         let dayRateChanged = previousDayRate != dayRate
         updatedUser.dayRate = dayRate
+        updatedUser.hourlyRate = nil
         
         do {
             try await firebaseBackend.updateUserDayRateMetadata(userId: updatedUser.id, dayRate: dayRate)
@@ -1949,7 +1953,7 @@ class UserStore: ObservableObject {
                 let effective = effectiveAt ?? Date()
                 let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
                 let merged = collection.mergedEntries(userId: updatedUser.id, operativeId: nil)
-                if let previousDayRate, merged.isEmpty {
+                if let previousDayRate, previousDayRate > 0, merged.isEmpty {
                     try? await firebaseBackend.recordOperativeDayRateChange(
                         organizationId: orgId,
                         userId: updatedUser.id,
@@ -1958,15 +1962,13 @@ class UserStore: ObservableObject {
                         effectiveAt: updatedUser.createdAt
                     )
                 }
-                if let newRate = dayRate {
-                    try? await firebaseBackend.recordOperativeDayRateChange(
-                        organizationId: orgId,
-                        userId: updatedUser.id,
-                        operativeId: nil,
-                        dayRate: newRate,
-                        effectiveAt: effective
-                    )
-                }
+                try? await firebaseBackend.recordOperativeDayRateChange(
+                    organizationId: orgId,
+                    userId: updatedUser.id,
+                    operativeId: nil,
+                    dayRate: dayRate ?? 0,
+                    effectiveAt: effective
+                )
             }
             organizationUsers[index] = updatedUser
             if let operativeStore {
@@ -2132,8 +2134,19 @@ class UserStore: ObservableObject {
                 op.isActive = true
                 changed = true
             }
-            if let dr = user.dayRate, op.dayRate != dr {
-                op.dayRate = dr
+            if let dr = user.dayRate, dr > 0 {
+                if op.dayRate != dr {
+                    op.dayRate = dr
+                    changed = true
+                }
+                if op.hourlyRate != nil {
+                    op.hourlyRate = nil
+                    changed = true
+                }
+            } else if op.dayRate != nil || op.hourlyRate != nil {
+                // Account rate blank — clear stale roster rates so profile/timesheets don't inherit them.
+                op.dayRate = nil
+                op.hourlyRate = nil
                 changed = true
             }
             if op.tradeTypePreset != user.tradeTypePreset || op.tradeTypeCustom != user.tradeTypeCustom {

@@ -1056,6 +1056,7 @@ struct ManageUserRowView: View {
 private struct EditUserDialogModifier: ViewModifier {
     let user: AppUser
     let bookingStore: BookingStore
+    @EnvironmentObject var notificationService: NotificationService
     @Binding var showingDeleteConfirmation: Bool
     @Binding var showingDeactivateConfirmation: Bool
     @Binding var saveErrorMessage: String?
@@ -2621,7 +2622,9 @@ struct EditUserView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     Spacer()
-                    Text("\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))")
+                    Text(entry.dayRate > 0
+                         ? "\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))"
+                         : "Cleared")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(ManageUserProfilePalette.textPrimary)
                 }

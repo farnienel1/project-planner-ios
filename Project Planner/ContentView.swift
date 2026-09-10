@@ -311,6 +311,10 @@ struct ContentView: View {
             if phase == .active {
                 Task {
                     await userStore.recordCurrentUserLastSeenIfDue()
+                    // Refresh the signed-in account when returning to the app so permission
+                    // toggles (e.g. Annual Leave Management) applied by an admin take effect
+                    // without requiring sign-out.
+                    await userStore.loadCurrentUser()
                     // Do not reload the full notifications inbox on every foreground —
                     // that alone can jetsam Simulator orgs with 100+ notification docs.
                 }

@@ -4152,8 +4152,10 @@ class FirebaseBackend: ObservableObject {
         if updateDayRate {
             if let dayRate {
                 payload["dayRate"] = dayRate
+                payload["hourlyRate"] = FieldValue.delete()
             } else {
                 payload["dayRate"] = FieldValue.delete()
+                payload["hourlyRate"] = FieldValue.delete()
             }
         }
         try await db.collection("users").document(userId).updateData(payload)
@@ -4165,8 +4167,10 @@ class FirebaseBackend: ObservableObject {
         ]
         if let dayRate {
             payload["dayRate"] = dayRate
+            payload["hourlyRate"] = FieldValue.delete()
         } else {
             payload["dayRate"] = FieldValue.delete()
+            payload["hourlyRate"] = FieldValue.delete()
         }
         try await db.collection("users").document(userId).updateData(payload)
     }

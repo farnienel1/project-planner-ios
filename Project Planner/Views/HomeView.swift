@@ -1846,12 +1846,10 @@ private struct HomeProfileCardSheet: View {
     }
 
     private var dayRateText: String {
-        guard let user else { return "£0.00" }
-        let resolved = PayrollRateResolver.resolve(
+        guard let user else { return "Not set" }
+        let resolved = PayrollRateResolver.resolveCurrentProfileRate(
             user: user,
             operative: operative,
-            on: Date(),
-            history: .empty,
             standardDayHours: 8
         )
         if let label = resolved.displayRateLabel() {

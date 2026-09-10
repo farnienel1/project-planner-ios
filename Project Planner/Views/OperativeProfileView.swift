@@ -78,11 +78,9 @@ struct OperativeProfileView: View {
 
     private var dayRateValue: String {
         let standardHours = firebaseBackend.currentOrganization?.settings.payrollTimePolicy.standardPaidHours ?? 8
-        let resolved = PayrollRateResolver.resolve(
+        let resolved = PayrollRateResolver.resolveCurrentProfileRate(
             user: displayedUser,
             operative: linkedOperative,
-            on: Date(),
-            history: .empty,
             standardDayHours: max(standardHours, 0.01)
         )
         if let label = resolved.displayRateLabel(currencySymbol: "£") {

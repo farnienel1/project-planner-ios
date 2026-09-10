@@ -98,6 +98,9 @@ enum PayrollRateResolver {
         return .dayRate
     }
 
+    /// Returns the history rate in effect on `day`.
+    /// - `nil` means no history entry yet (fall back to live profile rates).
+    /// - `<= 0` means the rate was explicitly cleared from that effective date forward.
     static func rateFromHistory(
         history: OperativeDayRateHistoryCollection,
         userId: String?,
@@ -147,6 +150,11 @@ enum PayrollRateResolver {
             on: day
         )
 
+        // Explicit clear in history must win over stale live roster rates.
+        if let historical, historical <= 0 {
+            return ResolvedPayrollRate(basis: basis, dayRate: nil, hourlyRate: nil)
+        }
+
         switch basis {
         case .dayRate:
             if let historical, historical > 0 {
@@ -173,5 +181,27 @@ enum PayrollRateResolver {
             }
             return ResolvedPayrollRate(basis: .hourly, dayRate: nil, hourlyRate: nil)
         }
+    }
+
+    /// Current profile-card rate: prefer the signed-in account fields only so a blank user rate
+    /// does not inherit a stale linked operative roster rate.
+    static func resolveCurrentProfileRate(
+        user: AppUser?,
+        operative: Operative?,
+        standardDayHours: Double = 8
+    ) -> ResolvedPayrollRate {
+        if let user {
+            let hasDay = (user.dayRate ?? 0) > 0
+            let hasHourly = (user.hourlyRate ?? 0) > 0
+            if hasHourly && !hasDay {
+                return ResolvedPayrollRate(basis: .hourly, dayRate: nil, hourlyRate: user.hourlyRate)
+            }
+            if hasDay {
+                return ResolvedPayrollRate(basis: .dayRate, dayRate: user.dayRate, hourlyRate: nil)
+            }
+            // Explicitly blank on the account — do not fall back to roster.
+            return ResolvedPayrollRate(basis: .dayRate, dayRate: nil, hourlyRate: nil)
+        }
+        return resolve(user: nil, operative: operative, on: Date(), history: .empty, standardDayHours: standardDayHours)
     }
 }
