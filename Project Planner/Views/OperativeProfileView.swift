@@ -90,7 +90,7 @@ struct OperativeProfileView: View {
         return "Not set"
     }
 
-    private var qualificationRows: [(id: UUID, title: String, detail: String?)] {
+    private var qualificationRows: [(id: UUID, title: String, detail: String?, certificateURL: URL?)] {
         guard let operative = linkedOperative else { return [] }
         let sorted = operative.qualifications.sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
@@ -106,7 +106,10 @@ struct OperativeProfileView: View {
             } else {
                 detail = nil
             }
-            return (qualification.id, qualification.name, detail)
+            let certString = operative.qualificationCertificateURLs[qualification.id]?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let certURL = certString.isEmpty ? nil : URL(string: certString)
+            return (qualification.id, qualification.name, detail, certURL)
         }
     }
 
@@ -362,6 +365,10 @@ struct OperativeProfileView: View {
                                         Text(detail)
                                             .font(.system(size: 11))
                                             .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                                    }
+                                    if let certificateURL = row.certificateURL {
+                                        Link("View certificate", destination: certificateURL)
+                                            .font(.system(size: 12, weight: .medium))
                                     }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)

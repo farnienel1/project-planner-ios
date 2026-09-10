@@ -1152,6 +1152,7 @@ private struct EditUserDialogModifier: ViewModifier {
                     )
                     .environmentObject(operativeStore)
                     .environmentObject(firebaseBackend)
+                    .environmentObject(notificationService)
                 }
             }
             .confirmationDialog("Profile photo", isPresented: $showingProfilePhotoSourcePicker, titleVisibility: .visible) {

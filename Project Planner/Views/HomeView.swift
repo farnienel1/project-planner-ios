@@ -1691,6 +1691,7 @@ struct OperativeQualificationsReadOnlyView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var notificationService: NotificationService
     @State private var isRepairingLink = false
     @State private var repairMessage: String?
     
@@ -1713,6 +1714,7 @@ struct OperativeQualificationsReadOnlyView: View {
                 )
                 .environmentObject(operativeStore)
                 .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
             } else {
                 NavigationStack {
                     ContentUnavailableView(

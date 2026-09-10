@@ -119,7 +119,8 @@ class NotificationService: ObservableObject {
     }
 
     /// Schedules local notifications 3 months, 1 month, 1 week and 1 day before each qualification expiry (09:00).
-    /// Operative accounts get reminders for their own linked operative record; line managers get one set per managed operative (`assignedManagerUserId`).
+    /// Operative accounts get reminders for their own linked operative record; each assigned line manager
+    /// (`lineManagerUserIds` / legacy `assignedManagerUserId`) gets one set per managed operative.
     func refreshQualificationExpiryReminders() async {
         guard let firebaseBackend,
               firebaseBackend.currentOrganization != nil,
@@ -155,9 +156,16 @@ class NotificationService: ObservableObject {
         for op in operativeStore.allOperatives {
             let opEmail = Self.normalizedEmail(op.email)
             guard let linked = orgUsers.first(where: { Self.normalizedEmail($0.email) == opEmail }) else { continue }
-            guard let rawMgr = linked.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !rawMgr.isEmpty else { continue }
-            let managerCanon = await resolvedRecipientUserIdResolvingStaleIds(rawMgr)
-            guard managerCanon == myCanonicalId else { continue }
+            guard linked.hasLineManager else { continue }
+            var isMyDirectReport = false
+            for rawMgr in linked.lineManagerUserIds {
+                let managerCanon = await resolvedRecipientUserIdResolvingStaleIds(rawMgr)
+                if managerCanon == myCanonicalId {
+                    isMyDirectReport = true
+                    break
+                }
+            }
+            guard isMyDirectReport else { continue }
             await scheduleQualificationExpiryReminders(for: op, audience: .lineManager)
         }
     }

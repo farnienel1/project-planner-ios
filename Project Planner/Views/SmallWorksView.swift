@@ -15,7 +15,8 @@ struct SmallWorksView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var firebaseBackend: FirebaseBackend
-    @State private var selectedStatus: ProjectStatus? = nil
+    /// Default to Active so the list opens on current jobs; use All / Completed chips for older work.
+    @State private var selectedStatus: ProjectStatus? = .active
     @State private var selectedProject: Project? = nil
     @State private var showingEditProject = false
     @State private var navigationPath = NavigationPath()
@@ -90,12 +91,12 @@ struct SmallWorksView: View {
                    tab == 2 {
                     // Reset navigation when Small Works tab is selected
                     navigationPath.removeLast(navigationPath.count)
-                    selectedStatus = nil
+                    selectedStatus = .active
                 }
             }
             .onAppear {
-                if selectedStatus == .inactive {
-                    selectedStatus = nil
+                if selectedStatus == .inactive || selectedStatus == nil {
+                    selectedStatus = .active
                 }
             }
             .sheet(isPresented: $showingEditProject) {

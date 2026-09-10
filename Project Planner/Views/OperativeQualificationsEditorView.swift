@@ -11,8 +11,10 @@ enum OperativeQualificationsPresentation: Equatable {
 
 struct OperativeQualificationsEditorView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var notificationService: NotificationService
 
     let operative: Operative
     let title: String
@@ -24,6 +26,7 @@ struct OperativeQualificationsEditorView: View {
     @State private var selectedQualifications: Set<Qualification>
     @State private var qualificationExpiryDates: [UUID: Date]
     @State private var qualificationCertificateURLs: [UUID: String]
+    /// Local temp copies of security-scoped picks, ready to upload on Save.
     @State private var certificateUploadTargets: [UUID: URL] = [:]
     @State private var selectedUploadQualificationId: UUID?
     @State private var isSaving = false
@@ -104,8 +107,13 @@ struct OperativeQualificationsEditorView: View {
             guard let qualificationId = selectedUploadQualificationId else { return }
             switch result {
             case .success(let url):
-                certificateUploadTargets[qualificationId] = url
-                errorMessage = nil
+                do {
+                    let localCopy = try Self.copySecurityScopedFileToTemp(url)
+                    certificateUploadTargets[qualificationId] = localCopy
+                    errorMessage = nil
+                } catch {
+                    errorMessage = "Could not read selected file: \(error.localizedDescription)"
+                }
             case .failure(let error):
                 errorMessage = "Could not select file: \(error.localizedDescription)"
             }
@@ -315,13 +323,25 @@ struct OperativeQualificationsEditorView: View {
                 .font(.caption)
 
                 if let pendingFile = certificateUploadTargets[qualification.id] {
-                    Text("Pending upload: \(pendingFile.lastPathComponent)")
+                    Text("Ready to upload: \(pendingFile.lastPathComponent)")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                } else if let existingURL = qualificationCertificateURLs[qualification.id], !existingURL.isEmpty {
-                    Text("Certificate uploaded")
-                        .font(.caption)
-                        .foregroundColor(.green)
+                    Text("Tap Save to store this certificate on your qualifications.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                } else if let existingURLString = qualificationCertificateURLs[qualification.id],
+                          !existingURLString.isEmpty {
+                    HStack(spacing: 12) {
+                        Text("Certificate uploaded")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                        if let url = URL(string: existingURLString) {
+                            Button("View certificate") {
+                                openURL(url)
+                            }
+                            .font(.caption)
+                        }
+                    }
                 } else {
                     Text("No certificate uploaded")
                         .font(.caption)
@@ -375,6 +395,34 @@ struct OperativeQualificationsEditorView: View {
         qualificationCertificateURLs = op.qualificationCertificateURLs
         certificateUploadTargets = [:]
         syncBaselineFromWorkingState()
+    }
+
+    /// FileImporter URLs are security-scoped; copy immediately so Save can still read the bytes.
+    private static func copySecurityScopedFileToTemp(_ url: URL) throws -> URL {
+        let didStart = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStart {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        if let size = attrs[.size] as? Int64, size > 10 * 1024 * 1024 {
+            throw NSError(
+                domain: "OperativeQualificationsEditor",
+                code: 413,
+                userInfo: [NSLocalizedDescriptionKey: "File is too large. Please choose a file smaller than 10MB."]
+            )
+        }
+
+        let fileName = url.lastPathComponent
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("qual-cert-\(UUID().uuidString)-\(fileName)")
+        if FileManager.default.fileExists(atPath: tempURL.path) {
+            try FileManager.default.removeItem(at: tempURL)
+        }
+        try FileManager.default.copyItem(at: url, to: tempURL)
+        return tempURL
     }
 
     @MainActor
@@ -444,9 +492,7 @@ struct OperativeQualificationsEditorView: View {
             }
         }
 
-        var updatedOperative = operative
-        // Preserve any legacy skill ids on the record; skills UI has been removed.
-        updatedOperative.skills = operative.skills
+        var updatedOperative = operativeStore.allOperatives.first(where: { $0.id == operative.id }) ?? operative
         updatedOperative.qualifications = selectedQualifications
         updatedOperative.qualificationExpiryDates = qualificationExpiryDates.filter { entry in
             selectedQualifications.contains(where: { $0.id == entry.key })
@@ -461,6 +507,9 @@ struct OperativeQualificationsEditorView: View {
         qualificationCertificateURLs = updatedOperative.qualificationCertificateURLs
         certificateUploadTargets = [:]
         syncBaselineFromWorkingState()
+
+        // Reschedule local expiry reminders (3m / 1m / 1w / 1d) for this user and line managers.
+        await notificationService.refreshQualificationExpiryReminders()
 
         if dismissAfterSave {
             dismiss()

@@ -230,7 +230,7 @@ class LocalNotificationService {
         (1...7).map(materialCutOffIdentifier(for:))
     }
 
-    /// Clears all pending one-shot qualification expiry reminders (3-month and 1-month) before rescheduling.
+    /// Clears all pending one-shot qualification expiry reminders (3m / 1m / 1w / 1d) before rescheduling.
     func removeQualificationExpiryReminders() async {
         let center = UNUserNotificationCenter.current()
         let pending = await center.pendingNotificationRequests()
