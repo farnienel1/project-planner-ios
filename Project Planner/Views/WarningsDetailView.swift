@@ -362,22 +362,26 @@ struct WarningsDetailView: View {
     }
 
     private func refreshAfterLaunchQuietIfNeeded() async {
-        // Wait for launch quiet AND populated core stores. Force refresh used to run
-        // while bookings/holidays were still empty → false "No active warnings".
+        // Wait for launch quiet AND hard stores. Soft stores (holidays / manager schedule)
+        // must not block forever — a hung holiday fetch used to leave Warnings empty.
         let deadline = Date().addingTimeInterval(90)
+        let softBypassAfter = Date().addingTimeInterval(45)
         while Date() < deadline {
             let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
-            let storesBusy = bookingStore.isLoading
+            let hardBusy = bookingStore.isLoading
                 || operativeStore.isLoading
                 || projectStore.isLoading
-                || holidayStore.isLoading
-                || managerScheduleStore.isLoading
+            let softBusy = holidayStore.isLoading || managerScheduleStore.isLoading
+            let rosterEmpty = operativeStore.allOperatives.isEmpty && userStore.organizationUsers.isEmpty
+            let allowSoftBypass = Date() >= softBypassAfter
             let blocked = firebaseBackend.isBootstrappingOrgDataLoad
                 || !firebaseBackend.hasBootstrappedOrgDataLoad
                 || quiet
-                || storesBusy
+                || hardBusy
+                || (softBusy && !allowSoftBypass)
+                || (rosterEmpty && !allowSoftBypass)
             if !blocked {
-                let didRun = await refreshWarningsAsync()
+                let didRun = await refreshWarningsAsync(bypassSoftStoreGates: allowSoftBypass || softBusy)
                 if didRun { return }
             } else {
                 print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting for quiet/stores")
@@ -385,11 +389,14 @@ struct WarningsDetailView: View {
             try? await Task.sleep(nanoseconds: 400_000_000)
             if Task.isCancelled { return }
         }
-        // Last attempt even if still busy — better than leaving the sheet permanently empty.
-        _ = await refreshWarningsAsync()
+        // Final attempt: soft/hard store gates may still be stuck; never bypass quiet/bootstrap.
+        _ = await refreshWarningsAsync(bypassSoftStoreGates: true, bypassAllStoreGates: true)
     }
 
-    private func refreshWarningsAsync() async -> Bool {
+    private func refreshWarningsAsync(
+        bypassSoftStoreGates: Bool = false,
+        bypassAllStoreGates: Bool = false
+    ) async -> Bool {
         isRefreshing = true
         defer { isRefreshing = false }
         return await WarningsRefreshHelper.refreshSharedWarnings(
@@ -401,7 +408,9 @@ struct WarningsDetailView: View {
             holidayStore: holidayStore,
             firebaseBackend: firebaseBackend,
             appSettings: appSettings,
-            force: true
+            force: true,
+            bypassSoftStoreGates: bypassSoftStoreGates,
+            bypassAllStoreGates: bypassAllStoreGates
         )
     }
 }

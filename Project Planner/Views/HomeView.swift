@@ -1332,19 +1332,23 @@ struct HomeView: View {
         guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
 
         let deadline = Date().addingTimeInterval(90)
+        let softBypassAfter = Date().addingTimeInterval(45)
         while Date() < deadline {
             if didSchedulePostQuietWarningsRefresh { return }
 
             let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
-            let storesBusy = bookingStore.isLoading
+            let hardBusy = bookingStore.isLoading
                 || operativeStore.isLoading
                 || projectStore.isLoading
-                || holidayStore.isLoading
-                || managerScheduleStore.isLoading
+            let softBusy = holidayStore.isLoading || managerScheduleStore.isLoading
+            let rosterEmpty = operativeStore.allOperatives.isEmpty && userStore.organizationUsers.isEmpty
+            let allowSoftBypass = Date() >= softBypassAfter
             let blocked = firebaseBackend.isBootstrappingOrgDataLoad
                 || !firebaseBackend.hasBootstrappedOrgDataLoad
                 || quiet
-                || storesBusy
+                || hardBusy
+                || (softBusy && !allowSoftBypass)
+                || (rosterEmpty && !allowSoftBypass)
 
             if !blocked {
                 print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh starting…")
@@ -1357,7 +1361,8 @@ struct HomeView: View {
                     holidayStore: holidayStore,
                     firebaseBackend: firebaseBackend,
                     appSettings: appSettings,
-                    force: true
+                    force: true,
+                    bypassSoftStoreGates: allowSoftBypass || softBusy
                 )
                 if didRun {
                     didSchedulePostQuietWarningsRefresh = true
@@ -1370,7 +1375,29 @@ struct HomeView: View {
             try? await Task.sleep(nanoseconds: 500_000_000)
             if Task.isCancelled { return }
         }
-        print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh timed out without running")
+
+        // Last chance after waiting — soft/hard store flags can stick true on hung fetches.
+        print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh final bypass attempt…")
+        let didRun = await WarningsRefreshHelper.refreshSharedWarnings(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings,
+            force: true,
+            bypassSoftStoreGates: true,
+            bypassAllStoreGates: true
+        )
+        if didRun {
+            didSchedulePostQuietWarningsRefresh = true
+            homeWarningCount = WarningsService.shared.warningCount
+            print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh finished (bypass) count=\(homeWarningCount)")
+        } else {
+            print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh timed out without running")
+        }
     }
     
     private var assignedTasksCount: Int {

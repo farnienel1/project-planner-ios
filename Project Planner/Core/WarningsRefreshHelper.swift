@@ -11,6 +11,14 @@ enum WarningsRefreshHelper {
     private static let minRefreshInterval: TimeInterval = 45
 
     /// Returns `true` when a recompute ran (or an in-flight one completed under `force`).
+    ///
+    /// - Parameters:
+    ///   - force: Ignore the min refresh interval.
+    ///   - bypassSoftStoreGates: Allow snapshot while holiday / manager-schedule are still
+    ///     loading. Hard gates (bootstrap, quiet, bookings/operatives/projects) still apply
+    ///     unless `bypassAllStoreGates` is also set.
+    ///   - bypassAllStoreGates: Final-attempt escape hatch after callers have waited. Still
+    ///     never runs during org bootstrap or the launch quiet period (those jetsam Simulator).
     @MainActor
     @discardableResult
     static func refreshSharedWarnings(
@@ -22,13 +30,14 @@ enum WarningsRefreshHelper {
         holidayStore: HolidayStore,
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore,
-        force: Bool = false
+        force: Bool = false,
+        bypassSoftStoreGates: Bool = false,
+        bypassAllStoreGates: Bool = false
     ) async -> Bool {
         guard userStore.hasAdminAccess() else { return false }
 
         // Always skip during bootstrap / launch quiet — even when `force` is true.
-        // Callers (Home post-quiet once, Warnings sheet) must wait for quiet + settled
-        // stores before invoking; bypassing these guards jetsams Simulator after bootstrap.
+        // Callers (Home post-quiet once, Warnings sheet) must wait for quiet before invoking.
         if firebaseBackend.isBootstrappingOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap in progress)")
             return false
@@ -42,10 +51,23 @@ enum WarningsRefreshHelper {
             return false
         }
 
-        // Even with force, do not snapshot while core stores are mid-fetch — empty
-        // bookings/operatives produce a false "all clear" that sticks until the next refresh.
-        if bookingStore.isLoading || operativeStore.isLoading || holidayStore.isLoading || projectStore.isLoading || managerScheduleStore.isLoading {
-            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (stores still loading)")
+        let hardBusy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading
+        let softBusy = holidayStore.isLoading || managerScheduleStore.isLoading
+
+        if hardBusy && !bypassAllStoreGates {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (hard stores still loading)")
+            return false
+        }
+        if softBusy && !bypassSoftStoreGates && !bypassAllStoreGates {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (soft stores still loading — holidays/manager schedule)")
+            return false
+        }
+
+        // Unbooked labour needs either org users or roster operatives. Wait rather than
+        // publishing a false all-clear when both are still empty after bootstrap.
+        let rosterEmpty = operativeStore.allOperatives.isEmpty && userStore.organizationUsers.isEmpty
+        if rosterEmpty && !bypassAllStoreGates {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (users + operatives still empty)")
             return false
         }
 
@@ -93,6 +115,12 @@ enum WarningsRefreshHelper {
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore
     ) async {
+        // Ensure org users are present so operative-mode / manager unbooked checks match Daily Overview.
+        if userStore.organizationUsers.isEmpty {
+            print("🔥🔥🔥 DEBUG: Warnings refresh loading organization users (was empty)…")
+            await userStore.loadOrganizationUsers()
+        }
+
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
@@ -110,6 +138,11 @@ enum WarningsRefreshHelper {
         let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
         let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
         let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
+        let users = userStore.organizationUsers
+
+        print(
+            "🔥🔥🔥 DEBUG: Warnings refresh snapshot inputs — users=\(users.count) activeOps=\(activeOperatives.count) bookings=\(bookingStore.bookings.count) mgr=\(managerScheduleStore.managerSiteBookings.count) holidays=\(holidayStore.bookings.count) standardPaid=\(policy.standardPaidHours)"
+        )
 
         // Yield so Home can finish painting before the heavy snapshot work.
         await Task.yield()
@@ -118,7 +151,7 @@ enum WarningsRefreshHelper {
             operatives: activeOperatives,
             bookings: bookingStore.bookings,
             projects: projects,
-            users: userStore.organizationUsers,
+            users: users,
             managerSiteBookings: managerScheduleStore.managerSiteBookings,
             holidayBookings: holidayStore.bookings,
             payrollTimePolicy: policy,
@@ -128,6 +161,13 @@ enum WarningsRefreshHelper {
             materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
             materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsTomorrow
+        )
+
+        let unbookedToday = WarningsService.shared.activeWarnings.filter {
+            $0.type == .unbookedLabour && ($0.occurrenceDate.map { cal.isDate($0, inSameDayAs: today) } ?? false)
+        }.count
+        print(
+            "🔥🔥🔥 DEBUG: Warnings refresh finished count=\(WarningsService.shared.warningCount) unbookedToday=\(unbookedToday)"
         )
         postWarningsCountDidChange()
     }
