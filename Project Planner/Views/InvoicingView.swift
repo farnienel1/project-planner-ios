@@ -1252,7 +1252,11 @@ private struct MyTimesheetView: View {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.red)
-                    Text("If you don't agree with the hours shown, contact your line manager to amend your booking schedule before signing. Agreed changes appear on a new timesheet.")
+                    Text(
+                        (userStore.displayUser?.hasLineManager == true)
+                        ? "If you don't agree with the hours shown, contact your line manager to amend your booking schedule before signing. Agreed changes appear on a new timesheet."
+                        : "If you don't agree with the hours shown, amend your booking schedule before signing. Agreed changes appear on a new timesheet."
+                    )
                         .font(.footnote)
                         .foregroundStyle(Color(red: 0.498, green: 0.113, blue: 0.113))
                 }
