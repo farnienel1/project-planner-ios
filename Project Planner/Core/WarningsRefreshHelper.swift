@@ -10,7 +10,9 @@ enum WarningsRefreshHelper {
     @MainActor private static var inFlightTask: Task<Void, Never>?
     private static let minRefreshInterval: TimeInterval = 45
 
+    /// Returns `true` when a recompute ran (or an in-flight one completed under `force`).
     @MainActor
+    @discardableResult
     static func refreshSharedWarnings(
         operativeStore: OperativeStore,
         bookingStore: BookingStore,
@@ -21,38 +23,42 @@ enum WarningsRefreshHelper {
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore,
         force: Bool = false
-    ) async {
-        guard userStore.hasAdminAccess() else { return }
+    ) async -> Bool {
+        guard userStore.hasAdminAccess() else { return false }
 
         // Always skip during bootstrap / launch quiet — even when `force` is true.
-        // Opening Warnings used to pass force:true and bypass these guards, which
-        // jetsams the Simulator right after Home bootstrap finishes.
+        // Callers (Home post-quiet once, Warnings sheet) must wait for quiet + settled
+        // stores before invoking; bypassing these guards jetsams Simulator after bootstrap.
         if firebaseBackend.isBootstrappingOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap in progress)")
-            return
+            return false
         }
         if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
-            return
+            return false
         }
         if !firebaseBackend.hasBootstrappedOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap not finished)")
-            return
+            return false
+        }
+
+        // Even with force, do not snapshot while core stores are mid-fetch — empty
+        // bookings/operatives produce a false "all clear" that sticks until the next refresh.
+        if bookingStore.isLoading || operativeStore.isLoading || holidayStore.isLoading || projectStore.isLoading || managerScheduleStore.isLoading {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (stores still loading)")
+            return false
         }
 
         if !force {
-            if bookingStore.isLoading || operativeStore.isLoading || holidayStore.isLoading || projectStore.isLoading {
-                return
-            }
             let now = Date()
             if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < minRefreshInterval {
-                return
+                return false
             }
         }
 
         if let inFlightTask {
             await inFlightTask.value
-            if !force { return }
+            if !force { return true }
         }
 
         let task = Task { @MainActor in
@@ -73,6 +79,7 @@ enum WarningsRefreshHelper {
         if inFlightTask == task {
             inFlightTask = nil
         }
+        return true
     }
 
     @MainActor

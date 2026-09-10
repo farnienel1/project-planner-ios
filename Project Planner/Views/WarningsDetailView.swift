@@ -5,12 +5,6 @@
 
 import SwiftUI
 
-/// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
-enum WarningsBuildStamp {
-    static let id = "wfix-let-stores"
-    static let homePillTitle = "Warnings · \(id)"
-}
-
 struct WarningsDetailView: View {
     @Environment(\.dismiss) private var dismiss
     /// Only the warnings list needs observation. Holding the other stores as `let`
@@ -46,19 +40,11 @@ struct WarningsDetailView: View {
                 }
             }
             .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .navigationTitle("Warnings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") { dismiss() }
-                }
-                ToolbarItem(placement: .principal) {
-                    VStack(spacing: 1) {
-                        Text("Warnings")
-                            .font(.headline)
-                        Text(WarningsBuildStamp.id)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
                 }
                 if userStore.hasAdminAccess() {
                     ToolbarItem(placement: .navigationBarTrailing) {
@@ -81,11 +67,8 @@ struct WarningsDetailView: View {
                         .padding(.top, 8)
                 }
             }
-            .onAppear {
-                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id)")
-            }
             .task {
-                // Defer recompute so the sheet can paint first.
+                // Defer recompute so the sheet can paint first, then wait for quiet + stores.
                 guard !didScheduleRefresh else { return }
                 didScheduleRefresh = true
                 try? await Task.sleep(nanoseconds: 750_000_000)
@@ -174,9 +157,6 @@ struct WarningsDetailView: View {
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
-            Text(WarningsBuildStamp.id)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -382,20 +362,37 @@ struct WarningsDetailView: View {
     }
 
     private func refreshAfterLaunchQuietIfNeeded() async {
-        while firebaseBackend.isBootstrappingOrgDataLoad
-            || !firebaseBackend.hasBootstrappedOrgDataLoad
-            || (firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false) {
-            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting quiet \(WarningsBuildStamp.id)")
+        // Wait for launch quiet AND populated core stores. Force refresh used to run
+        // while bookings/holidays were still empty → false "No active warnings".
+        let deadline = Date().addingTimeInterval(90)
+        while Date() < deadline {
+            let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
+            let storesBusy = bookingStore.isLoading
+                || operativeStore.isLoading
+                || projectStore.isLoading
+                || holidayStore.isLoading
+                || managerScheduleStore.isLoading
+            let blocked = firebaseBackend.isBootstrappingOrgDataLoad
+                || !firebaseBackend.hasBootstrappedOrgDataLoad
+                || quiet
+                || storesBusy
+            if !blocked {
+                let didRun = await refreshWarningsAsync()
+                if didRun { return }
+            } else {
+                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting for quiet/stores")
+            }
             try? await Task.sleep(nanoseconds: 400_000_000)
             if Task.isCancelled { return }
         }
-        await refreshWarningsAsync()
+        // Last attempt even if still busy — better than leaving the sheet permanently empty.
+        _ = await refreshWarningsAsync()
     }
 
-    private func refreshWarningsAsync() async {
+    private func refreshWarningsAsync() async -> Bool {
         isRefreshing = true
         defer { isRefreshing = false }
-        await WarningsRefreshHelper.refreshSharedWarnings(
+        return await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
             projectStore: projectStore,
