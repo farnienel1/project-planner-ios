@@ -8,7 +8,12 @@
 import Foundation
 
 enum MondayFirstCalendarSupport {
-    static let weekdayHeaders = ["M", "T", "W", "T", "F", "S", "S"]
+    /// Unique ids — labels alone duplicate ("T"/"S" twice) and break SwiftUI ForEach.
+    static let weekdayHeaderItems: [(id: String, label: String)] = [
+        ("mon", "M"), ("tue", "T"), ("wed", "W"), ("thu", "T"),
+        ("fri", "F"), ("sat", "S"), ("sun", "S")
+    ]
+    static let weekdayHeaders = weekdayHeaderItems.map(\.label)
 
     /// Inclusive date range covering full Mon–Sun weeks that contain `month`.
     static func gridRange(for month: Date, calendar: Calendar = .current) -> (start: Date, end: Date) {

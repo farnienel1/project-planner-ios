@@ -8,7 +8,7 @@ import Foundation
 enum WarningsRefreshHelper {
     @MainActor private static var lastRefreshAt: Date?
     @MainActor private static var inFlightTask: Task<Void, Never>?
-    private static let minRefreshInterval: TimeInterval = 5
+    private static let minRefreshInterval: TimeInterval = 45
 
     @MainActor
     static func refreshSharedWarnings(

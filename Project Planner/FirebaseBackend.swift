@@ -7771,7 +7771,7 @@ extension FirebaseBackend {
     func listTimesheetStates(
         organizationId: String,
         userId: String,
-        limit: Int = 52
+        limit: Int = 200
     ) async throws -> [[String: Any]] {
         let snapshot = try await db.collection("organizations")
             .document(organizationId)

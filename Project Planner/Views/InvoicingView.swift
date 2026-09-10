@@ -677,22 +677,18 @@ private struct MyTimesheetsHubView: View {
     }
 
     private var currentWeek: WeekRange {
-        TimesheetPayrollPolicy.timesheetWeekRange(for: settings)
+        TimesheetPayrollPolicy.payPeriodContaining(settings: settings)
     }
 
     private var pendingWeeks: [WeekRange] {
         guard let user = userStore.displayUser else { return [] }
         guard user.hasLineManager else { return [] }
-        var weeks: [WeekRange] = []
-        let current = currentWeek
-        for offset in 0...12 {
-            let week = offset == 0 ? current : current.offset(byWeeks: -offset)
+        var weeks: [WeekRange] = [currentWeek]
+        weeks.append(contentsOf: TimesheetPayrollPolicy.previousPayPeriods(count: 24, settings: settings))
+        return weeks.filter { week in
             let draft = TimesheetDraftStore.load(userId: user.id, weekStart: week.start)
-            if TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user) {
-                weeks.append(week)
-            }
+            return TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user)
         }
-        return weeks
     }
 
     private func draftHasPastContent(_ draft: TimesheetDraft) -> Bool {
@@ -707,12 +703,13 @@ private struct MyTimesheetsHubView: View {
         let current = currentWeek
         var byStart: [Date: WeekRange] = [:]
         for weekStart in TimesheetDraftStore.discoverStoredWeekStarts(userId: userId) {
-            guard weekStart != current.start else { continue }
-            let week = WeekRange.from(start: weekStart)
-            let draft = TimesheetDraftStore.load(userId: userId, weekStart: week.start)
-            if draftHasPastContent(draft) {
-                byStart[week.start] = week
-            }
+            let week = TimesheetPayrollPolicy.periodMatchingStoredStart(weekStart, settings: settings)
+            guard week.start != current.start else { continue }
+            byStart[week.start] = week
+        }
+        for week in TimesheetPayrollPolicy.previousPayPeriods(count: 120, settings: settings) {
+            guard week.start != current.start else { continue }
+            byStart[week.start] = week
         }
         let sorted = byStart.values.sorted(by: { $0.start > $1.start })
         if !sorted.isEmpty {
@@ -733,44 +730,38 @@ private struct MyTimesheetsHubView: View {
         var byStart: [Date: WeekRange] = [:]
 
         for weekStart in TimesheetDraftStore.discoverStoredWeekStarts(userId: userId) {
-            guard weekStart != current.start else { continue }
-            let week = WeekRange.from(start: weekStart)
-            let draft = TimesheetDraftStore.load(userId: userId, weekStart: week.start)
-            if draftHasPastContent(draft) {
-                byStart[week.start] = week
-            }
+            let week = TimesheetPayrollPolicy.periodMatchingStoredStart(weekStart, settings: settings)
+            guard week.start != current.start else { continue }
+            byStart[week.start] = week
         }
 
         if let orgId = organizationId {
             if let rows = try? await firebaseBackend.listTimesheetStates(
                 organizationId: orgId,
                 userId: userId,
-                limit: 80
+                limit: 200
             ) {
                 for row in rows {
                     guard let weekStart = (row["weekStart"] as? Timestamp)?.dateValue() else { continue }
-                    let week = WeekRange.from(start: weekStart)
+                    let storedStart = Calendar.current.startOfDay(for: weekStart)
+                    let week = TimesheetPayrollPolicy.periodMatchingStoredStart(storedStart, settings: settings)
                     guard week.start != current.start else { continue }
                     guard let draft = TimesheetDraftStore.decodeFirestoreMap(row) else { continue }
-                    guard draftHasPastContent(draft) else { continue }
-                    TimesheetDraftStore.save(draft, userId: userId, weekStart: week.start)
+                    // Always persist under the Firestore weekStart key — never remap to ISO Monday.
+                    TimesheetDraftStore.save(draft, userId: userId, weekStart: storedStart)
                     byStart[week.start] = week
                 }
             }
 
-            for week in TimesheetPayrollPolicy.previousPayPeriods(count: 24, settings: settings) {
+            for week in TimesheetPayrollPolicy.previousPayPeriods(count: 120, settings: settings) {
                 guard week.start != current.start else { continue }
-                if byStart[week.start] != nil { continue }
+                byStart[week.start] = week
                 _ = await TimesheetDraftStore.refreshFromCloud(
                     userId: userId,
                     weekStart: week.start,
                     firebaseBackend: firebaseBackend,
                     organizationId: orgId
                 )
-                let draft = TimesheetDraftStore.load(userId: userId, weekStart: week.start)
-                if draftHasPastContent(draft) {
-                    byStart[week.start] = week
-                }
             }
         }
 
@@ -966,7 +957,7 @@ private struct MyTimesheetView: View {
 
     init(settings: OrganizationInvoicingSettings, week: WeekRange? = nil) {
         self.settings = settings
-        _week = State(initialValue: week ?? TimesheetPayrollPolicy.timesheetWeekRange(for: settings))
+        _week = State(initialValue: week ?? TimesheetPayrollPolicy.payPeriodContaining(settings: settings))
     }
 
     private var currentUserId: String {
@@ -2023,11 +2014,12 @@ private struct PreviousTimesheetsView: View {
         if let rows = try? await firebaseBackend.listTimesheetStates(
             organizationId: orgId,
             userId: userId,
-            limit: 80
+            limit: 200
         ) {
             for row in rows {
                 guard let weekStart = (row["weekStart"] as? Timestamp)?.dateValue() else { continue }
-                let week = WeekRange.from(start: weekStart)
+                let storedStart = Calendar.current.startOfDay(for: weekStart)
+                let week = TimesheetPayrollPolicy.periodMatchingStoredStart(storedStart, settings: settings)
                 guard let draft = TimesheetDraftStore.decodeFirestoreMap(row) else { continue }
                 var adjusted = draft
                 if let user = userStore.displayUser {
@@ -2039,7 +2031,7 @@ private struct PreviousTimesheetsView: View {
                     || adjusted.managerSignedAt != nil
                     || !adjusted.managerNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 guard hasAnyContent else { continue }
-                TimesheetDraftStore.save(adjusted, userId: userId, weekStart: week.start)
+                TimesheetDraftStore.save(adjusted, userId: userId, weekStart: storedStart)
                 output.append(
                     PreviousTimesheetRun(
                         id: "prev-\(Int(week.start.timeIntervalSince1970))",
@@ -2050,9 +2042,9 @@ private struct PreviousTimesheetsView: View {
             }
         }
         if output.isEmpty {
-            let current = WeekRange.current(settings: settings)
-            for offset in 1...16 {
-                let week = current.offset(byWeeks: -offset)
+            let current = TimesheetPayrollPolicy.payPeriodContaining(settings: settings)
+            for week in TimesheetPayrollPolicy.previousPayPeriods(count: 32, settings: settings) {
+                guard week.start != current.start else { continue }
                 let local = TimesheetDraftStore.load(userId: userId, weekStart: week.start)
                 _ = await TimesheetDraftStore.refreshFromCloud(
                     userId: userId,
@@ -2147,7 +2139,7 @@ private struct OperativeTimesheetsView: View {
 
     init(settings: OrganizationInvoicingSettings, week: WeekRange? = nil) {
         self.settings = settings
-        self.week = week ?? TimesheetPayrollPolicy.timesheetWeekRange(for: settings)
+        self.week = week ?? TimesheetPayrollPolicy.payPeriodContaining(settings: settings)
     }
 
     private var directReports: [AppUser] {
@@ -3664,7 +3656,7 @@ private enum InvoicePDFGenerationSupport {
 
         let draft = TimesheetDraftStore.load(
             userId: currentUser.id,
-            weekStart: WeekRange.from(start: period.startDate).start
+            weekStart: Calendar.current.startOfDay(for: period.startDate)
         )
         for entry in draft.priceWorkEntries {
             rows.append(
@@ -4115,7 +4107,7 @@ private struct GenerateInvoiceView: View {
 
         let draft = TimesheetDraftStore.load(
             userId: currentUser.id,
-            weekStart: WeekRange.from(start: period.startDate).start
+            weekStart: Calendar.current.startOfDay(for: period.startDate)
         )
         for entry in draft.priceWorkEntries {
             rows.append(

@@ -1334,7 +1334,11 @@ struct HomeView: View {
             if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
                 homeWarningCount = WarningsService.shared.warningCount
             } else {
+                // Defer warnings well after Home paints — snapshot work freezes Simulator after booking reloads.
                 Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 8_000_000_000)
+                    guard !bookingStore.isLoading, !projectStore.isLoading else { return }
+                    print("🔥🔥🔥 DEBUG: Home deferred warnings refresh starting…")
                     await WarningsRefreshHelper.refreshSharedWarnings(
                         operativeStore: operativeStore,
                         bookingStore: bookingStore,
@@ -1346,6 +1350,7 @@ struct HomeView: View {
                         appSettings: appSettings
                     )
                     homeWarningCount = WarningsService.shared.warningCount
+                    print("🔥🔥🔥 DEBUG: Home deferred warnings refresh finished")
                 }
             }
         } else if userStore.hasAdminAccess() {

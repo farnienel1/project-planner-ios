@@ -495,8 +495,8 @@ struct ScheduleSubcontractorView: View {
     private var calendarGrid: some View {
         VStack(spacing: 10) {
             HStack(spacing: 0) {
-                ForEach(MondayFirstCalendarSupport.weekdayHeaders, id: \.self) { day in
-                    Text(day)
+                ForEach(MondayFirstCalendarSupport.weekdayHeaderItems, id: \.id) { day in
+                    Text(day.label)
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity)

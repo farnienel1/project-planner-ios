@@ -1148,8 +1148,8 @@ struct ScheduleOperativeView: View {
     private var calendarGridCompact: some View {
         VStack(spacing: 6) {
             HStack(spacing: 0) {
-                ForEach(MondayFirstCalendarSupport.weekdayHeaders, id: \.self) { day in
-                    Text(day)
+                ForEach(MondayFirstCalendarSupport.weekdayHeaderItems, id: \.id) { day in
+                    Text(day.label)
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
                         .frame(maxWidth: .infinity)

@@ -13,9 +13,10 @@ struct WeekRange: Hashable {
     let title: String
 
     static func current(settings: OrganizationInvoicingSettings = .default) -> WeekRange {
-        TimesheetPayrollPolicy.timesheetWeekRange(for: settings)
+        TimesheetPayrollPolicy.payPeriodContaining(referenceDate: Date(), settings: settings)
     }
 
+    /// ISO week reconstruction — only for true weekly ranges. Prefer `periodMatchingStoredStart` for pay runs.
     static func from(start: Date) -> WeekRange {
         let cal = Calendar.current
         let normalized = cal.startOfDay(for: start)
@@ -30,6 +31,13 @@ struct WeekRange: Hashable {
         let shifted = cal.date(byAdding: .day, value: 7 * weeks, to: start) ?? start
         return .from(start: shifted)
     }
+
+    static func titled(start: Date, end: Date, calendar: Calendar = .current) -> WeekRange {
+        let s = calendar.startOfDay(for: start)
+        let e = calendar.startOfDay(for: end)
+        let title = "\(s.formatted(date: .abbreviated, time: .omitted)) - \(e.formatted(date: .abbreviated, time: .omitted))"
+        return WeekRange(start: s, end: e, title: title)
+    }
 }
 
 enum TimesheetPayrollPolicy {
@@ -38,38 +46,57 @@ enum TimesheetPayrollPolicy {
         user.employmentType(on: calendar.startOfDay(for: day)) == .selfEmployed
     }
 
-    /// Open timesheet period for signing (most recent completed pay run).
+    /// Pay run that **contains** `referenceDate` (e.g. 10 Sep → 1–15 Sep for half-month orgs).
+    /// Use this for "Current pay run" in My Timesheets.
+    static func payPeriodContaining(
+        referenceDate: Date = Date(),
+        settings: OrganizationInvoicingSettings,
+        calendar: Calendar = .current
+    ) -> WeekRange {
+        let info = InvoicingPeriodResolver.resolve(
+            invoicing: settings,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+        return WeekRange.titled(
+            start: info.currentPeriodStart,
+            end: info.currentPeriodEnd,
+            calendar: calendar
+        )
+    }
+
+    /// Rebuild a stored timesheet's display period without remapping half-months onto ISO weeks.
+    static func periodMatchingStoredStart(
+        _ storedStart: Date,
+        settings: OrganizationInvoicingSettings,
+        calendar: Calendar = .current
+    ) -> WeekRange {
+        let day = calendar.startOfDay(for: storedStart)
+        let containing = payPeriodContaining(referenceDate: day, settings: settings, calendar: calendar)
+        if calendar.isDate(containing.start, inSameDayAs: day)
+            || (day >= containing.start && day <= containing.end) {
+            return containing
+        }
+        // Fallback: keep the stored start, estimate a 7-day window only for legacy weekly keys.
+        return WeekRange.from(start: day)
+    }
+
+    /// Most recent **completed** pay run (in arrears). Used for invoice generation of finished periods.
     static func timesheetWeekRange(
         for settings: OrganizationInvoicingSettings,
         referenceDate: Date = Date(),
         calendar: Calendar = .current
     ) -> WeekRange {
         let today = calendar.startOfDay(for: referenceDate)
-
-        if settings.paymentRunMode == .recurringTimeframe {
-            guard let startOfCurrentWeek = today.startOfISOWeek else { return WeekRange.from(start: today) }
-            let startOffset = settings.recurringRunStartDay.isoWeekOffset
-            let endOffset = settings.recurringRunEndDay.isoWeekOffset
-
-            guard let baseWeekStart = calendar.date(byAdding: .day, value: -7, to: startOfCurrentWeek),
-                  var startDate = calendar.date(byAdding: .day, value: startOffset, to: baseWeekStart),
-                  var endDate = calendar.date(byAdding: .day, value: endOffset, to: baseWeekStart) else {
-                return WeekRange.from(start: today)
+        let current = payPeriodContaining(referenceDate: today, settings: settings, calendar: calendar)
+        // If today's period has not ended yet, step to the immediately previous completed period.
+        if current.end >= today {
+            guard let dayBefore = calendar.date(byAdding: .day, value: -1, to: current.start) else {
+                return current
             }
-            if endOffset < startOffset {
-                endDate = calendar.date(byAdding: .day, value: 7, to: endDate) ?? endDate
-            }
-            while endDate >= today {
-                startDate = calendar.date(byAdding: .day, value: -7, to: startDate) ?? startDate
-                endDate = calendar.date(byAdding: .day, value: -7, to: endDate) ?? endDate
-            }
-            startDate = calendar.startOfDay(for: startDate)
-            endDate = calendar.startOfDay(for: endDate)
-            let title = "\(startDate.formatted(date: .abbreviated, time: .omitted)) - \(endDate.formatted(date: .abbreviated, time: .omitted))"
-            return WeekRange(start: startDate, end: endDate, title: title)
+            return payPeriodContaining(referenceDate: dayBefore, settings: settings, calendar: calendar)
         }
-
-        return monthDateRangePeriod(for: settings, referenceDate: referenceDate, calendar: calendar)
+        return current
     }
 
     /// Pay date for a completed timesheet period (when the user is considered paid).
@@ -116,7 +143,7 @@ enum TimesheetPayrollPolicy {
             return true
         }
 
-        let period = timesheetWeekRange(for: settings, referenceDate: referenceDate, calendar: calendar)
+        let period = payPeriodContaining(referenceDate: referenceDate, settings: settings, calendar: calendar)
         let hasSelfEmployedDays = calendarDays(from: period.start, to: period.end, calendar: calendar)
             .contains { isBillableSelfEmployedDay(user, on: $0, calendar: calendar) }
         guard hasSelfEmployedDays else { return false }
@@ -164,21 +191,21 @@ enum TimesheetPayrollPolicy {
         return calendar.startOfDay(for: referenceDate) <= calendar.startOfDay(for: payDate)
     }
 
-    /// Completed pay periods before the open period (works for weekly and month-range pay runs).
+    /// Prior pay periods before the current (containing-today) period.
+    /// Default ~5 years of semi-monthly runs (120) / weekly (~5 years).
     static func previousPayPeriods(
         before referenceDate: Date = Date(),
-        count: Int = 24,
+        count: Int = 120,
         settings: OrganizationInvoicingSettings,
         calendar: Calendar = .current
     ) -> [WeekRange] {
         var periods: [WeekRange] = []
-        var cursor = calendar.startOfDay(for: referenceDate)
+        let current = payPeriodContaining(referenceDate: referenceDate, settings: settings, calendar: calendar)
+        var cursor = current.start
         for _ in 0..<max(1, count) {
-            let open = timesheetWeekRange(for: settings, referenceDate: cursor, calendar: calendar)
-            guard let dayBefore = calendar.date(byAdding: .day, value: -1, to: open.start) else { break }
-            cursor = dayBefore
-            let previous = timesheetWeekRange(for: settings, referenceDate: cursor, calendar: calendar)
-            if periods.contains(where: { $0.start == previous.start }) { break }
+            guard let dayBefore = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
+            let previous = payPeriodContaining(referenceDate: dayBefore, settings: settings, calendar: calendar)
+            if periods.contains(where: { calendar.isDate($0.start, inSameDayAs: previous.start) }) { break }
             periods.append(previous)
             cursor = previous.start
         }
@@ -198,47 +225,6 @@ enum TimesheetPayrollPolicy {
     }
 
     // MARK: - Private helpers
-
-    private static func monthDateRangePeriod(
-        for settings: OrganizationInvoicingSettings,
-        referenceDate: Date,
-        calendar: Calendar
-    ) -> WeekRange {
-        let today = calendar.startOfDay(for: referenceDate)
-        let ranges = settings.normalizedRanges
-        let dayOfMonth = calendar.component(.day, from: today)
-
-        guard let matched = ranges.first(where: { $0.contains(day: dayOfMonth) }) else {
-            return WeekRange.from(start: today)
-        }
-
-        var components = calendar.dateComponents([.year, .month], from: today)
-        components.day = matched.startDay
-        guard var startDate = calendar.date(from: components) else {
-            return WeekRange.from(start: today)
-        }
-        startDate = calendar.startOfDay(for: startDate)
-
-        components.day = matched.endDay
-        guard var endDate = calendar.date(from: components) else {
-            return WeekRange.from(start: today)
-        }
-        if matched.endDay < matched.startDay {
-            endDate = calendar.date(byAdding: .month, value: 1, to: endDate) ?? endDate
-        }
-        endDate = calendar.startOfDay(for: endDate)
-
-        if endDate >= today {
-            startDate = calendar.date(byAdding: .month, value: -1, to: startDate) ?? startDate
-            endDate = calendar.date(byAdding: .month, value: -1, to: endDate) ?? endDate
-            if matched.endDay < matched.startDay, endDate < startDate {
-                endDate = calendar.date(byAdding: .month, value: 1, to: endDate) ?? endDate
-            }
-        }
-
-        let title = "\(startDate.formatted(date: .abbreviated, time: .omitted)) - \(endDate.formatted(date: .abbreviated, time: .omitted))"
-        return WeekRange(start: startDate, end: endDate, title: title)
-    }
 
     private static func specificMonthPayDate(
         after periodEnd: Date,
