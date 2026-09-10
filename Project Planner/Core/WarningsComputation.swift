@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct WarningsComputationInput {
+struct WarningsComputationInput: @unchecked Sendable {
     let operatives: [Operative]
     let bookings: [Booking]
     let projects: [Project]
@@ -145,7 +145,9 @@ struct WarningsComputationSnapshot: Sendable {
 }
 
 enum WarningsComputation {
-    static func makeSnapshot(from input: WarningsComputationInput) -> WarningsComputationSnapshot {
+    /// Builds the sendable snapshot. Must stay off the main actor — payroll/clash
+    /// interval work over all bookings freezes/jetsams Simulator when run on MainActor.
+    nonisolated static func makeSnapshot(from input: WarningsComputationInput) -> WarningsComputationSnapshot {
         let cal = Calendar.current
 
         let operatives: [WarningsComputationSnapshot.OperativeSnapshot] = input.operatives.map { operative in

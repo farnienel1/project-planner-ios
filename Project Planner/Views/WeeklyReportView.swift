@@ -30,7 +30,7 @@ struct WeeklyReportView: View {
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var taskStore: ProjectTaskStore
 
-    @StateObject private var warningsService = WarningsService()
+    @ObservedObject private var warningsService = WarningsService.shared
     @State private var showingWarningsDetail = false
     @State private var startDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var endDate: Date = Calendar.current.startOfDay(for: Date())
@@ -62,7 +62,9 @@ struct WeeklyReportView: View {
         let cal = Calendar.current
         let start = cal.startOfDay(for: startDate)
         let end = cal.startOfDay(for: endDate)
-        return start...end
+        let lower = min(start, end)
+        let upper = max(start, end)
+        return lower...upper
     }
 
     private var hasReportWarnings: Bool {

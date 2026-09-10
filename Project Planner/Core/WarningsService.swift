@@ -234,9 +234,11 @@ class WarningsService: ObservableObject {
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
             materialItemsForTomorrow: materialItemsForTomorrow
         )
-        let snapshot = WarningsComputation.makeSnapshot(from: input)
+        // Snapshot + generate both off main — makeSnapshot alone was enough to jetsam
+        // when opening Warnings forced a refresh right after Home bootstrap.
         let generated = await Task.detached(priority: .utility) {
-            WarningsComputation.generate(snapshot)
+            let snapshot = WarningsComputation.makeSnapshot(from: input)
+            return WarningsComputation.generate(snapshot)
         }.value
         guard generation == updateGeneration else { return }
         resolutionStore.pruneDismissedUnbookedKeys(

@@ -77,6 +77,7 @@ struct WarningsDetailView: View {
             }
             .appChromeNavigationBarSurface()
             .task {
+                // Soft refresh after open; bootstrap/quiet guards still apply.
                 await refreshWarningsAsync()
             }
             .sheet(item: $openDayDate) { day in

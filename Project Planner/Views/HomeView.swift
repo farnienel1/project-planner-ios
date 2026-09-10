@@ -1343,21 +1343,22 @@ struct HomeView: View {
     }
 
     private func openWarningsDetail() async {
-        if userStore.hasAdminAccess() {
-            await WarningsRefreshHelper.refreshSharedWarnings(
-                operativeStore: operativeStore,
-                bookingStore: bookingStore,
-                projectStore: projectStore,
-                userStore: userStore,
-                managerScheduleStore: managerScheduleStore,
-                holidayStore: holidayStore,
-                firebaseBackend: firebaseBackend,
-                appSettings: appSettings,
-                force: true
-            )
-            homeWarningCount = WarningsService.shared.warningCount
-        }
+        // Present immediately with cached counts — never block the sheet on a forced
+        // recompute (that was freezing/jetsaming Simulator right after bootstrap).
         presentWarningsDetail()
+        guard userStore.hasAdminAccess() else { return }
+        await WarningsRefreshHelper.refreshSharedWarnings(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings,
+            force: true
+        )
+        homeWarningCount = WarningsService.shared.warningCount
     }
     
     private var assignedTasksCount: Int {
