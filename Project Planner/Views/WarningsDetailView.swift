@@ -5,13 +5,17 @@
 
 import SwiftUI
 
+/// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
+enum WarningsBuildStamp {
+    static let id = "wfix-let-stores"
+    static let homePillTitle = "Warnings · \(id)"
+}
+
 struct WarningsDetailView: View {
     @Environment(\.dismiss) private var dismiss
-    /// Only warningsService needs observation — list/hero must refresh when warnings change.
+    /// Only the warnings list needs observation. Holding the other stores as `let`
+    /// avoids subscribing to ~11 large ObservableObjects (jetsam on Simulator sheet open).
     @ObservedObject var warningsService: WarningsService
-    // Pass stores as plain `let` refs (not @ObservedObject). Observing ~12 large org stores
-    // from a sheet after bootstrap (~90+ bookings) can invalidate body on every publish and
-    // jetsam Simulator. Sheets still need explicit refs (EnvironmentObject is unreliable).
     let projectStore: ProjectStore
     let userStore: UserStore
     let operativeStore: OperativeStore
@@ -30,6 +34,7 @@ struct WarningsDetailView: View {
     @State private var warningPendingDismiss: Warning?
     @State private var showingWarningsSettings = false
     @State private var isRefreshing = false
+    @State private var didScheduleRefresh = false
 
     var body: some View {
         NavigationStack {
@@ -41,7 +46,6 @@ struct WarningsDetailView: View {
                 }
             }
             .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
-            .navigationTitle("Warnings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -51,7 +55,7 @@ struct WarningsDetailView: View {
                     VStack(spacing: 1) {
                         Text("Warnings")
                             .font(.headline)
-                        Text("build wfix-let-stores")
+                        Text(WarningsBuildStamp.id)
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
@@ -78,9 +82,14 @@ struct WarningsDetailView: View {
                 }
             }
             .onAppear {
-                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED build=wfix-let-stores (let stores, observe warnings only)")
+                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id)")
             }
             .task {
+                // Defer recompute so the sheet can paint first.
+                guard !didScheduleRefresh else { return }
+                didScheduleRefresh = true
+                try? await Task.sleep(nanoseconds: 750_000_000)
+                guard !Task.isCancelled else { return }
                 await refreshAfterLaunchQuietIfNeeded()
             }
             .sheet(isPresented: $showingWarningsSettings) {
@@ -165,6 +174,9 @@ struct WarningsDetailView: View {
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
+            Text(WarningsBuildStamp.id)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -251,7 +263,6 @@ struct WarningsDetailView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
             if let d = warning.unbookedLabour {
-                // Enumerated ids avoid ForEach traps when two people share a display name.
                 ForEach(Array(d.names.enumerated()), id: \.offset) { _, name in
                     Text("• \(name)")
                         .font(.system(size: 12))
@@ -371,11 +382,10 @@ struct WarningsDetailView: View {
     }
 
     private func refreshAfterLaunchQuietIfNeeded() async {
-        // Never recompute while launch quiet / bootstrap is active — that jetsams Simulator.
         while firebaseBackend.isBootstrappingOrgDataLoad
             || !firebaseBackend.hasBootstrappedOrgDataLoad
             || (firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false) {
-            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting for launch quiet/bootstrap to end")
+            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting quiet \(WarningsBuildStamp.id)")
             try? await Task.sleep(nanoseconds: 400_000_000)
             if Task.isCancelled { return }
         }
