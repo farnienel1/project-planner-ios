@@ -1331,13 +1331,6 @@ struct HomeView: View {
             homeWarningCount = WarningsService.shared.warningCount
         }
     }
-
-    private func openWarningsDetail() async {
-        // Present only — never block or recompute on the tap path.
-        // Refresh runs inside the sheet after launch quiet ends.
-        print("🔥🔥🔥 DEBUG: WARNINGS_OPEN tapped — presenting sheet")
-        presentWarningsDetail()
-    }
     
     private var assignedTasksCount: Int {
         if userStore.isOperativeMode() {
