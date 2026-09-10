@@ -177,7 +177,7 @@ struct HomeView: View {
             presentTasksDetail()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToWarnings"))) { _ in
-            print("🔥🔥🔥 DEBUG: WARNINGS_NAVIGATE_SYNC build=wfix-let-stores")
+            print("🔥🔥🔥 DEBUG: WARNINGS_NAVIGATE_SYNC \(WarningsBuildStamp.id)")
             showingTasksDetail = false
             showingWarningsDetail = true
         }
@@ -731,11 +731,11 @@ struct HomeView: View {
                     icon: "exclamationmark.triangle.fill",
                     iconTint: Color(red: 0.64, green: 0.18, blue: 0.18),
                     iconBackground: Color(red: 0.99, green: 0.92, blue: 0.92),
-                    title: "Warnings · wfix-let-stores",
+                    title: WarningsBuildStamp.homePillTitle,
                     value: homeWarningCount == 0 ? "All clear" : "\(homeWarningCount) active"
                 ) {
-                    // Sync log proves this binary includes the let-stores Warnings open fix.
-                    print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON_SYNC build=wfix-let-stores")
+                    // Sync log proves this binary includes the Warnings open fix.
+                    print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON_SYNC \(WarningsBuildStamp.id)")
                     showingTasksDetail = false
                     showingWarningsDetail = true
                 }
