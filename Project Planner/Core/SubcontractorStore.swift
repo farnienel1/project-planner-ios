@@ -24,13 +24,24 @@ class SubcontractorStore: ObservableObject {
         }
         isLoading = true
         errorMessage = nil
+        print("🔥🔥🔥 DEBUG: SubcontractorStore.loadData starting for org \(orgId)…")
         do {
             async let loadedSubcontractors = firebaseBackend.loadSubcontractors(organizationId: orgId)
             async let loadedBookings = firebaseBackend.loadSubcontractorBookings(organizationId: orgId)
-            subcontractors = try await loadedSubcontractors
-            bookings = try await loadedBookings
+            let firms = try await loadedSubcontractors
+            let firmBookings = try await loadedBookings
+            // Deduplicate contact ids within each firm — duplicate ForEach ids crash SwiftUI.
+            subcontractors = firms.map { firm in
+                var copy = firm
+                var seen = Set<UUID>()
+                copy.contacts = firm.contacts.filter { seen.insert($0.id).inserted }
+                return copy
+            }
+            bookings = firmBookings
+            print("🔥🔥🔥 DEBUG: SubcontractorStore.loadData finished — \(subcontractors.count) firms, \(bookings.count) bookings")
         } catch {
             errorMessage = error.localizedDescription
+            print("🔥🔥🔥 DEBUG: SubcontractorStore.loadData failed: \(error.localizedDescription)")
         }
         isLoading = false
     }

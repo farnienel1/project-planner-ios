@@ -22,6 +22,7 @@ struct OperativeProfileView: View {
 
     @State private var showingEdit = false
     @State private var profileRefreshToken = 0
+    @State private var certificateViewerURL: IdentifiableURL?
 
     /// Admins, or managers with the Operatives permission — same gate as Manage Operatives.
     private var canOpenOperativeSettings: Bool {
@@ -160,6 +161,9 @@ struct OperativeProfileView: View {
                     .environmentObject(holidayStore)
                     .environmentObject(firebaseBackend)
                     .environmentObject(notificationService)
+            }
+            .sheet(item: $certificateViewerURL) { item in
+                InAppRemoteDocumentViewer(remoteURL: item.url, title: "Certificate")
             }
         }
     }
@@ -367,8 +371,10 @@ struct OperativeProfileView: View {
                                             .foregroundStyle(ManageUserProfilePalette.textSecondary)
                                     }
                                     if let certificateURL = row.certificateURL {
-                                        Link("View certificate", destination: certificateURL)
-                                            .font(.system(size: 12, weight: .medium))
+                                        Button("View certificate") {
+                                            certificateViewerURL = IdentifiableURL(certificateURL)
+                                        }
+                                        .font(.system(size: 12, weight: .medium))
                                     }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)

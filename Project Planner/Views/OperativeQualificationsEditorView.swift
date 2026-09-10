@@ -11,7 +11,6 @@ enum OperativeQualificationsPresentation: Equatable {
 
 struct OperativeQualificationsEditorView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openURL) private var openURL
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
@@ -29,6 +28,7 @@ struct OperativeQualificationsEditorView: View {
     /// Local temp copies of security-scoped picks, ready to upload on Save.
     @State private var certificateUploadTargets: [UUID: URL] = [:]
     @State private var selectedUploadQualificationId: UUID?
+    @State private var certificateViewerURL: IdentifiableURL?
     @State private var isSaving = false
     @State private var errorMessage: String?
 
@@ -143,6 +143,9 @@ struct OperativeQualificationsEditorView: View {
         .onChange(of: operative.updatedAt) { _, _ in
             guard isMyQualifications, !hasUnsavedChanges else { return }
             applyOperativeSnapshot(operative)
+        }
+        .sheet(item: $certificateViewerURL) { item in
+            InAppRemoteDocumentViewer(remoteURL: item.url, title: "Certificate")
         }
     }
 
@@ -337,7 +340,7 @@ struct OperativeQualificationsEditorView: View {
                             .foregroundColor(.green)
                         if let url = URL(string: existingURLString) {
                             Button("View certificate") {
-                                openURL(url)
+                                certificateViewerURL = IdentifiableURL(url)
                             }
                             .font(.caption)
                         }

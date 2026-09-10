@@ -475,6 +475,7 @@ struct ContentView: View {
                     NavigationStack {
                         SubcontractorsView()
                             .environmentObject(subcontractorStore)
+                            .environmentObject(userStore)
                     }
                 } else {
                     NavigationStack { HomeView() }
