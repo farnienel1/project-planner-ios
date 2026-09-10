@@ -281,11 +281,11 @@ struct ContentView: View {
                         await performInitialDataLoadIfNeeded(force: true)
                     }
                 } else {
-                    // First org assignment: RootView owns store bootstrap. Do not clear the
-                    // bootstrap flag or force a second full-collection storm.
-                    print("🔥🔥🔥 DEBUG: Organization assigned \(newOrgId) - finishing ContentView side work only")
+                    // First org assignment: RootView owns store bootstrap. Do not call bootstrap
+                    // here — racing the RootView wait-loop caused a second full load storm / freeze.
+                    print("🔥🔥🔥 DEBUG: Organization assigned \(newOrgId) - ContentView side work only (RootView owns bootstrap)")
                     Task {
-                        await performInitialDataLoadIfNeeded(force: false)
+                        await completeFirstOrgAssignmentSideWork(organizationId: newOrgId)
                     }
                 }
             } else if oldValue != nil && newValue == nil {
@@ -339,6 +339,23 @@ struct ContentView: View {
         }
     }
     
+    private func completeFirstOrgAssignmentSideWork(organizationId: String) async {
+        guard firebaseBackend.isAuthenticated else { return }
+        if organizationId == lastLoadedOrganizationId { return }
+
+        await userStore.loadCurrentUser()
+        appSettings.loadSettings()
+        lastLoadedOrganizationId = organizationId
+
+        // Defer non-UI sync / local reminder work so launch stays responsive.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
+            await notificationService.refreshDailyMaterialCutOffReminder()
+            await notificationService.refreshQualificationExpiryReminders()
+        }
+    }
+
     private func performInitialDataLoadIfNeeded(force: Bool = false) async {
         guard firebaseBackend.isAuthenticated else { return }
         guard !isInitialDataLoading else { return }
@@ -351,7 +368,8 @@ struct ContentView: View {
         isInitialDataLoading = true
         defer { isInitialDataLoading = false }
 
-        if force || !firebaseBackend.hasBootstrappedOrgDataLoad {
+        // Never start a second bootstrap while one is already in flight (including org wait).
+        if force || (!firebaseBackend.hasBootstrappedOrgDataLoad && !firebaseBackend.isBootstrappingOrgDataLoad) {
             await PlannerStoreWiring.bootstrapOrgDataIfNeeded(
                 firebaseBackend: firebaseBackend,
                 projectStore: projectStore,

@@ -24,6 +24,10 @@ class ProjectTaskStore: ObservableObject {
     
     func loadData() async {
         if isLoading {
+            if firebaseBackend?.isBootstrappingOrgDataLoad == true {
+                print("🔥🔥🔥 DEBUG: TaskStore loadData ignored (already loading during bootstrap); not queueing follow-up")
+                return
+            }
             pendingReloadAfterCurrentLoad = true
             print("🔥🔥🔥 DEBUG: TaskStore loadData ignored (already loading); queued one follow-up reload")
             return
@@ -43,11 +47,14 @@ class ProjectTaskStore: ObservableObject {
         
         defer {
             isLoading = false
-            if pendingReloadAfterCurrentLoad {
+            if pendingReloadAfterCurrentLoad,
+               self.firebaseBackend?.isBootstrappingOrgDataLoad != true {
                 pendingReloadAfterCurrentLoad = false
                 Task { @MainActor in
                     await self.loadData()
                 }
+            } else {
+                pendingReloadAfterCurrentLoad = false
             }
         }
 

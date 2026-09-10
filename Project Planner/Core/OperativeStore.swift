@@ -129,6 +129,10 @@ class OperativeStore: ObservableObject {
     
     func loadData() {
         if isLoading {
+            if firebaseBackend?.isBootstrappingOrgDataLoad == true {
+                print("🔥🔥🔥 DEBUG: OperativeStore loadData ignored (already loading during bootstrap); not queueing follow-up")
+                return
+            }
             pendingReloadAfterCurrentLoad = true
             print("🔥🔥🔥 DEBUG: OperativeStore loadData ignored (already loading); queued one follow-up reload")
             return
@@ -156,7 +160,8 @@ class OperativeStore: ObservableObject {
                     isLoading = false
                     if pendingReloadAfterCurrentLoad {
                         pendingReloadAfterCurrentLoad = false
-                        if firebaseBackend?.hasBootstrappedOrgDataLoad == true {
+                        if firebaseBackend?.hasBootstrappedOrgDataLoad == true,
+                           firebaseBackend?.isBootstrappingOrgDataLoad != true {
                             Task { @MainActor in
                                 try? await Task.sleep(nanoseconds: 1_200_000_000)
                                 self.loadData()

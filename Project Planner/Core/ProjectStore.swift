@@ -128,6 +128,11 @@ class ProjectStore: ObservableObject {
     
     func loadData() {
         if isLoading {
+            // During bootstrap a second kick must not queue another full projects storm.
+            if firebaseBackend?.isBootstrappingOrgDataLoad == true {
+                print("🔥🔥🔥 DEBUG: ProjectStore loadData ignored (already loading during bootstrap); not queueing follow-up")
+                return
+            }
             pendingReloadAfterCurrentLoad = true
             print("🔥🔥🔥 DEBUG: ProjectStore loadData ignored (already loading); queued one follow-up reload")
             return
@@ -156,8 +161,9 @@ class ProjectStore: ObservableObject {
                     isLoading = false
                     if pendingReloadAfterCurrentLoad {
                         pendingReloadAfterCurrentLoad = false
-                        // Coalesce follow-ups: one delayed reload max, and only after bootstrap.
-                        if firebaseBackend?.hasBootstrappedOrgDataLoad == true {
+                        // Coalesce follow-ups: one delayed reload max, and only after bootstrap finishes.
+                        if firebaseBackend?.hasBootstrappedOrgDataLoad == true,
+                           firebaseBackend?.isBootstrappingOrgDataLoad != true {
                             print("🔥🔥🔥 DEBUG: ProjectStore running queued follow-up reload")
                             Task { @MainActor in
                                 try? await Task.sleep(nanoseconds: 1_200_000_000)

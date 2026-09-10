@@ -88,6 +88,10 @@ class BookingStore: ObservableObject {
     
     func loadData() {
         if isLoading {
+            if firebaseBackend?.isBootstrappingOrgDataLoad == true {
+                print("🔥🔥🔥 DEBUG: BookingStore loadData ignored (already loading during bootstrap); not queueing follow-up")
+                return
+            }
             pendingReloadAfterCurrentLoad = true
             print("🔥🔥🔥 DEBUG: BookingStore loadData ignored (already loading); queued one follow-up reload")
             return
@@ -100,7 +104,8 @@ class BookingStore: ObservableObject {
                 self.isLoading = false
                 if self.pendingReloadAfterCurrentLoad {
                     self.pendingReloadAfterCurrentLoad = false
-                    if self.firebaseBackend?.hasBootstrappedOrgDataLoad == true {
+                    if self.firebaseBackend?.hasBootstrappedOrgDataLoad == true,
+                       self.firebaseBackend?.isBootstrappingOrgDataLoad != true {
                         self.loadData()
                     }
                 }

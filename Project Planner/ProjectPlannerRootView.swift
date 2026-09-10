@@ -81,7 +81,13 @@ enum PlannerStoreWiring {
         notificationService: NotificationService
     ) async {
         guard firebaseBackend.isAuthenticated else { return }
-        if firebaseBackend.hasBootstrappedOrgDataLoad { return }
+        // Claim the lock before any await so a second caller cannot pass the guard while we wait for org.
+        if firebaseBackend.hasBootstrappedOrgDataLoad || firebaseBackend.isBootstrappingOrgDataLoad {
+            print("🔥🔥🔥 DEBUG: bootstrapOrgDataIfNeeded skipped (hasBootstrapped=\(firebaseBackend.hasBootstrappedOrgDataLoad), inFlight=\(firebaseBackend.isBootstrappingOrgDataLoad))")
+            return
+        }
+        firebaseBackend.isBootstrappingOrgDataLoad = true
+        defer { firebaseBackend.isBootstrappingOrgDataLoad = false }
 
         var waitCount = 0
         while firebaseBackend.currentOrganization == nil && waitCount < 10 {
@@ -102,6 +108,12 @@ enum PlannerStoreWiring {
             } else {
                 return
             }
+        }
+
+        // Another path may have finished bootstrap while we waited/recovered.
+        if firebaseBackend.hasBootstrappedOrgDataLoad {
+            print("🔥🔥🔥 DEBUG: bootstrapOrgDataIfNeeded aborted after wait — already bootstrapped")
+            return
         }
 
         guard firebaseBackend.currentOrganization?.firestoreDocumentId != nil else { return }

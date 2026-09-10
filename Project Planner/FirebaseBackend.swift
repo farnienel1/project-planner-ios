@@ -71,6 +71,9 @@ class FirebaseBackend: ObservableObject {
     @Published var userRole: UserRole = .basic
     /// Set after the root shell has kicked off the first org-wide store load (prevents duplicate parallel reloads on launch).
     @Published var hasBootstrappedOrgDataLoad = false
+    /// True while `PlannerStoreWiring.bootstrapOrgDataIfNeeded` is in flight (including waiting for org).
+    /// Prevents a second caller from starting another full bootstrap after the wait loop yields.
+    var isBootstrappingOrgDataLoad = false
     
     /// Lazy so `FirebaseBackend` can be constructed before `application(_:didFinishLaunchingWithOptions:)` calls `FirebaseApp.configure()`.
     /// `internal` so `FirebaseBackend+OrganizationMembership` (separate file) can use the same clients.
@@ -305,6 +308,7 @@ class FirebaseBackend: ObservableObject {
                     self.currentOrganization = nil
                     self.userRole = .basic
                     self.hasBootstrappedOrgDataLoad = false
+                    self.isBootstrappingOrgDataLoad = false
                     self.clearLocalOrganizationCache()
                     NotificationCenter.default.post(name: .userDidSignOut, object: nil)
                 }
@@ -5882,6 +5886,7 @@ class FirebaseBackend: ObservableObject {
         
         // Allow PlannerStoreWiring to run a fresh single-flight bootstrap after reload.
         hasBootstrappedOrgDataLoad = false
+        isBootstrappingOrgDataLoad = false
 
         // Clear current organization to force fresh load
         currentOrganization = nil
