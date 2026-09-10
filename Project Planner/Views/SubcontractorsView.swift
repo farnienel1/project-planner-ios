@@ -322,8 +322,13 @@ struct SubcontractorsView: View {
                 [Color(red: 0.05, green: 0.52, blue: 0.55), Color(red: 0.10, green: 0.68, blue: 0.72)]
             )
         default:
+            let palette: [(Color, Color, [Color])] = [
+                (Color(red: 0.33, green: 0.29, blue: 0.72), Color(red: 0.92, green: 0.91, blue: 0.98), [Color(red: 0.33, green: 0.29, blue: 0.72), Color(red: 0.50, green: 0.47, blue: 0.87)]),
+                (Color(red: 0.09, green: 0.37, blue: 0.65), Color(red: 0.90, green: 0.94, blue: 0.99), [Color(red: 0.09, green: 0.37, blue: 0.65), Color(red: 0.20, green: 0.50, blue: 0.80)]),
+                (Color(red: 0.55, green: 0.32, blue: 0.08), Color(red: 0.99, green: 0.93, blue: 0.85), [Color(red: 0.71, green: 0.33, blue: 0.04), Color(red: 0.85, green: 0.47, blue: 0.10)])
+            ]
             // Avoid `abs(hashValue)` — abs(Int.min) traps and crashes the app.
-            let idx = palette.isEmpty ? 0 : ((key.hashValue % palette.count) + palette.count) % palette.count
+            let idx = ((key.hashValue % palette.count) + palette.count) % palette.count
             let pick = palette[idx]
             return (pick.0, pick.1, pick.2)
         }
