@@ -83,10 +83,8 @@ class HolidayStore: ObservableObject {
             print("🔥🔥🔥 DEBUG: HolidayStore resolved org \(orgId); fetching holidayBookings…")
             bookings = try await fb.loadHolidayBookings(organizationId: orgId)
             print("🔥🔥🔥 DEBUG: HolidayStore loaded \(bookings.count) holiday bookings")
-            // Weekend purge does sequential deletes — never await it on the load/launch path.
-            Task { @MainActor in
-                await self.purgeInvalidWeekendBookingsIfNeeded()
-            }
+            // Do not auto-purge weekends on load — sequential deletes freeze Simulator launch.
+            // Purge remains available via `purgeInvalidWeekendBookingsIfNeeded()` for explicit cleanup.
         } catch {
             let nsError = error as NSError
             print("🔥🔥🔥 DEBUG: HolidayStore loadData failed: \(error.localizedDescription)")

@@ -135,6 +135,10 @@ enum PlannerStoreWiring {
 
         print("🔥🔥🔥 DEBUG: ✅ Home-critical org bootstrap finished (projects/operatives/bookings/tasks kicked)")
 
+        // Keep Home/warnings/reminders quiet while secondary loads land and UI settles.
+        firebaseBackend.launchQuietUntil = Date().addingTimeInterval(30)
+        print("🔥🔥🔥 DEBUG: Launch quiet period until \(firebaseBackend.launchQuietUntil?.description ?? "nil")")
+
         // Secondary collections: do not await on the launch path.
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
@@ -152,8 +156,10 @@ enum PlannerStoreWiring {
         // plus a live listener jetsam the Simulator on launch. Notifications load on demand
         // from NotificationsView; unread badge warms after a long idle delay.
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            try? await Task.sleep(nanoseconds: 35_000_000_000)
+            print("🔥🔥🔥 DEBUG: Warming unread notification badge (post-quiet)…")
             await notificationService.warmUnreadBadgeIfNeeded()
+            print("🔥🔥🔥 DEBUG: Unread badge warm finished")
         }
     }
 }

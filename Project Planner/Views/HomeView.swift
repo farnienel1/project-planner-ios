@@ -532,19 +532,23 @@ struct HomeView: View {
             // Coalesce rapid store updates while Firebase batches load.
             // Longer debounce during bootstrap / while core stores are still loading.
             let bootstrapping = firebaseBackend.isBootstrappingOrgDataLoad
+            let inQuiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
             let storesBusy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading
-            let delayNs: UInt64 = (bootstrapping || storesBusy) ? 2_500_000_000 : 1_000_000_000
+            let delayNs: UInt64 = (bootstrapping || inQuiet || storesBusy) ? 2_500_000_000 : 1_000_000_000
             try? await Task.sleep(nanoseconds: delayNs)
             guard !Task.isCancelled else { return }
             // Skip heavy derived work until home-critical bootstrap releases the lock.
             if firebaseBackend.isBootstrappingOrgDataLoad {
                 return
             }
+            print("🔥🔥🔥 DEBUG: Home derived refresh starting…")
             await refreshHomeDerivedData()
+            print("🔥🔥🔥 DEBUG: Home derived refresh finished")
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
             guard userStore.hasAdminAccess() else { return }
             guard !firebaseBackend.isBootstrappingOrgDataLoad else { return }
+            if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil { return }
             let now = Date()
             if let lastManagerWarningsRefreshAt,
                now.timeIntervalSince(lastManagerWarningsRefreshAt) < 2 {
@@ -1327,18 +1331,22 @@ struct HomeView: View {
         if userStore.hasAdminAccess(),
            !storesStillLoading,
            firebaseBackend.hasBootstrappedOrgDataLoad {
-            Task { @MainActor in
-                await WarningsRefreshHelper.refreshSharedWarnings(
-                    operativeStore: operativeStore,
-                    bookingStore: bookingStore,
-                    projectStore: projectStore,
-                    userStore: userStore,
-                    managerScheduleStore: managerScheduleStore,
-                    holidayStore: holidayStore,
-                    firebaseBackend: firebaseBackend,
-                    appSettings: appSettings
-                )
+            if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
                 homeWarningCount = WarningsService.shared.warningCount
+            } else {
+                Task { @MainActor in
+                    await WarningsRefreshHelper.refreshSharedWarnings(
+                        operativeStore: operativeStore,
+                        bookingStore: bookingStore,
+                        projectStore: projectStore,
+                        userStore: userStore,
+                        managerScheduleStore: managerScheduleStore,
+                        holidayStore: holidayStore,
+                        firebaseBackend: firebaseBackend,
+                        appSettings: appSettings
+                    )
+                    homeWarningCount = WarningsService.shared.warningCount
+                }
             }
         } else if userStore.hasAdminAccess() {
             homeWarningCount = WarningsService.shared.warningCount

@@ -30,6 +30,10 @@ enum WarningsRefreshHelper {
             if firebaseBackend.isBootstrappingOrgDataLoad {
                 return
             }
+            if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
+                print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
+                return
+            }
             if bookingStore.isLoading || operativeStore.isLoading || holidayStore.isLoading || projectStore.isLoading {
                 return
             }

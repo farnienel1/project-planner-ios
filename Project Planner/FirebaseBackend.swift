@@ -74,6 +74,9 @@ class FirebaseBackend: ObservableObject {
     /// True while `PlannerStoreWiring.bootstrapOrgDataIfNeeded` is in flight (including waiting for org).
     /// Prevents a second caller from starting another full bootstrap after the wait loop yields.
     var isBootstrappingOrgDataLoad = false
+    /// While `Date() < launchQuietUntil`, skip heavy post-launch work (warnings, reminder storms).
+    /// Set when home-critical bootstrap finishes so Holidays publishing cannot immediately freeze Home.
+    var launchQuietUntil: Date?
     
     /// Lazy so `FirebaseBackend` can be constructed before `application(_:didFinishLaunchingWithOptions:)` calls `FirebaseApp.configure()`.
     /// `internal` so `FirebaseBackend+OrganizationMembership` (separate file) can use the same clients.
@@ -309,6 +312,7 @@ class FirebaseBackend: ObservableObject {
                     self.userRole = .basic
                     self.hasBootstrappedOrgDataLoad = false
                     self.isBootstrappingOrgDataLoad = false
+                    self.launchQuietUntil = nil
                     self.clearLocalOrganizationCache()
                     NotificationCenter.default.post(name: .userDidSignOut, object: nil)
                 }
@@ -5888,6 +5892,7 @@ class FirebaseBackend: ObservableObject {
         // Allow PlannerStoreWiring to run a fresh single-flight bootstrap after reload.
         hasBootstrappedOrgDataLoad = false
         isBootstrappingOrgDataLoad = false
+        launchQuietUntil = nil
 
         // Clear current organization to force fresh load
         currentOrganization = nil

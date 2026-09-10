@@ -348,12 +348,14 @@ struct ContentView: View {
         appSettings.loadSettings()
         lastLoadedOrganizationId = organizationId
 
-        // Defer non-UI sync / local reminder work so launch stays responsive.
+        // Defer non-UI sync / local reminder work well past secondary loads + quiet period.
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            try? await Task.sleep(nanoseconds: 35_000_000_000)
+            print("🔥🔥🔥 DEBUG: Post-quiet side work starting (operative sync + reminders)…")
             await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
             await notificationService.refreshDailyMaterialCutOffReminder()
             await notificationService.refreshQualificationExpiryReminders()
+            print("🔥🔥🔥 DEBUG: Post-quiet side work finished")
         }
     }
 
