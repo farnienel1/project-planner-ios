@@ -30,6 +30,7 @@ struct OperativesView: View {
     @State private var selectedUserForProfile: AppUser? = nil
     @State private var rosterSegment: UserRosterSegment = .active
     @State private var operativeToDelete: Operative? = nil
+    @State private var liveSearchText = ""
 
     enum FilterType: String, CaseIterable {
         case firstName = "First Name"
@@ -59,6 +60,11 @@ struct OperativesView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
             .background(Color(.systemGroupedBackground))
+
+            operativesLiveSearchBar
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
+                .background(Color(.systemGroupedBackground))
             
             if rosterSegment == .pending {
                 pendingOperativeInviteesList
@@ -235,6 +241,9 @@ struct OperativesView: View {
     }
     
     private var emptyOperativesTitle: String {
+        if !liveSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "No matches for “\(liveSearchText.trimmingCharacters(in: .whitespacesAndNewlines))”"
+        }
         if !hasAnyOperativesInOrganization {
             return "No Operatives Added Yet"
         }
@@ -252,7 +261,9 @@ struct OperativesView: View {
         let base = userStore.organizationUsers.filter {
             $0.permissions.operativeMode && rosterSegment.matches($0)
         }
-        return base.filter { operativeUserPassesTextFilter($0) }
+        let searched = base.filter { ManageOperativesSearch.matches(user: $0, query: liveSearchText) }
+        let filtered = searched.filter { operativeUserPassesTextFilter($0) }
+        return ManageOperativesSearch.sorted(filtered, query: liveSearchText)
     }
     
     /// Operative records from Firestore store, filtered by Active/Inactive segment and search text.
@@ -263,18 +274,56 @@ struct OperativesView: View {
             .map(\.operative)
         return base.filter { operativePassesTextFilter($0) }
     }
+
+    private var operativesLiveSearchBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(ManageUserProfilePalette.listBlue)
+            TextField("Search operatives by name", text: $liveSearchText)
+                .font(.system(size: 16))
+                .textInputAutocapitalization(.words)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+            if !liveSearchText.isEmpty {
+                Button {
+                    liveSearchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ManageUserProfilePalette.cardBorder, lineWidth: 0.5)
+        )
+    }
     
     private var pendingOperativeInvitees: [AppUser] {
         let base = userStore.organizationUsers.filter { $0.permissions.operativeMode && !$0.passwordSet }
-        guard !filterText.isEmpty else { return base }
-        return base.filter { user in
-            switch selectedFilterType {
-            case .firstName: return user.firstName.localizedCaseInsensitiveContains(filterText)
-            case .surname: return user.surname.localizedCaseInsensitiveContains(filterText)
-            case .email: return user.email.localizedCaseInsensitiveContains(filterText)
-            case .startDate, .skills, .qualifications, .dayRate: return true
+        let searched = base.filter { ManageOperativesSearch.matches(user: $0, query: liveSearchText) }
+        let afterAdvancedFilter: [AppUser]
+        if filterText.isEmpty {
+            afterAdvancedFilter = searched
+        } else {
+            afterAdvancedFilter = searched.filter { user in
+                switch selectedFilterType {
+                case .firstName: return user.firstName.localizedCaseInsensitiveContains(filterText)
+                case .surname: return user.surname.localizedCaseInsensitiveContains(filterText)
+                case .email: return user.email.localizedCaseInsensitiveContains(filterText)
+                case .startDate, .skills, .qualifications, .dayRate: return true
+                }
             }
         }
+        return ManageOperativesSearch.sorted(afterAdvancedFilter, query: liveSearchText)
     }
     
     @ViewBuilder

@@ -742,6 +742,9 @@ class UserStore: ObservableObject {
     }
     
     /// Manager account with operative management only (no admin / super admin).
+    /// These users can open Manage Operatives, view profiles, and edit operative details
+    /// via the same EditUserView used by Manage Users (shared AppUser + Operative records).
+    /// They cannot add users — only admins can.
     func isActingManagerOperativeManagementOnly() -> Bool {
         guard let u = displayUser else { return false }
         if u.permissions.operativeMode { return false }

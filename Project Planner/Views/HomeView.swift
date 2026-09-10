@@ -144,20 +144,17 @@ struct HomeView: View {
                 .environmentObject(projectStore)
         }
         .sheet(isPresented: $showingAddUser) {
-            AddUserView(mode: (!userStore.hasAdminAccess() &&
-                               userStore.displayUser?.permissions.manager == true &&
-                               userStore.displayUser?.permissions.operatives == true)
-                        ? .managerAddingOperative
-                        : .admin)
+            AddUserView(mode: .admin)
                 .environmentObject(userStore)
         }
-        .sheet(isPresented: $showingManageUsers) {
+            .sheet(isPresented: $showingManageUsers) {
             ManageUsersView()
                 .environmentObject(userStore)
                 .environmentObject(bookingStore)
                 .environmentObject(operativeStore)
                 .environmentObject(holidayStore)
                 .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
         }
         .sheet(isPresented: $showingMaterialCatalogue) {
             MaterialCatalogueRootView()

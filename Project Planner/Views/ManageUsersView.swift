@@ -94,9 +94,9 @@ struct ManageUsersView: View {
                     .foregroundStyle(ManageUserProfilePalette.listBlue)
                 }
                 
-                if userStore.canManageUsers() || isManagerOperativeManagement {
+                if userStore.canManageUsers() {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button(isManagerOperativeManagement && !userStore.canManageUsers() ? "Add Operative" : "Add") {
+                        Button("Add") {
                             showingAddUser = true
                         }
                         .font(.system(size: 17, weight: .semibold))
@@ -105,7 +105,7 @@ struct ManageUsersView: View {
                 }
             }
             .sheet(isPresented: $showingAddUser) {
-                AddUserView(mode: (isManagerOperativeManagement && !userStore.canManageUsers()) ? .managerAddingOperative : .admin)
+                AddUserView(mode: .admin)
                     .environmentObject(userStore)
             }
             .sheet(item: $selectedUser) { user in
@@ -211,9 +211,13 @@ struct ManageUsersView: View {
         VStack(alignment: .leading, spacing: 14) {
             if userStore.canManageUsers() {
                 manageUsersRoleSegment
+                manageUsersStatusChips
+                manageUsersSearchBar
+            } else {
+                // Manage Operatives: search first for fast filtering.
+                manageUsersSearchBar
+                manageUsersStatusChips
             }
-            manageUsersStatusChips
-            manageUsersSearchBar
             manageUsersListHeader
             manageUsersCardList
             if userStore.canManageUsers() {
@@ -293,19 +297,47 @@ struct ManageUsersView: View {
     }
 
     private var manageUsersSearchBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(ManageUserProfilePalette.textSecondary)
-            TextField("Search", text: $searchText)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(ManageUserProfilePalette.listBlue)
+            TextField(searchPlaceholder, text: $searchText)
                 .font(.system(size: 16))
-                .textInputAutocapitalization(.never)
+                .textInputAutocapitalization(.words)
                 .autocorrectionDisabled()
+                .submitLabel(.search)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(ManageUserProfilePalette.searchBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ManageUserProfilePalette.cardBorder, lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
+    }
+
+    private var searchPlaceholder: String {
+        if isManagerOperativeManagement && !userStore.canManageUsers() {
+            return "Search operatives by name"
+        }
+        switch selectedTab {
+        case 0: return "Search admins by name"
+        case 1: return "Search managers by name"
+        default: return "Search operatives by name"
+        }
     }
 
     private var manageUsersListHeader: some View {
@@ -356,19 +388,35 @@ struct ManageUsersView: View {
                 .fill(Color.white)
                 .frame(width: 64, height: 64)
                 .overlay {
-                    Image(systemName: "person.3.fill")
+                    Image(systemName: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "person.3.fill" : "magnifyingglass")
                         .font(.system(size: 28))
                         .foregroundStyle(ManageUserProfilePalette.textSecondary.opacity(0.45))
                 }
                 .shadow(color: Color.black.opacity(0.05), radius: 3, y: 1)
-            Text("No \(rosterSegment.title.lowercased()) \(roleSectionTitle.lowercased())")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(ManageUserProfilePalette.textSecondary)
-            Text("There are no \(rosterSegment.title.lowercased()) \(roleSectionTitle.lowercased()) right now. Try another filter or add someone new.")
-                .font(.system(size: 13.5))
-                .foregroundStyle(ManageUserProfilePalette.textSecondary.opacity(0.75))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 260)
+            if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("No matches for “\(searchText.trimmingCharacters(in: .whitespacesAndNewlines))”")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .multilineTextAlignment(.center)
+                Text("Try another spelling, first name, surname, or email.")
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary.opacity(0.75))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 260)
+            } else {
+                Text("No \(rosterSegment.title.lowercased()) \(roleSectionTitle.lowercased())")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                Text(
+                    userStore.canManageUsers()
+                    ? "There are no \(rosterSegment.title.lowercased()) \(roleSectionTitle.lowercased()) right now. Try another filter or add someone new."
+                    : "There are no \(rosterSegment.title.lowercased()) \(roleSectionTitle.lowercased()) right now. Ask an admin if someone is missing."
+                )
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary.opacity(0.75))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 260)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 56)
@@ -444,15 +492,8 @@ struct ManageUsersView: View {
     private var filteredUsers: [AppUser] {
         let tab = userStore.canManageUsers() ? selectedTab : 2
         var users = usersForRoleTab(tab).filter { rosterSegment.matches($0) }
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if !query.isEmpty {
-            users = users.filter {
-                $0.fullName.lowercased().contains(query) || $0.email.lowercased().contains(query)
-            }
-        }
-        return users.sorted {
-            ($0.fullName.isEmpty ? $0.email : $0.fullName).localizedCaseInsensitiveCompare($1.fullName.isEmpty ? $1.email : $1.fullName) == .orderedAscending
-        }
+        users = users.filter { ManageOperativesSearch.matches(user: $0, query: searchText) }
+        return ManageOperativesSearch.sorted(users, query: searchText)
     }
 
     private func rosterCount(for segment: UserRosterSegment) -> Int {
@@ -501,11 +542,13 @@ struct ManageUsersView: View {
                     .foregroundColor(.secondary)
             }
             
+            if userStore.canManageUsers() {
             Button("Add First User") {
                 showingAddUser = true
             }
             .buttonStyle(.borderedProminent)
             .tint(.indigo)
+            }
             
             Spacer()
         }

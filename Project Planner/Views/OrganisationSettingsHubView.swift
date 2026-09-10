@@ -269,6 +269,7 @@ struct OrganisationSettingsHubView: View {
                             .environmentObject(operativeStore)
                             .environmentObject(holidayStore)
                             .environmentObject(firebaseBackend)
+                            .environmentObject(notificationService)
                     } label: {
                         hubRowLabel(
                             icon: "person.3.fill",

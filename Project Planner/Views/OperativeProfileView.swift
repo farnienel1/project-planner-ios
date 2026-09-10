@@ -2,8 +2,9 @@
 //  OperativeProfileView.swift
 //  Project Planner
 //
-//  Read-only profile card opened from Manage Operatives / Operatives list.
-//  Edit remains available via the toolbar.
+//  Read-only profile opened from Manage Operatives / Operatives.
+//  Settings cog opens EditUserView — the same Manage Users editor — so
+//  operative detail changes stay linked to the shared AppUser + Operative records.
 //
 
 import SwiftUI
@@ -20,12 +21,22 @@ struct OperativeProfileView: View {
     let user: AppUser
 
     @State private var showingEdit = false
+    @State private var profileRefreshToken = 0
+
+    /// Admins, or managers with the Operatives permission — same gate as Manage Operatives.
+    private var canOpenOperativeSettings: Bool {
+        userStore.canManageUsers()
+            || userStore.isActingManagerOperativeManagementOnly()
+            || userStore.canViewOperatives()
+    }
 
     private var displayedUser: AppUser {
-        userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let _ = profileRefreshToken
+        return userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
     }
 
     private var linkedOperative: Operative? {
+        let _ = profileRefreshToken
         let key = displayedUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return nil }
         return operativeStore.allOperatives.first {
@@ -118,12 +129,27 @@ struct OperativeProfileView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Edit") { showingEdit = true }
-                        .fontWeight(.semibold)
+                if canOpenOperativeSettings {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showingEdit = true
+                        } label: {
+                            Image(systemName: "gearshape.fill")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(ManageUserProfilePalette.listBlue)
+                        }
+                        .accessibilityLabel("Operative settings")
+                    }
                 }
             }
-            .sheet(isPresented: $showingEdit) {
+            // Same Manage Users editor — keeps AppUser + linked Operative in sync.
+            .sheet(isPresented: $showingEdit, onDismiss: {
+                Task {
+                    await userStore.loadOrganizationUsers()
+                    operativeStore.loadData()
+                    await MainActor.run { profileRefreshToken += 1 }
+                }
+            }) {
                 EditUserView(user: displayedUser)
                     .environmentObject(userStore)
                     .environmentObject(bookingStore)

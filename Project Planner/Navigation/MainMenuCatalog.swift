@@ -278,9 +278,6 @@ enum MainMenuCatalog {
                 iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
                 isEligible: { u, _, _ in
                     u.canManageUsers()
-                        || (!u.hasAdminAccess()
-                            && u.displayUser?.permissions.manager == true
-                            && u.displayUser?.permissions.operatives == true)
                 },
                 action: .openSurface(.addUser)
             ),
@@ -379,7 +376,7 @@ enum MainMenuCatalog {
         let baseTitle: String
         switch spec.id {
         case "add_user":
-            baseTitle = userStore.canManageUsers() ? "Add user" : "Add operative"
+            baseTitle = "Add user"
         case "manage_users":
             baseTitle = userStore.canManageUsers() ? "Manage users" : "Manage operatives"
         default:
@@ -432,10 +429,8 @@ enum MainMenuCatalog {
     }
 
     static func canAddUserQuick(userStore: UserStore) -> Bool {
+        // Only admins can add / manage users. Managers with operatives access use Manage Operatives to view & edit.
         userStore.canManageUsers()
-            || (!userStore.hasAdminAccess()
-                && userStore.displayUser?.permissions.manager == true
-                && userStore.displayUser?.permissions.operatives == true)
     }
 
     // MARK: - Subtitles (Navigate polish)
