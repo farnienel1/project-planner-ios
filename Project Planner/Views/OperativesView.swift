@@ -1219,4 +1219,9 @@ struct PendingUserRowView: View {
     OperativesView()
         .environmentObject(OperativeStore())
         .environmentObject(UserStore())
+        .environmentObject(BookingStore())
+        .environmentObject(HolidayStore())
+        .environmentObject(AppSettingsStore())
+        .environmentObject(FirebaseBackend())
+        .environmentObject(NotificationService())
 }
