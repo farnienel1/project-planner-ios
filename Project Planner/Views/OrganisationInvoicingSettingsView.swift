@@ -141,17 +141,29 @@ struct OrganisationInvoicingSettingsView: View {
             if let coverageWarning {
                 Section {
                     Text(coverageWarning)
-                        .foregroundStyle(.orange)
-                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .font(.subheadline.weight(.semibold))
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(red: 0.992, green: 0.918, blue: 0.918))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
+                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                .listRowBackground(Color.clear)
             }
 
             if let errorMessage {
                 Section {
                     Text(errorMessage)
                         .foregroundStyle(.red)
-                        .font(.caption)
+                        .font(.subheadline.weight(.semibold))
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(red: 0.992, green: 0.918, blue: 0.918))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
+                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                .listRowBackground(Color.clear)
             }
 
             Section {
@@ -365,6 +377,11 @@ struct OrganisationInvoicingSettingsView: View {
         errorMessage = nil
         coverageWarning = nil
         defer { isSaving = false }
+
+        if let overlap = draft.paymentRunRangesOverlapWarning() {
+            coverageWarning = overlap
+            return
+        }
 
         if let warning = draft.fullMonthCoverageWarning() {
             coverageWarning = warning

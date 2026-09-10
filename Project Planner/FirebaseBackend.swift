@@ -7773,18 +7773,25 @@ extension FirebaseBackend {
         userId: String,
         limit: Int = 200
     ) async throws -> [[String: Any]] {
+        // Query by userId only, then sort/limit in memory.
+        // Ordering by weekStart requires a composite index that may not exist yet and was
+        // crashing/failing My Timesheets history loads in Simulator.
         let snapshot = try await db.collection("organizations")
             .document(organizationId)
             .collection("settings")
             .whereField("userId", isEqualTo: userId)
-            .order(by: "weekStart", descending: true)
-            .limit(to: limit)
             .getDocuments()
-        return snapshot.documents.map { doc in
+        let rows: [[String: Any]] = snapshot.documents.map { doc in
             var row = doc.data()
             row["__documentId"] = doc.documentID
             return row
         }
+        let sorted = rows.sorted { lhs, rhs in
+            let left = (lhs["weekStart"] as? Timestamp)?.dateValue() ?? .distantPast
+            let right = (rhs["weekStart"] as? Timestamp)?.dateValue() ?? .distantPast
+            return left > right
+        }
+        return Array(sorted.prefix(max(1, limit)))
     }
 
     private func hsCollectionName(for project: Project) -> String {

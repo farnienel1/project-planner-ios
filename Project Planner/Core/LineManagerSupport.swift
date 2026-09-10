@@ -22,7 +22,8 @@ extension AppUser {
         return ids.filter { seen.insert($0).inserted }
     }
 
-    var hasLineManager: Bool { hasNoLineManager || !lineManagerUserIds.isEmpty }
+    /// True when this user has at least one assigned line manager and is not marked “no line manager”.
+    var hasLineManager: Bool { !hasNoLineManager && !lineManagerUserIds.isEmpty }
 
     /// Primary line manager (first assigned) — backward compatible with single-id field.
     var primaryLineManagerUserId: String? { lineManagerUserIds.first }

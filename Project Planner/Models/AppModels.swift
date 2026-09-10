@@ -887,6 +887,20 @@ struct OrganizationInvoicingSettings: Codable, Hashable {
         return nil
     }
 
+    /// True when two (or more) payment-run ranges claim the same calendar day.
+    func paymentRunRangesOverlapWarning() -> String? {
+        guard paymentRunMode == .dateRanges else { return nil }
+        let ranges = normalizedRanges
+        guard ranges.count > 1 else { return nil }
+        for day in 1...31 {
+            let hits = ranges.filter { $0.contains(day: day) }.count
+            if hits > 1 {
+                return "Payment run dates are overlapping, please cover the full month without overlapping dates."
+            }
+        }
+        return nil
+    }
+
     var recurringRunDisplaySummary: String {
         "In arrears: \(recurringRunStartDay.title) to \(recurringRunEndDay.title) (of the previous week)"
     }

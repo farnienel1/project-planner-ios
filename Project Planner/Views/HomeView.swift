@@ -1331,28 +1331,10 @@ struct HomeView: View {
         if userStore.hasAdminAccess(),
            !storesStillLoading,
            firebaseBackend.hasBootstrappedOrgDataLoad {
-            if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
-                homeWarningCount = WarningsService.shared.warningCount
-            } else {
-                // Defer warnings well after Home paints — snapshot work freezes Simulator after booking reloads.
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 8_000_000_000)
-                    guard !bookingStore.isLoading, !projectStore.isLoading else { return }
-                    print("🔥🔥🔥 DEBUG: Home deferred warnings refresh starting…")
-                    await WarningsRefreshHelper.refreshSharedWarnings(
-                        operativeStore: operativeStore,
-                        bookingStore: bookingStore,
-                        projectStore: projectStore,
-                        userStore: userStore,
-                        managerScheduleStore: managerScheduleStore,
-                        holidayStore: holidayStore,
-                        firebaseBackend: firebaseBackend,
-                        appSettings: appSettings
-                    )
-                    homeWarningCount = WarningsService.shared.warningCount
-                    print("🔥🔥🔥 DEBUG: Home deferred warnings refresh finished")
-                }
-            }
+            // Do not auto-run warnings on Home after every store refresh — that MainActor
+            // snapshot freezes/crashes Simulator. Badge stays at last known count; opening
+            // Warnings detail still force-refreshes.
+            homeWarningCount = WarningsService.shared.warningCount
         } else if userStore.hasAdminAccess() {
             homeWarningCount = WarningsService.shared.warningCount
         }

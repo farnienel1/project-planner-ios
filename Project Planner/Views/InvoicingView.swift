@@ -444,9 +444,15 @@ private enum TimesheetApprovalPolicy {
     }
 
     static func applySelfApprovalIfNoLineManager(draft: inout TimesheetDraft, user: AppUser) {
-        // No line manager: operative signature alone completes approval — do not duplicate manager signature fields.
-        _ = draft
-        _ = user
+        // No line manager: operative signature alone completes approval.
+        guard !requiresLineManagerCounterSign(for: user) else { return }
+        guard draft.operativeSignedAt != nil else { return }
+        // Clear any stale manager signature fields so UI doesn't imply a counter-sign is pending.
+        if draft.managerSignedAt != nil || draft.managerSignedByName != nil || draft.managerSignatureImageBase64 != nil {
+            draft.managerSignedAt = nil
+            draft.managerSignedByName = nil
+            draft.managerSignatureImageBase64 = nil
+        }
     }
 
     static func clearSignatures(draft: inout TimesheetDraft) {
