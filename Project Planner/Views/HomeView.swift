@@ -61,7 +61,6 @@ struct HomeView: View {
     @State private var persistedAdminOverviewMetricIds: [HomeOverviewMetricID] = []
     @State private var hasLoadedAdminOverviewMetrics = false
     @State private var showingHomeProfileCard = false
-    @State private var lastManagerWarningsRefreshAt: Date?
     
     var body: some View {
         ScrollView {
@@ -178,7 +177,7 @@ struct HomeView: View {
             presentTasksDetail()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToWarnings"))) { _ in
-            print("🔥🔥🔥 DEBUG: WARNINGS_NAVIGATE_SYNC build=wfix-1984509")
+            print("🔥🔥🔥 DEBUG: WARNINGS_NAVIGATE_SYNC build=wfix-let-stores")
             showingTasksDetail = false
             showingWarningsDetail = true
         }
@@ -732,11 +731,11 @@ struct HomeView: View {
                     icon: "exclamationmark.triangle.fill",
                     iconTint: Color(red: 0.64, green: 0.18, blue: 0.18),
                     iconBackground: Color(red: 0.99, green: 0.92, blue: 0.92),
-                    title: "Warnings",
+                    title: "Warnings · wfix-let-stores",
                     value: homeWarningCount == 0 ? "All clear" : "\(homeWarningCount) active"
                 ) {
-                    // Sync log proves this binary includes the Warnings open fix.
-                    print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON_SYNC build=wfix-1984509")
+                    // Sync log proves this binary includes the let-stores Warnings open fix.
+                    print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON_SYNC build=wfix-let-stores")
                     showingTasksDetail = false
                     showingWarningsDetail = true
                 }

@@ -7,20 +7,22 @@ import SwiftUI
 
 struct WarningsDetailView: View {
     @Environment(\.dismiss) private var dismiss
+    /// Only warningsService needs observation — list/hero must refresh when warnings change.
     @ObservedObject var warningsService: WarningsService
-    // Explicit observed stores — sheets do not reliably inherit EnvironmentObjects,
-    // and a missing @EnvironmentObject fatals on first body access (no Swift stack).
-    @ObservedObject var projectStore: ProjectStore
-    @ObservedObject var userStore: UserStore
-    @ObservedObject var operativeStore: OperativeStore
-    @ObservedObject var bookingStore: BookingStore
-    @ObservedObject var managerScheduleStore: ManagerScheduleStore
-    @ObservedObject var firebaseBackend: FirebaseBackend
-    @ObservedObject var appSettings: AppSettingsStore
-    @ObservedObject var holidayStore: HolidayStore
-    @ObservedObject var notificationService: NotificationService
-    @ObservedObject var subcontractorStore: SubcontractorStore
-    @ObservedObject var taskStore: ProjectTaskStore
+    // Pass stores as plain `let` refs (not @ObservedObject). Observing ~12 large org stores
+    // from a sheet after bootstrap (~90+ bookings) can invalidate body on every publish and
+    // jetsam Simulator. Sheets still need explicit refs (EnvironmentObject is unreliable).
+    let projectStore: ProjectStore
+    let userStore: UserStore
+    let operativeStore: OperativeStore
+    let bookingStore: BookingStore
+    let managerScheduleStore: ManagerScheduleStore
+    let firebaseBackend: FirebaseBackend
+    let appSettings: AppSettingsStore
+    let holidayStore: HolidayStore
+    let notificationService: NotificationService
+    let subcontractorStore: SubcontractorStore
+    let taskStore: ProjectTaskStore
 
     @State private var filterChip: WarningsFilterChip = .all
     @State private var openDayDate: IdentifiableDay?
@@ -49,7 +51,7 @@ struct WarningsDetailView: View {
                     VStack(spacing: 1) {
                         Text("Warnings")
                             .font(.headline)
-                        Text("build wfix-1984509")
+                        Text("build wfix-let-stores")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
@@ -76,7 +78,7 @@ struct WarningsDetailView: View {
                 }
             }
             .onAppear {
-                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED (explicit stores, no EnvironmentObject)")
+                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED build=wfix-let-stores (let stores, observe warnings only)")
             }
             .task {
                 await refreshAfterLaunchQuietIfNeeded()
