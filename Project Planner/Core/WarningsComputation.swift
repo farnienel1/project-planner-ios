@@ -855,9 +855,9 @@ private struct WarningsScheduleIndex {
             if isExcluded(userId: user.id) { continue }
             let linked = operativesByEmail[user.emailLowercased]
             if hasHoliday(userId: user.id, operativeId: linked?.id) { continue }
-            if let oid = linked?.id {
-                let paid = operativePaidTotal(oid) + managerPaidTotal(user.id)
-                appendIfUnderBooked(name: linked!.name, emailKey: user.emailLowercased, paid: paid)
+            if let linked {
+                let paid = operativePaidTotal(linked.id) + managerPaidTotal(user.id)
+                appendIfUnderBooked(name: linked.name, emailKey: user.emailLowercased, paid: paid)
             } else {
                 let paid = managerPaidTotal(user.id)
                 appendIfUnderBooked(name: user.displayName, emailKey: user.emailLowercased, paid: paid)

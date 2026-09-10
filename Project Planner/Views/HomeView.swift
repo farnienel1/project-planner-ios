@@ -84,6 +84,9 @@ struct HomeView: View {
                 .environmentObject(firebaseBackend)
                 .environmentObject(appSettings)
                 .environmentObject(holidayStore)
+                .environmentObject(notificationService)
+                .environmentObject(subcontractorStore)
+                .environmentObject(taskStore)
         }
         .sheet(isPresented: $showingTasksDetail) {
             TasksDetailView()
@@ -214,6 +217,7 @@ struct HomeView: View {
                 .environmentObject(firebaseBackend)
                 .environmentObject(subcontractorStore)
                 .environmentObject(appSettings)
+                .environmentObject(notificationService)
         }
         .sheet(isPresented: $showingOrgSitesMap) {
             OrgSitesMapView()

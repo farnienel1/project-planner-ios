@@ -17,10 +17,12 @@ struct WarningsDetailView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var subcontractorStore: SubcontractorStore
+    @EnvironmentObject var taskStore: ProjectTaskStore
 
     @State private var filterChip: WarningsFilterChip = .all
-    @State private var openDayDate: Date?
-    @State private var openBookLabourDate: Date?
+    @State private var openDayDate: IdentifiableDay?
+    @State private var openBookLabourDate: IdentifiableDay?
     @State private var openProjectId: UUID?
     @State private var warningPendingDismiss: Warning?
     @State private var showingWarningsSettings = false
@@ -79,18 +81,22 @@ struct WarningsDetailView: View {
             }
             .sheet(item: $openDayDate) { day in
                 NavigationStack {
-                    DailyOverviewView(displayDate: day)
+                    DailyOverviewView(displayDate: day.date)
                         .environmentObject(bookingStore)
                         .environmentObject(projectStore)
                         .environmentObject(operativeStore)
                         .environmentObject(userStore)
+                        .environmentObject(holidayStore)
                         .environmentObject(managerScheduleStore)
+                        .environmentObject(subcontractorStore)
                         .environmentObject(firebaseBackend)
                         .environmentObject(appSettings)
+                        .environmentObject(taskStore)
+                        .environmentObject(notificationService)
                 }
             }
             .fullScreenCover(item: $openBookLabourDate) { day in
-                BookLabourFlowView(bookDate: day)
+                BookLabourFlowView(bookDate: day.date)
                     .environmentObject(appSettings)
                     .environmentObject(bookingStore)
                     .environmentObject(projectStore)
@@ -187,7 +193,7 @@ struct WarningsDetailView: View {
                 warning: warning,
                 onRemoveA: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingAId) },
                 onRemoveB: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingBId) },
-                onOpenDay: { openDayDate = warning.occurrenceDate },
+                onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
             )
         case .managerLocationClash:
@@ -196,7 +202,7 @@ struct WarningsDetailView: View {
                 onRemoveA: { removeManagerBooking(warning, entry: warning.managerClash?.entryA) },
                 onRemoveB: { removeManagerBooking(warning, entry: warning.managerClash?.entryB) },
                 onApprove: { warningsService.approveWarning(warning) },
-                onOpenDay: { openDayDate = warning.occurrenceDate },
+                onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
             )
         case .unbookedLabour:
@@ -224,7 +230,7 @@ struct WarningsDetailView: View {
                         .font(.system(size: 12))
                 }
             }
-            Button { openDayDate = warning.occurrenceDate } label: {
+            Button { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) } label: {
                 Text("Open day on Daily Overview")
                     .font(.system(size: 12, weight: .medium))
                     .frame(maxWidth: .infinity)
@@ -233,7 +239,7 @@ struct WarningsDetailView: View {
             .buttonStyle(.bordered)
             if userStore.hasAdminAccess(), let warningDay = warning.occurrenceDate {
                 Button {
-                    openBookLabourDate = warningDay
+                    openBookLabourDate = IdentifiableDay(warningDay)
                 } label: {
                     Text("Book labour")
                         .font(.system(size: 12, weight: .semibold))
@@ -352,8 +358,14 @@ struct WarningsDetailView: View {
     }
 }
 
-extension Date: @retroactive Identifiable {
-    public var id: TimeInterval { timeIntervalSince1970 }
+/// Sheet/item identity for a calendar day without making `Date` globally Identifiable.
+private struct IdentifiableDay: Identifiable, Hashable {
+    let date: Date
+    var id: TimeInterval { Calendar.current.startOfDay(for: date).timeIntervalSince1970 }
+
+    init(_ date: Date) {
+        self.date = Calendar.current.startOfDay(for: date)
+    }
 }
 
 #Preview {
@@ -365,5 +377,8 @@ extension Date: @retroactive Identifiable {
         .environmentObject(ManagerScheduleStore())
         .environmentObject(FirebaseBackend())
         .environmentObject(AppSettingsStore())
+        .environmentObject(HolidayStore())
         .environmentObject(NotificationService())
+        .environmentObject(SubcontractorStore())
+        .environmentObject(ProjectTaskStore())
 }

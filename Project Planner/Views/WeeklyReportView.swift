@@ -27,6 +27,7 @@ struct WeeklyReportView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject var notificationService: NotificationService
 
     @StateObject private var warningsService = WarningsService()
     @State private var showingWarningsDetail = false
@@ -164,6 +165,7 @@ struct WeeklyReportView: View {
             .environmentObject(firebaseBackend)
             .environmentObject(appSettings)
             .environmentObject(holidayStore)
+            .environmentObject(notificationService)
     }
 
     // MARK: - UI sections
