@@ -109,7 +109,7 @@ struct ManageUsersView: View {
                     .environmentObject(userStore)
             }
             .sheet(item: $selectedUser) { user in
-                EditUserView(user: user)
+                OperativeProfileView(user: user)
                     .environmentObject(userStore)
                     .environmentObject(bookingStore)
                     .environmentObject(operativeStore)

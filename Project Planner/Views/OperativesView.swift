@@ -18,6 +18,8 @@ struct OperativesView: View {
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var notificationService: NotificationService
     @Environment(\.dismiss) private var dismiss
     @State private var selectedOperative: Operative? = nil
     @State private var showingEditOperative = false
@@ -93,11 +95,13 @@ struct OperativesView: View {
             OperativeFilterOptionsView(selectedFilter: $selectedFilterType, filterText: $filterText)
         }
         .sheet(item: $selectedUserForProfile) { user in
-            EditUserView(user: user)
+            OperativeProfileView(user: user)
                 .environmentObject(userStore)
                 .environmentObject(bookingStore)
                 .environmentObject(operativeStore)
                 .environmentObject(holidayStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("resetNavigationForTab"))) { notification in
             if let userInfo = notification.userInfo, let tab = userInfo["tab"] as? Int, tab == 3 {
@@ -133,7 +137,7 @@ struct OperativesView: View {
     }
     
     private func openUserProfile(for operative: Operative) {
-        // Find the corresponding app user by email and open their profile (EditUserView)
+        // Find the corresponding app user by email and open their profile
         let matchingUser = userStore.organizationUsers.first { user in
             user.email.lowercased() == operative.email.lowercased()
         }
