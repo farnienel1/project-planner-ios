@@ -149,6 +149,8 @@ enum WarningsComputation {
     /// interval work over all bookings freezes/jetsams Simulator when run on MainActor.
     nonisolated static func makeSnapshot(from input: WarningsComputationInput) -> WarningsComputationSnapshot {
         let cal = Calendar.current
+        let coverageStart = cal.startOfDay(for: input.coverageStart)
+        let coverageEnd = cal.startOfDay(for: input.coverageEnd)
 
         let operatives: [WarningsComputationSnapshot.OperativeSnapshot] = input.operatives.map { operative in
             let qualificationNames: [UUID: String] = operative.qualifications.reduce(into: [:]) { acc, q in
@@ -171,7 +173,9 @@ enum WarningsComputation {
             return WarningsComputationSnapshot.OperativeSnapshot(
                 id: operative.id,
                 name: operative.name,
-                emailLowercased: operative.email.lowercased(),
+                emailLowercased: operative.email
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased(),
                 isActive: operative.isActive,
                 qualificationExpiries: qualificationExpiries
             )
@@ -180,7 +184,9 @@ enum WarningsComputation {
         let users: [WarningsComputationSnapshot.UserSnapshot] = input.users.map { user in
             WarningsComputationSnapshot.UserSnapshot(
                 id: user.id,
-                emailLowercased: user.email.lowercased(),
+                emailLowercased: user.email
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased(),
                 displayName: user.fullName.isEmpty ? user.email : user.fullName,
                 isActive: user.isActive,
                 passwordSet: user.passwordSet,
@@ -202,13 +208,18 @@ enum WarningsComputation {
             )
         }
 
-        let bookings: [WarningsComputationSnapshot.OperativeBookingSnapshot] = input.bookings.map { booking in
-            WarningsComputationSnapshot.OperativeBookingSnapshot(
+        // Only snapshot bookings inside the detection window. Computing paid hours /
+        // clash intervals for the entire booking history jetsams Simulator before
+        // unbooked-labour warnings can publish.
+        let bookings: [WarningsComputationSnapshot.OperativeBookingSnapshot] = input.bookings.compactMap { booking in
+            let dayStart = cal.startOfDay(for: booking.date)
+            guard dayStart >= coverageStart && dayStart <= coverageEnd else { return nil }
+            return WarningsComputationSnapshot.OperativeBookingSnapshot(
                 id: booking.id,
                 operativeId: booking.operativeId,
                 projectId: booking.projectId,
                 date: booking.date,
-                dayStart: cal.startOfDay(for: booking.date),
+                dayStart: dayStart,
                 isActiveStatus: booking.status == .confirmed || booking.status == .tentative,
                 paidHours: booking.paidBookedHours(policy: input.payrollTimePolicy),
                 scheduleLabel: booking.scheduleLabel(policy: input.payrollTimePolicy),
@@ -216,7 +227,9 @@ enum WarningsComputation {
             )
         }
 
-        let managerSiteBookings: [WarningsComputationSnapshot.ManagerBookingSnapshot] = input.managerSiteBookings.map { booking in
+        let managerSiteBookings: [WarningsComputationSnapshot.ManagerBookingSnapshot] = input.managerSiteBookings.compactMap { booking in
+            let dayStart = cal.startOfDay(for: booking.date)
+            guard dayStart >= coverageStart && dayStart <= coverageEnd else { return nil }
             let locationKind: WarningsComputationSnapshot.ManagerLocationKind
             switch booking.locationType {
             case .project:
@@ -236,7 +249,7 @@ enum WarningsComputation {
                 id: booking.id,
                 userId: booking.userId,
                 date: booking.date,
-                dayStart: cal.startOfDay(for: booking.date),
+                dayStart: dayStart,
                 isFullDaySlot: booking.timeSlot == .fullDay,
                 isBreakRemoved: booking.isBreakRemoved,
                 hasCustomClockTimes: {
@@ -254,12 +267,16 @@ enum WarningsComputation {
             )
         }
 
-        let holidayBookings: [WarningsComputationSnapshot.HolidaySnapshot] = input.holidayBookings.map { booking in
-            WarningsComputationSnapshot.HolidaySnapshot(
+        let holidayBookings: [WarningsComputationSnapshot.HolidaySnapshot] = input.holidayBookings.compactMap { booking in
+            let startDay = cal.startOfDay(for: booking.startDate)
+            let endDay = cal.startOfDay(for: booking.endDate)
+            // Keep holidays that overlap the scan window (needed for unbooked exclusions).
+            guard endDay >= coverageStart && startDay <= coverageEnd else { return nil }
+            return WarningsComputationSnapshot.HolidaySnapshot(
                 userId: booking.userId?.trimmingCharacters(in: .whitespacesAndNewlines),
                 operativeId: booking.operativeId,
-                startDay: cal.startOfDay(for: booking.startDate),
-                endDay: cal.startOfDay(for: booking.endDate),
+                startDay: startDay,
+                endDay: endDay,
                 isApproved: booking.status == .approved
             )
         }
@@ -841,13 +858,16 @@ private struct WarningsScheduleIndex {
             )
         }
 
-        let operativeUserEmails = Set(operativeUsers.map(\.emailLowercased))
+        let operativeUserEmails = Set(
+            operativeUsers.map(\.emailLowercased).filter { !$0.isEmpty }
+        )
         var seenEmails = Set<String>()
         var names: [String] = []
         names.reserveCapacity(operativeUsers.count + managerUsers.count + rosterOperatives.count)
 
-        func appendIfUnderBooked(name: String, emailKey: String, paid: Double) {
-            guard seenEmails.insert(emailKey).inserted else { return }
+        func appendIfUnderBooked(name: String, dedupeKey: String, paid: Double) {
+            guard !dedupeKey.isEmpty else { return }
+            guard seenEmails.insert(dedupeKey).inserted else { return }
             guard paid < requiredPaidHours else { return }
             let missing = max(0, requiredPaidHours - paid)
             names.append("\(name) (missing \(WarningsComputation.formatHours(missing))h)")
@@ -855,37 +875,47 @@ private struct WarningsScheduleIndex {
 
         for user in operativeUsers {
             if isExcluded(userId: user.id) { continue }
-            let linked = operativesByEmail[user.emailLowercased]
+            let email = user.emailLowercased
+            let linked = email.isEmpty ? nil : operativesByEmail[email]
             if hasHoliday(userId: user.id, operativeId: linked?.id) { continue }
+            let dedupe = email.isEmpty ? "user:\(user.id)" : email
             if let linked {
                 let paid = operativePaidTotal(linked.id) + managerPaidTotal(user.id)
-                appendIfUnderBooked(name: linked.name, emailKey: user.emailLowercased, paid: paid)
+                appendIfUnderBooked(name: linked.name, dedupeKey: dedupe, paid: paid)
             } else {
                 let paid = managerPaidTotal(user.id)
-                appendIfUnderBooked(name: user.displayName, emailKey: user.emailLowercased, paid: paid)
+                appendIfUnderBooked(name: user.displayName, dedupeKey: dedupe, paid: paid)
             }
         }
 
         for user in managerUsers {
             if isExcluded(userId: user.id) { continue }
-            let linked = operativesByEmail[user.emailLowercased]
+            let email = user.emailLowercased
+            let linked = email.isEmpty ? nil : operativesByEmail[email]
             if hasHoliday(userId: user.id, operativeId: linked?.id) { continue }
             let paid = managerPaidTotal(user.id) + (linked.map { operativePaidTotal($0.id) } ?? 0)
-            appendIfUnderBooked(name: user.displayName, emailKey: user.emailLowercased, paid: paid)
+            let dedupe = email.isEmpty ? "user:\(user.id)" : email
+            appendIfUnderBooked(name: user.displayName, dedupeKey: dedupe, paid: paid)
         }
 
         for op in rosterOperatives where op.isActive {
             let email = op.emailLowercased
-            guard !operativeUserEmails.contains(email) else { continue }
-            if let matchedUser = usersById.values.first(where: { $0.emailLowercased == email }),
+            // Skip when a matching operative-mode user already covers this person.
+            if !email.isEmpty, operativeUserEmails.contains(email) { continue }
+            if !email.isEmpty,
+               let matchedUser = usersById.values.first(where: { $0.emailLowercased == email }),
                managerAdminUserIds.contains(matchedUser.id) {
                 continue
             }
-            let linkedUserId = usersById.values.first(where: { $0.emailLowercased == email })?.id
+            let linkedUserId: String? = {
+                guard !email.isEmpty else { return nil }
+                return usersById.values.first(where: { $0.emailLowercased == email })?.id
+            }()
             if isExcluded(userId: linkedUserId) { continue }
             if hasHoliday(userId: linkedUserId, operativeId: op.id) { continue }
             let paid = operativePaidTotal(op.id) + (linkedUserId.map { managerPaidTotal($0) } ?? 0)
-            appendIfUnderBooked(name: op.name, emailKey: email, paid: paid)
+            let dedupe = email.isEmpty ? "op:\(op.id.uuidString)" : email
+            appendIfUnderBooked(name: op.name, dedupeKey: dedupe, paid: paid)
         }
         return names.sorted()
     }
