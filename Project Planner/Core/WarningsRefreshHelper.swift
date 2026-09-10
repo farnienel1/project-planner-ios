@@ -27,6 +27,9 @@ enum WarningsRefreshHelper {
         // Do not kick a fresh manager-schedule load here during Home bootstrap —
         // that re-enters the store load storm and can jetsam the simulator.
         if !force {
+            if firebaseBackend.isBootstrappingOrgDataLoad {
+                return
+            }
             if bookingStore.isLoading || operativeStore.isLoading || holidayStore.isLoading || projectStore.isLoading {
                 return
             }

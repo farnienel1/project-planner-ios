@@ -78,11 +78,18 @@ class HolidayStore: ObservableObject {
         }
         errorMessage = nil
         do {
+            print("🔥🔥🔥 DEBUG: HolidayStore loadData starting…")
             let orgId = try await resolveOrganizationId()
+            print("🔥🔥🔥 DEBUG: HolidayStore resolved org \(orgId); fetching holidayBookings…")
             bookings = try await fb.loadHolidayBookings(organizationId: orgId)
-            await purgeInvalidWeekendBookingsIfNeeded()
+            print("🔥🔥🔥 DEBUG: HolidayStore loaded \(bookings.count) holiday bookings")
+            // Weekend purge does sequential deletes — never await it on the load/launch path.
+            Task { @MainActor in
+                await self.purgeInvalidWeekendBookingsIfNeeded()
+            }
         } catch {
             let nsError = error as NSError
+            print("🔥🔥🔥 DEBUG: HolidayStore loadData failed: \(error.localizedDescription)")
             if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 {
                 errorMessage = "Holiday sync is currently blocked by Firebase permissions. Existing cached data may still be shown."
             } else {

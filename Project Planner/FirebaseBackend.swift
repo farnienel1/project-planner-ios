@@ -5253,7 +5253,8 @@ class FirebaseBackend: ObservableObject {
     }
 
     func loadHolidayBookings(organizationId: String) async throws -> [HolidayBooking] {
-        let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
+        // Read path only — do not run writable-org repair (that can hang launch).
+        let orgId = try await ensureReadableOrganization(organizationId)
         let holidaysRef = db.collection("organizations").document(orgId).collection("holidayBookings")
         let snapshot: QuerySnapshot
         do {

@@ -120,21 +120,31 @@ enum PlannerStoreWiring {
         firebaseBackend.hasBootstrappedOrgDataLoad = true
         print("🔥🔥🔥 DEBUG: ✅ Organization loaded, starting single-flight data bootstrap...")
 
-        // Home-critical stores first (projects / operatives / bookings). Secondary collections
-        // are staggered so Simulator does not jetsam under a parallel full-collection storm.
+        // Home-critical stores first (projects / operatives / bookings / tasks).
+        // Holidays + subcontractors are deferred: awaiting them on this path hung launch
+        // (writable-org repair + weekend purge) and blocked the MainActor after TaskStore.
         projectStore.loadData()
         operativeStore.loadData()
         bookingStore.loadData()
 
         try? await Task.sleep(nanoseconds: 500_000_000)
+        await Task.yield()
         managerScheduleStore.loadData()
         await taskStore.loadData()
+        await Task.yield()
 
-        try? await Task.sleep(nanoseconds: 400_000_000)
-        await holidayStore.loadData()
+        print("🔥🔥🔥 DEBUG: ✅ Home-critical org bootstrap finished (projects/operatives/bookings/tasks kicked)")
 
-        try? await Task.sleep(nanoseconds: 400_000_000)
-        await subcontractorStore.loadData()
+        // Secondary collections: do not await on the launch path.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            print("🔥🔥🔥 DEBUG: Starting deferred holiday load...")
+            await holidayStore.loadData()
+            print("🔥🔥🔥 DEBUG: Deferred holiday load finished; starting subcontractors...")
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            await subcontractorStore.loadData()
+            print("🔥🔥🔥 DEBUG: ✅ Deferred secondary org loads finished")
+        }
 
         print("🔥🔥🔥 DEBUG: ✅ Org data bootstrap requests finished")
 

@@ -530,12 +530,21 @@ struct HomeView: View {
         }
         .task(id: homeDataRefreshTrigger) {
             // Coalesce rapid store updates while Firebase batches load.
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            // Longer debounce during bootstrap / while core stores are still loading.
+            let bootstrapping = firebaseBackend.isBootstrappingOrgDataLoad
+            let storesBusy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading
+            let delayNs: UInt64 = (bootstrapping || storesBusy) ? 2_500_000_000 : 1_000_000_000
+            try? await Task.sleep(nanoseconds: delayNs)
             guard !Task.isCancelled else { return }
+            // Skip heavy derived work until home-critical bootstrap releases the lock.
+            if firebaseBackend.isBootstrappingOrgDataLoad {
+                return
+            }
             await refreshHomeDerivedData()
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
             guard userStore.hasAdminAccess() else { return }
+            guard !firebaseBackend.isBootstrappingOrgDataLoad else { return }
             let now = Date()
             if let lastManagerWarningsRefreshAt,
                now.timeIntervalSince(lastManagerWarningsRefreshAt) < 2 {
