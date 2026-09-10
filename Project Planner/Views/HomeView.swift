@@ -532,6 +532,7 @@ struct HomeView: View {
         .padding(.bottom, 28)
         .onAppear {
             loadPersistedAdminOverviewMetricsIfNeeded()
+            print("🔥🔥🔥 DEBUG: HOME_APPEARED \(WarningsBuildStamp.id) — pill must say '\(WarningsBuildStamp.homePillTitle)'")
         }
         .task(id: homeDataRefreshTrigger) {
             // Coalesce rapid store updates while Firebase batches load.
