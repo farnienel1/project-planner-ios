@@ -130,7 +130,10 @@ class NotificationService: ObservableObject {
             return
         }
 
-        await userStore.loadOrganizationUsers()
+        // Organization users are usually already loaded for Home; avoid a second roster fetch on launch.
+        if userStore.organizationUsers.isEmpty {
+            await userStore.loadOrganizationUsers()
+        }
         let orgUsers = userStore.organizationUsers
 
         await LocalNotificationService.shared.removeQualificationExpiryReminders()

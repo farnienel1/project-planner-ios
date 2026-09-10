@@ -131,6 +131,7 @@ extension FirebaseBackend {
         storeOrganizationLocally(organization)
         hasBootstrappedOrgDataLoad = false
         isBootstrappingOrgDataLoad = false
+        launchQuietUntil = nil
         broadcastOrganizationDidLoadIfNeeded(force: true)
     }
 

@@ -87,8 +87,15 @@ class ManagerScheduleStore: ObservableObject {
                 OfflineManagerScheduleLocalStore.save(managerSiteBookings, organizationId: orgId)
                 lastLoadAt = Date()
                 if !duplicates.isEmpty {
-                    for duplicate in duplicates {
-                        try? await fb.deleteManagerSiteBooking(duplicate, organizationId: orgId)
+                    // Defer duplicate cleanup — sequential deletes on launch freeze Simulator.
+                    let orgIdForDeletes = orgId
+                    let duplicatesToRemove = duplicates
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 45_000_000_000)
+                        print("🔥🔥🔥 DEBUG: ManagerSchedule deferred duplicate cleanup (\(duplicatesToRemove.count))…")
+                        for duplicate in duplicatesToRemove {
+                            try? await fb.deleteManagerSiteBooking(duplicate, organizationId: orgIdForDeletes)
+                        }
                     }
                 }
                 NotificationCenter.default.post(name: didChangeNotificationName, object: nil)

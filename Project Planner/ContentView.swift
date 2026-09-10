@@ -302,7 +302,7 @@ struct ContentView: View {
         .onChange(of: userStore.currentUser?.id) { _, _ in
             // Reminder scheduling hits UNUserNotificationCenter + org users — keep off first paint.
             Task {
-                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                try? await Task.sleep(nanoseconds: 35_000_000_000)
                 await notificationService.refreshDailyMaterialCutOffReminder()
                 await notificationService.refreshQualificationExpiryReminders()
             }
@@ -389,12 +389,14 @@ struct ContentView: View {
         await userStore.loadCurrentUser()
         appSettings.loadSettings()
 
-        // Defer non-UI sync / local reminder work so launch memory peaks stay lower.
+        // Defer non-UI sync / local reminder work well past secondary loads + quiet period.
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            try? await Task.sleep(nanoseconds: 35_000_000_000)
+            print("🔥🔥🔥 DEBUG: Post-quiet side work starting (operative sync + reminders)…")
             await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
             await notificationService.refreshDailyMaterialCutOffReminder()
             await notificationService.refreshQualificationExpiryReminders()
+            print("🔥🔥🔥 DEBUG: Post-quiet side work finished")
         }
 
         if let organizationId {
