@@ -8,24 +8,26 @@ import SwiftUI
 struct WarningsDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var warningsService: WarningsService
-    @EnvironmentObject var projectStore: ProjectStore
-    @EnvironmentObject var userStore: UserStore
-    @EnvironmentObject var operativeStore: OperativeStore
-    @EnvironmentObject var bookingStore: BookingStore
-    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
-    @EnvironmentObject var firebaseBackend: FirebaseBackend
-    @EnvironmentObject var appSettings: AppSettingsStore
-    @EnvironmentObject var holidayStore: HolidayStore
-    @EnvironmentObject var notificationService: NotificationService
-    @EnvironmentObject var subcontractorStore: SubcontractorStore
-    @EnvironmentObject var taskStore: ProjectTaskStore
+    // Explicit observed stores — sheets do not reliably inherit EnvironmentObjects,
+    // and a missing @EnvironmentObject fatals on first body access (no Swift stack).
+    @ObservedObject var projectStore: ProjectStore
+    @ObservedObject var userStore: UserStore
+    @ObservedObject var operativeStore: OperativeStore
+    @ObservedObject var bookingStore: BookingStore
+    @ObservedObject var managerScheduleStore: ManagerScheduleStore
+    @ObservedObject var firebaseBackend: FirebaseBackend
+    @ObservedObject var appSettings: AppSettingsStore
+    @ObservedObject var holidayStore: HolidayStore
+    @ObservedObject var notificationService: NotificationService
+    @ObservedObject var subcontractorStore: SubcontractorStore
+    @ObservedObject var taskStore: ProjectTaskStore
 
     @State private var filterChip: WarningsFilterChip = .all
     @State private var openDayDate: IdentifiableDay?
     @State private var openBookLabourDate: IdentifiableDay?
-    @State private var openProjectId: UUID?
     @State private var warningPendingDismiss: Warning?
     @State private var showingWarningsSettings = false
+    @State private var isRefreshing = false
 
     var body: some View {
         NavigationStack {
@@ -55,30 +57,42 @@ struct WarningsDetailView: View {
                     }
                 }
             }
-            .navigationDestination(isPresented: $showingWarningsSettings) {
-                OrganisationWarningsSettingsView(
-                    exitsToHomeOnBack: true,
-                    onExitToHome: {
-                        showingWarningsSettings = false
-                        dismiss()
-                    },
-                    onSaved: {
-                        showingWarningsSettings = false
-                    }
-                )
-                .environmentObject(firebaseBackend)
-                .environmentObject(operativeStore)
-                .environmentObject(bookingStore)
-                .environmentObject(projectStore)
-                .environmentObject(userStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(holidayStore)
-                .environmentObject(appSettings)
-            }
             .appChromeNavigationBarSurface()
+            .overlay(alignment: .top) {
+                if isRefreshing {
+                    ProgressView()
+                        .padding(8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.top, 8)
+                }
+            }
+            .onAppear {
+                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED (explicit stores, no EnvironmentObject)")
+            }
             .task {
-                // Soft refresh after open; bootstrap/quiet guards still apply.
-                await refreshWarningsAsync()
+                await refreshAfterLaunchQuietIfNeeded()
+            }
+            .sheet(isPresented: $showingWarningsSettings) {
+                NavigationStack {
+                    OrganisationWarningsSettingsView(
+                        exitsToHomeOnBack: true,
+                        onExitToHome: {
+                            showingWarningsSettings = false
+                            dismiss()
+                        },
+                        onSaved: {
+                            showingWarningsSettings = false
+                        }
+                    )
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(operativeStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(userStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(holidayStore)
+                    .environmentObject(appSettings)
+                }
             }
             .sheet(item: $openDayDate) { day in
                 NavigationStack {
@@ -226,7 +240,8 @@ struct WarningsDetailView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
             if let d = warning.unbookedLabour {
-                ForEach(d.names, id: \.self) { name in
+                // Enumerated ids avoid ForEach traps when two people share a display name.
+                ForEach(Array(d.names.enumerated()), id: \.offset) { _, name in
                     Text("• \(name)")
                         .font(.system(size: 12))
                 }
@@ -344,7 +359,21 @@ struct WarningsDetailView: View {
         Task { await refreshWarningsAsync() }
     }
 
+    private func refreshAfterLaunchQuietIfNeeded() async {
+        // Never recompute while launch quiet / bootstrap is active — that jetsams Simulator.
+        while firebaseBackend.isBootstrappingOrgDataLoad
+            || !firebaseBackend.hasBootstrappedOrgDataLoad
+            || (firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false) {
+            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting for launch quiet/bootstrap to end")
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if Task.isCancelled { return }
+        }
+        await refreshWarningsAsync()
+    }
+
     private func refreshWarningsAsync() async {
+        isRefreshing = true
+        defer { isRefreshing = false }
         await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
@@ -370,16 +399,18 @@ private struct IdentifiableDay: Identifiable, Hashable {
 }
 
 #Preview {
-    WarningsDetailView(warningsService: WarningsService())
-        .environmentObject(ProjectStore())
-        .environmentObject(UserStore())
-        .environmentObject(OperativeStore())
-        .environmentObject(BookingStore())
-        .environmentObject(ManagerScheduleStore())
-        .environmentObject(FirebaseBackend())
-        .environmentObject(AppSettingsStore())
-        .environmentObject(HolidayStore())
-        .environmentObject(NotificationService())
-        .environmentObject(SubcontractorStore())
-        .environmentObject(ProjectTaskStore())
+    WarningsDetailView(
+        warningsService: WarningsService(),
+        projectStore: ProjectStore(),
+        userStore: UserStore(),
+        operativeStore: OperativeStore(),
+        bookingStore: BookingStore(),
+        managerScheduleStore: ManagerScheduleStore(),
+        firebaseBackend: FirebaseBackend(),
+        appSettings: AppSettingsStore(),
+        holidayStore: HolidayStore(),
+        notificationService: NotificationService(),
+        subcontractorStore: SubcontractorStore(),
+        taskStore: ProjectTaskStore()
+    )
 }

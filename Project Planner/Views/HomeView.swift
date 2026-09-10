@@ -75,18 +75,20 @@ struct HomeView: View {
         .toolbar(.hidden, for: .navigationBar)
         .background(homeCanvasBackground.ignoresSafeArea(edges: .top))
         .sheet(isPresented: $showingWarningsDetail) {
-            WarningsDetailView(warningsService: WarningsService.shared)
-                .environmentObject(projectStore)
-                .environmentObject(userStore)
-                .environmentObject(operativeStore)
-                .environmentObject(bookingStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(appSettings)
-                .environmentObject(holidayStore)
-                .environmentObject(notificationService)
-                .environmentObject(subcontractorStore)
-                .environmentObject(taskStore)
+            WarningsDetailView(
+                warningsService: WarningsService.shared,
+                projectStore: projectStore,
+                userStore: userStore,
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                firebaseBackend: firebaseBackend,
+                appSettings: appSettings,
+                holidayStore: holidayStore,
+                notificationService: notificationService,
+                subcontractorStore: subcontractorStore,
+                taskStore: taskStore
+            )
         }
         .sheet(isPresented: $showingTasksDetail) {
             TasksDetailView()
@@ -1333,9 +1335,9 @@ struct HomeView: View {
         if userStore.hasAdminAccess(),
            !storesStillLoading,
            firebaseBackend.hasBootstrappedOrgDataLoad {
-            // Do not auto-run warnings on Home after every store refresh — that MainActor
-            // snapshot freezes/crashes Simulator. Badge stays at last known count; opening
-            // Warnings detail still force-refreshes.
+            // Do not auto-run warnings on Home after every store refresh — that used to
+            // freeze/crash Simulator. Badge stays at last known count; opening Warnings
+            // refreshes off the main actor (and never during bootstrap/quiet).
             homeWarningCount = WarningsService.shared.warningCount
         } else if userStore.hasAdminAccess() {
             homeWarningCount = WarningsService.shared.warningCount
@@ -1343,22 +1345,10 @@ struct HomeView: View {
     }
 
     private func openWarningsDetail() async {
-        // Present immediately with cached counts — never block the sheet on a forced
-        // recompute (that was freezing/jetsaming Simulator right after bootstrap).
+        // Present only — never block or recompute on the tap path.
+        // Refresh runs inside the sheet after launch quiet ends.
+        print("🔥🔥🔥 DEBUG: WARNINGS_OPEN tapped — presenting sheet")
         presentWarningsDetail()
-        guard userStore.hasAdminAccess() else { return }
-        await WarningsRefreshHelper.refreshSharedWarnings(
-            operativeStore: operativeStore,
-            bookingStore: bookingStore,
-            projectStore: projectStore,
-            userStore: userStore,
-            managerScheduleStore: managerScheduleStore,
-            holidayStore: holidayStore,
-            firebaseBackend: firebaseBackend,
-            appSettings: appSettings,
-            force: true
-        )
-        homeWarningCount = WarningsService.shared.warningCount
     }
     
     private var assignedTasksCount: Int {

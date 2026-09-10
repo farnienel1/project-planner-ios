@@ -159,18 +159,20 @@ struct WeeklyReportView: View {
     }
 
     private var warningsDetailSheet: some View {
-        WarningsDetailView(warningsService: warningsService)
-            .environmentObject(projectStore)
-            .environmentObject(userStore)
-            .environmentObject(operativeStore)
-            .environmentObject(bookingStore)
-            .environmentObject(managerScheduleStore)
-            .environmentObject(firebaseBackend)
-            .environmentObject(appSettings)
-            .environmentObject(holidayStore)
-            .environmentObject(notificationService)
-            .environmentObject(subcontractorStore)
-            .environmentObject(taskStore)
+        WarningsDetailView(
+            warningsService: warningsService,
+            projectStore: projectStore,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings,
+            holidayStore: holidayStore,
+            notificationService: notificationService,
+            subcontractorStore: subcontractorStore,
+            taskStore: taskStore
+        )
     }
 
     // MARK: - UI sections

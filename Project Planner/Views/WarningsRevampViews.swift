@@ -274,23 +274,20 @@ struct ClashTimelineDiagram: View {
         let b = (entryB.startMinutes, entryB.endMinutes)
         let overlapStart = max(a.0, b.0)
         let overlapEnd = min(a.1, b.1)
-        let bar = (
-            left: CGFloat(overlapStart) / CGFloat(WarningTimelineMath.dayMinutes),
-            width: CGFloat(max(0, overlapEnd - overlapStart)) / CGFloat(WarningTimelineMath.dayMinutes)
-        )
+        let bar = WarningTimelineMath.barFraction(start: overlapStart, end: overlapEnd)
         let clashLabel: String
         if overlapMinutes >= WarningTimelineMath.dayMinutes - 30 {
             clashLabel = "CLASH · Full day"
         } else {
-            let h = Double(overlapMinutes) / 60.0
+            let h = Double(max(0, overlapMinutes)) / 60.0
             clashLabel = h >= 1 ? String(format: "CLASH · %.0fh", h.rounded()) : "CLASH"
         }
         return HStack(spacing: 9) {
             Color.clear.frame(width: 68, height: 20)
             GeometryReader { geo in
+                let w = max(4, geo.size.width * bar.width)
+                let x = max(0, min(geo.size.width - w, geo.size.width * bar.left))
                 ZStack(alignment: .leading) {
-                    let w = max(4, geo.size.width * bar.width)
-                    let x = geo.size.width * bar.left
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .stroke(style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                         .foregroundStyle(Color(red: 0.639, green: 0.176, blue: 0.176))
@@ -303,7 +300,8 @@ struct ClashTimelineDiagram: View {
                         .padding(.vertical, 2)
                         .background(Color(red: 0.639, green: 0.176, blue: 0.176))
                         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                        .position(x: x + w / 2, y: 10)
+                        .frame(width: w, height: 20, alignment: .center)
+                        .offset(x: x)
                 }
             }
             .frame(height: 20)
