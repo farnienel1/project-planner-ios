@@ -1263,6 +1263,7 @@ struct HomeView: View {
     private func refreshHomeDerivedData() async {
         guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
         guard !Task.isCancelled else { return }
+        guard !firebaseBackend.isBootstrappingOrgDataLoad else { return }
         guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
 
         let storesStillLoading = bookingStore.isLoading
