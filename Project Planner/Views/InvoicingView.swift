@@ -5063,7 +5063,7 @@ private enum TimesheetExportHelper {
             to: recipientEmail,
             subject: "Signed timesheets for filing — \(paymentRunStamp) — \(organizationName)",
             htmlContent: html,
-            pdfAttachments: attachments.map { ($0.fileName, $0.data) },
+            pdfAttachments: attachments.map { (fileName: $0.fileName, data: $0.data) },
             fromName: organizationName
         )
 
