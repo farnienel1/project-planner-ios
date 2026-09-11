@@ -49,6 +49,9 @@ struct WeeklyReportView: View {
     @State private var logoImage: UIImage?
     @State private var didScheduleWarningsRefresh = false
     @State private var warningsRefreshTask: Task<Void, Never>?
+    /// Blocks onChange refresh while `.task` sets the initial week range (avoids double/triple compute on open).
+    @State private var suppressRangeDrivenRefresh = false
+    @State private var isReportWarningsRefreshInFlight = false
 
     private var organizationName: String {
         firebaseBackend.currentOrganization?.name ?? "Organization"
@@ -118,16 +121,24 @@ struct WeeklyReportView: View {
                         .presentationDragIndicator(.visible)
                 }
                 .task {
+                    suppressRangeDrivenRefresh = true
                     setThisWeekRange()
+                    suppressRangeDrivenRefresh = false
                     guard !didScheduleWarningsRefresh else { return }
                     didScheduleWarningsRefresh = true
-                    // Paint first, then wait for launch quiet — same pattern as Warnings sheet.
+                    // Paint first, then wait for launch quiet — same pattern as Home warnings.
                     try? await Task.sleep(nanoseconds: 600_000_000)
                     guard !Task.isCancelled else { return }
                     await refreshReportWarningsAfterQuiet()
                 }
-                .onChange(of: startDate) { _, _ in scheduleDebouncedWarningsRefresh() }
-                .onChange(of: endDate) { _, _ in scheduleDebouncedWarningsRefresh() }
+                .onChange(of: startDate) { _, _ in
+                    guard !suppressRangeDrivenRefresh else { return }
+                    scheduleDebouncedWarningsRefresh()
+                }
+                .onChange(of: endDate) { _, _ in
+                    guard !suppressRangeDrivenRefresh else { return }
+                    scheduleDebouncedWarningsRefresh()
+                }
                 .onDisappear {
                     warningsRefreshTask?.cancel()
                     warningsRefreshTask = nil
@@ -185,7 +196,10 @@ struct WeeklyReportView: View {
     }
 
     private func presentWarningsDetail() {
-        warningsSheetPayload = WarningsDisplaySnapshot(from: warningsService)
+        warningsSheetPayload = WarningsDisplaySnapshot(
+            from: warningsService,
+            detectionCompleted: true
+        )
     }
 
     // MARK: - UI sections
@@ -646,6 +660,13 @@ struct WeeklyReportView: View {
     }
 
     private func refreshReportWarningsAsync() async {
+        guard !isReportWarningsRefreshInFlight else {
+            print("🔥🔥🔥 DEBUG: Weekly Report warnings refresh skipped (already in flight)")
+            return
+        }
+        isReportWarningsRefreshInFlight = true
+        defer { isReportWarningsRefreshInFlight = false }
+
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
@@ -672,23 +693,13 @@ struct WeeklyReportView: View {
         }
 
         let materialCutOffEnabled = appSettings.settings.notifications.materialOrderCutOff
-        let hour = cal.component(.hour, from: Date())
-        var materialItemsForTomorrow: [MaterialItem] = []
-        var materialsDataLoaded = false
-        if materialCutOffEnabled, hour >= 16,
-           let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-            materialsDataLoaded = true
-            for project in projectsTomorrow.prefix(25) {
-                if let items = try? await firebaseBackend.loadMaterialItems(
-                    organizationId: orgId,
-                    projectId: project.id
-                ) {
-                    materialItemsForTomorrow.append(
-                        contentsOf: items.filter { cal.isDate($0.date, inSameDayAs: tomorrow) }
-                    )
-                }
-            }
-        }
+        // Never pull material lines while opening Weekly Report — sequential Firestore
+        // fetches here jetsamed Simulator. Materials cutoff stays off for the in-report
+        // summary; export can still run without that low-priority slice.
+        let materialItemsForTomorrow: [MaterialItem] = []
+        let materialsDataLoaded = false
+        _ = projectsTomorrow
+        _ = tomorrow
 
         // Private service — never overwrite WarningsService.shared (org detection horizon).
         await warningsService.updateWarningsAsync(

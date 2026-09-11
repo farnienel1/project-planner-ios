@@ -24,6 +24,9 @@ struct HomeView: View {
     /// One-shot post-quiet warnings recompute — avoids empty "All clear" after jetsam guards
     /// removed per-derived-refresh warnings work, without re-entering the launch load storm.
     @State private var didSchedulePostQuietWarningsRefresh = false
+    /// True after the first successful detection pass (even if count is 0).
+    @State private var homeWarningsDetectionCompleted = false
+    @State private var isPreparingWarningsSheet = false
     @State private var cachedUpNextSections: [HomeUpNextDaySection] = []
     @State private var cachedOverviewMetrics = HomeOverviewMetrics()
     @State private var showingCreateClient = false
@@ -589,6 +592,7 @@ struct HomeView: View {
         }
         .task(id: userStore.currentUser?.id) {
             didSchedulePostQuietWarningsRefresh = false
+            homeWarningsDetectionCompleted = false
             await schedulePostQuietWarningsRefreshIfNeeded()
         }
         .onChange(of: showingAdminOverviewCustomize) { _, isOpen in
@@ -759,7 +763,7 @@ struct HomeView: View {
                     iconTint: Color(red: 0.64, green: 0.18, blue: 0.18),
                     iconBackground: Color(red: 0.99, green: 0.92, blue: 0.92),
                     title: "Warnings",
-                    value: homeWarningCount == 0 ? "All clear" : "\(homeWarningCount) active"
+                    value: warningsPillValue
                 ) {
                     presentWarningsDetail()
                 }
@@ -1267,18 +1271,58 @@ struct HomeView: View {
         )
     }
 
+    private var warningsPillValue: String {
+        if isPreparingWarningsSheet { return "Loading…" }
+        if homeWarningCount > 0 { return "\(homeWarningCount) active" }
+        if homeWarningsDetectionCompleted || didSchedulePostQuietWarningsRefresh {
+            return "All clear"
+        }
+        return "Checking…"
+    }
+
     private func presentTasksDetail() {
         WarningsRefreshHelper.isWarningsSheetVisible = false
         warningsSheetPayload = nil
         showingTasksDetail = true
     }
 
+    /// Wait for Home detection (sheet not visible) before freezing the list — otherwise
+    /// an early tap latches an empty snapshot for the whole presentation.
     private func presentWarningsDetail() {
         showingTasksDetail = false
-        // Capture counts/list now so the sheet never re-subscribes to live recompute.
-        let payload = WarningsDisplaySnapshot(from: WarningsService.shared)
-        WarningsRefreshHelper.isWarningsSheetVisible = true
-        warningsSheetPayload = payload
+        guard !isPreparingWarningsSheet else { return }
+        isPreparingWarningsSheet = true
+        Task { @MainActor in
+            defer { isPreparingWarningsSheet = false }
+
+            if !didSchedulePostQuietWarningsRefresh {
+                await refreshWarningsFromHome(force: true)
+            }
+
+            if !didSchedulePostQuietWarningsRefresh {
+                let deadline = Date().addingTimeInterval(25)
+                while !didSchedulePostQuietWarningsRefresh && Date() < deadline {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    if Task.isCancelled { return }
+                    if WarningsService.shared.activeWarnings.isEmpty == false {
+                        break
+                    }
+                }
+                if !didSchedulePostQuietWarningsRefresh {
+                    await refreshWarningsFromHome(force: true)
+                }
+            }
+
+            let detectionDone = didSchedulePostQuietWarningsRefresh
+                || homeWarningsDetectionCompleted
+                || !WarningsService.shared.activeWarnings.isEmpty
+            let payload = WarningsDisplaySnapshot(
+                from: WarningsService.shared,
+                detectionCompleted: detectionDone
+            )
+            WarningsRefreshHelper.isWarningsSheetVisible = true
+            warningsSheetPayload = payload
+        }
     }
 
     /// Rebuild Up Next + overview metrics; warnings refresh stays off the main thread via `WarningsRefreshHelper`.
@@ -1371,6 +1415,7 @@ struct HomeView: View {
         )
         if didRun {
             didSchedulePostQuietWarningsRefresh = true
+            homeWarningsDetectionCompleted = true
             homeWarningCount = WarningsService.shared.warningCount
             print("🔥🔥🔥 DEBUG: Home warnings refresh finished count=\(homeWarningCount)")
         }
@@ -1431,6 +1476,7 @@ struct HomeView: View {
                 )
                 if didRun {
                     didSchedulePostQuietWarningsRefresh = true
+                    homeWarningsDetectionCompleted = true
                     homeWarningCount = WarningsService.shared.warningCount
                     print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh finished count=\(homeWarningCount)")
                     // Do not follow up with materials fetch — that secondary pass jetsams Simulator.
@@ -1467,6 +1513,7 @@ struct HomeView: View {
         )
         if didRun {
             didSchedulePostQuietWarningsRefresh = true
+            homeWarningsDetectionCompleted = true
             homeWarningCount = WarningsService.shared.warningCount
             print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh finished (bypass) count=\(homeWarningCount)")
         } else {

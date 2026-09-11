@@ -16,6 +16,8 @@ struct WarningsDisplaySnapshot: Identifiable, Equatable {
     let highCount: Int
     let mediumCount: Int
     let lowCount: Int
+    /// False when Home has not finished a detection pass yet — empty list is not "all clear".
+    let detectionCompleted: Bool
 
     init(
         id: UUID = UUID(),
@@ -23,7 +25,8 @@ struct WarningsDisplaySnapshot: Identifiable, Equatable {
         activeCount: Int,
         highCount: Int,
         mediumCount: Int,
-        lowCount: Int
+        lowCount: Int,
+        detectionCompleted: Bool = true
     ) {
         self.id = id
         self.warnings = warnings
@@ -31,16 +34,18 @@ struct WarningsDisplaySnapshot: Identifiable, Equatable {
         self.highCount = highCount
         self.mediumCount = mediumCount
         self.lowCount = lowCount
+        self.detectionCompleted = detectionCompleted
     }
 
     @MainActor
-    init(from service: WarningsService, id: UUID = UUID()) {
+    init(from service: WarningsService, detectionCompleted: Bool, id: UUID = UUID()) {
         self.id = id
         self.warnings = service.warningsSortedByDate()
         self.activeCount = service.warningCount
         self.highCount = service.highCount
         self.mediumCount = service.mediumCount
         self.lowCount = service.lowCount
+        self.detectionCompleted = detectionCompleted
     }
 }
 
@@ -169,12 +174,16 @@ struct WarningsDetailView: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Image(systemName: "checkmark.circle.fill")
+            Image(systemName: snapshot.detectionCompleted ? "checkmark.circle.fill" : "hourglass")
                 .font(.system(size: 56))
-                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-            Text("No active warnings yet")
+                .foregroundStyle(snapshot.detectionCompleted
+                                 ? ProjectWorksRevampColors.activeGreen
+                                 : ProjectWorksRevampColors.muted)
+            Text(snapshot.detectionCompleted ? "All clear" : "Still checking…")
                 .font(.title3.weight(.semibold))
-            Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.\n\nIf Daily Overview shows unbooked people, close Warnings and reopen after Home has finished loading.")
+            Text(snapshot.detectionCompleted
+                 ? "High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00."
+                 : "Warnings are calculated on Home after launch settles. Close this screen, wait a few seconds on Home, then reopen.")
                 .font(.subheadline)
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .multilineTextAlignment(.center)
