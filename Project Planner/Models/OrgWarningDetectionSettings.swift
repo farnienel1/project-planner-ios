@@ -69,7 +69,11 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         detectClashes = try c.decodeIfPresent(Bool.self, forKey: .detectClashes) ?? true
-        clashLookaheadMode = try c.decodeIfPresent(WarningClashLookaheadMode.self, forKey: .clashLookaheadMode) ?? .numberOfDays
+        if let raw = try c.decodeIfPresent(String.self, forKey: .clashLookaheadMode) {
+            clashLookaheadMode = WarningClashLookaheadMode(rawValue: raw) ?? .numberOfDays
+        } else {
+            clashLookaheadMode = .numberOfDays
+        }
         clashLookaheadDays = try c.decodeIfPresent(Int.self, forKey: .clashLookaheadDays) ?? 7
         includeWeekendsForUnbookedLabour = try c.decodeIfPresent(Bool.self, forKey: .includeWeekendsForUnbookedLabour) ?? false
         excludedUserIdsFromUnbookedWarnings = try c.decodeIfPresent([String].self, forKey: .excludedUserIdsFromUnbookedWarnings) ?? []

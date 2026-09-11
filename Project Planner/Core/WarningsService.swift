@@ -230,7 +230,7 @@ class WarningsService: ObservableObject {
         let generation = updateGeneration
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-        let coverageStart = cal.startOfDay(
+        var coverageStart = cal.startOfDay(
             for: labourCoverageStart
                 ?? warningDetection.coverageStart(from: today, invoicing: invoicingSettings, calendar: cal)
         )
@@ -238,33 +238,46 @@ class WarningsService: ObservableObject {
             for: labourCoverageEnd
                 ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
         )
-        // Full invoicing-period mode must include past working days in the current period.
-        let effectiveScanUnbookedFromStart = scanUnbookedFromCoverageStart
+        // Hard cap live detection window so full-period mode cannot balloon into a jetsam.
+        let maxLiveCoverageDays = 45
+        if let earliest = cal.date(byAdding: .day, value: -(maxLiveCoverageDays - 1), to: coverageEnd) {
+            let earliestStart = cal.startOfDay(for: earliest)
+            if coverageStart < earliestStart {
+                coverageStart = earliestStart
+            }
+        }
+        // Full invoicing-period mode includes past working days. Do that in a second
+        // pass so Home/Warnings still publish today's results if the past-day scan is heavy.
+        let wantsPastUnbooked = scanUnbookedFromCoverageStart
             || (labourCoverageStart == nil && warningDetection.scansUnbookedFromCoverageStart)
-        let input = WarningsComputationInput(
-            operatives: operatives,
-            bookings: bookings,
-            projects: projects,
-            users: users,
-            managerSiteBookings: managerSiteBookings,
-            holidayBookings: holidayBookings,
-            payrollTimePolicy: payrollTimePolicy,
-            warningDetection: warningDetection,
-            coverageStart: coverageStart,
-            coverageEnd: coverageEnd,
-            scanUnbookedFromCoverageStart: effectiveScanUnbookedFromStart,
-            materialOrderCutOffEnabled: materialOrderCutOffEnabled,
-            materialCutOffOnSaturday: materialCutOffOnSaturday,
-            materialCutOffOnSunday: materialCutOffOnSunday,
-            projectsWithTomorrowBookings: projectsWithTomorrowBookings,
-            materialItemsForTomorrow: materialItemsForTomorrow,
-            materialsDataLoaded: materialsDataLoaded
-        )
+
+        func makeInput(scanUnbookedFromStart: Bool) -> WarningsComputationInput {
+            WarningsComputationInput(
+                operatives: operatives,
+                bookings: bookings,
+                projects: projects,
+                users: users,
+                managerSiteBookings: managerSiteBookings,
+                holidayBookings: holidayBookings,
+                payrollTimePolicy: payrollTimePolicy,
+                warningDetection: warningDetection,
+                coverageStart: coverageStart,
+                coverageEnd: coverageEnd,
+                scanUnbookedFromCoverageStart: scanUnbookedFromStart,
+                materialOrderCutOffEnabled: materialOrderCutOffEnabled,
+                materialCutOffOnSaturday: materialCutOffOnSaturday,
+                materialCutOffOnSunday: materialCutOffOnSunday,
+                projectsWithTomorrowBookings: projectsWithTomorrowBookings,
+                materialItemsForTomorrow: materialItemsForTomorrow,
+                materialsDataLoaded: materialsDataLoaded
+            )
+        }
+
         // Snapshot + generate both off main — makeSnapshot alone was enough to jetsam
         // when opening Warnings forced a refresh right after Home bootstrap.
-        let generated = await Task.detached(priority: .utility) {
-            let snapshot = WarningsComputation.makeSnapshot(from: input)
-            return WarningsComputation.generate(snapshot)
+        let fastGenerated = await Task.detached(priority: .utility) {
+            let snapshot = WarningsComputation.makeSnapshot(from: makeInput(scanUnbookedFromStart: false))
+            return await WarningsComputation.generate(snapshot)
         }.value
         guard generation == updateGeneration else { return }
         if pruneDismissals {
@@ -275,9 +288,24 @@ class WarningsService: ObservableObject {
                 calendar: cal
             )
         }
-        allGeneratedWarnings = generated
-        activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+        allGeneratedWarnings = fastGenerated
+        activeWarnings = fastGenerated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
         refreshSeverityCounts()
+        WarningsRefreshHelper.postWarningsCountDidChange()
+
+        guard wantsPastUnbooked else { return }
+        await Task.yield()
+        guard generation == updateGeneration else { return }
+
+        let fullGenerated = await Task.detached(priority: .utility) {
+            let snapshot = WarningsComputation.makeSnapshot(from: makeInput(scanUnbookedFromStart: true))
+            return await WarningsComputation.generate(snapshot)
+        }.value
+        guard generation == updateGeneration else { return }
+        allGeneratedWarnings = fullGenerated
+        activeWarnings = fullGenerated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+        refreshSeverityCounts()
+        WarningsRefreshHelper.postWarningsCountDidChange()
     }
 
     /// Approve only applies to MEDIUM manager/admin clashes (weekly report tick).
