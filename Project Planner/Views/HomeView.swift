@@ -40,7 +40,7 @@ struct HomeView: View {
     @State private var showingAddUser = false
     @State private var showingManageUsers = false
     @State private var showingDailyOverview = false
-    @State private var showingWeeklyReport = false
+    @State private var weeklyReportLaunch: WeeklyReportDependencies?
     @State private var showingOrgSitesMap = false
     @State private var showingMySchedule = false
     @State private var warningsSheetPayload: WarningsDisplaySnapshot?
@@ -234,26 +234,12 @@ struct HomeView: View {
                 .environmentObject(taskStore)
                 .environmentObject(notificationService)
         }
-        .sheet(isPresented: $showingWeeklyReport) {
-            // Do NOT construct WeeklyReportView until the shell finishes — creating it
-            // with every store while Home is hot is what keeps jetsamming open.
-            WeeklyReportLoadingShell {
-                WeeklyReportView(
-                    bookingStore: bookingStore,
-                    managerScheduleStore: managerScheduleStore,
-                    projectStore: projectStore,
-                    operativeStore: operativeStore,
-                    holidayStore: holidayStore,
-                    userStore: userStore,
-                    firebaseBackend: firebaseBackend,
-                    subcontractorStore: subcontractorStore,
-                    appSettings: appSettings,
-                    notificationService: notificationService,
-                    taskStore: taskStore
-                )
-            }
+        .sheet(item: $weeklyReportLaunch) { deps in
+            // Store-free boot first; report view only after Continue.
+            WeeklyReportFlowView(deps: deps)
         }
-        .onChange(of: showingWeeklyReport) { _, isPresented in
+        .onChange(of: weeklyReportLaunch?.id) { _, newId in
+            let isPresented = newId != nil
             WarningsRefreshHelper.isWeeklyReportVisible = isPresented
             if isPresented {
                 WarningsRefreshHelper.cancelInFlightRefresh()
@@ -993,7 +979,20 @@ struct HomeView: View {
         case HomeQuickActionID.staffWeeklyReport.rawValue:
             WarningsRefreshHelper.isWeeklyReportVisible = true
             WarningsRefreshHelper.cancelInFlightRefresh()
-            showingWeeklyReport = true
+            weeklyReportLaunch = WeeklyReportDependencies(
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                projectStore: projectStore,
+                operativeStore: operativeStore,
+                holidayStore: holidayStore,
+                userStore: userStore,
+                firebaseBackend: firebaseBackend,
+                subcontractorStore: subcontractorStore,
+                appSettings: appSettings,
+                notificationService: notificationService,
+                taskStore: taskStore
+            )
+            print("🔥🔥🔥 DEBUG: Weekly Report launch sheet requested")
         case HomeQuickActionID.staffDailyOverview.rawValue:
             showingDailyOverview = true
         case HomeQuickActionID.staffManagers.rawValue:
@@ -1314,42 +1313,25 @@ struct HomeView: View {
         showingTasksDetail = true
     }
 
-    /// Wait for a real published detection pass before freezing the list.
+    /// Present immediately — never wait on MainActor for a detection pass.
+    /// Waiting looked like a crash (UI frozen) while the process stayed alive
+    /// (terminal PID watcher never printed DIED).
     private func presentWarningsDetail() {
         showingTasksDetail = false
-        guard !isPreparingWarningsSheet else { return }
-        isPreparingWarningsSheet = true
-        Task { @MainActor in
-            defer { isPreparingWarningsSheet = false }
-
-            // Always attempt a publish when the list is empty — the one-shot latch used to
-            // mark "done" even when refresh aborted without calling updateWarningsAsync.
-            if WarningsService.shared.activeWarnings.isEmpty {
-                let deadline = Date().addingTimeInterval(35)
-                var published = false
-                while Date() < deadline {
-                    published = await refreshWarningsFromHome(force: true)
-                    if published { break }
-                    if WarningsService.shared.activeWarnings.isEmpty == false { break }
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                    if Task.isCancelled { return }
-                }
-                if !published {
-                    published = await refreshWarningsFromHome(force: true)
-                }
-                _ = published
-            }
-
-            let detectionDone = didSchedulePostQuietWarningsRefresh
-                || homeWarningsDetectionCompleted
-                || !WarningsService.shared.activeWarnings.isEmpty
-            let payload = WarningsDisplaySnapshot(
-                from: WarningsService.shared,
-                detectionCompleted: detectionDone
-            )
-            WarningsRefreshHelper.isWarningsSheetVisible = true
-            warningsSheetPayload = payload
-        }
+        let shared = WarningsService.shared
+        let detectionDone = didSchedulePostQuietWarningsRefresh
+            || homeWarningsDetectionCompleted
+            || !shared.activeWarnings.isEmpty
+        let payload = WarningsDisplaySnapshot(
+            from: shared,
+            detectionCompleted: detectionDone
+        )
+        WarningsRefreshHelper.isWarningsSheetVisible = true
+        warningsSheetPayload = payload
+        isPreparingWarningsSheet = false
+        print(
+            "🔥🔥🔥 DEBUG: Warnings sheet presented immediately count=\(shared.activeWarnings.count) detectionDone=\(detectionDone)"
+        )
     }
 
     /// Rebuild Up Next + overview metrics; warnings refresh stays off the main thread via `WarningsRefreshHelper`.

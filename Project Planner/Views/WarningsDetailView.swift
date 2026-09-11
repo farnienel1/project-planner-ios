@@ -78,6 +78,12 @@ struct WarningsDetailView: View {
     @State private var showingWarningsSettings = false
     @State private var selectedWarning: Warning?
     @State private var canManageAdminActions: Bool
+    @State private var detectionCompleted: Bool
+    @State private var activeCount: Int
+    @State private var highCount: Int
+    @State private var mediumCount: Int
+    @State private var lowCount: Int
+    @State private var isFillInRefreshRunning = false
 
     init(
         snapshot: WarningsDisplaySnapshot,
@@ -109,6 +115,11 @@ struct WarningsDetailView: View {
         self.taskStore = taskStore
         _displayedWarnings = State(initialValue: snapshot.warnings)
         _canManageAdminActions = State(initialValue: userStore.hasAdminAccess())
+        _detectionCompleted = State(initialValue: snapshot.detectionCompleted)
+        _activeCount = State(initialValue: snapshot.activeCount)
+        _highCount = State(initialValue: snapshot.highCount)
+        _mediumCount = State(initialValue: snapshot.mediumCount)
+        _lowCount = State(initialValue: snapshot.lowCount)
     }
 
     var body: some View {
@@ -169,21 +180,68 @@ struct WarningsDetailView: View {
             } message: { warning in
                 Text("Are you sure you want to remove this warning? It will be hidden from the list and other admins will be notified. You may still need to resolve the issue manually.\n\n\(warning.removalNotificationDetail)")
             }
+            .task(id: snapshot.id) {
+                await fillInIfStillChecking()
+            }
         }
+    }
+
+    /// One-shot fill while sheet is open — does not observe live publishes.
+    @MainActor
+    private func fillInIfStillChecking() async {
+        guard !detectionCompleted, displayedWarnings.isEmpty, !isFillInRefreshRunning else { return }
+        isFillInRefreshRunning = true
+        defer { isFillInRefreshRunning = false }
+        // Let the sheet paint "Checking…" before any MainActor snapshot work.
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        guard !Task.isCancelled else { return }
+        print("🔥🔥🔥 DEBUG: Warnings sheet fill-in refresh starting")
+        let didRun = await WarningsRefreshHelper.refreshSharedWarnings(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings,
+            force: true,
+            bypassSoftStoreGates: true,
+            includeMaterialsFetch: false
+        )
+        guard !Task.isCancelled else { return }
+        let filled = WarningsDisplaySnapshot(
+            from: warningsService,
+            detectionCompleted: true
+        )
+        displayedWarnings = filled.warnings
+        activeCount = filled.activeCount
+        highCount = filled.highCount
+        mediumCount = filled.mediumCount
+        lowCount = filled.lowCount
+        detectionCompleted = true
+        print(
+            "🔥🔥🔥 DEBUG: Warnings sheet fill-in finished didRun=\(didRun) count=\(filled.warnings.count)"
+        )
     }
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Image(systemName: snapshot.detectionCompleted ? "checkmark.circle.fill" : "hourglass")
+            if isFillInRefreshRunning {
+                ProgressView()
+                    .padding(.bottom, 4)
+            }
+            Image(systemName: detectionCompleted ? "checkmark.circle.fill" : "hourglass")
                 .font(.system(size: 56))
-                .foregroundStyle(snapshot.detectionCompleted
+                .foregroundStyle(detectionCompleted
                                  ? ProjectWorksRevampColors.activeGreen
                                  : ProjectWorksRevampColors.muted)
-            Text(snapshot.detectionCompleted ? "All clear" : "Still checking…")
+            Text(detectionCompleted ? "All clear" : (isFillInRefreshRunning ? "Checking warnings…" : "Still checking…"))
                 .font(.title3.weight(.semibold))
-            Text(snapshot.detectionCompleted
+            Text(detectionCompleted
                  ? "High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00."
-                 : "Warnings are calculated on Home after launch settles. Close this screen, wait a few seconds on Home, then reopen.")
+                 : "Warnings are calculated in the background. This screen stays open — it will update when detection finishes.")
                 .font(.subheadline)
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .multilineTextAlignment(.center)
@@ -202,10 +260,10 @@ struct WarningsDetailView: View {
         List {
             Section {
                 WarningsHeroCard(
-                    activeCount: snapshot.activeCount,
-                    highCount: snapshot.highCount,
-                    mediumCount: snapshot.mediumCount,
-                    lowCount: snapshot.lowCount
+                    activeCount: activeCount,
+                    highCount: highCount,
+                    mediumCount: mediumCount,
+                    lowCount: lowCount
                 )
                 .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 8, trailing: 16))
                 .listRowSeparator(.hidden)

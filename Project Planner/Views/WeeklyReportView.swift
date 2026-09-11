@@ -16,27 +16,88 @@ private enum WeeklyReportColors {
     static let greenTx = Color(red: 0.086, green: 0.400, blue: 0.204)
 }
 
-/// Presents a tiny ProgressView first. The real report view (and its store
-/// captures) are only constructed after a delay so the sheet can appear
-/// without jetsamming Simulator.
-struct WeeklyReportLoadingShell<Content: View>: View {
+/// Stable store bag for Weekly Report — identity is fixed at tap time so Home
+/// re-renders do not rebuild the sheet from scratch.
+struct WeeklyReportDependencies: Identifiable {
+    let id: UUID
+    let bookingStore: BookingStore
+    let managerScheduleStore: ManagerScheduleStore
+    let projectStore: ProjectStore
+    let operativeStore: OperativeStore
+    let holidayStore: HolidayStore
+    let userStore: UserStore
+    let firebaseBackend: FirebaseBackend
+    let subcontractorStore: SubcontractorStore
+    let appSettings: AppSettingsStore
+    let notificationService: NotificationService
+    let taskStore: ProjectTaskStore
+
+    init(
+        bookingStore: BookingStore,
+        managerScheduleStore: ManagerScheduleStore,
+        projectStore: ProjectStore,
+        operativeStore: OperativeStore,
+        holidayStore: HolidayStore,
+        userStore: UserStore,
+        firebaseBackend: FirebaseBackend,
+        subcontractorStore: SubcontractorStore,
+        appSettings: AppSettingsStore,
+        notificationService: NotificationService,
+        taskStore: ProjectTaskStore
+    ) {
+        self.id = UUID()
+        self.bookingStore = bookingStore
+        self.managerScheduleStore = managerScheduleStore
+        self.projectStore = projectStore
+        self.operativeStore = operativeStore
+        self.holidayStore = holidayStore
+        self.userStore = userStore
+        self.firebaseBackend = firebaseBackend
+        self.subcontractorStore = subcontractorStore
+        self.appSettings = appSettings
+        self.notificationService = notificationService
+        self.taskStore = taskStore
+    }
+}
+
+/// Opens instantly with a store-free boot screen. The real report view is only
+/// built after the user taps Continue — auto-building after a delay still froze
+/// Simulator (process stayed alive; terminal never printed DIED).
+struct WeeklyReportFlowView: View {
+    let deps: WeeklyReportDependencies
     @Environment(\.dismiss) private var dismiss
-    @ViewBuilder var content: () -> Content
-    @State private var isReady = false
+    @State private var showReport = false
 
     var body: some View {
         NavigationStack {
             Group {
-                if isReady {
-                    content()
+                if showReport {
+                    WeeklyReportView(deps: deps)
                 } else {
-                    VStack(spacing: 16) {
-                        ProgressView()
-                        Text("Loading weekly report…")
+                    VStack(spacing: 20) {
+                        Image(systemName: "doc.text.magnifyingglass")
+                            .font(.system(size: 40))
+                            .foregroundStyle(WeeklyReportColors.blue)
+                        Text("Weekly Report")
+                            .font(.title3.weight(.semibold))
+                        Text("Home keeps running under this sheet. Tap Continue when the app feels settled — that builds the report screen.")
                             .font(.subheadline)
                             .foregroundStyle(WeeklyReportColors.muted)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 28)
+                        Button {
+                            print("🔥🔥🔥 DEBUG: Weekly Report Continue tapped — building report view")
+                            showReport = true
+                        } label: {
+                            Text("Continue")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.horizontal, 28)
                         Button("Close") { dismiss() }
-                            .padding(.top, 8)
+                            .padding(.top, 4)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(.systemGroupedBackground).ignoresSafeArea())
@@ -49,16 +110,14 @@ struct WeeklyReportLoadingShell<Content: View>: View {
                 }
             }
         }
-        .task {
+        .onAppear {
             WarningsRefreshHelper.isWeeklyReportVisible = true
             WarningsRefreshHelper.cancelInFlightRefresh()
-            // Wait long enough for Home's memory spike to settle and the sheet to finish presenting.
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            guard !Task.isCancelled else { return }
-            isReady = true
+            print("🔥🔥🔥 DEBUG: Weekly Report flow boot (store-free)")
         }
         .onDisappear {
             WarningsRefreshHelper.isWeeklyReportVisible = false
+            print("🔥🔥🔥 DEBUG: Weekly Report flow closed")
         }
     }
 }
@@ -99,33 +158,22 @@ struct WeeklyReportView: View {
     @State private var periodSummaryReady = false
     @State private var exportWarningsService: WarningsService?
 
-    init(
-        bookingStore: BookingStore,
-        managerScheduleStore: ManagerScheduleStore,
-        projectStore: ProjectStore,
-        operativeStore: OperativeStore,
-        holidayStore: HolidayStore,
-        userStore: UserStore,
-        firebaseBackend: FirebaseBackend,
-        subcontractorStore: SubcontractorStore,
-        appSettings: AppSettingsStore,
-        notificationService: NotificationService,
-        taskStore: ProjectTaskStore
-    ) {
-        self.bookingStore = bookingStore
-        self.managerScheduleStore = managerScheduleStore
-        self.projectStore = projectStore
-        self.operativeStore = operativeStore
-        self.holidayStore = holidayStore
-        self.userStore = userStore
-        self.firebaseBackend = firebaseBackend
-        self.subcontractorStore = subcontractorStore
-        self.appSettings = appSettings
-        self.notificationService = notificationService
-        self.taskStore = taskStore
+    init(deps: WeeklyReportDependencies) {
+        self.bookingStore = deps.bookingStore
+        self.managerScheduleStore = deps.managerScheduleStore
+        self.projectStore = deps.projectStore
+        self.operativeStore = deps.operativeStore
+        self.holidayStore = deps.holidayStore
+        self.userStore = deps.userStore
+        self.firebaseBackend = deps.firebaseBackend
+        self.subcontractorStore = deps.subcontractorStore
+        self.appSettings = deps.appSettings
+        self.notificationService = deps.notificationService
+        self.taskStore = deps.taskStore
         let week = Self.mondayToSunday(containing: Date())
         _startDate = State(initialValue: week.start)
         _endDate = State(initialValue: week.end)
+        print("🔥🔥🔥 DEBUG: WeeklyReportView init")
     }
 
     private var organizationName: String {
@@ -189,22 +237,6 @@ struct WeeklyReportView: View {
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
-            .onAppear {
-                // Defer shared-warning scans so first paint stays cheap.
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 400_000_000)
-                    guard !Task.isCancelled else { return }
-                    refreshPeriodSummaryFromShared()
-                }
-            }
-            .onChange(of: startDate) { _, _ in
-                guard !suppressRangeDrivenRefresh else { return }
-                refreshPeriodSummaryFromShared()
-            }
-            .onChange(of: endDate) { _, _ in
-                guard !suppressRangeDrivenRefresh else { return }
-                refreshPeriodSummaryFromShared()
-            }
     }
 
     private static func mondayToSunday(containing date: Date) -> (start: Date, end: Date) {
@@ -225,7 +257,11 @@ struct WeeklyReportView: View {
                     brandHeader
                     quickSelectCard
                     customRangeCard
-                    // Invoicing + warnings cards are heavier; keep open path to range + generate.
+                    Text("Period warnings and pay breakdown are calculated when you tap Generate.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(WeeklyReportColors.muted)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
                     generateSection
                     if let message {
                         Text(message)
