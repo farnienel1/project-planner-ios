@@ -125,7 +125,7 @@ struct OrganisationWarningsSettingsView: View {
                 modeOption(
                     .allWorkingDaysInCurrentInvoicingPeriod,
                     label: "All working days within current invoicing period",
-                    description: "Scan every working day in the current billing period — including past days still in that period. Material order cut-off stays same-day."
+                    description: "Scan the current billing period for clashes (including past days). Unbooked labour scans today through period end; Weekly Report still lists past missed bookings for the report range. Material order cut-off stays same-day."
                 )
                 modeOption(.endOfWorkingWeek, label: "End of working week", description: "Scan through Friday of the current working week. Resets each Monday.")
             }

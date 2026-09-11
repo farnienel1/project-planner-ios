@@ -343,7 +343,7 @@ enum WarningsComputation {
         return map
     }
 
-    nonisolated static func generate(_ input: WarningsComputationSnapshot) async -> [Warning] {
+    nonisolated static func generate(_ input: WarningsComputationSnapshot) -> [Warning] {
         var generated: [Warning] = []
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
@@ -543,7 +543,6 @@ enum WarningsComputation {
             ? coverageStart
             : max(coverageStart, today)
         var day = unbookedScanStart
-        var scannedDays = 0
         while day <= coverageEnd {
             let weekday = cal.component(.weekday, from: day)
             if isUnbookedLabourWeekday(weekday, includeWeekends: input.warningDetection.includeWeekendsForUnbookedLabour) {
@@ -568,12 +567,6 @@ enum WarningsComputation {
                         unbookedLabour: Warning.UnbookedLabourWarningDetails(date: day, names: names)
                     ))
                 }
-            }
-            scannedDays += 1
-            // Yield occasionally on long past-day scans so Simulator stays responsive.
-            // Every-2 was too chatty and kept memory pressure high during Weekly Report.
-            if scannedDays % 7 == 0 {
-                await Task.yield()
             }
             guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
             day = next

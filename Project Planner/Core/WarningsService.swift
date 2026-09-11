@@ -230,9 +230,7 @@ class WarningsService: ObservableObject {
         let generation = updateGeneration
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-        // Weekly Report (and any caller) may pass an explicit range — never mutate that.
-        let hasExplicitCoverage = labourCoverageStart != nil || labourCoverageEnd != nil
-        var coverageStart = cal.startOfDay(
+        let coverageStart = cal.startOfDay(
             for: labourCoverageStart
                 ?? warningDetection.coverageStart(from: today, invoicing: invoicingSettings, calendar: cal)
         )
@@ -240,49 +238,36 @@ class WarningsService: ObservableObject {
             for: labourCoverageEnd
                 ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
         )
-        // Hard cap LIVE detection only so full-period mode cannot balloon into a jetsam.
-        if !hasExplicitCoverage {
-            let maxLiveCoverageDays = 45
-            if let earliest = cal.date(byAdding: .day, value: -(maxLiveCoverageDays - 1), to: coverageEnd) {
-                let earliestStart = cal.startOfDay(for: earliest)
-                if coverageStart < earliestStart {
-                    coverageStart = earliestStart
-                }
-            }
-        }
-
-        // Live Home: full invoicing-period mode needs past working days. Do that in a
-        // second pass so today's results publish first. Weekly Report always single-pass
-        // (explicit coverage + scanUnbookedFromCoverageStart) — a second pass jetsams Generate.
-        let wantsLivePastUnbooked = !hasExplicitCoverage && warningDetection.scansUnbookedFromCoverageStart
-        let useTwoPhase = wantsLivePastUnbooked
-        let singlePassScanFromStart = scanUnbookedFromCoverageStart || wantsLivePastUnbooked
-
-        func makeInput(scanUnbookedFromStart: Bool) -> WarningsComputationInput {
-            WarningsComputationInput(
-                operatives: operatives,
-                bookings: bookings,
-                projects: projects,
-                users: users,
-                managerSiteBookings: managerSiteBookings,
-                holidayBookings: holidayBookings,
-                payrollTimePolicy: payrollTimePolicy,
-                warningDetection: warningDetection,
-                coverageStart: coverageStart,
-                coverageEnd: coverageEnd,
-                scanUnbookedFromCoverageStart: scanUnbookedFromStart,
-                materialOrderCutOffEnabled: materialOrderCutOffEnabled,
-                materialCutOffOnSaturday: materialCutOffOnSaturday,
-                materialCutOffOnSunday: materialCutOffOnSunday,
-                projectsWithTomorrowBookings: projectsWithTomorrowBookings,
-                materialItemsForTomorrow: materialItemsForTomorrow,
-                materialsDataLoaded: materialsDataLoaded
-            )
-        }
-
-        // Build inputs on MainActor, then snapshot+generate off main.
-        // Calling makeInput inside Task.detached crossed MainActor isolation and could
-        // trap / leave Warnings empty and jetsam Weekly Report mid-scan.
+        // Full-period mode expands coverageStart (clashes include past days in period).
+        // Past-day *unbooked* on Home was jetsamming Simulator — only enable when the
+        // caller asks (Weekly Report passes scanUnbookedFromCoverageStart: true).
+        // Unbooked on Home still scans today → coverageEnd within the period window.
+        let input = WarningsComputationInput(
+            operatives: operatives,
+            bookings: bookings,
+            projects: projects,
+            users: users,
+            managerSiteBookings: managerSiteBookings,
+            holidayBookings: holidayBookings,
+            payrollTimePolicy: payrollTimePolicy,
+            warningDetection: warningDetection,
+            coverageStart: coverageStart,
+            coverageEnd: coverageEnd,
+            scanUnbookedFromCoverageStart: scanUnbookedFromCoverageStart,
+            materialOrderCutOffEnabled: materialOrderCutOffEnabled,
+            materialCutOffOnSaturday: materialCutOffOnSaturday,
+            materialCutOffOnSunday: materialCutOffOnSunday,
+            projectsWithTomorrowBookings: projectsWithTomorrowBookings,
+            materialItemsForTomorrow: materialItemsForTomorrow,
+            materialsDataLoaded: materialsDataLoaded
+        )
+        // Snapshot + generate both off main — makeSnapshot alone was enough to jetsam
+        // when opening Warnings forced a refresh right after Home bootstrap.
+        let generated = await Task.detached(priority: .utility) {
+            let snapshot = WarningsComputation.makeSnapshot(from: input)
+            return WarningsComputation.generate(snapshot)
+        }.value
+        guard generation == updateGeneration else { return }
         if pruneDismissals {
             // Only drop dismissals before the live detection start — never wipe future keys
             // when a report uses a narrower/past window.
@@ -291,45 +276,9 @@ class WarningsService: ObservableObject {
                 calendar: cal
             )
         }
-
-        if useTwoPhase {
-            let fastInput = makeInput(scanUnbookedFromStart: false)
-            let fastGenerated = await Task.detached(priority: .utility) {
-                let snapshot = WarningsComputation.makeSnapshot(from: fastInput)
-                return await WarningsComputation.generate(snapshot)
-            }.value
-            guard generation == updateGeneration else { return }
-            allGeneratedWarnings = fastGenerated
-            activeWarnings = fastGenerated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
-            refreshSeverityCounts()
-            WarningsRefreshHelper.postWarningsCountDidChange()
-
-            await Task.yield()
-            guard generation == updateGeneration else { return }
-
-            let fullInput = makeInput(scanUnbookedFromStart: true)
-            let fullGenerated = await Task.detached(priority: .utility) {
-                let snapshot = WarningsComputation.makeSnapshot(from: fullInput)
-                return await WarningsComputation.generate(snapshot)
-            }.value
-            guard generation == updateGeneration else { return }
-            allGeneratedWarnings = fullGenerated
-            activeWarnings = fullGenerated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
-            refreshSeverityCounts()
-            WarningsRefreshHelper.postWarningsCountDidChange()
-            return
-        }
-
-        let input = makeInput(scanUnbookedFromStart: singlePassScanFromStart)
-        let generated = await Task.detached(priority: .utility) {
-            let snapshot = WarningsComputation.makeSnapshot(from: input)
-            return await WarningsComputation.generate(snapshot)
-        }.value
-        guard generation == updateGeneration else { return }
         allGeneratedWarnings = generated
         activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
         refreshSeverityCounts()
-        WarningsRefreshHelper.postWarningsCountDidChange()
     }
 
     /// Approve only applies to MEDIUM manager/admin clashes (weekly report tick).
