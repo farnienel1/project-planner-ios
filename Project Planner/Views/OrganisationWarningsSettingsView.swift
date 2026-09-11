@@ -573,7 +573,8 @@ struct OrganisationWarningsSettingsView: View {
                 holidayStore: holidayStore,
                 firebaseBackend: firebaseBackend,
                 appSettings: appSettings,
-                force: true
+                force: true,
+                bypassSoftStoreGates: true
             )
             userHasEdited = false
             if let onSaved {
@@ -603,7 +604,8 @@ struct OrganisationWarningsSettingsView: View {
                 holidayStore: holidayStore,
                 firebaseBackend: firebaseBackend,
                 appSettings: appSettings,
-                force: true
+                force: true,
+                bypassSoftStoreGates: true
             )
             userHasEdited = false
         } catch {

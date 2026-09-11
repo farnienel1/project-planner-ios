@@ -18,19 +18,21 @@ private enum WeeklyReportColors {
 
 struct WeeklyReportView: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject var bookingStore: BookingStore
-    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
-    @EnvironmentObject var projectStore: ProjectStore
-    @EnvironmentObject var operativeStore: OperativeStore
-    @EnvironmentObject var holidayStore: HolidayStore
-    @EnvironmentObject var userStore: UserStore
-    @EnvironmentObject var firebaseBackend: FirebaseBackend
-    @EnvironmentObject var subcontractorStore: SubcontractorStore
-    @EnvironmentObject var appSettings: AppSettingsStore
-    @EnvironmentObject var notificationService: NotificationService
-    @EnvironmentObject var taskStore: ProjectTaskStore
+    /// Observe only the report-local warnings service. Holding other stores as `let`
+    /// avoids the EnvironmentObject observation storm that jetsams Simulator on open.
+    @StateObject private var warningsService = WarningsService()
+    let bookingStore: BookingStore
+    let managerScheduleStore: ManagerScheduleStore
+    let projectStore: ProjectStore
+    let operativeStore: OperativeStore
+    let holidayStore: HolidayStore
+    let userStore: UserStore
+    let firebaseBackend: FirebaseBackend
+    let subcontractorStore: SubcontractorStore
+    let appSettings: AppSettingsStore
+    let notificationService: NotificationService
+    let taskStore: ProjectTaskStore
 
-    @ObservedObject private var warningsService = WarningsService.shared
     @State private var showingWarningsDetail = false
     @State private var startDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var endDate: Date = Calendar.current.startOfDay(for: Date())
@@ -45,6 +47,8 @@ struct WeeklyReportView: View {
     @State private var message: String?
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
     @State private var logoImage: UIImage?
+    @State private var didScheduleWarningsRefresh = false
+    @State private var warningsRefreshTask: Task<Void, Never>?
 
     private var organizationName: String {
         firebaseBackend.currentOrganization?.name ?? "Organization"
@@ -97,15 +101,21 @@ struct WeeklyReportView: View {
                         .presentationDetents([.medium, .large])
                         .presentationDragIndicator(.visible)
                 }
-                .onAppear {
+                .task {
                     setThisWeekRange()
-                    refreshReportWarnings()
-                    Task { await loadOrganizationLogo() }
+                    guard !didScheduleWarningsRefresh else { return }
+                    didScheduleWarningsRefresh = true
+                    // Paint first, then wait for launch quiet — same pattern as Warnings sheet.
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    guard !Task.isCancelled else { return }
+                    await refreshReportWarningsAfterQuiet()
                 }
-                .onChange(of: startDate) { _, _ in refreshReportWarnings() }
-                .onChange(of: endDate) { _, _ in refreshReportWarnings() }
-                .onChange(of: bookingStore.bookings) { _, _ in refreshReportWarnings() }
-                .onChange(of: managerScheduleStore.managerSiteBookings) { _, _ in refreshReportWarnings() }
+                .onChange(of: startDate) { _, _ in scheduleDebouncedWarningsRefresh() }
+                .onChange(of: endDate) { _, _ in scheduleDebouncedWarningsRefresh() }
+                .onDisappear {
+                    warningsRefreshTask?.cancel()
+                    warningsRefreshTask = nil
+                }
         }
     }
 
@@ -602,58 +612,103 @@ struct WeeklyReportView: View {
         }
     }
 
-    private func refreshReportWarnings() {
-        Task {
-            let cal = Calendar.current
-            let today = cal.startOfDay(for: Date())
-            let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
-            let tomorrowProjectIds = Set(
-                bookingStore.bookings
-                    .filter {
-                        cal.isDate($0.date, inSameDayAs: tomorrow) &&
-                            ($0.status == .confirmed || $0.status == .tentative)
-                    }
-                    .map(\.projectId)
-            )
-            let allProjects = projectStore.projects
-            let projectsTomorrow = allProjects.filter { tomorrowProjectIds.contains($0.id) }
-            let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
-            let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
-            let activeOperatives = operativeStore.activeOperatives.isEmpty
-                ? operativeStore.allOperatives.filter(\.isActive)
-                : operativeStore.activeOperatives
-            var materialItemsForTomorrow: [MaterialItem] = []
-            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-                for project in projectsTomorrow {
-                    if let items = try? await firebaseBackend.loadMaterialItems(
-                        organizationId: orgId,
-                        projectId: project.id
-                    ) {
-                        materialItemsForTomorrow.append(
-                            contentsOf: items.filter { cal.isDate($0.date, inSameDayAs: tomorrow) }
-                        )
-                    }
+    private func scheduleDebouncedWarningsRefresh() {
+        warningsRefreshTask?.cancel()
+        warningsRefreshTask = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            await refreshReportWarningsAsync()
+        }
+    }
+
+    private func refreshReportWarningsAfterQuiet() async {
+        let deadline = Date().addingTimeInterval(90)
+        while Date() < deadline {
+            let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
+            let hardBusy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading
+            let blocked = firebaseBackend.isBootstrappingOrgDataLoad
+                || !firebaseBackend.hasBootstrappedOrgDataLoad
+                || quiet
+                || hardBusy
+            if !blocked {
+                await refreshReportWarningsAsync()
+                Task { await loadOrganizationLogo() }
+                return
+            }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if Task.isCancelled { return }
+        }
+        await refreshReportWarningsAsync()
+        Task { await loadOrganizationLogo() }
+    }
+
+    private func refreshReportWarningsAsync() async {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
+        let rangeStart = cal.startOfDay(for: min(startDate, endDate))
+        let rangeEnd = cal.startOfDay(for: max(startDate, endDate))
+        let tomorrowProjectIds = Set(
+            bookingStore.bookings
+                .filter {
+                    cal.isDate($0.date, inSameDayAs: tomorrow) &&
+                        ($0.status == .confirmed || $0.status == .tentative)
+                }
+                .map(\.projectId)
+        )
+        let allProjects = projectStore.projects
+        let projectsTomorrow = allProjects.filter { tomorrowProjectIds.contains($0.id) }
+        let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
+        let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
+        let activeOperatives = operativeStore.activeOperatives.isEmpty
+            ? operativeStore.allOperatives.filter(\.isActive)
+            : operativeStore.activeOperatives
+
+        if userStore.organizationUsers.isEmpty {
+            await userStore.loadOrganizationUsers()
+        }
+
+        let materialCutOffEnabled = appSettings.settings.notifications.materialOrderCutOff
+        let hour = cal.component(.hour, from: Date())
+        var materialItemsForTomorrow: [MaterialItem] = []
+        var materialsDataLoaded = false
+        if materialCutOffEnabled, hour >= 16,
+           let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+            materialsDataLoaded = true
+            for project in projectsTomorrow.prefix(25) {
+                if let items = try? await firebaseBackend.loadMaterialItems(
+                    organizationId: orgId,
+                    projectId: project.id
+                ) {
+                    materialItemsForTomorrow.append(
+                        contentsOf: items.filter { cal.isDate($0.date, inSameDayAs: tomorrow) }
+                    )
                 }
             }
-            await warningsService.updateWarningsAsync(
-                operatives: activeOperatives,
-                bookings: bookingStore.bookings,
-                projects: allProjects,
-                users: userStore.organizationUsers,
-                managerSiteBookings: managerScheduleStore.managerSiteBookings,
-                holidayBookings: holidayStore.bookings,
-                payrollTimePolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
-                warningDetection: warningDetection,
-                invoicingSettings: invoicingSettings,
-                labourCoverageStart: startDate,
-                labourCoverageEnd: endDate,
-                materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
-                materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
-                materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
-                projectsWithTomorrowBookings: projectsTomorrow,
-                materialItemsForTomorrow: materialItemsForTomorrow
-            )
         }
+
+        // Private service — never overwrite WarningsService.shared (org detection horizon).
+        await warningsService.updateWarningsAsync(
+            operatives: activeOperatives,
+            bookings: bookingStore.bookings,
+            projects: allProjects,
+            users: userStore.organizationUsers,
+            managerSiteBookings: managerScheduleStore.managerSiteBookings,
+            holidayBookings: holidayStore.bookings,
+            payrollTimePolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
+            warningDetection: warningDetection,
+            invoicingSettings: invoicingSettings,
+            labourCoverageStart: rangeStart,
+            labourCoverageEnd: rangeEnd,
+            scanUnbookedFromCoverageStart: true,
+            materialOrderCutOffEnabled: materialCutOffEnabled,
+            materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
+            materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
+            projectsWithTomorrowBookings: projectsTomorrow,
+            materialItemsForTomorrow: materialItemsForTomorrow,
+            materialsDataLoaded: materialsDataLoaded,
+            pruneDismissals: false
+        )
     }
 
     private func setThisWeekRange() {

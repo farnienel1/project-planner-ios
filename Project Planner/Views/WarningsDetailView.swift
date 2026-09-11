@@ -5,12 +5,6 @@
 
 import SwiftUI
 
-/// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
-enum WarningsBuildStamp {
-    static let id = "wfix-let-stores"
-    static let homePillTitle = "Warnings · \(id)"
-}
-
 struct WarningsDetailView: View {
     @Environment(\.dismiss) private var dismiss
     /// Only the warnings list needs observation. Holding the other stores as `let`
@@ -46,19 +40,11 @@ struct WarningsDetailView: View {
                 }
             }
             .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .navigationTitle("Warnings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") { dismiss() }
-                }
-                ToolbarItem(placement: .principal) {
-                    VStack(spacing: 1) {
-                        Text("Warnings")
-                            .font(.headline)
-                        Text(WarningsBuildStamp.id)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
                 }
                 if userStore.hasAdminAccess() {
                     ToolbarItem(placement: .navigationBarTrailing) {
@@ -81,11 +67,8 @@ struct WarningsDetailView: View {
                         .padding(.top, 8)
                 }
             }
-            .onAppear {
-                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id)")
-            }
             .task {
-                // Defer recompute so the sheet can paint first.
+                // Defer recompute so the sheet can paint first, then wait for quiet + stores.
                 guard !didScheduleRefresh else { return }
                 didScheduleRefresh = true
                 try? await Task.sleep(nanoseconds: 750_000_000)
@@ -174,9 +157,6 @@ struct WarningsDetailView: View {
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
-            Text(WarningsBuildStamp.id)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -382,20 +362,44 @@ struct WarningsDetailView: View {
     }
 
     private func refreshAfterLaunchQuietIfNeeded() async {
-        while firebaseBackend.isBootstrappingOrgDataLoad
-            || !firebaseBackend.hasBootstrappedOrgDataLoad
-            || (firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false) {
-            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting quiet \(WarningsBuildStamp.id)")
+        // Wait for launch quiet AND hard stores. Soft stores (holidays / manager schedule)
+        // must not block forever — a hung holiday fetch used to leave Warnings empty.
+        let deadline = Date().addingTimeInterval(90)
+        let softBypassAfter = Date().addingTimeInterval(45)
+        while Date() < deadline {
+            let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
+            let hardBusy = bookingStore.isLoading
+                || operativeStore.isLoading
+                || projectStore.isLoading
+            let softBusy = holidayStore.isLoading || managerScheduleStore.isLoading
+            let rosterEmpty = operativeStore.allOperatives.isEmpty && userStore.organizationUsers.isEmpty
+            let allowSoftBypass = Date() >= softBypassAfter
+            let blocked = firebaseBackend.isBootstrappingOrgDataLoad
+                || !firebaseBackend.hasBootstrappedOrgDataLoad
+                || quiet
+                || hardBusy
+                || (softBusy && !allowSoftBypass)
+                || (rosterEmpty && !allowSoftBypass)
+            if !blocked {
+                let didRun = await refreshWarningsAsync(bypassSoftStoreGates: allowSoftBypass || softBusy)
+                if didRun { return }
+            } else {
+                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting for quiet/stores")
+            }
             try? await Task.sleep(nanoseconds: 400_000_000)
             if Task.isCancelled { return }
         }
-        await refreshWarningsAsync()
+        // Final attempt: soft/hard store gates may still be stuck; never bypass quiet/bootstrap.
+        _ = await refreshWarningsAsync(bypassSoftStoreGates: true, bypassAllStoreGates: true)
     }
 
-    private func refreshWarningsAsync() async {
+    private func refreshWarningsAsync(
+        bypassSoftStoreGates: Bool = false,
+        bypassAllStoreGates: Bool = false
+    ) async -> Bool {
         isRefreshing = true
         defer { isRefreshing = false }
-        await WarningsRefreshHelper.refreshSharedWarnings(
+        return await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
             projectStore: projectStore,
@@ -404,7 +408,9 @@ struct WarningsDetailView: View {
             holidayStore: holidayStore,
             firebaseBackend: firebaseBackend,
             appSettings: appSettings,
-            force: true
+            force: true,
+            bypassSoftStoreGates: bypassSoftStoreGates,
+            bypassAllStoreGates: bypassAllStoreGates
         )
     }
 }
