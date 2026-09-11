@@ -5,12 +5,6 @@
 
 import SwiftUI
 
-/// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
-enum WarningsBuildStamp {
-    static let id = "wfix-let-stores"
-    static let homePillTitle = "Warnings · \(id)"
-}
-
 struct WarningsDetailView: View {
     @Environment(\.dismiss) private var dismiss
     /// Only the warnings list needs observation. Holding the other stores as `let`
@@ -33,8 +27,8 @@ struct WarningsDetailView: View {
     @State private var openBookLabourDate: IdentifiableDay?
     @State private var warningPendingDismiss: Warning?
     @State private var showingWarningsSettings = false
-    @State private var isRefreshing = false
-    @State private var didScheduleRefresh = false
+    /// Display-only sheet: never recompute warnings while presented (jetsam).
+    @State private var pendingHomeRefreshOnDismiss = false
 
     var body: some View {
         NavigationStack {
@@ -46,19 +40,11 @@ struct WarningsDetailView: View {
                 }
             }
             .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .navigationTitle("Warnings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") { dismiss() }
-                }
-                ToolbarItem(placement: .principal) {
-                    VStack(spacing: 1) {
-                        Text("Warnings")
-                            .font(.headline)
-                        Text(WarningsBuildStamp.id)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
                 }
                 if userStore.hasAdminAccess() {
                     ToolbarItem(placement: .navigationBarTrailing) {
@@ -73,25 +59,6 @@ struct WarningsDetailView: View {
                 }
             }
             .appChromeNavigationBarSurface()
-            .overlay(alignment: .top) {
-                if isRefreshing {
-                    ProgressView()
-                        .padding(8)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .padding(.top, 8)
-                }
-            }
-            .onAppear {
-                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id)")
-            }
-            .task {
-                // Defer recompute so the sheet can paint first.
-                guard !didScheduleRefresh else { return }
-                didScheduleRefresh = true
-                try? await Task.sleep(nanoseconds: 750_000_000)
-                guard !Task.isCancelled else { return }
-                await refreshAfterLaunchQuietIfNeeded()
-            }
             .sheet(isPresented: $showingWarningsSettings) {
                 NavigationStack {
                     OrganisationWarningsSettingsView(
@@ -164,26 +131,33 @@ struct WarningsDetailView: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Image(systemName: "checkmark.circle.fill")
+            Image(systemName: warningsService.warningCount == 0 && pendingHomeRefreshOnDismiss == false
+                  ? "checkmark.circle.fill" : "hourglass")
                 .font(.system(size: 56))
                 .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-            Text("No active warnings")
+            Text(pendingHomeRefreshOnDismiss ? "Refreshing when you close…" : "No active warnings yet")
                 .font(.title3.weight(.semibold))
-            Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
+            Text(pendingHomeRefreshOnDismiss
+                 ? "Warnings are calculated on Home after launch settles. Close this screen and reopen in a few seconds."
+                 : "High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.\n\nIf Daily Overview shows unbooked people, close Warnings and reopen after Home has finished loading.")
                 .font(.subheadline)
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
-            Text(WarningsBuildStamp.id)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+            Button("Close & refresh") {
+                pendingHomeRefreshOnDismiss = true
+                NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
+                dismiss()
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var warningsScroll: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            LazyVStack(alignment: .leading, spacing: 18) {
                 WarningsHeroCard(
                     activeCount: warningsService.warningCount,
                     highCount: warningsService.highCount,
@@ -263,9 +237,15 @@ struct WarningsDetailView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
             if let d = warning.unbookedLabour {
-                ForEach(Array(d.names.enumerated()), id: \.offset) { _, name in
+                let visibleNames = Array(d.names.prefix(40))
+                ForEach(Array(visibleNames.enumerated()), id: \.offset) { _, name in
                     Text("• \(name)")
                         .font(.system(size: 12))
+                }
+                if d.names.count > visibleNames.count {
+                    Text("• …and \(d.names.count - visibleNames.count) more")
+                        .font(.system(size: 12))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
                 }
             }
             Button { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) } label: {
@@ -355,7 +335,7 @@ struct WarningsDetailView: View {
               let booking = bookingStore.bookings.first(where: { $0.id == id }) else { return }
         Task {
             await bookingStore.deleteBooking(booking)
-            refreshWarnings()
+            requestRefreshAfterDismiss()
         }
     }
 
@@ -365,48 +345,25 @@ struct WarningsDetailView: View {
            let booking = managerScheduleStore.managerSiteBookings.first(where: { $0.id == mgrId }) {
             Task {
                 await managerScheduleStore.deleteBooking(booking)
-                refreshWarnings()
+                requestRefreshAfterDismiss()
             }
             return
         }
         if let opBooking = bookingStore.bookings.first(where: { $0.id == entry.bookingId }) {
             Task {
                 await bookingStore.deleteBooking(opBooking)
-                refreshWarnings()
+                requestRefreshAfterDismiss()
             }
         }
     }
 
-    private func refreshWarnings() {
-        Task { await refreshWarningsAsync() }
+    private func requestRefreshAfterDismiss() {
+        pendingHomeRefreshOnDismiss = true
+        // Do not recompute under this sheet — that jetsams Simulator.
+        NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
+        dismiss()
     }
 
-    private func refreshAfterLaunchQuietIfNeeded() async {
-        while firebaseBackend.isBootstrappingOrgDataLoad
-            || !firebaseBackend.hasBootstrappedOrgDataLoad
-            || (firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false) {
-            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting quiet \(WarningsBuildStamp.id)")
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            if Task.isCancelled { return }
-        }
-        await refreshWarningsAsync()
-    }
-
-    private func refreshWarningsAsync() async {
-        isRefreshing = true
-        defer { isRefreshing = false }
-        await WarningsRefreshHelper.refreshSharedWarnings(
-            operativeStore: operativeStore,
-            bookingStore: bookingStore,
-            projectStore: projectStore,
-            userStore: userStore,
-            managerScheduleStore: managerScheduleStore,
-            holidayStore: holidayStore,
-            firebaseBackend: firebaseBackend,
-            appSettings: appSettings,
-            force: true
-        )
-    }
 }
 
 /// Sheet/item identity for a calendar day without making `Date` globally Identifiable.
