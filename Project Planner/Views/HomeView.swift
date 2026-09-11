@@ -1334,7 +1334,10 @@ struct HomeView: View {
 
         let deadline = Date().addingTimeInterval(90)
         let softBypassAfter = Date().addingTimeInterval(45)
-        while Date() < deadline {
+        // If Warnings is opened during the wait, keep waiting for it to close (capped)
+        // so we still run one org-horizon refresh afterward.
+        let absoluteDeadline = Date().addingTimeInterval(300)
+        while Date() < absoluteDeadline {
             if didSchedulePostQuietWarningsRefresh { return }
 
             let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
@@ -1344,6 +1347,15 @@ struct HomeView: View {
             let softBusy = holidayStore.isLoading || managerScheduleStore.isLoading
             let rosterEmpty = operativeStore.allOperatives.isEmpty && userStore.organizationUsers.isEmpty
             let allowSoftBypass = Date() >= softBypassAfter
+            let pastInitialDeadline = Date() >= deadline
+
+            if WarningsRefreshHelper.isWarningsSheetVisible {
+                print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh waiting (Warnings sheet visible)")
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { return }
+                continue
+            }
+
             let blocked = firebaseBackend.isBootstrappingOrgDataLoad
                 || !firebaseBackend.hasBootstrappedOrgDataLoad
                 || quiet
@@ -1363,14 +1375,38 @@ struct HomeView: View {
                     firebaseBackend: firebaseBackend,
                     appSettings: appSettings,
                     force: true,
-                    bypassSoftStoreGates: allowSoftBypass || softBusy
+                    bypassSoftStoreGates: allowSoftBypass || softBusy,
+                    includeMaterialsFetch: false
                 )
                 if didRun {
                     didSchedulePostQuietWarningsRefresh = true
                     homeWarningCount = WarningsService.shared.warningCount
                     print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh finished count=\(homeWarningCount)")
+                    // Materials are deferred so Home + Warnings stay stable; optional follow-up
+                    // only when the sheet is not open and launch quiet has ended.
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 20_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        guard !WarningsRefreshHelper.isWarningsSheetVisible else { return }
+                        _ = await WarningsRefreshHelper.refreshSharedWarnings(
+                            operativeStore: operativeStore,
+                            bookingStore: bookingStore,
+                            projectStore: projectStore,
+                            userStore: userStore,
+                            managerScheduleStore: managerScheduleStore,
+                            holidayStore: holidayStore,
+                            firebaseBackend: firebaseBackend,
+                            appSettings: appSettings,
+                            force: true,
+                            bypassSoftStoreGates: true,
+                            includeMaterialsFetch: true
+                        )
+                        homeWarningCount = WarningsService.shared.warningCount
+                    }
                     return
                 }
+            } else if pastInitialDeadline {
+                break
             }
 
             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -1378,6 +1414,11 @@ struct HomeView: View {
         }
 
         // Last chance after waiting — soft/hard store flags can stick true on hung fetches.
+        // Still skip while Warnings is open, and never pull materials on this path.
+        if WarningsRefreshHelper.isWarningsSheetVisible {
+            print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh timed out while Warnings sheet visible — will not force under sheet")
+            return
+        }
         print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh final bypass attempt…")
         let didRun = await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
@@ -1390,7 +1431,8 @@ struct HomeView: View {
             appSettings: appSettings,
             force: true,
             bypassSoftStoreGates: true,
-            bypassAllStoreGates: true
+            bypassAllStoreGates: true,
+            includeMaterialsFetch: false
         )
         if didRun {
             didSchedulePostQuietWarningsRefresh = true

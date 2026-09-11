@@ -68,12 +68,17 @@ struct WarningsDetailView: View {
                 }
             }
             .task {
+                WarningsRefreshHelper.isWarningsSheetVisible = true
                 // Defer recompute so the sheet can paint first, then wait for quiet + stores.
+                // Never fetch materials while this sheet is open — that jetsams Simulator mid-view.
                 guard !didScheduleRefresh else { return }
                 didScheduleRefresh = true
                 try? await Task.sleep(nanoseconds: 750_000_000)
                 guard !Task.isCancelled else { return }
                 await refreshAfterLaunchQuietIfNeeded()
+            }
+            .onDisappear {
+                WarningsRefreshHelper.isWarningsSheetVisible = false
             }
             .sheet(isPresented: $showingWarningsSettings) {
                 NavigationStack {
@@ -163,7 +168,7 @@ struct WarningsDetailView: View {
 
     private var warningsScroll: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            LazyVStack(alignment: .leading, spacing: 18) {
                 WarningsHeroCard(
                     activeCount: warningsService.warningCount,
                     highCount: warningsService.highCount,
@@ -243,9 +248,15 @@ struct WarningsDetailView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
             if let d = warning.unbookedLabour {
-                ForEach(Array(d.names.enumerated()), id: \.offset) { _, name in
+                let visibleNames = Array(d.names.prefix(40))
+                ForEach(Array(visibleNames.enumerated()), id: \.offset) { _, name in
                     Text("• \(name)")
                         .font(.system(size: 12))
+                }
+                if d.names.count > visibleNames.count {
+                    Text("• …and \(d.names.count - visibleNames.count) more")
+                        .font(.system(size: 12))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
                 }
             }
             Button { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) } label: {
@@ -410,7 +421,8 @@ struct WarningsDetailView: View {
             appSettings: appSettings,
             force: true,
             bypassSoftStoreGates: bypassSoftStoreGates,
-            bypassAllStoreGates: bypassAllStoreGates
+            bypassAllStoreGates: bypassAllStoreGates,
+            includeMaterialsFetch: false
         )
     }
 }

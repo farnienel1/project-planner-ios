@@ -9,6 +9,8 @@ enum WarningsRefreshHelper {
     @MainActor private static var lastRefreshAt: Date?
     @MainActor private static var inFlightTask: Task<Void, Never>?
     private static let minRefreshInterval: TimeInterval = 45
+    /// Set while Warnings sheet is on screen so Home / background paths avoid heavy work underneath it.
+    @MainActor static var isWarningsSheetVisible = false
 
     /// Returns `true` when a recompute ran (or an in-flight one completed under `force`).
     ///
@@ -19,6 +21,8 @@ enum WarningsRefreshHelper {
     ///     unless `bypassAllStoreGates` is also set.
     ///   - bypassAllStoreGates: Final-attempt escape hatch after callers have waited. Still
     ///     never runs during org bootstrap or the launch quiet period (those jetsam Simulator).
+    ///   - includeMaterialsFetch: Load tomorrow's material lines. Off by default — sequential
+    ///     Firestore fetches jetsam Simulator when Warnings is open / just after launch.
     @MainActor
     @discardableResult
     static func refreshSharedWarnings(
@@ -32,7 +36,8 @@ enum WarningsRefreshHelper {
         appSettings: AppSettingsStore,
         force: Bool = false,
         bypassSoftStoreGates: Bool = false,
-        bypassAllStoreGates: Bool = false
+        bypassAllStoreGates: Bool = false,
+        includeMaterialsFetch: Bool = false
     ) async -> Bool {
         guard userStore.hasAdminAccess() else { return false }
 
@@ -92,7 +97,8 @@ enum WarningsRefreshHelper {
                 managerScheduleStore: managerScheduleStore,
                 holidayStore: holidayStore,
                 firebaseBackend: firebaseBackend,
-                appSettings: appSettings
+                appSettings: appSettings,
+                includeMaterialsFetch: includeMaterialsFetch
             )
         }
         inFlightTask = task
@@ -113,7 +119,8 @@ enum WarningsRefreshHelper {
         managerScheduleStore: ManagerScheduleStore,
         holidayStore: HolidayStore,
         firebaseBackend: FirebaseBackend,
-        appSettings: AppSettingsStore
+        appSettings: AppSettingsStore,
+        includeMaterialsFetch: Bool
     ) async {
         // Ensure org users are present so operative-mode / manager unbooked checks match Daily Overview.
         if userStore.organizationUsers.isEmpty {
@@ -141,21 +148,25 @@ enum WarningsRefreshHelper {
         let users = userStore.organizationUsers
 
         print(
-            "🔥🔥🔥 DEBUG: Warnings refresh snapshot inputs — users=\(users.count) activeOps=\(activeOperatives.count) bookings=\(bookingStore.bookings.count) mgr=\(managerScheduleStore.managerSiteBookings.count) holidays=\(holidayStore.bookings.count) standardPaid=\(policy.standardPaidHours) horizonEnd=\(warningDetection.coverageEnd(from: today, invoicing: invoicingSettings))"
+            "🔥🔥🔥 DEBUG: Warnings refresh snapshot inputs — users=\(users.count) activeOps=\(activeOperatives.count) bookings=\(bookingStore.bookings.count) mgr=\(managerScheduleStore.managerSiteBookings.count) holidays=\(holidayStore.bookings.count) standardPaid=\(policy.standardPaidHours) horizonEnd=\(warningDetection.coverageEnd(from: today, invoicing: invoicingSettings)) materialsFetch=\(includeMaterialsFetch)"
         )
 
         // Yield so Home can finish painting before the heavy snapshot work.
         await Task.yield()
+        if Task.isCancelled { return }
 
         let materialCutOffEnabled = appSettings.settings.notifications.materialOrderCutOff
         let hour = cal.component(.hour, from: Date())
         var materialItemsForTomorrow: [MaterialItem] = []
         var materialsDataLoaded = false
-        // Only fetch when cut-off rules can fire — avoids launch jetsam and false empty-list warnings.
-        if materialCutOffEnabled, hour >= 16,
+        // Materials fetches are optional and capped — sequential project loads jetsam while
+        // the Warnings sheet is open. Callers opt in only for deferred background refresh.
+        if includeMaterialsFetch, materialCutOffEnabled, hour >= 16,
+           !isWarningsSheetVisible,
            let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
             materialsDataLoaded = true
-            for project in projectsTomorrow.prefix(25) {
+            for project in projectsTomorrow.prefix(8) {
+                if Task.isCancelled { return }
                 if let items = try? await firebaseBackend.loadMaterialItems(
                     organizationId: orgId,
                     projectId: project.id
@@ -164,8 +175,11 @@ enum WarningsRefreshHelper {
                         contentsOf: items.filter { cal.isDate($0.date, inSameDayAs: tomorrow) }
                     )
                 }
+                await Task.yield()
             }
         }
+
+        if Task.isCancelled { return }
 
         await WarningsService.shared.updateWarningsAsync(
             operatives: activeOperatives,
