@@ -230,8 +230,23 @@ class WarningsService: ObservableObject {
         let generation = updateGeneration
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-        let coverageStart = cal.startOfDay(for: labourCoverageStart ?? warningDetection.coverageStart(from: today, calendar: cal))
-        let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal))
+                // Live Home passes nil coverage overrides. Cap full-period lookback (see liveScanDayCap).
+        // Weekly Report passes explicit labourCoverageStart/End and must not be capped here.
+        let coverageStart = cal.startOfDay(
+            for: labourCoverageStart
+                ?? warningDetection.coverageStart(
+                    from: today,
+                    invoicing: invoicingSettings,
+                    calendar: cal,
+                    liveScanDayCap: labourCoverageStart == nil ? 21 : nil
+                )
+        )
+        let coverageEnd = cal.startOfDay(
+            for: labourCoverageEnd
+                ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
+        )
+        let effectiveScanUnbookedFromStart = scanUnbookedFromCoverageStart
+            || (labourCoverageStart == nil && warningDetection.scansUnbookedFromCoverageStart)
         let input = WarningsComputationInput(
             operatives: operatives,
             bookings: bookings,
@@ -243,7 +258,7 @@ class WarningsService: ObservableObject {
             warningDetection: warningDetection,
             coverageStart: coverageStart,
             coverageEnd: coverageEnd,
-            scanUnbookedFromCoverageStart: scanUnbookedFromCoverageStart,
+            scanUnbookedFromCoverageStart: effectiveScanUnbookedFromStart,
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
             materialCutOffOnSaturday: materialCutOffOnSaturday,
             materialCutOffOnSunday: materialCutOffOnSunday,

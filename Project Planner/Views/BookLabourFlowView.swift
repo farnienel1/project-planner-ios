@@ -1306,13 +1306,23 @@ struct BookLabourFlowView: View {
 
     // MARK: - Candidate building (aligned with DailyOverviewView)
 
+    private var excludedUnbookedUserIds: Set<String> {
+        Set(
+            firebaseBackend.currentOrganization?.settings.warningDetection.excludedUserIdsFromUnbookedWarnings ?? []
+        )
+    }
+
     private func buildCandidates() -> [BookLabourCandidate] {
         let weekday = calendar.component(.weekday, from: day)
         guard weekday >= 2 && weekday <= 6 else { return [] }
 
-        let operativeUsers = userStore.organizationUsers.filter { $0.permissions.operativeMode && $0.isActive }
+        let excluded = excludedUnbookedUserIds
+        let operativeUsers = userStore.organizationUsers.filter {
+            $0.permissions.operativeMode && $0.isActive && !excluded.contains($0.id)
+        }
         let managerUsers = userStore.organizationUsers.filter {
             $0.isActive &&
+                !excluded.contains($0.id) &&
                 ($0.permissions.manager || $0.permissions.adminAccess || $0.isSuperAdmin || $0.role == .admin)
         }
         let operativeOnlyUsers = operativeUsers.filter {

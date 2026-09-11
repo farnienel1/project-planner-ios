@@ -21,32 +21,32 @@ enum WarningsRefreshHelper {
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore,
         force: Bool = false
-    ) async {
-        guard userStore.hasAdminAccess() else { return }
+    ) async -> Bool {
+        guard userStore.hasAdminAccess() else { return false }
 
         // Always skip during bootstrap / launch quiet — even when `force` is true.
         // Opening Warnings used to pass force:true and bypass these guards, which
         // jetsams the Simulator right after Home bootstrap finishes.
         if firebaseBackend.isBootstrappingOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap in progress)")
-            return
+            return false
         }
         if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
-            return
+            return false
         }
         if !firebaseBackend.hasBootstrappedOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap not finished)")
-            return
+            return false
         }
 
         if !force {
             if bookingStore.isLoading || operativeStore.isLoading || holidayStore.isLoading || projectStore.isLoading {
-                return
+                return false
             }
             let now = Date()
             if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < minRefreshInterval {
-                return
+                return false
             }
         }
 
@@ -54,7 +54,7 @@ enum WarningsRefreshHelper {
             // Always join the in-flight pass — never start a second org scan (jetsams Simulator).
             print("🔥🔥🔥 DEBUG: Warnings refresh awaiting in-flight pass (no second snapshot)")
             await inFlightTask.value
-            return
+            return !inFlightTask.isCancelled
         }
 
         let task = Task { @MainActor in
@@ -72,9 +72,23 @@ enum WarningsRefreshHelper {
         inFlightTask = task
         lastRefreshAt = Date()
         await task.value
+        let cancelled = task.isCancelled
         if inFlightTask == task {
             inFlightTask = nil
         }
+        if cancelled {
+            print("🔥🔥🔥 DEBUG: Warnings refresh finished cancelled — not treating as success")
+            return false
+        }
+        return true
+    }
+
+    /// Cancel any in-flight Home warnings scan before opening heavy sheets (Weekly Report).
+    @MainActor
+    static func cancelInFlightRefresh() {
+        inFlightTask?.cancel()
+        inFlightTask = nil
+        print("🔥🔥🔥 DEBUG: Warnings refresh in-flight cancelled for sheet open")
     }
 
     @MainActor
@@ -88,6 +102,8 @@ enum WarningsRefreshHelper {
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore
     ) async {
+        if Task.isCancelled { return }
+
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
@@ -108,6 +124,7 @@ enum WarningsRefreshHelper {
 
         // Yield so Home can finish painting before the heavy snapshot work.
         await Task.yield()
+        if Task.isCancelled { return }
 
         await WarningsService.shared.updateWarningsAsync(
             operatives: activeOperatives,

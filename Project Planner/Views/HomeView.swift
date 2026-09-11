@@ -569,7 +569,7 @@ struct HomeView: View {
         }
     }
 
-    /// One detection pass after launch quiet — Home "All clear" must mean detection ran, not "never scanned".
+    /// One detection pass after launch quiet — Home "All clear" must mean detection ran on real data.
     @MainActor
     private func runPostQuietWarningsDetection() async {
         let deadline = Date().addingTimeInterval(120)
@@ -579,17 +579,38 @@ struct HomeView: View {
             if !firebaseBackend.isBootstrappingOrgDataLoad,
                firebaseBackend.hasBootstrappedOrgDataLoad,
                !quiet,
-               !busy {
+               !busy,
+               userStore.hasAdminAccess() {
                 break
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
             if Task.isCancelled { return }
         }
-        // Brief beat so opening Warnings right as quiet ends joins this pass instead of racing it.
+        guard userStore.hasAdminAccess() else {
+            print("🔥🔥🔥 DEBUG: Home post-quiet warnings skipped — no admin access yet")
+            return
+        }
+        // Wait until store data has actually arrived (isLoading can flip false while arrays are still empty).
+        let dataDeadline = Date().addingTimeInterval(45)
+        while Date() < dataDeadline {
+            let hasPeople = !operativeStore.allOperatives.isEmpty || !userStore.organizationUsers.isEmpty
+            let hasBookings = !bookingStore.bookings.isEmpty || !managerScheduleStore.managerSiteBookings.isEmpty
+            if hasPeople || hasBookings { break }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled { return }
+        }
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         if Task.isCancelled { return }
-        print("🔥🔥🔥 DEBUG: Home post-quiet warnings detection starting…")
-        await WarningsRefreshHelper.refreshSharedWarnings(
+        if firebaseBackend.isBootstrappingOrgDataLoad || !firebaseBackend.hasBootstrappedOrgDataLoad {
+            print("🔥🔥🔥 DEBUG: Home post-quiet warnings skipped — bootstrap state changed")
+            return
+        }
+        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
+            print("🔥🔥🔥 DEBUG: Home post-quiet warnings skipped — quiet re-entered")
+            return
+        }
+        print("🔥🔥🔥 DEBUG: Home post-quiet warnings detection starting… bookings=\(bookingStore.bookings.count) operatives=\(operativeStore.allOperatives.count)")
+        let didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
             projectStore: projectStore,
@@ -600,6 +621,10 @@ struct HomeView: View {
             appSettings: appSettings,
             force: true
         )
+        guard didRefresh else {
+            print("🔥🔥🔥 DEBUG: Home post-quiet warnings skipped — refresh did not run")
+            return
+        }
         homeWarningCount = WarningsService.shared.warningCount
         hasCompletedWarningsDetection = true
         print("🔥🔥🔥 DEBUG: Home post-quiet warnings detection finished count=\(homeWarningCount)")

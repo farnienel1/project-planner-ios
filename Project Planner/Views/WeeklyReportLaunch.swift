@@ -49,6 +49,7 @@ struct WeeklyReportOpenShell: View {
     let token: WeeklyReportLaunchToken
     @Environment(\.dismiss) private var dismiss
     @State private var showReport = false
+    @State private var isOpeningReport = false
 
     var body: some View {
         Group {
@@ -83,15 +84,31 @@ struct WeeklyReportOpenShell: View {
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.secondary)
                         Button {
+                            guard !isOpeningReport else { return }
+                            isOpeningReport = true
                             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_CONTINUE \(WarningsBuildStamp.id)")
-                            showReport = true
+                            Task { @MainActor in
+                                // Drop any in-flight Home warnings scan so Continue does not jetsam.
+                                WarningsRefreshHelper.cancelInFlightRefresh()
+                                await Task.yield()
+                                try? await Task.sleep(nanoseconds: 350_000_000)
+                                await Task.yield()
+                                showReport = true
+                            }
                         } label: {
-                            Text("Continue")
-                                .font(.system(size: 16, weight: .semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
+                            if isOpeningReport {
+                                ProgressView()
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                            } else {
+                                Text("Continue")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                            }
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(isOpeningReport)
                         .padding(.horizontal, 28)
                         Button("Close") { dismiss() }
                     }
