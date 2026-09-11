@@ -68,17 +68,52 @@ struct WarningsDetailView: View {
                 }
             }
             .task {
-                WarningsRefreshHelper.isWarningsSheetVisible = true
-                // Defer recompute so the sheet can paint first, then wait for quiet + stores.
-                // Never fetch materials while this sheet is open — that jetsams Simulator mid-view.
+                // Home owns `isWarningsSheetVisible`. Do not compute under this sheet on open —
+                // that jetsams Simulator. Prefer shared warnings from Home post-quiet refresh.
                 guard !didScheduleRefresh else { return }
-                didScheduleRefresh = true
-                try? await Task.sleep(nanoseconds: 750_000_000)
+                isRefreshing = true
+                defer { isRefreshing = false }
+                try? await Task.sleep(nanoseconds: 400_000_000)
                 guard !Task.isCancelled else { return }
-                await refreshAfterLaunchQuietIfNeeded()
-            }
-            .onDisappear {
-                WarningsRefreshHelper.isWarningsSheetVisible = false
+
+                if !warningsService.activeWarnings.isEmpty {
+                    didScheduleRefresh = true
+                    print("🔥🔥🔥 DEBUG: WARNINGS_SHEET using existing shared warnings count=\(warningsService.warningCount)")
+                    return
+                }
+
+                // Wait briefly for Home post-quiet to publish before doing any local work.
+                let waitDeadline = Date().addingTimeInterval(35)
+                while Date() < waitDeadline {
+                    if !warningsService.activeWarnings.isEmpty {
+                        didScheduleRefresh = true
+                        print("🔥🔥🔥 DEBUG: WARNINGS_SHEET shared warnings arrived count=\(warningsService.warningCount)")
+                        return
+                    }
+                    let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
+                    let hardBusy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading
+                    let bootBlocked = firebaseBackend.isBootstrappingOrgDataLoad
+                        || !firebaseBackend.hasBootstrappedOrgDataLoad
+                        || quiet
+                        || hardBusy
+                    if !bootBlocked { break }
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    if Task.isCancelled { return }
+                }
+
+                if !warningsService.activeWarnings.isEmpty {
+                    didScheduleRefresh = true
+                    return
+                }
+
+                // Still empty after quiet — run one sheet-safe refresh with visibility cleared
+                // so we are not stacking a snapshot under the presented sheet chrome.
+                let didRun = await refreshWarningsSafelyFromSheet()
+                if didRun || !warningsService.activeWarnings.isEmpty {
+                    didScheduleRefresh = true
+                } else if !Task.isCancelled {
+                    print("🔥🔥🔥 DEBUG: WARNINGS_SHEET safe refresh did not publish — retry available")
+                }
             }
             .sheet(isPresented: $showingWarningsSettings) {
                 NavigationStack {
@@ -152,16 +187,39 @@ struct WarningsDetailView: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 56))
-                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-            Text("No active warnings")
-                .font(.title3.weight(.semibold))
-            Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
-                .font(.subheadline)
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
+            if isRefreshing {
+                ProgressView()
+                    .padding(.bottom, 4)
+                Text("Checking for warnings…")
+                    .font(.title3.weight(.semibold))
+                Text("Waiting for schedule data to finish loading.")
+                    .font(.subheadline)
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            } else {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 56))
+                    .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                Text("No active warnings")
+                    .font(.title3.weight(.semibold))
+                Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
+                    .font(.subheadline)
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                Button("Check again") {
+                    didScheduleRefresh = false
+                    Task {
+                        let didRun = await refreshWarningsSafelyFromSheet()
+                        if didRun || !warningsService.activeWarnings.isEmpty {
+                            didScheduleRefresh = true
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .padding(.top, 4)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -369,15 +427,32 @@ struct WarningsDetailView: View {
     }
 
     private func refreshWarnings() {
-        Task { await refreshWarningsAsync() }
+        Task { await refreshWarningsSafelyFromSheet() }
     }
 
-    private func refreshAfterLaunchQuietIfNeeded() async {
+    /// Temporarily clears the sheet-visible flag so one refresh is not stacked under the
+    /// presented Warnings chrome (that jetsams Simulator), then restores it.
+    @discardableResult
+    private func refreshWarningsSafelyFromSheet() async -> Bool {
+        isRefreshing = true
+        defer { isRefreshing = false }
+        WarningsRefreshHelper.isWarningsSheetVisible = false
+        defer { WarningsRefreshHelper.isWarningsSheetVisible = true }
+        return await refreshAfterLaunchQuietIfNeeded()
+    }
+
+    @discardableResult
+    private func refreshAfterLaunchQuietIfNeeded() async -> Bool {
         // Wait for launch quiet AND hard stores. Soft stores (holidays / manager schedule)
         // must not block forever — a hung holiday fetch used to leave Warnings empty.
         let deadline = Date().addingTimeInterval(90)
         let softBypassAfter = Date().addingTimeInterval(45)
         while Date() < deadline {
+            // Another path (Home post-quiet) may have filled shared warnings while we waited.
+            if !warningsService.activeWarnings.isEmpty {
+                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET shared warnings arrived while waiting count=\(warningsService.warningCount)")
+                return true
+            }
             let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
             let hardBusy = bookingStore.isLoading
                 || operativeStore.isLoading
@@ -393,15 +468,16 @@ struct WarningsDetailView: View {
                 || (rosterEmpty && !allowSoftBypass)
             if !blocked {
                 let didRun = await refreshWarningsAsync(bypassSoftStoreGates: allowSoftBypass || softBusy)
-                if didRun { return }
+                if didRun { return true }
             } else {
                 print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting for quiet/stores")
             }
             try? await Task.sleep(nanoseconds: 400_000_000)
-            if Task.isCancelled { return }
+            if Task.isCancelled { return false }
         }
         // Final attempt: soft/hard store gates may still be stuck; never bypass quiet/bootstrap.
-        _ = await refreshWarningsAsync(bypassSoftStoreGates: true, bypassAllStoreGates: true)
+        if !warningsService.activeWarnings.isEmpty { return true }
+        return await refreshWarningsAsync(bypassSoftStoreGates: true, bypassAllStoreGates: true)
     }
 
     private func refreshWarningsAsync(

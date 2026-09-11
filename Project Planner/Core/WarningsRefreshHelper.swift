@@ -83,9 +83,14 @@ enum WarningsRefreshHelper {
             }
         }
 
+        // If a refresh is already running, wait for it — do not start a second heavy pass
+        // under the open Warnings sheet (that jetsams Simulator).
         if let inFlightTask {
+            print("🔥🔥🔥 DEBUG: Warnings refresh awaiting in-flight pass (no second snapshot)")
             await inFlightTask.value
-            if !force { return true }
+            let rosterEmpty = operativeStore.allOperatives.isEmpty && userStore.organizationUsers.isEmpty
+            // Only treat as success if we actually have roster data or published warnings.
+            return !rosterEmpty || !WarningsService.shared.activeWarnings.isEmpty
         }
 
         let task = Task { @MainActor in
@@ -104,10 +109,11 @@ enum WarningsRefreshHelper {
         inFlightTask = task
         lastRefreshAt = Date()
         await task.value
+        let published = !Task.isCancelled
         if inFlightTask == task {
             inFlightTask = nil
         }
-        return true
+        return published && !(operativeStore.allOperatives.isEmpty && userStore.organizationUsers.isEmpty && WarningsService.shared.activeWarnings.isEmpty)
     }
 
     @MainActor
@@ -128,6 +134,14 @@ enum WarningsRefreshHelper {
             await userStore.loadOrganizationUsers()
         }
 
+        // Never publish a roster-empty snapshot — that sticks a false "all clear" on Home/Warnings.
+        let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
+        let users = userStore.organizationUsers
+        if activeOperatives.isEmpty && users.isEmpty {
+            print("🔥🔥🔥 DEBUG: Warnings refresh aborted (still no users/operatives after load) — keeping prior warnings")
+            return
+        }
+
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
@@ -144,11 +158,9 @@ enum WarningsRefreshHelper {
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
         let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
-        let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
-        let users = userStore.organizationUsers
 
         print(
-            "🔥🔥🔥 DEBUG: Warnings refresh snapshot inputs — users=\(users.count) activeOps=\(activeOperatives.count) bookings=\(bookingStore.bookings.count) mgr=\(managerScheduleStore.managerSiteBookings.count) holidays=\(holidayStore.bookings.count) standardPaid=\(policy.standardPaidHours) horizonEnd=\(warningDetection.coverageEnd(from: today, invoicing: invoicingSettings)) materialsFetch=\(includeMaterialsFetch)"
+            "🔥🔥🔥 DEBUG: Warnings refresh snapshot inputs — users=\(users.count) activeOps=\(activeOperatives.count) bookings=\(bookingStore.bookings.count) mgr=\(managerScheduleStore.managerSiteBookings.count) holidays=\(holidayStore.bookings.count) standardPaid=\(policy.standardPaidHours) horizonEnd=\(warningDetection.coverageEnd(from: today, invoicing: invoicingSettings)) materialsFetch=\(includeMaterialsFetch) sheetVisible=\(isWarningsSheetVisible)"
         )
 
         // Yield so Home can finish painting before the heavy snapshot work.
@@ -166,7 +178,11 @@ enum WarningsRefreshHelper {
            let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
             materialsDataLoaded = true
             for project in projectsTomorrow.prefix(8) {
-                if Task.isCancelled { return }
+                if Task.isCancelled || isWarningsSheetVisible {
+                    materialsDataLoaded = false
+                    materialItemsForTomorrow = []
+                    break
+                }
                 if let items = try? await firebaseBackend.loadMaterialItems(
                     organizationId: orgId,
                     projectId: project.id

@@ -92,6 +92,17 @@ struct HomeView: View {
                 taskStore: taskStore
             )
         }
+        .onChange(of: showingWarningsDetail) { _, isPresented in
+            // Own the visibility flag here — nested sheets inside Warnings must not clear it
+            // via child onDisappear (that let Home start a heavy refresh under Warnings).
+            WarningsRefreshHelper.isWarningsSheetVisible = isPresented
+            if !isPresented {
+                Task { @MainActor in
+                    // If post-quiet never completed because the sheet was open, finish it now.
+                    await schedulePostQuietWarningsRefreshIfNeeded()
+                }
+            }
+        }
         .sheet(isPresented: $showingTasksDetail) {
             TasksDetailView()
                 .environmentObject(taskStore)
@@ -181,6 +192,7 @@ struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToWarnings"))) { _ in
             showingTasksDetail = false
+            WarningsRefreshHelper.isWarningsSheetVisible = true
             showingWarningsDetail = true
         }
         .fullScreenCover(isPresented: $showingClientsView) {
@@ -742,6 +754,7 @@ struct HomeView: View {
                     value: homeWarningCount == 0 ? "All clear" : "\(homeWarningCount) active"
                 ) {
                     showingTasksDetail = false
+                    WarningsRefreshHelper.isWarningsSheetVisible = true
                     showingWarningsDetail = true
                 }
                 .frame(maxWidth: .infinity)
@@ -1249,12 +1262,14 @@ struct HomeView: View {
     }
 
     private func presentTasksDetail() {
+        WarningsRefreshHelper.isWarningsSheetVisible = false
         showingWarningsDetail = false
         showingTasksDetail = true
     }
 
     private func presentWarningsDetail() {
         showingTasksDetail = false
+        WarningsRefreshHelper.isWarningsSheetVisible = true
         showingWarningsDetail = true
     }
 
