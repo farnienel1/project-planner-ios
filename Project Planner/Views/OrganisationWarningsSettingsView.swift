@@ -122,12 +122,12 @@ struct OrganisationWarningsSettingsView: View {
             VStack(spacing: 10) {
                 modeOption(.numberOfDays, label: "Set number of days", description: "Scan a fixed number of days from today — you control the window.")
                 modeOption(.endOfInvoicingPeriod, label: "End of invoicing period", description: "Scan from today through the end of your current billing period. Automatically adjusts when each new period begins.")
-                modeOption(.endOfWorkingWeek, label: "End of working week", description: "Scan through Friday of the current working week. Resets each Monday.")
                 modeOption(
                     .allWorkingDaysInCurrentInvoicingPeriod,
                     label: "All working days within current invoicing period",
                     description: "Scan every working day in the current billing period — including past days still in that period. Material order cut-off stays same-day."
                 )
+                modeOption(.endOfWorkingWeek, label: "End of working week", description: "Scan through Friday of the current working week. Resets each Monday.")
             }
 
             if draft.clashLookaheadMode == .numberOfDays {

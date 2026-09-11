@@ -230,6 +230,8 @@ class WarningsService: ObservableObject {
         let generation = updateGeneration
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
+        // Weekly Report (and any caller) may pass an explicit range — never mutate that.
+        let hasExplicitCoverage = labourCoverageStart != nil || labourCoverageEnd != nil
         var coverageStart = cal.startOfDay(
             for: labourCoverageStart
                 ?? warningDetection.coverageStart(from: today, invoicing: invoicingSettings, calendar: cal)
@@ -238,18 +240,23 @@ class WarningsService: ObservableObject {
             for: labourCoverageEnd
                 ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
         )
-        // Hard cap live detection window so full-period mode cannot balloon into a jetsam.
-        let maxLiveCoverageDays = 45
-        if let earliest = cal.date(byAdding: .day, value: -(maxLiveCoverageDays - 1), to: coverageEnd) {
-            let earliestStart = cal.startOfDay(for: earliest)
-            if coverageStart < earliestStart {
-                coverageStart = earliestStart
+        // Hard cap LIVE detection only so full-period mode cannot balloon into a jetsam.
+        if !hasExplicitCoverage {
+            let maxLiveCoverageDays = 45
+            if let earliest = cal.date(byAdding: .day, value: -(maxLiveCoverageDays - 1), to: coverageEnd) {
+                let earliestStart = cal.startOfDay(for: earliest)
+                if coverageStart < earliestStart {
+                    coverageStart = earliestStart
+                }
             }
         }
-        // Full invoicing-period mode includes past working days. Do that in a second
-        // pass so Home/Warnings still publish today's results if the past-day scan is heavy.
-        let wantsPastUnbooked = scanUnbookedFromCoverageStart
-            || (labourCoverageStart == nil && warningDetection.scansUnbookedFromCoverageStart)
+
+        // Live Home: full invoicing-period mode needs past working days. Do that in a
+        // second pass so today's results publish first. Weekly Report always single-pass
+        // (explicit coverage + scanUnbookedFromCoverageStart) — a second pass jetsams Generate.
+        let wantsLivePastUnbooked = !hasExplicitCoverage && warningDetection.scansUnbookedFromCoverageStart
+        let useTwoPhase = wantsLivePastUnbooked
+        let singlePassScanFromStart = scanUnbookedFromCoverageStart || wantsLivePastUnbooked
 
         func makeInput(scanUnbookedFromStart: Bool) -> WarningsComputationInput {
             WarningsComputationInput(
@@ -273,13 +280,9 @@ class WarningsService: ObservableObject {
             )
         }
 
-        // Snapshot + generate both off main — makeSnapshot alone was enough to jetsam
-        // when opening Warnings forced a refresh right after Home bootstrap.
-        let fastGenerated = await Task.detached(priority: .utility) {
-            let snapshot = WarningsComputation.makeSnapshot(from: makeInput(scanUnbookedFromStart: false))
-            return await WarningsComputation.generate(snapshot)
-        }.value
-        guard generation == updateGeneration else { return }
+        // Build inputs on MainActor, then snapshot+generate off main.
+        // Calling makeInput inside Task.detached crossed MainActor isolation and could
+        // trap / leave Warnings empty and jetsam Weekly Report mid-scan.
         if pruneDismissals {
             // Only drop dismissals before the live detection start — never wipe future keys
             // when a report uses a narrower/past window.
@@ -288,22 +291,43 @@ class WarningsService: ObservableObject {
                 calendar: cal
             )
         }
-        allGeneratedWarnings = fastGenerated
-        activeWarnings = fastGenerated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
-        refreshSeverityCounts()
-        WarningsRefreshHelper.postWarningsCountDidChange()
 
-        guard wantsPastUnbooked else { return }
-        await Task.yield()
-        guard generation == updateGeneration else { return }
+        if useTwoPhase {
+            let fastInput = makeInput(scanUnbookedFromStart: false)
+            let fastGenerated = await Task.detached(priority: .utility) {
+                let snapshot = WarningsComputation.makeSnapshot(from: fastInput)
+                return await WarningsComputation.generate(snapshot)
+            }.value
+            guard generation == updateGeneration else { return }
+            allGeneratedWarnings = fastGenerated
+            activeWarnings = fastGenerated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+            refreshSeverityCounts()
+            WarningsRefreshHelper.postWarningsCountDidChange()
 
-        let fullGenerated = await Task.detached(priority: .utility) {
-            let snapshot = WarningsComputation.makeSnapshot(from: makeInput(scanUnbookedFromStart: true))
+            await Task.yield()
+            guard generation == updateGeneration else { return }
+
+            let fullInput = makeInput(scanUnbookedFromStart: true)
+            let fullGenerated = await Task.detached(priority: .utility) {
+                let snapshot = WarningsComputation.makeSnapshot(from: fullInput)
+                return await WarningsComputation.generate(snapshot)
+            }.value
+            guard generation == updateGeneration else { return }
+            allGeneratedWarnings = fullGenerated
+            activeWarnings = fullGenerated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+            refreshSeverityCounts()
+            WarningsRefreshHelper.postWarningsCountDidChange()
+            return
+        }
+
+        let input = makeInput(scanUnbookedFromStart: singlePassScanFromStart)
+        let generated = await Task.detached(priority: .utility) {
+            let snapshot = WarningsComputation.makeSnapshot(from: input)
             return await WarningsComputation.generate(snapshot)
         }.value
         guard generation == updateGeneration else { return }
-        allGeneratedWarnings = fullGenerated
-        activeWarnings = fullGenerated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+        allGeneratedWarnings = generated
+        activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
         refreshSeverityCounts()
         WarningsRefreshHelper.postWarningsCountDidChange()
     }

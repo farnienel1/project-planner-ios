@@ -570,8 +570,9 @@ enum WarningsComputation {
                 }
             }
             scannedDays += 1
-            // Yield so full-period past-day scans don't jetsam Simulator mid-pass.
-            if scannedDays % 2 == 0 {
+            // Yield occasionally on long past-day scans so Simulator stays responsive.
+            // Every-2 was too chatty and kept memory pressure high during Weekly Report.
+            if scannedDays % 7 == 0 {
                 await Task.yield()
             }
             guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
