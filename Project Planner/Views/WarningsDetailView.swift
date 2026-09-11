@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-restore-main-open"
+    static let id = "wfix-wr-let-stores"
     static let homePillTitle = "Warnings · \(id)"
 }
 
@@ -164,16 +164,28 @@ struct WarningsDetailView: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 56))
-                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-            Text("No active warnings")
-                .font(.title3.weight(.semibold))
-            Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
-                .font(.subheadline)
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
+            if isRefreshing || !didScheduleRefresh {
+                ProgressView()
+                    .padding(.bottom, 4)
+                Text("Checking warnings…")
+                    .font(.title3.weight(.semibold))
+                Text("Detection runs after launch settles. This screen updates when it finishes.")
+                    .font(.subheadline)
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            } else {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 56))
+                    .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                Text("No active warnings")
+                    .font(.title3.weight(.semibold))
+                Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
+                    .font(.subheadline)
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
             Text(WarningsBuildStamp.id)
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(ProjectWorksRevampColors.muted)

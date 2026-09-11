@@ -208,18 +208,19 @@ struct HomeView: View {
                 .environmentObject(notificationService)
         }
         .sheet(isPresented: $showingWeeklyReport) {
-            WeeklyReportView()
-                .environmentObject(bookingStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(holidayStore)
-                .environmentObject(userStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(subcontractorStore)
-                .environmentObject(appSettings)
-                .environmentObject(notificationService)
-                .environmentObject(taskStore)
+            WeeklyReportView(
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                projectStore: projectStore,
+                operativeStore: operativeStore,
+                holidayStore: holidayStore,
+                userStore: userStore,
+                firebaseBackend: firebaseBackend,
+                subcontractorStore: subcontractorStore,
+                appSettings: appSettings,
+                notificationService: notificationService,
+                taskStore: taskStore
+            )
         }
 
         .sheet(isPresented: $showingOrgSitesMap) {
@@ -729,9 +730,10 @@ struct HomeView: View {
                     icon: "exclamationmark.triangle.fill",
                     iconTint: Color(red: 0.64, green: 0.18, blue: 0.18),
                     iconBackground: Color(red: 0.99, green: 0.92, blue: 0.92),
-                    title: "Warnings",
+                    title: WarningsBuildStamp.homePillTitle,
                     value: warningsPillValue
                 ) {
+                    print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON \(WarningsBuildStamp.id)")
                     presentWarningsDetail()
                 }
                 .frame(maxWidth: .infinity)
@@ -932,6 +934,7 @@ struct HomeView: View {
         case HomeQuickActionID.opSettings.rawValue, HomeQuickActionID.staffSettings.rawValue:
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 5])
         case HomeQuickActionID.staffWeeklyReport.rawValue:
+            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_BUTTON \(WarningsBuildStamp.id)")
             showingWeeklyReport = true
         case HomeQuickActionID.staffDailyOverview.rawValue:
             showingDailyOverview = true
