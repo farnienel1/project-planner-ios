@@ -230,7 +230,7 @@ class WarningsService: ObservableObject {
         let generation = updateGeneration
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-        let coverageStart = cal.startOfDay(for: labourCoverageStart ?? warningDetection.coverageStart(from: today, invoicing: invoicingSettings, calendar: cal))
+        let coverageStart = cal.startOfDay(for: labourCoverageStart ?? warningDetection.coverageStart(from: today, calendar: cal))
         let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal))
         let input = WarningsComputationInput(
             operatives: operatives,

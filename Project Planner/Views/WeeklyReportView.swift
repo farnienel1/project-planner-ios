@@ -805,45 +805,11 @@ struct WeeklyReportView: View {
         let range = reportDateRange
         var sections: [WeeklyReportExportBuilder.Section] = []
 
-        // Plain top section (no custom PDF styling) so Generate stays stable.
-        let clashWarnings = activeWarningsService.operativeBookingClashes(in: range)
-        let unbookedWarnings = activeWarningsService.unbookedLabourWarnings(in: range)
-        var criticalRows: [[String]] = []
-        for warning in clashWarnings {
-            criticalRows.append([
-                "CLASH — not actioned",
-                warning.occurrenceDate.map(formatDate) ?? "",
-                warning.affectedPersonNames,
-                warning.title,
-                warning.message,
-            ])
-        }
-        for warning in unbookedWarnings {
-            criticalRows.append([
-                "MISSED BOOKING — not actioned",
-                warning.occurrenceDate.map(formatDate) ?? "",
-                warning.affectedPersonNames,
-                warning.title,
-                warning.message,
-            ])
-        }
-        if criticalRows.isEmpty {
-            criticalRows.append(["None", "", "", "No unactioned clashes or missed bookings in this report period", ""])
-        }
-        sections.append(
-            WeeklyReportExportBuilder.Section(
-                title: "⚠ UNACTIONED WARNINGS — ACTION REQUIRED",
-                headers: ["Issue", "Date", "Person(s)", "Description", "Detail"],
-                rows: criticalRows,
-                totalRow: nil
-            )
-        )
-
         var warningRows: [[String]] = []
-        for warning in clashWarnings {
+        for warning in activeWarningsService.operativeBookingClashes(in: range) {
             warningRows.append(clashExportCells(warning, status: "Active — remove booking"))
         }
-        for warning in unbookedWarnings {
+        for warning in activeWarningsService.unbookedLabourWarnings(in: range) {
             warningRows.append(clashExportCells(warning, status: "Active"))
         }
         for warning in activeWarningsService.unresolvedManagerClashes(in: range) {
