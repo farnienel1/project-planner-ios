@@ -328,7 +328,7 @@ struct WarningsDetailView: View {
                     Section("Day") {
                         Button("Open day on Daily Overview") {
                             selectedWarning = nil
-                            openDayDate = warning.occurrenceDate.map(IdentifiableDay.init)
+                            openDayDate = warning.occurrenceDate.map { IdentifiableDay($0) }
                         }
                         if canManageAdminActions, warning.type == .unbookedLabour {
                             Button("Book labour") {
@@ -497,12 +497,15 @@ struct WarningsDetailView: View {
 }
 
 /// Sheet/item identity for a calendar day without making `Date` globally Identifiable.
-private struct IdentifiableDay: Identifiable, Hashable {
+/// `nonisolated` + no `Calendar.current` — that API is MainActor-isolated and breaks
+/// button / escaping action closures (`init(_:)` in a nonisolated context).
+private struct IdentifiableDay: Identifiable, Hashable, Sendable {
     let date: Date
-    var id: TimeInterval { Calendar.current.startOfDay(for: date).timeIntervalSince1970 }
+    var id: TimeInterval { date.timeIntervalSince1970 }
 
-    init(_ date: Date) {
-        self.date = Calendar.current.startOfDay(for: date)
+    /// Warning `occurrenceDate` values are already start-of-day from computation.
+    nonisolated init(_ date: Date) {
+        self.date = date
     }
 }
 
