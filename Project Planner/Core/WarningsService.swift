@@ -230,18 +230,8 @@ class WarningsService: ObservableObject {
         let generation = updateGeneration
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-        let coverageStart = cal.startOfDay(
-            for: labourCoverageStart
-                ?? warningDetection.coverageStart(from: today, invoicing: invoicingSettings, calendar: cal)
-        )
-        let coverageEnd = cal.startOfDay(
-            for: labourCoverageEnd
-                ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
-        )
-        // Full-period mode expands coverageStart (clashes include past days in period).
-        // Past-day *unbooked* on Home was jetsamming Simulator — only enable when the
-        // caller asks (Weekly Report passes scanUnbookedFromCoverageStart: true).
-        // Unbooked on Home still scans today → coverageEnd within the period window.
+        let coverageStart = cal.startOfDay(for: labourCoverageStart ?? warningDetection.coverageStart(from: today, invoicing: invoicingSettings, calendar: cal))
+        let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal))
         let input = WarningsComputationInput(
             operatives: operatives,
             bookings: bookings,
