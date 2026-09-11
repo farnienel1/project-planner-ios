@@ -43,30 +43,31 @@ struct WeeklyReportLaunchToken: Identifiable {
     }
 }
 
-/// Store-free gate. The heavy `WeeklyReportView` is only built after Continue.
+/// Store-free gate. Important: do NOT nest NavigationStack around WeeklyReportView —
+/// that produces a blank white sheet on Simulator.
 struct WeeklyReportOpenShell: View {
     let token: WeeklyReportLaunchToken
     @Environment(\.dismiss) private var dismiss
     @State private var showReport = false
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if showReport {
-                    WeeklyReportView(
-                        bookingStore: token.bookingStore,
-                        managerScheduleStore: token.managerScheduleStore,
-                        projectStore: token.projectStore,
-                        operativeStore: token.operativeStore,
-                        holidayStore: token.holidayStore,
-                        userStore: token.userStore,
-                        firebaseBackend: token.firebaseBackend,
-                        subcontractorStore: token.subcontractorStore,
-                        appSettings: token.appSettings,
-                        notificationService: token.notificationService,
-                        taskStore: token.taskStore
-                    )
-                } else {
+        Group {
+            if showReport {
+                WeeklyReportView(
+                    bookingStore: token.bookingStore,
+                    managerScheduleStore: token.managerScheduleStore,
+                    projectStore: token.projectStore,
+                    operativeStore: token.operativeStore,
+                    holidayStore: token.holidayStore,
+                    userStore: token.userStore,
+                    firebaseBackend: token.firebaseBackend,
+                    subcontractorStore: token.subcontractorStore,
+                    appSettings: token.appSettings,
+                    notificationService: token.notificationService,
+                    taskStore: token.taskStore
+                )
+            } else {
+                NavigationStack {
                     VStack(spacing: 20) {
                         Image(systemName: "doc.text")
                             .font(.system(size: 40))

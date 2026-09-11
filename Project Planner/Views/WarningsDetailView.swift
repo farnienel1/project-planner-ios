@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-no-hang-check"
+    static let id = "wfix-blank-sheet"
     static let homePillTitle = "Warnings · \(id)"
 }
 
@@ -34,18 +34,17 @@ struct WarningsDetailView: View {
     @State private var warningPendingDismiss: Warning?
     @State private var showingWarningsSettings = false
     @State private var isRefreshing = false
-    @State private var didScheduleRefresh = false
 
     var body: some View {
         NavigationStack {
-            Group {
+            ZStack {
+                Color(.systemGroupedBackground).ignoresSafeArea()
                 if warningsService.activeWarnings.isEmpty {
                     emptyState
                 } else {
                     warningsScroll
                 }
             }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -82,24 +81,9 @@ struct WarningsDetailView: View {
                 }
             }
             .onAppear {
-                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id)")
+                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id) count=\(warningsService.activeWarnings.count)")
             }
-            .task {
-                // Paint first. Never wait forever — that left "Checking…" stuck.
-                // Never start a second org scan on top of Home's — helper joins in-flight.
-                guard !didScheduleRefresh else { return }
-                didScheduleRefresh = true
-                if !warningsService.activeWarnings.isEmpty {
-                    print("🔥🔥🔥 DEBUG: WARNINGS_SHEET skip refresh (already \(warningsService.activeWarnings.count))")
-                    return
-                }
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                guard !Task.isCancelled else { return }
-                if !warningsService.activeWarnings.isEmpty { return }
-                isRefreshing = true
-                defer { isRefreshing = false }
-                await refreshWarningsAsync(alreadyShowingSpinner: true)
-            }
+            // No auto-refresh on open — stacking with Home's scan caused blank/white sheets.
             .sheet(isPresented: $showingWarningsSettings) {
                 NavigationStack {
                     OrganisationWarningsSettingsView(
@@ -177,55 +161,34 @@ struct WarningsDetailView: View {
                     .padding(.bottom, 4)
                 Text("Checking warnings…")
                     .font(.title3.weight(.semibold))
-                Text("Finishing Home’s detection pass. This should clear in a few seconds.")
+                Text("Finishing detection. This should clear in a few seconds.")
                     .font(.subheadline)
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
-            } else if isLaunchStillSettling {
-                Image(systemName: "hourglass")
-                    .font(.system(size: 48))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                Text("Still settling…")
+            } else {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 56))
+                    .foregroundStyle(.green)
+                Text("No active warnings")
                     .font(.title3.weight(.semibold))
-                Text("Launch quiet / bootstrap is still running, so detection was skipped. Wait on Home until the pill leaves Checking…, then tap Retry.")
+                Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
                     .font(.subheadline)
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
                 Button("Retry check") {
                     Task { await refreshWarningsAsync(alreadyShowingSpinner: false) }
                 }
                 .buttonStyle(.borderedProminent)
-            } else {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 56))
-                    .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                Text("No active warnings")
-                    .font(.title3.weight(.semibold))
-                Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
-                    .font(.subheadline)
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-                Button("Retry check") {
-                    Task { await refreshWarningsAsync(alreadyShowingSpinner: false) }
-                }
-                .buttonStyle(.bordered)
                 .padding(.top, 4)
             }
             Text(WarningsBuildStamp.id)
                 .font(.caption2.weight(.medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var isLaunchStillSettling: Bool {
-        if firebaseBackend.isBootstrappingOrgDataLoad { return true }
-        if !firebaseBackend.hasBootstrappedOrgDataLoad { return true }
-        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil { return true }
-        return false
+        .padding()
     }
 
     private var warningsScroll: some View {
