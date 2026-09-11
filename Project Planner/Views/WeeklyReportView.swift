@@ -54,6 +54,8 @@ struct WeeklyReportView: View {
     @State private var periodSummaryReady = false
     /// Filled only during Generate — never allocated on open.
     @State private var exportWarningsService: WarningsService?
+    /// Defer heavy scroll content so the sheet can present without jetsamming.
+    @State private var isContentReady = false
 
     private var organizationName: String {
         firebaseBackend.currentOrganization?.name ?? "Organization"
@@ -82,7 +84,20 @@ struct WeeklyReportView: View {
 
     var body: some View {
         NavigationStack {
-            weeklyReportScrollContent
+            Group {
+                if isContentReady {
+                    weeklyReportScrollContent
+                } else {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                        Text("Loading weekly report…")
+                            .font(.subheadline)
+                            .foregroundStyle(WeeklyReportColors.muted)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.systemGroupedBackground).ignoresSafeArea())
+                }
+            }
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { weeklyReportToolbar }
                 .sheet(item: $warningsSheetPayload) { payload in
@@ -118,12 +133,19 @@ struct WeeklyReportView: View {
                         .presentationDragIndicator(.visible)
                 }
                 .task {
+                    WarningsRefreshHelper.isWeeklyReportVisible = true
                     suppressRangeDrivenRefresh = true
                     setThisWeekRange()
                     suppressRangeDrivenRefresh = false
-                    // Open must stay light — only copy Home's shared warnings into the summary.
+                    // Let the sheet finish presenting before building the heavy form.
+                    try? await Task.sleep(nanoseconds: 350_000_000)
+                    guard !Task.isCancelled else { return }
                     refreshPeriodSummaryFromShared()
+                    isContentReady = true
                     await loadOrganizationLogo()
+                }
+                .onDisappear {
+                    WarningsRefreshHelper.isWeeklyReportVisible = false
                 }
                 .onChange(of: startDate) { _, _ in
                     guard !suppressRangeDrivenRefresh else { return }
@@ -609,15 +631,18 @@ struct WeeklyReportView: View {
 
             if isExpanded.wrappedValue {
                 Divider().padding(.leading, 16)
+                // Compact (not graphical) — graphical calendars jetsamed Simulator on open.
                 if label == "End" {
                     DatePicker("", selection: date, in: startDate..., displayedComponents: .date)
-                        .datePickerStyle(.graphical)
+                        .datePickerStyle(.wheel)
+                        .labelsHidden()
                         .tint(WeeklyReportColors.blue)
                         .padding(.horizontal, 12)
                         .padding(.bottom, 8)
                 } else {
                     DatePicker("", selection: date, displayedComponents: .date)
-                        .datePickerStyle(.graphical)
+                        .datePickerStyle(.wheel)
+                        .labelsHidden()
                         .tint(WeeklyReportColors.blue)
                         .padding(.horizontal, 12)
                         .padding(.bottom, 8)

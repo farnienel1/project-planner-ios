@@ -7,12 +7,19 @@ import Foundation
 
 enum WarningsRefreshHelper {
     @MainActor private static var lastRefreshAt: Date?
-    @MainActor private static var inFlightTask: Task<Void, Never>?
+    @MainActor private static var inFlightTask: Task<Bool, Never>?
     private static let minRefreshInterval: TimeInterval = 45
     /// Set while Warnings sheet is on screen so Home / background paths avoid heavy work underneath it.
     @MainActor static var isWarningsSheetVisible = false
+    /// Set while Weekly Report is on screen — opening it during a warnings recompute jetsams Simulator.
+    @MainActor static var isWeeklyReportVisible = false
 
-    /// Returns `true` when a recompute ran (or an in-flight one completed under `force`).
+    @MainActor
+    static var isHeavySheetVisible: Bool {
+        isWarningsSheetVisible || isWeeklyReportVisible
+    }
+
+    /// Returns `true` only when `updateWarningsAsync` actually ran and published.
     ///
     /// - Parameters:
     ///   - force: Ignore the min refresh interval.
@@ -42,7 +49,6 @@ enum WarningsRefreshHelper {
         guard userStore.hasAdminAccess() else { return false }
 
         // Always skip during bootstrap / launch quiet — even when `force` is true.
-        // Callers (Home post-quiet once, Warnings sheet) must wait for quiet before invoking.
         if firebaseBackend.isBootstrappingOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap in progress)")
             return false
@@ -53,6 +59,10 @@ enum WarningsRefreshHelper {
         }
         if !firebaseBackend.hasBootstrappedOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap not finished)")
+            return false
+        }
+        if isHeavySheetVisible && !force {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (Warnings/Weekly Report sheet visible)")
             return false
         }
 
@@ -68,11 +78,11 @@ enum WarningsRefreshHelper {
             return false
         }
 
-        // Unbooked labour needs either org users or roster operatives. Wait rather than
-        // publishing a false all-clear when both are still empty after bootstrap.
-        let rosterEmpty = operativeStore.allOperatives.isEmpty && userStore.organizationUsers.isEmpty
-        if rosterEmpty && !bypassAllStoreGates {
-            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (users + operatives still empty)")
+        // Match abort logic: need active operatives and/or org users.
+        let activeEmpty = operativeStore.allOperatives.filter(\.isActive).isEmpty
+        let usersEmpty = userStore.organizationUsers.isEmpty
+        if activeEmpty && usersEmpty && !bypassAllStoreGates {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (active users + operatives still empty)")
             return false
         }
 
@@ -83,17 +93,12 @@ enum WarningsRefreshHelper {
             }
         }
 
-        // If a refresh is already running, wait for it — do not start a second heavy pass
-        // under the open Warnings sheet (that jetsams Simulator).
         if let inFlightTask {
             print("🔥🔥🔥 DEBUG: Warnings refresh awaiting in-flight pass (no second snapshot)")
-            await inFlightTask.value
-            let rosterEmpty = operativeStore.allOperatives.isEmpty && userStore.organizationUsers.isEmpty
-            // Only treat as success if we actually have roster data or published warnings.
-            return !rosterEmpty || !WarningsService.shared.activeWarnings.isEmpty
+            return await inFlightTask.value
         }
 
-        let task = Task { @MainActor in
+        let task = Task<Bool, Never> { @MainActor in
             await performRefresh(
                 operativeStore: operativeStore,
                 bookingStore: bookingStore,
@@ -108,12 +113,11 @@ enum WarningsRefreshHelper {
         }
         inFlightTask = task
         lastRefreshAt = Date()
-        await task.value
-        let published = !Task.isCancelled
+        let didPublish = await task.value
         if inFlightTask == task {
             inFlightTask = nil
         }
-        return published && !(operativeStore.allOperatives.isEmpty && userStore.organizationUsers.isEmpty && WarningsService.shared.activeWarnings.isEmpty)
+        return didPublish
     }
 
     @MainActor
@@ -127,19 +131,17 @@ enum WarningsRefreshHelper {
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore,
         includeMaterialsFetch: Bool
-    ) async {
-        // Ensure org users are present so operative-mode / manager unbooked checks match Daily Overview.
+    ) async -> Bool {
         if userStore.organizationUsers.isEmpty {
             print("🔥🔥🔥 DEBUG: Warnings refresh loading organization users (was empty)…")
             await userStore.loadOrganizationUsers()
         }
 
-        // Never publish a roster-empty snapshot — that sticks a false "all clear" on Home/Warnings.
         let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
         let users = userStore.organizationUsers
         if activeOperatives.isEmpty && users.isEmpty {
             print("🔥🔥🔥 DEBUG: Warnings refresh aborted (still no users/operatives after load) — keeping prior warnings")
-            return
+            return false
         }
 
         let cal = Calendar.current
@@ -160,25 +162,22 @@ enum WarningsRefreshHelper {
         let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
 
         print(
-            "🔥🔥🔥 DEBUG: Warnings refresh snapshot inputs — users=\(users.count) activeOps=\(activeOperatives.count) bookings=\(bookingStore.bookings.count) mgr=\(managerScheduleStore.managerSiteBookings.count) holidays=\(holidayStore.bookings.count) standardPaid=\(policy.standardPaidHours) horizonEnd=\(warningDetection.coverageEnd(from: today, invoicing: invoicingSettings)) materialsFetch=\(includeMaterialsFetch) sheetVisible=\(isWarningsSheetVisible)"
+            "🔥🔥🔥 DEBUG: Warnings refresh snapshot inputs — users=\(users.count) activeOps=\(activeOperatives.count) bookings=\(bookingStore.bookings.count) mgr=\(managerScheduleStore.managerSiteBookings.count) holidays=\(holidayStore.bookings.count) standardPaid=\(policy.standardPaidHours) horizonEnd=\(warningDetection.coverageEnd(from: today, invoicing: invoicingSettings)) materialsFetch=\(includeMaterialsFetch) sheetVisible=\(isHeavySheetVisible)"
         )
 
-        // Yield so Home can finish painting before the heavy snapshot work.
         await Task.yield()
-        if Task.isCancelled { return }
+        if Task.isCancelled { return false }
 
         let materialCutOffEnabled = appSettings.settings.notifications.materialOrderCutOff
         let hour = cal.component(.hour, from: Date())
         var materialItemsForTomorrow: [MaterialItem] = []
         var materialsDataLoaded = false
-        // Materials fetches are optional and capped — sequential project loads jetsam while
-        // the Warnings sheet is open. Callers opt in only for deferred background refresh.
         if includeMaterialsFetch, materialCutOffEnabled, hour >= 16,
-           !isWarningsSheetVisible,
+           !isHeavySheetVisible,
            let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
             materialsDataLoaded = true
             for project in projectsTomorrow.prefix(8) {
-                if Task.isCancelled || isWarningsSheetVisible {
+                if Task.isCancelled || isHeavySheetVisible {
                     materialsDataLoaded = false
                     materialItemsForTomorrow = []
                     break
@@ -195,7 +194,7 @@ enum WarningsRefreshHelper {
             }
         }
 
-        if Task.isCancelled { return }
+        if Task.isCancelled { return false }
 
         await WarningsService.shared.updateWarningsAsync(
             operatives: activeOperatives,
@@ -220,9 +219,10 @@ enum WarningsRefreshHelper {
             $0.type == .unbookedLabour && ($0.occurrenceDate.map { cal.isDate($0, inSameDayAs: today) } ?? false)
         }.count
         print(
-            "🔥🔥🔥 DEBUG: Warnings refresh finished count=\(WarningsService.shared.warningCount) unbookedToday=\(unbookedToday)"
+            "🔥🔥🔥 DEBUG: Warnings refresh finished count=\(WarningsService.shared.warningCount) active=\(WarningsService.shared.activeWarnings.count) unbookedToday=\(unbookedToday)"
         )
         postWarningsCountDidChange()
+        return true
     }
 
     @MainActor

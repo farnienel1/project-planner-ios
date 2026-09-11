@@ -249,6 +249,14 @@ struct HomeView: View {
                 taskStore: taskStore
             )
         }
+        .onChange(of: showingWeeklyReport) { _, isPresented in
+            WarningsRefreshHelper.isWeeklyReportVisible = isPresented
+            if !isPresented {
+                Task { @MainActor in
+                    await refreshWarningsFromHome(force: true)
+                }
+            }
+        }
         .sheet(isPresented: $showingOrgSitesMap) {
             OrgSitesMapView()
                 .environmentObject(firebaseBackend)
@@ -588,6 +596,18 @@ struct HomeView: View {
                 homeWarningCount = count
             } else {
                 homeWarningCount = WarningsService.shared.warningCount
+            }
+            homeWarningsDetectionCompleted = true
+        }
+        .onChange(of: bookingStore.bookings.count) { _, _ in
+            guard userStore.hasAdminAccess() else { return }
+            guard !WarningsRefreshHelper.isHeavySheetVisible else { return }
+            guard didSchedulePostQuietWarningsRefresh || homeWarningsDetectionCompleted else { return }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                guard !Task.isCancelled else { return }
+                guard !WarningsRefreshHelper.isHeavySheetVisible else { return }
+                await refreshWarningsFromHome(force: false)
             }
         }
         .task(id: userStore.currentUser?.id) {
@@ -1286,8 +1306,7 @@ struct HomeView: View {
         showingTasksDetail = true
     }
 
-    /// Wait for Home detection (sheet not visible) before freezing the list — otherwise
-    /// an early tap latches an empty snapshot for the whole presentation.
+    /// Wait for a real published detection pass before freezing the list.
     private func presentWarningsDetail() {
         showingTasksDetail = false
         guard !isPreparingWarningsSheet else { return }
@@ -1295,22 +1314,22 @@ struct HomeView: View {
         Task { @MainActor in
             defer { isPreparingWarningsSheet = false }
 
-            if !didSchedulePostQuietWarningsRefresh {
-                await refreshWarningsFromHome(force: true)
-            }
-
-            if !didSchedulePostQuietWarningsRefresh {
-                let deadline = Date().addingTimeInterval(25)
-                while !didSchedulePostQuietWarningsRefresh && Date() < deadline {
+            // Always attempt a publish when the list is empty — the one-shot latch used to
+            // mark "done" even when refresh aborted without calling updateWarningsAsync.
+            if WarningsService.shared.activeWarnings.isEmpty {
+                let deadline = Date().addingTimeInterval(35)
+                var published = false
+                while Date() < deadline {
+                    published = await refreshWarningsFromHome(force: true)
+                    if published { break }
+                    if WarningsService.shared.activeWarnings.isEmpty == false { break }
                     try? await Task.sleep(nanoseconds: 500_000_000)
                     if Task.isCancelled { return }
-                    if WarningsService.shared.activeWarnings.isEmpty == false {
-                        break
-                    }
                 }
-                if !didSchedulePostQuietWarningsRefresh {
-                    await refreshWarningsFromHome(force: true)
+                if !published {
+                    published = await refreshWarningsFromHome(force: true)
                 }
+                _ = published
             }
 
             let detectionDone = didSchedulePostQuietWarningsRefresh
@@ -1400,6 +1419,10 @@ struct HomeView: View {
             print("🔥🔥🔥 DEBUG: Home warnings refresh skipped (Warnings sheet still visible)")
             return
         }
+        guard !WarningsRefreshHelper.isWeeklyReportVisible else {
+            print("🔥🔥🔥 DEBUG: Home warnings refresh skipped (Weekly Report still visible)")
+            return
+        }
         let didRun = await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
@@ -1445,8 +1468,8 @@ struct HomeView: View {
             let allowSoftBypass = Date() >= softBypassAfter
             let pastInitialDeadline = Date() >= deadline
 
-            if WarningsRefreshHelper.isWarningsSheetVisible {
-                print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh waiting (Warnings sheet visible)")
+            if WarningsRefreshHelper.isHeavySheetVisible {
+                print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh waiting (heavy sheet visible)")
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 if Task.isCancelled { return }
                 continue
@@ -1492,8 +1515,8 @@ struct HomeView: View {
 
         // Last chance after waiting — soft/hard store flags can stick true on hung fetches.
         // Still skip while Warnings is open, and never pull materials on this path.
-        if WarningsRefreshHelper.isWarningsSheetVisible {
-            print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh timed out while Warnings sheet visible — will not force under sheet")
+        if WarningsRefreshHelper.isHeavySheetVisible {
+            print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh timed out while heavy sheet visible — will not force under sheet")
             return
         }
         print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh final bypass attempt…")
