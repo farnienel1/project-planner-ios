@@ -90,8 +90,10 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         let start = calendar.startOfDay(for: today)
         switch clashLookaheadMode {
         case .numberOfDays:
+            // Inclusive window: "7 days" = today through today+6 (not today+7).
             let days = max(1, min(clashLookaheadDays, 366))
-            return calendar.startOfDay(for: calendar.date(byAdding: .day, value: days, to: start) ?? start)
+            let offset = days - 1
+            return calendar.startOfDay(for: calendar.date(byAdding: .day, value: offset, to: start) ?? start)
         case .endOfWorkingWeek:
             return Self.endOfWorkingWeek(from: start, calendar: calendar)
         case .endOfInvoicingPeriod:
