@@ -19,6 +19,14 @@ enum WarningsRefreshHelper {
         isWarningsSheetVisible || isWeeklyReportVisible
     }
 
+    /// Cancel any in-flight shared refresh (e.g. before presenting Weekly Report).
+    @MainActor
+    static func cancelInFlightRefresh() {
+        inFlightTask?.cancel()
+        inFlightTask = nil
+        print("🔥🔥🔥 DEBUG: Warnings refresh in-flight cancelled")
+    }
+
     /// Returns `true` only when `updateWarningsAsync` actually ran and published.
     ///
     /// - Parameters:

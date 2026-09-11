@@ -235,23 +235,29 @@ struct HomeView: View {
                 .environmentObject(notificationService)
         }
         .sheet(isPresented: $showingWeeklyReport) {
-            WeeklyReportView(
-                bookingStore: bookingStore,
-                managerScheduleStore: managerScheduleStore,
-                projectStore: projectStore,
-                operativeStore: operativeStore,
-                holidayStore: holidayStore,
-                userStore: userStore,
-                firebaseBackend: firebaseBackend,
-                subcontractorStore: subcontractorStore,
-                appSettings: appSettings,
-                notificationService: notificationService,
-                taskStore: taskStore
-            )
+            // Do NOT construct WeeklyReportView until the shell finishes — creating it
+            // with every store while Home is hot is what keeps jetsamming open.
+            WeeklyReportLoadingShell {
+                WeeklyReportView(
+                    bookingStore: bookingStore,
+                    managerScheduleStore: managerScheduleStore,
+                    projectStore: projectStore,
+                    operativeStore: operativeStore,
+                    holidayStore: holidayStore,
+                    userStore: userStore,
+                    firebaseBackend: firebaseBackend,
+                    subcontractorStore: subcontractorStore,
+                    appSettings: appSettings,
+                    notificationService: notificationService,
+                    taskStore: taskStore
+                )
+            }
         }
         .onChange(of: showingWeeklyReport) { _, isPresented in
             WarningsRefreshHelper.isWeeklyReportVisible = isPresented
-            if !isPresented {
+            if isPresented {
+                WarningsRefreshHelper.cancelInFlightRefresh()
+            } else {
                 Task { @MainActor in
                     await refreshWarningsFromHome(force: true)
                 }
@@ -985,6 +991,8 @@ struct HomeView: View {
         case HomeQuickActionID.opSettings.rawValue, HomeQuickActionID.staffSettings.rawValue:
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 5])
         case HomeQuickActionID.staffWeeklyReport.rawValue:
+            WarningsRefreshHelper.isWeeklyReportVisible = true
+            WarningsRefreshHelper.cancelInFlightRefresh()
             showingWeeklyReport = true
         case HomeQuickActionID.staffDailyOverview.rawValue:
             showingDailyOverview = true

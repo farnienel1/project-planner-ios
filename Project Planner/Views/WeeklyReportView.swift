@@ -16,6 +16,53 @@ private enum WeeklyReportColors {
     static let greenTx = Color(red: 0.086, green: 0.400, blue: 0.204)
 }
 
+/// Presents a tiny ProgressView first. The real report view (and its store
+/// captures) are only constructed after a delay so the sheet can appear
+/// without jetsamming Simulator.
+struct WeeklyReportLoadingShell<Content: View>: View {
+    @Environment(\.dismiss) private var dismiss
+    @ViewBuilder var content: () -> Content
+    @State private var isReady = false
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isReady {
+                    content()
+                } else {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                        Text("Loading weekly report…")
+                            .font(.subheadline)
+                            .foregroundStyle(WeeklyReportColors.muted)
+                        Button("Close") { dismiss() }
+                            .padding(.top, 8)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.systemGroupedBackground).ignoresSafeArea())
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Close") { dismiss() }
+                        }
+                    }
+                }
+            }
+        }
+        .task {
+            WarningsRefreshHelper.isWeeklyReportVisible = true
+            WarningsRefreshHelper.cancelInFlightRefresh()
+            // Wait long enough for Home's memory spike to settle and the sheet to finish presenting.
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard !Task.isCancelled else { return }
+            isReady = true
+        }
+        .onDisappear {
+            WarningsRefreshHelper.isWeeklyReportVisible = false
+        }
+    }
+}
+
 struct WeeklyReportView: View {
     @Environment(\.dismiss) private var dismiss
     let bookingStore: BookingStore
@@ -31,8 +78,8 @@ struct WeeklyReportView: View {
     let taskStore: ProjectTaskStore
 
     @State private var warningsSheetPayload: WarningsDisplaySnapshot?
-    @State private var startDate: Date = Calendar.current.startOfDay(for: Date())
-    @State private var endDate: Date = Calendar.current.startOfDay(for: Date())
+    @State private var startDate: Date
+    @State private var endDate: Date
     @State private var showStartPicker = false
     @State private var showEndPicker = false
     @State private var isGenerating = false
@@ -44,18 +91,42 @@ struct WeeklyReportView: View {
     @State private var message: String?
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
     @State private var logoImage: UIImage?
-    /// Blocks onChange work while `.task` sets the initial week range.
     @State private var suppressRangeDrivenRefresh = false
     @State private var isExportWarningsRefreshInFlight = false
-    /// Lightweight period summary copied from WarningsService.shared (no second generate on open).
     @State private var periodHighCount = 0
     @State private var periodMediumCount = 0
     @State private var periodLowCount = 0
     @State private var periodSummaryReady = false
-    /// Filled only during Generate — never allocated on open.
     @State private var exportWarningsService: WarningsService?
-    /// Defer heavy scroll content so the sheet can present without jetsamming.
-    @State private var isContentReady = false
+
+    init(
+        bookingStore: BookingStore,
+        managerScheduleStore: ManagerScheduleStore,
+        projectStore: ProjectStore,
+        operativeStore: OperativeStore,
+        holidayStore: HolidayStore,
+        userStore: UserStore,
+        firebaseBackend: FirebaseBackend,
+        subcontractorStore: SubcontractorStore,
+        appSettings: AppSettingsStore,
+        notificationService: NotificationService,
+        taskStore: ProjectTaskStore
+    ) {
+        self.bookingStore = bookingStore
+        self.managerScheduleStore = managerScheduleStore
+        self.projectStore = projectStore
+        self.operativeStore = operativeStore
+        self.holidayStore = holidayStore
+        self.userStore = userStore
+        self.firebaseBackend = firebaseBackend
+        self.subcontractorStore = subcontractorStore
+        self.appSettings = appSettings
+        self.notificationService = notificationService
+        self.taskStore = taskStore
+        let week = Self.mondayToSunday(containing: Date())
+        _startDate = State(initialValue: week.start)
+        _endDate = State(initialValue: week.end)
+    }
 
     private var organizationName: String {
         firebaseBackend.currentOrganization?.name ?? "Organization"
@@ -83,79 +154,67 @@ struct WeeklyReportView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if isContentReady {
-                    weeklyReportScrollContent
-                } else {
-                    VStack(spacing: 16) {
-                        ProgressView()
-                        Text("Loading weekly report…")
-                            .font(.subheadline)
-                            .foregroundStyle(WeeklyReportColors.muted)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        weeklyReportScrollContent
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { weeklyReportToolbar }
+            .sheet(item: $warningsSheetPayload) { payload in
+                WarningsDetailView(
+                    snapshot: payload,
+                    warningsService: WarningsService.shared,
+                    projectStore: projectStore,
+                    userStore: userStore,
+                    operativeStore: operativeStore,
+                    bookingStore: bookingStore,
+                    managerScheduleStore: managerScheduleStore,
+                    firebaseBackend: firebaseBackend,
+                    appSettings: appSettings,
+                    holidayStore: holidayStore,
+                    notificationService: notificationService,
+                    subcontractorStore: subcontractorStore,
+                    taskStore: taskStore
+                )
+            }
+            .sheet(isPresented: $showShareXLSX) {
+                if let generatedXLSXURL {
+                    WeeklyReportShareSheet(items: [generatedXLSXURL])
                 }
             }
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { weeklyReportToolbar }
-                .sheet(item: $warningsSheetPayload) { payload in
-                    WarningsDetailView(
-                        snapshot: payload,
-                        warningsService: WarningsService.shared,
-                        projectStore: projectStore,
-                        userStore: userStore,
-                        operativeStore: operativeStore,
-                        bookingStore: bookingStore,
-                        managerScheduleStore: managerScheduleStore,
-                        firebaseBackend: firebaseBackend,
-                        appSettings: appSettings,
-                        holidayStore: holidayStore,
-                        notificationService: notificationService,
-                        subcontractorStore: subcontractorStore,
-                        taskStore: taskStore
-                    )
+            .sheet(isPresented: $showSharePDF) {
+                if let generatedPDFURL {
+                    WeeklyReportShareSheet(items: [generatedPDFURL])
                 }
-                .sheet(isPresented: $showShareXLSX) {
-                    if let generatedXLSXURL {
-                        WeeklyReportShareSheet(items: [generatedXLSXURL])
-                    }
-                }
-                .sheet(isPresented: $showSharePDF) {
-                    if let generatedPDFURL {
-                        WeeklyReportShareSheet(items: [generatedPDFURL])
-                    }
-                }
-                .sheet(isPresented: $showGeneratedSuccess) {
-                    reportGeneratedSuccessSheet
-                        .presentationDetents([.medium, .large])
-                        .presentationDragIndicator(.visible)
-                }
-                .task {
-                    WarningsRefreshHelper.isWeeklyReportVisible = true
-                    suppressRangeDrivenRefresh = true
-                    setThisWeekRange()
-                    suppressRangeDrivenRefresh = false
-                    // Let the sheet finish presenting before building the heavy form.
-                    try? await Task.sleep(nanoseconds: 350_000_000)
+            }
+            .sheet(isPresented: $showGeneratedSuccess) {
+                reportGeneratedSuccessSheet
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
+            .onAppear {
+                // Defer shared-warning scans so first paint stays cheap.
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 400_000_000)
                     guard !Task.isCancelled else { return }
                     refreshPeriodSummaryFromShared()
-                    isContentReady = true
-                    await loadOrganizationLogo()
                 }
-                .onDisappear {
-                    WarningsRefreshHelper.isWeeklyReportVisible = false
-                }
-                .onChange(of: startDate) { _, _ in
-                    guard !suppressRangeDrivenRefresh else { return }
-                    refreshPeriodSummaryFromShared()
-                }
-                .onChange(of: endDate) { _, _ in
-                    guard !suppressRangeDrivenRefresh else { return }
-                    refreshPeriodSummaryFromShared()
-                }
-        }
+            }
+            .onChange(of: startDate) { _, _ in
+                guard !suppressRangeDrivenRefresh else { return }
+                refreshPeriodSummaryFromShared()
+            }
+            .onChange(of: endDate) { _, _ in
+                guard !suppressRangeDrivenRefresh else { return }
+                refreshPeriodSummaryFromShared()
+            }
+    }
+
+    private static func mondayToSunday(containing date: Date) -> (start: Date, end: Date) {
+        let cal = Calendar.current
+        let now = cal.startOfDay(for: date)
+        let weekday = cal.component(.weekday, from: now)
+        let daysFromMonday = (weekday + 5) % 7
+        let monday = cal.startOfDay(for: cal.date(byAdding: .day, value: -daysFromMonday, to: now) ?? now)
+        let sunday = cal.date(byAdding: .day, value: 6, to: monday) ?? monday
+        return (monday, sunday)
     }
 
     private var weeklyReportScrollContent: some View {
@@ -166,8 +225,7 @@ struct WeeklyReportView: View {
                     brandHeader
                     quickSelectCard
                     customRangeCard
-                    invoicingPeriodCard
-                    warningsCard
+                    // Invoicing + warnings cards are heavier; keep open path to range + generate.
                     generateSection
                     if let message {
                         Text(message)
