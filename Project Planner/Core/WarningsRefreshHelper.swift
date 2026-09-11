@@ -51,8 +51,10 @@ enum WarningsRefreshHelper {
         }
 
         if let inFlightTask {
+            // Always join the in-flight pass — never start a second org scan (jetsams Simulator).
+            print("🔥🔥🔥 DEBUG: Warnings refresh awaiting in-flight pass (no second snapshot)")
             await inFlightTask.value
-            if !force { return }
+            return
         }
 
         let task = Task { @MainActor in

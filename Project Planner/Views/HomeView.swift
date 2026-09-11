@@ -585,6 +585,9 @@ struct HomeView: View {
             try? await Task.sleep(nanoseconds: 500_000_000)
             if Task.isCancelled { return }
         }
+        // Brief beat so opening Warnings right as quiet ends joins this pass instead of racing it.
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        if Task.isCancelled { return }
         print("🔥🔥🔥 DEBUG: Home post-quiet warnings detection starting…")
         await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,

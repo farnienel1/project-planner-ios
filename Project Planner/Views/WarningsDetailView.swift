@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-split-scopes"
+    static let id = "wfix-no-hang-check"
     static let homePillTitle = "Warnings · \(id)"
 }
 
@@ -85,16 +85,20 @@ struct WarningsDetailView: View {
                 print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id)")
             }
             .task {
-                // Defer recompute so the sheet can paint first.
+                // Paint first. Never wait forever — that left "Checking…" stuck.
+                // Never start a second org scan on top of Home's — helper joins in-flight.
                 guard !didScheduleRefresh else { return }
                 didScheduleRefresh = true
-                isRefreshing = true
-                try? await Task.sleep(nanoseconds: 750_000_000)
-                guard !Task.isCancelled else {
-                    isRefreshing = false
+                if !warningsService.activeWarnings.isEmpty {
+                    print("🔥🔥🔥 DEBUG: WARNINGS_SHEET skip refresh (already \(warningsService.activeWarnings.count))")
                     return
                 }
-                await refreshAfterLaunchQuietIfNeeded()
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled else { return }
+                if !warningsService.activeWarnings.isEmpty { return }
+                isRefreshing = true
+                defer { isRefreshing = false }
+                await refreshWarningsAsync(alreadyShowingSpinner: true)
             }
             .sheet(isPresented: $showingWarningsSettings) {
                 NavigationStack {
@@ -168,16 +172,31 @@ struct WarningsDetailView: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            if isRefreshing || !didScheduleRefresh {
+            if isRefreshing {
                 ProgressView()
                     .padding(.bottom, 4)
                 Text("Checking warnings…")
                     .font(.title3.weight(.semibold))
-                Text("Detection runs after launch settles. This screen updates when it finishes.")
+                Text("Finishing Home’s detection pass. This should clear in a few seconds.")
                     .font(.subheadline)
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
+            } else if isLaunchStillSettling {
+                Image(systemName: "hourglass")
+                    .font(.system(size: 48))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                Text("Still settling…")
+                    .font(.title3.weight(.semibold))
+                Text("Launch quiet / bootstrap is still running, so detection was skipped. Wait on Home until the pill leaves Checking…, then tap Retry.")
+                    .font(.subheadline)
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                Button("Retry check") {
+                    Task { await refreshWarningsAsync(alreadyShowingSpinner: false) }
+                }
+                .buttonStyle(.borderedProminent)
             } else {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 56))
@@ -189,12 +208,24 @@ struct WarningsDetailView: View {
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
+                Button("Retry check") {
+                    Task { await refreshWarningsAsync(alreadyShowingSpinner: false) }
+                }
+                .buttonStyle(.bordered)
+                .padding(.top, 4)
             }
             Text(WarningsBuildStamp.id)
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var isLaunchStillSettling: Bool {
+        if firebaseBackend.isBootstrappingOrgDataLoad { return true }
+        if !firebaseBackend.hasBootstrappedOrgDataLoad { return true }
+        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil { return true }
+        return false
     }
 
     private var warningsScroll: some View {
@@ -394,23 +425,18 @@ struct WarningsDetailView: View {
     }
 
     private func refreshWarnings() {
-        Task { await refreshWarningsAsync() }
+        Task { await refreshWarningsAsync(alreadyShowingSpinner: false) }
     }
 
-    private func refreshAfterLaunchQuietIfNeeded() async {
-        while firebaseBackend.isBootstrappingOrgDataLoad
-            || !firebaseBackend.hasBootstrappedOrgDataLoad
-            || (firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false) {
-            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting quiet \(WarningsBuildStamp.id)")
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            if Task.isCancelled { return }
+    private func refreshWarningsAsync(alreadyShowingSpinner: Bool) async {
+        if !alreadyShowingSpinner {
+            isRefreshing = true
         }
-        await refreshWarningsAsync()
-    }
-
-    private func refreshWarningsAsync() async {
-        isRefreshing = true
-        defer { isRefreshing = false }
+        defer {
+            if !alreadyShowingSpinner {
+                isRefreshing = false
+            }
+        }
         await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
