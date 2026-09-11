@@ -564,18 +564,24 @@ struct OrganisationWarningsSettingsView: View {
         defer { isSaving = false }
         do {
             try await firebaseBackend.updateOrganizationWarningDetectionSettings(draft)
-            await WarningsRefreshHelper.refreshSharedWarnings(
-                operativeStore: operativeStore,
-                bookingStore: bookingStore,
-                projectStore: projectStore,
-                userStore: userStore,
-                managerScheduleStore: managerScheduleStore,
-                holidayStore: holidayStore,
-                firebaseBackend: firebaseBackend,
-                appSettings: appSettings,
-                force: true,
-                bypassSoftStoreGates: true
-            )
+            if WarningsRefreshHelper.isWarningsSheetVisible {
+                // Never recompute under the open Warnings sheet — ask Home after dismiss.
+                NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
+            } else {
+                await WarningsRefreshHelper.refreshSharedWarnings(
+                    operativeStore: operativeStore,
+                    bookingStore: bookingStore,
+                    projectStore: projectStore,
+                    userStore: userStore,
+                    managerScheduleStore: managerScheduleStore,
+                    holidayStore: holidayStore,
+                    firebaseBackend: firebaseBackend,
+                    appSettings: appSettings,
+                    force: true,
+                    bypassSoftStoreGates: true,
+                    includeMaterialsFetch: false
+                )
+            }
             userHasEdited = false
             if let onSaved {
                 await MainActor.run { onSaved() }
@@ -595,18 +601,23 @@ struct OrganisationWarningsSettingsView: View {
         defer { isSaving = false }
         do {
             try await firebaseBackend.updateOrganizationWarningDetectionSettings(draft)
-            await WarningsRefreshHelper.refreshSharedWarnings(
-                operativeStore: operativeStore,
-                bookingStore: bookingStore,
-                projectStore: projectStore,
-                userStore: userStore,
-                managerScheduleStore: managerScheduleStore,
-                holidayStore: holidayStore,
-                firebaseBackend: firebaseBackend,
-                appSettings: appSettings,
-                force: true,
-                bypassSoftStoreGates: true
-            )
+            if WarningsRefreshHelper.isWarningsSheetVisible {
+                NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
+            } else {
+                await WarningsRefreshHelper.refreshSharedWarnings(
+                    operativeStore: operativeStore,
+                    bookingStore: bookingStore,
+                    projectStore: projectStore,
+                    userStore: userStore,
+                    managerScheduleStore: managerScheduleStore,
+                    holidayStore: holidayStore,
+                    firebaseBackend: firebaseBackend,
+                    appSettings: appSettings,
+                    force: true,
+                    bypassSoftStoreGates: true,
+                    includeMaterialsFetch: false
+                )
+            }
             userHasEdited = false
         } catch {
             errorMessage = error.localizedDescription

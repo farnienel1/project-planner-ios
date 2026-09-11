@@ -93,14 +93,21 @@ struct HomeView: View {
             )
         }
         .onChange(of: showingWarningsDetail) { _, isPresented in
-            // Own the visibility flag here — nested sheets inside Warnings must not clear it
-            // via child onDisappear (that let Home start a heavy refresh under Warnings).
+            // Own the visibility flag here — nested sheets inside Warnings must not clear it.
             WarningsRefreshHelper.isWarningsSheetVisible = isPresented
             if !isPresented {
                 Task { @MainActor in
-                    // If post-quiet never completed because the sheet was open, finish it now.
-                    await schedulePostQuietWarningsRefreshIfNeeded()
+                    // Safe to compute now that the sheet is gone.
+                    await refreshWarningsFromHome(force: true)
                 }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .warningsNeedsHomeRefresh)) { _ in
+            Task { @MainActor in
+                // Fired as Warnings dismisses — wait a beat so the sheet is fully gone.
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !WarningsRefreshHelper.isWarningsSheetVisible else { return }
+                await refreshWarningsFromHome(force: true)
             }
         }
         .sheet(isPresented: $showingTasksDetail) {
@@ -1342,6 +1349,34 @@ struct HomeView: View {
 
     /// Runs warnings detection once after launch quiet + core stores finish loading.
     @MainActor
+    private func refreshWarningsFromHome(force: Bool) async {
+        guard userStore.hasAdminAccess() else { return }
+        guard !WarningsRefreshHelper.isWarningsSheetVisible else {
+            print("🔥🔥🔥 DEBUG: Home warnings refresh skipped (Warnings sheet still visible)")
+            return
+        }
+        let didRun = await WarningsRefreshHelper.refreshSharedWarnings(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings,
+            force: force,
+            bypassSoftStoreGates: true,
+            includeMaterialsFetch: false
+        )
+        if didRun {
+            didSchedulePostQuietWarningsRefresh = true
+            homeWarningCount = WarningsService.shared.warningCount
+            print("🔥🔥🔥 DEBUG: Home warnings refresh finished count=\(homeWarningCount)")
+        }
+    }
+
+    /// Runs warnings detection once after launch quiet + core stores finish loading.
+    @MainActor
     private func schedulePostQuietWarningsRefreshIfNeeded() async {
         guard userStore.hasAdminAccess() else { return }
         guard !didSchedulePostQuietWarningsRefresh else { return }
@@ -1397,27 +1432,7 @@ struct HomeView: View {
                     didSchedulePostQuietWarningsRefresh = true
                     homeWarningCount = WarningsService.shared.warningCount
                     print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh finished count=\(homeWarningCount)")
-                    // Materials are deferred so Home + Warnings stay stable; optional follow-up
-                    // only when the sheet is not open and launch quiet has ended.
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 20_000_000_000)
-                        guard !Task.isCancelled else { return }
-                        guard !WarningsRefreshHelper.isWarningsSheetVisible else { return }
-                        _ = await WarningsRefreshHelper.refreshSharedWarnings(
-                            operativeStore: operativeStore,
-                            bookingStore: bookingStore,
-                            projectStore: projectStore,
-                            userStore: userStore,
-                            managerScheduleStore: managerScheduleStore,
-                            holidayStore: holidayStore,
-                            firebaseBackend: firebaseBackend,
-                            appSettings: appSettings,
-                            force: true,
-                            bypassSoftStoreGates: true,
-                            includeMaterialsFetch: true
-                        )
-                        homeWarningCount = WarningsService.shared.warningCount
-                    }
+                    // Do not follow up with materials fetch — that secondary pass jetsams Simulator.
                     return
                 }
             } else if pastInitialDeadline {

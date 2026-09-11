@@ -27,8 +27,8 @@ struct WarningsDetailView: View {
     @State private var openBookLabourDate: IdentifiableDay?
     @State private var warningPendingDismiss: Warning?
     @State private var showingWarningsSettings = false
-    @State private var isRefreshing = false
-    @State private var didScheduleRefresh = false
+    /// Display-only sheet: never recompute warnings while presented (jetsam).
+    @State private var pendingHomeRefreshOnDismiss = false
 
     var body: some View {
         NavigationStack {
@@ -59,62 +59,6 @@ struct WarningsDetailView: View {
                 }
             }
             .appChromeNavigationBarSurface()
-            .overlay(alignment: .top) {
-                if isRefreshing {
-                    ProgressView()
-                        .padding(8)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .padding(.top, 8)
-                }
-            }
-            .task {
-                // Home owns `isWarningsSheetVisible`. Do not compute under this sheet on open —
-                // that jetsams Simulator. Prefer shared warnings from Home post-quiet refresh.
-                guard !didScheduleRefresh else { return }
-                isRefreshing = true
-                defer { isRefreshing = false }
-                try? await Task.sleep(nanoseconds: 400_000_000)
-                guard !Task.isCancelled else { return }
-
-                if !warningsService.activeWarnings.isEmpty {
-                    didScheduleRefresh = true
-                    print("🔥🔥🔥 DEBUG: WARNINGS_SHEET using existing shared warnings count=\(warningsService.warningCount)")
-                    return
-                }
-
-                // Wait briefly for Home post-quiet to publish before doing any local work.
-                let waitDeadline = Date().addingTimeInterval(35)
-                while Date() < waitDeadline {
-                    if !warningsService.activeWarnings.isEmpty {
-                        didScheduleRefresh = true
-                        print("🔥🔥🔥 DEBUG: WARNINGS_SHEET shared warnings arrived count=\(warningsService.warningCount)")
-                        return
-                    }
-                    let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
-                    let hardBusy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading
-                    let bootBlocked = firebaseBackend.isBootstrappingOrgDataLoad
-                        || !firebaseBackend.hasBootstrappedOrgDataLoad
-                        || quiet
-                        || hardBusy
-                    if !bootBlocked { break }
-                    try? await Task.sleep(nanoseconds: 400_000_000)
-                    if Task.isCancelled { return }
-                }
-
-                if !warningsService.activeWarnings.isEmpty {
-                    didScheduleRefresh = true
-                    return
-                }
-
-                // Still empty after quiet — run one sheet-safe refresh with visibility cleared
-                // so we are not stacking a snapshot under the presented sheet chrome.
-                let didRun = await refreshWarningsSafelyFromSheet()
-                if didRun || !warningsService.activeWarnings.isEmpty {
-                    didScheduleRefresh = true
-                } else if !Task.isCancelled {
-                    print("🔥🔥🔥 DEBUG: WARNINGS_SHEET safe refresh did not publish — retry available")
-                }
-            }
             .sheet(isPresented: $showingWarningsSettings) {
                 NavigationStack {
                     OrganisationWarningsSettingsView(
@@ -187,39 +131,26 @@ struct WarningsDetailView: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            if isRefreshing {
-                ProgressView()
-                    .padding(.bottom, 4)
-                Text("Checking for warnings…")
-                    .font(.title3.weight(.semibold))
-                Text("Waiting for schedule data to finish loading.")
-                    .font(.subheadline)
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-            } else {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 56))
-                    .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                Text("No active warnings")
-                    .font(.title3.weight(.semibold))
-                Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
-                    .font(.subheadline)
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-                Button("Check again") {
-                    didScheduleRefresh = false
-                    Task {
-                        let didRun = await refreshWarningsSafelyFromSheet()
-                        if didRun || !warningsService.activeWarnings.isEmpty {
-                            didScheduleRefresh = true
-                        }
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .padding(.top, 4)
+            Image(systemName: warningsService.warningCount == 0 && pendingHomeRefreshOnDismiss == false
+                  ? "checkmark.circle.fill" : "hourglass")
+                .font(.system(size: 56))
+                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+            Text(pendingHomeRefreshOnDismiss ? "Refreshing when you close…" : "No active warnings yet")
+                .font(.title3.weight(.semibold))
+            Text(pendingHomeRefreshOnDismiss
+                 ? "Warnings are calculated on Home after launch settles. Close this screen and reopen in a few seconds."
+                 : "High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.\n\nIf Daily Overview shows unbooked people, close Warnings and reopen after Home has finished loading.")
+                .font(.subheadline)
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+            Button("Close & refresh") {
+                pendingHomeRefreshOnDismiss = true
+                NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
+                dismiss()
             }
+            .buttonStyle(.borderedProminent)
+            .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -404,7 +335,7 @@ struct WarningsDetailView: View {
               let booking = bookingStore.bookings.first(where: { $0.id == id }) else { return }
         Task {
             await bookingStore.deleteBooking(booking)
-            refreshWarnings()
+            requestRefreshAfterDismiss()
         }
     }
 
@@ -414,93 +345,25 @@ struct WarningsDetailView: View {
            let booking = managerScheduleStore.managerSiteBookings.first(where: { $0.id == mgrId }) {
             Task {
                 await managerScheduleStore.deleteBooking(booking)
-                refreshWarnings()
+                requestRefreshAfterDismiss()
             }
             return
         }
         if let opBooking = bookingStore.bookings.first(where: { $0.id == entry.bookingId }) {
             Task {
                 await bookingStore.deleteBooking(opBooking)
-                refreshWarnings()
+                requestRefreshAfterDismiss()
             }
         }
     }
 
-    private func refreshWarnings() {
-        Task { await refreshWarningsSafelyFromSheet() }
+    private func requestRefreshAfterDismiss() {
+        pendingHomeRefreshOnDismiss = true
+        // Do not recompute under this sheet — that jetsams Simulator.
+        NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
+        dismiss()
     }
 
-    /// Temporarily clears the sheet-visible flag so one refresh is not stacked under the
-    /// presented Warnings chrome (that jetsams Simulator), then restores it.
-    @discardableResult
-    private func refreshWarningsSafelyFromSheet() async -> Bool {
-        isRefreshing = true
-        defer { isRefreshing = false }
-        WarningsRefreshHelper.isWarningsSheetVisible = false
-        defer { WarningsRefreshHelper.isWarningsSheetVisible = true }
-        return await refreshAfterLaunchQuietIfNeeded()
-    }
-
-    @discardableResult
-    private func refreshAfterLaunchQuietIfNeeded() async -> Bool {
-        // Wait for launch quiet AND hard stores. Soft stores (holidays / manager schedule)
-        // must not block forever — a hung holiday fetch used to leave Warnings empty.
-        let deadline = Date().addingTimeInterval(90)
-        let softBypassAfter = Date().addingTimeInterval(45)
-        while Date() < deadline {
-            // Another path (Home post-quiet) may have filled shared warnings while we waited.
-            if !warningsService.activeWarnings.isEmpty {
-                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET shared warnings arrived while waiting count=\(warningsService.warningCount)")
-                return true
-            }
-            let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
-            let hardBusy = bookingStore.isLoading
-                || operativeStore.isLoading
-                || projectStore.isLoading
-            let softBusy = holidayStore.isLoading || managerScheduleStore.isLoading
-            let rosterEmpty = operativeStore.allOperatives.isEmpty && userStore.organizationUsers.isEmpty
-            let allowSoftBypass = Date() >= softBypassAfter
-            let blocked = firebaseBackend.isBootstrappingOrgDataLoad
-                || !firebaseBackend.hasBootstrappedOrgDataLoad
-                || quiet
-                || hardBusy
-                || (softBusy && !allowSoftBypass)
-                || (rosterEmpty && !allowSoftBypass)
-            if !blocked {
-                let didRun = await refreshWarningsAsync(bypassSoftStoreGates: allowSoftBypass || softBusy)
-                if didRun { return true }
-            } else {
-                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting for quiet/stores")
-            }
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            if Task.isCancelled { return false }
-        }
-        // Final attempt: soft/hard store gates may still be stuck; never bypass quiet/bootstrap.
-        if !warningsService.activeWarnings.isEmpty { return true }
-        return await refreshWarningsAsync(bypassSoftStoreGates: true, bypassAllStoreGates: true)
-    }
-
-    private func refreshWarningsAsync(
-        bypassSoftStoreGates: Bool = false,
-        bypassAllStoreGates: Bool = false
-    ) async -> Bool {
-        isRefreshing = true
-        defer { isRefreshing = false }
-        return await WarningsRefreshHelper.refreshSharedWarnings(
-            operativeStore: operativeStore,
-            bookingStore: bookingStore,
-            projectStore: projectStore,
-            userStore: userStore,
-            managerScheduleStore: managerScheduleStore,
-            holidayStore: holidayStore,
-            firebaseBackend: firebaseBackend,
-            appSettings: appSettings,
-            force: true,
-            bypassSoftStoreGates: bypassSoftStoreGates,
-            bypassAllStoreGates: bypassAllStoreGates,
-            includeMaterialsFetch: false
-        )
-    }
 }
 
 /// Sheet/item identity for a calendar day without making `Date` globally Identifiable.
