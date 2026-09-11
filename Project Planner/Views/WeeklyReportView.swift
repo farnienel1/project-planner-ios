@@ -33,7 +33,7 @@ struct WeeklyReportView: View {
     let notificationService: NotificationService
     let taskStore: ProjectTaskStore
 
-    @State private var showingWarningsDetail = false
+    @State private var warningsSheetPayload: WarningsDisplaySnapshot?
     @State private var startDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var endDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var showStartPicker = false
@@ -85,7 +85,23 @@ struct WeeklyReportView: View {
             weeklyReportScrollContent
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { weeklyReportToolbar }
-                .sheet(isPresented: $showingWarningsDetail) { warningsDetailSheet }
+                .sheet(item: $warningsSheetPayload) { payload in
+                    WarningsDetailView(
+                        snapshot: payload,
+                        warningsService: warningsService,
+                        projectStore: projectStore,
+                        userStore: userStore,
+                        operativeStore: operativeStore,
+                        bookingStore: bookingStore,
+                        managerScheduleStore: managerScheduleStore,
+                        firebaseBackend: firebaseBackend,
+                        appSettings: appSettings,
+                        holidayStore: holidayStore,
+                        notificationService: notificationService,
+                        subcontractorStore: subcontractorStore,
+                        taskStore: taskStore
+                    )
+                }
                 .sheet(isPresented: $showShareXLSX) {
                     if let generatedXLSXURL {
                         WeeklyReportShareSheet(items: [generatedXLSXURL])
@@ -168,21 +184,8 @@ struct WeeklyReportView: View {
         }
     }
 
-    private var warningsDetailSheet: some View {
-        WarningsDetailView(
-            warningsService: warningsService,
-            projectStore: projectStore,
-            userStore: userStore,
-            operativeStore: operativeStore,
-            bookingStore: bookingStore,
-            managerScheduleStore: managerScheduleStore,
-            firebaseBackend: firebaseBackend,
-            appSettings: appSettings,
-            holidayStore: holidayStore,
-            notificationService: notificationService,
-            subcontractorStore: subcontractorStore,
-            taskStore: taskStore
-        )
+    private func presentWarningsDetail() {
+        warningsSheetPayload = WarningsDisplaySnapshot(from: warningsService)
     }
 
     // MARK: - UI sections
@@ -331,7 +334,7 @@ struct WeeklyReportView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
                 Divider().padding(.leading, 16)
-                Button { showingWarningsDetail = true } label: {
+                Button { presentWarningsDetail() } label: {
                     HStack {
                         Image(systemName: "exclamationmark.triangle")
                         Text("Open Warnings").font(.subheadline.weight(.medium))
@@ -370,7 +373,7 @@ struct WeeklyReportView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         Divider().padding(.leading, 16)
-        Button { showingWarningsDetail = true } label: {
+        Button { presentWarningsDetail() } label: {
             HStack {
                 Image(systemName: "arrow.right.circle.fill")
                 Text("View All Warnings").font(.subheadline.weight(.medium))

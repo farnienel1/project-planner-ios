@@ -40,7 +40,7 @@ struct HomeView: View {
     @State private var showingWeeklyReport = false
     @State private var showingOrgSitesMap = false
     @State private var showingMySchedule = false
-    @State private var showingWarningsDetail = false
+    @State private var warningsSheetPayload: WarningsDisplaySnapshot?
     @State private var showingTasksDetail = false
     @State private var showingWholesalers = false
     @State private var showingMaterialCatalogue = false
@@ -76,8 +76,10 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar(.hidden, for: .navigationBar)
         .background(homeCanvasBackground.ignoresSafeArea(edges: .top))
-        .sheet(isPresented: $showingWarningsDetail) {
+        .sheet(item: $warningsSheetPayload) { payload in
+            // Frozen snapshot — sheet must not observe WarningsService.shared.
             WarningsDetailView(
+                snapshot: payload,
                 warningsService: WarningsService.shared,
                 projectStore: projectStore,
                 userStore: userStore,
@@ -92,8 +94,9 @@ struct HomeView: View {
                 taskStore: taskStore
             )
         }
-        .onChange(of: showingWarningsDetail) { _, isPresented in
+        .onChange(of: warningsSheetPayload?.id) { _, newId in
             // Own the visibility flag here — nested sheets inside Warnings must not clear it.
+            let isPresented = newId != nil
             WarningsRefreshHelper.isWarningsSheetVisible = isPresented
             if !isPresented {
                 Task { @MainActor in
@@ -198,9 +201,7 @@ struct HomeView: View {
             presentTasksDetail()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToWarnings"))) { _ in
-            showingTasksDetail = false
-            WarningsRefreshHelper.isWarningsSheetVisible = true
-            showingWarningsDetail = true
+            presentWarningsDetail()
         }
         .fullScreenCover(isPresented: $showingClientsView) {
             ClientsView()
@@ -760,9 +761,7 @@ struct HomeView: View {
                     title: "Warnings",
                     value: homeWarningCount == 0 ? "All clear" : "\(homeWarningCount) active"
                 ) {
-                    showingTasksDetail = false
-                    WarningsRefreshHelper.isWarningsSheetVisible = true
-                    showingWarningsDetail = true
+                    presentWarningsDetail()
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -1270,14 +1269,16 @@ struct HomeView: View {
 
     private func presentTasksDetail() {
         WarningsRefreshHelper.isWarningsSheetVisible = false
-        showingWarningsDetail = false
+        warningsSheetPayload = nil
         showingTasksDetail = true
     }
 
     private func presentWarningsDetail() {
         showingTasksDetail = false
+        // Capture counts/list now so the sheet never re-subscribes to live recompute.
+        let payload = WarningsDisplaySnapshot(from: WarningsService.shared)
         WarningsRefreshHelper.isWarningsSheetVisible = true
-        showingWarningsDetail = true
+        warningsSheetPayload = payload
     }
 
     /// Rebuild Up Next + overview metrics; warnings refresh stays off the main thread via `WarningsRefreshHelper`.
