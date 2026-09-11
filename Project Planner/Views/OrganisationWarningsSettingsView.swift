@@ -121,8 +121,13 @@ struct OrganisationWarningsSettingsView: View {
 
             VStack(spacing: 10) {
                 modeOption(.numberOfDays, label: "Set number of days", description: "Scan a fixed number of days from today — you control the window.")
-                modeOption(.endOfInvoicingPeriod, label: "End of invoicing period", description: "Scan through the end of your current billing period. Automatically adjusts when each new period begins.")
+                modeOption(.endOfInvoicingPeriod, label: "End of invoicing period", description: "Scan from today through the end of your current billing period. Automatically adjusts when each new period begins.")
                 modeOption(.endOfWorkingWeek, label: "End of working week", description: "Scan through Friday of the current working week. Resets each Monday.")
+                modeOption(
+                    .allWorkingDaysInCurrentInvoicingPeriod,
+                    label: "All working days within current invoicing period",
+                    description: "Scan every working day in the current billing period — including past days still in that period. Material order cut-off stays same-day."
+                )
             }
 
             if draft.clashLookaheadMode == .numberOfDays {
@@ -130,7 +135,11 @@ struct OrganisationWarningsSettingsView: View {
             }
 
             if draft.clashLookaheadMode == .endOfInvoicingPeriod {
-                invoicingPeriodPanel
+                invoicingPeriodPanel(fullPeriodIncludingPast: false)
+            }
+
+            if draft.clashLookaheadMode == .allWorkingDaysInCurrentInvoicingPeriod {
+                invoicingPeriodPanel(fullPeriodIncludingPast: true)
             }
 
             if draft.clashLookaheadMode == .endOfWorkingWeek {
@@ -219,7 +228,7 @@ struct OrganisationWarningsSettingsView: View {
         .padding(.top, 8)
     }
 
-    private var invoicingPeriodPanel: some View {
+    private func invoicingPeriodPanel(fullPeriodIncludingPast: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(spacing: 0) {
                 HStack {
@@ -261,9 +270,15 @@ struct OrganisationWarningsSettingsView: View {
                 Text(invoicingPeriod.currentPeriodLabel)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color(red: 0.08, green: 0.33, blue: 0.18))
-                Text("Warnings will scan through \(invoicingPeriod.currentPeriodEndLabel). This window resets automatically when the new period begins.")
-                    .font(.caption)
-                    .foregroundStyle(Color(red: 0.09, green: 0.40, blue: 0.20))
+                if fullPeriodIncludingPast {
+                    Text("Warnings cover every working day from the period start through \(invoicingPeriod.currentPeriodEndLabel), including past days still in this period. When the next period begins, the Warnings page moves with it.")
+                        .font(.caption)
+                        .foregroundStyle(Color(red: 0.09, green: 0.40, blue: 0.20))
+                } else {
+                    Text("Warnings will scan through \(invoicingPeriod.currentPeriodEndLabel). This window resets automatically when the new period begins.")
+                        .font(.caption)
+                        .foregroundStyle(Color(red: 0.09, green: 0.40, blue: 0.20))
+                }
             }
             .padding(14)
             .background(Color(red: 0.94, green: 0.99, blue: 0.95))
@@ -279,7 +294,7 @@ struct OrganisationWarningsSettingsView: View {
 
     private var excludedUsersCard: some View {
         warningsCard {
-            sectionHeader(icon: "person.2.fill", title: "Excluded users", subtitle: "Some staff (e.g. PAYE employees) don't need to appear in unbooked labour warnings. Users added here are silently skipped by the warnings engine.")
+            sectionHeader(icon: "person.2.fill", title: "Excluded users", subtitle: "Some staff (e.g. directors or PAYE employees) don't need diary checks. Users added here are skipped by Warnings, Book Labour’s unbooked list, and Daily Overview unbooked labour.")
 
             Button {
                 withAnimation { excludedExpanded.toggle() }

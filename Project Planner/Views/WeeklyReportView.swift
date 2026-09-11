@@ -805,11 +805,59 @@ struct WeeklyReportView: View {
         let range = reportDateRange
         var sections: [WeeklyReportExportBuilder.Section] = []
 
+        // Always surface unactioned clashes + missed bookings for the chosen report range,
+        // independent of Home Warnings look-ahead (e.g. report for 1–15 generated on the 16th).
+        let clashWarnings = activeWarningsService.operativeBookingClashes(in: range)
+        let unbookedWarnings = activeWarningsService.unbookedLabourWarnings(in: range)
+        var criticalRows: [[String]] = []
+        for warning in clashWarnings {
+            criticalRows.append([
+                "Booking clash — not actioned",
+                warning.occurrenceDate.map(formatDate) ?? "",
+                warning.affectedPersonNames,
+                warning.title,
+                warning.message,
+            ])
+        }
+        for warning in unbookedWarnings {
+            criticalRows.append([
+                "Missed booking — not actioned",
+                warning.occurrenceDate.map(formatDate) ?? "",
+                warning.affectedPersonNames,
+                warning.title,
+                warning.message,
+            ])
+        }
+        if criticalRows.isEmpty {
+            criticalRows.append(["None", "", "", "No unactioned clashes or missed bookings in this report period", ""])
+        }
+        let criticalPeople = Set(
+            (clashWarnings + unbookedWarnings)
+                .flatMap { $0.affectedPersonNames.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
+                .filter { !$0.isEmpty }
+        ).sorted()
+        let peopleNote: String
+        if criticalPeople.isEmpty {
+            peopleNote = "Scanned for the report date range only (not limited by Warnings settings look-ahead)."
+        } else {
+            peopleNote = "People with unactioned issues: \(criticalPeople.joined(separator: ", ")). Scanned for the report date range only (not limited by Warnings settings look-ahead)."
+        }
+        sections.append(
+            WeeklyReportExportBuilder.Section(
+                title: "Unactioned clashes & missed bookings",
+                headers: ["Issue", "Date", "Person(s)", "Description", "Detail"],
+                rows: criticalRows,
+                totalRow: nil,
+                style: .critical,
+                bannerNote: peopleNote
+            )
+        )
+
         var warningRows: [[String]] = []
-        for warning in activeWarningsService.operativeBookingClashes(in: range) {
+        for warning in clashWarnings {
             warningRows.append(clashExportCells(warning, status: "Active — remove booking"))
         }
-        for warning in activeWarningsService.unbookedLabourWarnings(in: range) {
+        for warning in unbookedWarnings {
             warningRows.append(clashExportCells(warning, status: "Active"))
         }
         for warning in activeWarningsService.unresolvedManagerClashes(in: range) {
@@ -826,7 +874,7 @@ struct WeeklyReportView: View {
         }
         sections.append(
             WeeklyReportExportBuilder.Section(
-                title: "⚠  Warnings Summary",
+                title: "⚠  Warnings Summary (all types)",
                 headers: ["Status", "Priority", "Type", "Date", "Description", "Detail", "For"],
                 rows: warningRows,
                 totalRow: nil
@@ -935,13 +983,40 @@ struct WeeklyReportView: View {
         rows.append(["From", formatDate(startDate), "To", formatDate(endDate)])
         rows.append([])
         let range = reportDateRange
-        rows.append(["WARNINGS SUMMARY"])
+        rows.append(["⚠ UNACTIONED WARNINGS — ACTION REQUIRED"])
+        rows.append(["Issue", "Date", "Person(s)", "Description", "Detail"])
+        let clashWarnings = activeWarningsService.operativeBookingClashes(in: range)
+        let unbookedWarnings = activeWarningsService.unbookedLabourWarnings(in: range)
+        if clashWarnings.isEmpty && unbookedWarnings.isEmpty {
+            rows.append(["None", "", "", "No unactioned clashes or missed bookings in this report period", ""])
+        } else {
+            for warning in clashWarnings {
+                rows.append([
+                    "Booking clash — not actioned",
+                    warning.occurrenceDate.map(formatDate) ?? "",
+                    warning.affectedPersonNames,
+                    warning.title,
+                    warning.message,
+                ])
+            }
+            for warning in unbookedWarnings {
+                rows.append([
+                    "Missed booking — not actioned",
+                    warning.occurrenceDate.map(formatDate) ?? "",
+                    warning.affectedPersonNames,
+                    warning.title,
+                    warning.message,
+                ])
+            }
+        }
+        rows.append([])
+        rows.append(["WARNINGS SUMMARY (ALL TYPES)"])
         rows.append(["Status", "Priority", "Type", "Date", "Description", "Detail", "For"])
 
-        for warning in activeWarningsService.operativeBookingClashes(in: range) {
+        for warning in clashWarnings {
             rows.append(clashExportCells(warning, status: "Active — remove booking"))
         }
-        for warning in activeWarningsService.unbookedLabourWarnings(in: range) {
+        for warning in unbookedWarnings {
             rows.append(clashExportCells(warning, status: "Active"))
         }
         for warning in activeWarningsService.unresolvedManagerClashes(in: range) {
@@ -953,8 +1028,8 @@ struct WeeklyReportView: View {
         for warning in activeWarningsService.materialsCutoffWarnings(in: range) {
             rows.append(clashExportCells(warning, status: "Active"))
         }
-        if activeWarningsService.operativeBookingClashes(in: range).isEmpty
-            && activeWarningsService.unbookedLabourWarnings(in: range).isEmpty
+        if clashWarnings.isEmpty
+            && unbookedWarnings.isEmpty
             && activeWarningsService.unresolvedManagerClashes(in: range).isEmpty
             && activeWarningsService.approvedManagerClashes(in: range).isEmpty
             && activeWarningsService.materialsCutoffWarnings(in: range).isEmpty {

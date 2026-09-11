@@ -270,8 +270,10 @@ struct DailyOverviewView: View {
     }
 
     private var operativeUsers: [AppUser] {
-        userStore.organizationUsers.filter {
+        let excluded = excludedUnbookedUserIds
+        return userStore.organizationUsers.filter {
             $0.isActive &&
+            !excluded.contains($0.id) &&
             $0.permissions.operativeMode &&
             !$0.permissions.manager &&
             !$0.permissions.adminAccess &&
@@ -281,10 +283,19 @@ struct DailyOverviewView: View {
     }
 
     private var managerUsers: [AppUser] {
-        userStore.organizationUsers.filter {
+        let excluded = excludedUnbookedUserIds
+        return userStore.organizationUsers.filter {
             $0.isActive &&
+            !excluded.contains($0.id) &&
             ($0.permissions.manager || $0.permissions.adminAccess || $0.isSuperAdmin || $0.role == .admin)
         }
+    }
+
+    /// Matches Warnings settings → Excluded users (directors etc. skipped from unbooked checks).
+    private var excludedUnbookedUserIds: Set<String> {
+        Set(
+            firebaseBackend.currentOrganization?.settings.warningDetection.excludedUserIdsFromUnbookedWarnings ?? []
+        )
     }
 
     private func hasApprovedHoliday(userId: String, operativeId: UUID?) -> Bool {

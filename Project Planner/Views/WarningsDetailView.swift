@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-blank-sheet"
+    static let id = "wfix-period-excl"
     static let homePillTitle = "Warnings · \(id)"
 }
 

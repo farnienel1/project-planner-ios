@@ -8,11 +8,35 @@
 import UIKit
 
 enum WeeklyReportExportBuilder {
+    enum SectionStyle: Sendable {
+        case standard
+        /// Unactioned clashes / missed bookings — red banner at top of report.
+        case critical
+    }
+
     struct Section {
         let title: String
         let headers: [String]
         let rows: [[String]]
         let totalRow: [String]?
+        let style: SectionStyle
+        let bannerNote: String?
+
+        init(
+            title: String,
+            headers: [String],
+            rows: [[String]],
+            totalRow: [String]?,
+            style: SectionStyle = .standard,
+            bannerNote: String? = nil
+        ) {
+            self.title = title
+            self.headers = headers
+            self.rows = rows
+            self.totalRow = totalRow
+            self.style = style
+            self.bannerNote = bannerNote
+        }
     }
 
     struct Context {
@@ -56,6 +80,12 @@ enum WeeklyReportExportBuilder {
         rows.append([""])
 
         for section in context.sections {
+            if section.style == .critical {
+                rows.append(["⚠ UNACTIONED WARNINGS — ACTION REQUIRED", "", "", "", "", "", "", ""])
+                if let note = section.bannerNote, !note.isEmpty {
+                    rows.append([note, "", "", "", "", "", "", ""])
+                }
+            }
             rows.append([section.title, "", "", "", "", "", "", ""])
             rows.append(section.headers)
             if section.rows.isEmpty {
@@ -165,6 +195,8 @@ enum WeeklyReportExportBuilder {
         let navy = UIColor(red: 0.043, green: 0.071, blue: 0.125, alpha: 1)
         let cyan = UIColor(red: 0.055, green: 0.647, blue: 0.914, alpha: 1)
         let slate = UIColor(red: 0.392, green: 0.455, blue: 0.545, alpha: 1)
+        let criticalRed = UIColor(red: 0.72, green: 0.11, blue: 0.11, alpha: 1)
+        let criticalFill = UIColor(red: 1.0, green: 0.92, blue: 0.92, alpha: 1)
 
         return renderer.pdfData { pdf in
             pdf.beginPage()
@@ -205,7 +237,9 @@ enum WeeklyReportExportBuilder {
                     contentWidth: contentWidth,
                     pageRect: pageRect,
                     navy: navy,
-                    slate: slate
+                    slate: slate,
+                    criticalRed: criticalRed,
+                    criticalFill: criticalFill
                 )
             }
         }
@@ -294,17 +328,52 @@ enum WeeklyReportExportBuilder {
         contentWidth: CGFloat,
         pageRect: CGRect,
         navy: UIColor,
-        slate: UIColor
+        slate: UIColor,
+        criticalRed: UIColor,
+        criticalFill: UIColor
     ) -> CGFloat {
         var y = startY
+        let isCritical = section.style == .critical
+        let titleColor = isCritical ? criticalRed : navy
+        let headerFill = isCritical ? criticalRed : navy
+
+        if isCritical {
+            let bannerHeight: CGFloat = section.bannerNote == nil ? 36 : 58
+            let bannerRect = CGRect(x: margin, y: y, width: contentWidth, height: bannerHeight)
+            let path = UIBezierPath(roundedRect: bannerRect, cornerRadius: 8)
+            criticalFill.setFill()
+            path.fill()
+            criticalRed.setStroke()
+            path.lineWidth = 1.5
+            path.stroke()
+
+            ("⚠ UNACTIONED WARNINGS — ACTION REQUIRED" as NSString).draw(
+                at: CGPoint(x: margin + 10, y: y + 8),
+                withAttributes: [
+                    .font: UIFont.systemFont(ofSize: 11, weight: .heavy),
+                    .foregroundColor: criticalRed,
+                ]
+            )
+            if let note = section.bannerNote, !note.isEmpty {
+                (note as NSString).draw(
+                    in: CGRect(x: margin + 10, y: y + 26, width: contentWidth - 20, height: 28),
+                    withAttributes: [
+                        .font: UIFont.systemFont(ofSize: 8.5, weight: .medium),
+                        .foregroundColor: criticalRed.withAlphaComponent(0.9),
+                    ]
+                )
+            }
+            y += bannerHeight + 10
+        }
+
         (section.title as NSString).draw(at: CGPoint(x: margin, y: y), withAttributes: [
             .font: UIFont.systemFont(ofSize: 12, weight: .bold),
-            .foregroundColor: navy,
+            .foregroundColor: titleColor,
         ])
         y += 18
 
         let headerRect = CGRect(x: margin, y: y, width: contentWidth, height: 20)
-        navy.setFill()
+        headerFill.setFill()
         UIRectFill(headerRect)
         let colWidth = contentWidth / CGFloat(max(section.headers.count, 1))
         for (index, header) in section.headers.enumerated() {
@@ -321,12 +390,20 @@ enum WeeklyReportExportBuilder {
                 pdf.beginPage()
                 y = margin
             }
+            if isCritical {
+                criticalFill.setFill()
+                UIRectFill(CGRect(x: margin, y: y, width: contentWidth, height: 30))
+            }
             UIColor(white: 0.94, alpha: 1).setFill()
             UIRectFill(CGRect(x: margin, y: y, width: contentWidth, height: 0.6))
+            let cellColor = isCritical ? criticalRed : slate
             for (index, cell) in row.enumerated() {
                 (cell as NSString).draw(
                     in: CGRect(x: margin + CGFloat(index) * colWidth + 4, y: y + 4, width: colWidth - 6, height: 28),
-                    withAttributes: [.font: UIFont.systemFont(ofSize: 8.5), .foregroundColor: slate]
+                    withAttributes: [
+                        .font: UIFont.systemFont(ofSize: 8.5, weight: isCritical ? .semibold : .regular),
+                        .foregroundColor: cellColor,
+                    ]
                 )
             }
             y += 30
