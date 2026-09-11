@@ -8,7 +8,7 @@ import Combine
 
 @MainActor
 class WarningsService: ObservableObject {
-    /// Shared instance for Warnings sheet / weekly report (avoid duplicating state on Home).
+    /// Shared instance for Warnings sheet / Home badge (avoid duplicating org-horizon state).
     static let shared = WarningsService()
 
     @Published private(set) var allGeneratedWarnings: [Warning] = []
@@ -116,11 +116,14 @@ class WarningsService: ObservableObject {
         invoicingSettings: OrganizationInvoicingSettings? = nil,
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
+        scanUnbookedFromCoverageStart: Bool = false,
         materialOrderCutOffEnabled: Bool = true,
         materialCutOffOnSaturday: Bool = false,
         materialCutOffOnSunday: Bool = false,
         projectsWithTomorrowBookings: [Project] = [],
-        materialItemsForTomorrow: [MaterialItem] = []
+        materialItemsForTomorrow: [MaterialItem] = [],
+        materialsDataLoaded: Bool = false,
+        pruneDismissals: Bool = true
     ) {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
         let resolvedWarningDetection = warningDetection ?? .default
@@ -140,11 +143,14 @@ class WarningsService: ObservableObject {
                 invoicingSettings: resolvedInvoicing,
                 labourCoverageStart: labourCoverageStart,
                 labourCoverageEnd: labourCoverageEnd,
+                scanUnbookedFromCoverageStart: scanUnbookedFromCoverageStart,
                 materialOrderCutOffEnabled: materialOrderCutOffEnabled,
                 materialCutOffOnSaturday: materialCutOffOnSaturday,
                 materialCutOffOnSunday: materialCutOffOnSunday,
                 projectsWithTomorrowBookings: projectsWithTomorrowBookings,
-                materialItemsForTomorrow: materialItemsForTomorrow
+                materialItemsForTomorrow: materialItemsForTomorrow,
+                materialsDataLoaded: materialsDataLoaded,
+                pruneDismissals: pruneDismissals
             )
         }
     }
@@ -162,11 +168,14 @@ class WarningsService: ObservableObject {
         invoicingSettings: OrganizationInvoicingSettings? = nil,
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
+        scanUnbookedFromCoverageStart: Bool = false,
         materialOrderCutOffEnabled: Bool = true,
         materialCutOffOnSaturday: Bool = false,
         materialCutOffOnSunday: Bool = false,
         projectsWithTomorrowBookings: [Project] = [],
-        materialItemsForTomorrow: [MaterialItem] = []
+        materialItemsForTomorrow: [MaterialItem] = [],
+        materialsDataLoaded: Bool = false,
+        pruneDismissals: Bool = true
     ) async {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
         let resolvedWarningDetection = warningDetection ?? .default
@@ -185,11 +194,14 @@ class WarningsService: ObservableObject {
             invoicingSettings: resolvedInvoicing,
             labourCoverageStart: labourCoverageStart,
             labourCoverageEnd: labourCoverageEnd,
+            scanUnbookedFromCoverageStart: scanUnbookedFromCoverageStart,
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
             materialCutOffOnSaturday: materialCutOffOnSaturday,
             materialCutOffOnSunday: materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
-            materialItemsForTomorrow: materialItemsForTomorrow
+            materialItemsForTomorrow: materialItemsForTomorrow,
+            materialsDataLoaded: materialsDataLoaded,
+            pruneDismissals: pruneDismissals
         )
     }
 
@@ -205,11 +217,14 @@ class WarningsService: ObservableObject {
         invoicingSettings: OrganizationInvoicingSettings,
         labourCoverageStart: Date?,
         labourCoverageEnd: Date?,
+        scanUnbookedFromCoverageStart: Bool,
         materialOrderCutOffEnabled: Bool,
         materialCutOffOnSaturday: Bool,
         materialCutOffOnSunday: Bool,
         projectsWithTomorrowBookings: [Project],
-        materialItemsForTomorrow: [MaterialItem]
+        materialItemsForTomorrow: [MaterialItem],
+        materialsDataLoaded: Bool,
+        pruneDismissals: Bool
     ) async {
         updateGeneration += 1
         let generation = updateGeneration
@@ -228,11 +243,13 @@ class WarningsService: ObservableObject {
             warningDetection: warningDetection,
             coverageStart: coverageStart,
             coverageEnd: coverageEnd,
+            scanUnbookedFromCoverageStart: scanUnbookedFromCoverageStart,
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
             materialCutOffOnSaturday: materialCutOffOnSaturday,
             materialCutOffOnSunday: materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
-            materialItemsForTomorrow: materialItemsForTomorrow
+            materialItemsForTomorrow: materialItemsForTomorrow,
+            materialsDataLoaded: materialsDataLoaded
         )
         // Snapshot + generate both off main — makeSnapshot alone was enough to jetsam
         // when opening Warnings forced a refresh right after Home bootstrap.
@@ -241,11 +258,14 @@ class WarningsService: ObservableObject {
             return WarningsComputation.generate(snapshot)
         }.value
         guard generation == updateGeneration else { return }
-        resolutionStore.pruneDismissedUnbookedKeys(
-            from: max(coverageStart, today),
-            through: coverageEnd,
-            calendar: cal
-        )
+        if pruneDismissals {
+            // Only drop dismissals before the live detection start — never wipe future keys
+            // when a report uses a narrower/past window.
+            resolutionStore.pruneDismissedUnbookedKeys(
+                olderThan: coverageStart,
+                calendar: cal
+            )
+        }
         allGeneratedWarnings = generated
         activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
         refreshSeverityCounts()

@@ -18,12 +18,16 @@ struct WarningsComputationInput: @unchecked Sendable {
     let warningDetection: OrgWarningDetectionSettings
     let coverageStart: Date
     let coverageEnd: Date
+    /// When true (weekly report period), scan unbooked labour from `coverageStart` even if that is before today.
+    let scanUnbookedFromCoverageStart: Bool
     let materialOrderCutOffEnabled: Bool
     let materialCutOffOnSaturday: Bool
     let materialCutOffOnSunday: Bool
     let projectsWithTomorrowBookings: [Project]
     /// Material lines dated for tomorrow (loaded when computing warnings).
     let materialItemsForTomorrow: [MaterialItem]
+    /// When false, skip materials cut-off generation (items were not loaded — avoids false "no materials ordered").
+    let materialsDataLoaded: Bool
 }
 
 struct WarningsComputationSnapshot: Sendable {
@@ -137,9 +141,11 @@ struct WarningsComputationSnapshot: Sendable {
     let warningDetection: WarningDetectionSnapshot
     let coverageStart: Date
     let coverageEnd: Date
+    let scanUnbookedFromCoverageStart: Bool
     let materialOrderCutOffEnabled: Bool
     let materialCutOffOnSaturday: Bool
     let materialCutOffOnSunday: Bool
+    let materialsDataLoaded: Bool
     let projectsWithTomorrowBookingIds: [UUID]
     let materialItemsForTomorrow: [MaterialItemSnapshot]
 }
@@ -309,9 +315,11 @@ enum WarningsComputation {
             ),
             coverageStart: cal.startOfDay(for: input.coverageStart),
             coverageEnd: cal.startOfDay(for: input.coverageEnd),
+            scanUnbookedFromCoverageStart: input.scanUnbookedFromCoverageStart,
             materialOrderCutOffEnabled: input.materialOrderCutOffEnabled,
             materialCutOffOnSaturday: input.materialCutOffOnSaturday,
             materialCutOffOnSunday: input.materialCutOffOnSunday,
+            materialsDataLoaded: input.materialsDataLoaded,
             projectsWithTomorrowBookingIds: input.projectsWithTomorrowBookings.map(\.id),
             materialItemsForTomorrow: materialItemsForTomorrow
         )
@@ -531,7 +539,9 @@ enum WarningsComputation {
         }
 
         let activeOperatives = input.operatives.filter(\.isActive)
-        let unbookedScanStart = max(coverageStart, today)
+        let unbookedScanStart = input.scanUnbookedFromCoverageStart
+            ? coverageStart
+            : max(coverageStart, today)
         var day = unbookedScanStart
         while day <= coverageEnd {
             let weekday = cal.component(.weekday, from: day)
@@ -563,7 +573,8 @@ enum WarningsComputation {
         }
 
         let hour = cal.component(.hour, from: Date())
-        if input.materialOrderCutOffEnabled, hour >= 16 {
+        // Skip when materials were not loaded — empty list would false-positive every tomorrow job.
+        if input.materialOrderCutOffEnabled, input.materialsDataLoaded, hour >= 16 {
             let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
             let tomorrowWeekday = cal.component(.weekday, from: tomorrow)
             if tomorrowWeekday == 7 && !input.materialCutOffOnSaturday {

@@ -212,18 +212,19 @@ struct HomeView: View {
                 .environmentObject(notificationService)
         }
         .sheet(isPresented: $showingWeeklyReport) {
-            WeeklyReportView()
-                .environmentObject(bookingStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(holidayStore)
-                .environmentObject(userStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(subcontractorStore)
-                .environmentObject(appSettings)
-                .environmentObject(notificationService)
-                .environmentObject(taskStore)
+            WeeklyReportView(
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                projectStore: projectStore,
+                operativeStore: operativeStore,
+                holidayStore: holidayStore,
+                userStore: userStore,
+                firebaseBackend: firebaseBackend,
+                subcontractorStore: subcontractorStore,
+                appSettings: appSettings,
+                notificationService: notificationService,
+                taskStore: taskStore
+            )
         }
         .sheet(isPresented: $showingOrgSitesMap) {
             OrgSitesMapView()

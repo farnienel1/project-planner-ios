@@ -141,11 +141,31 @@ enum WarningsRefreshHelper {
         let users = userStore.organizationUsers
 
         print(
-            "🔥🔥🔥 DEBUG: Warnings refresh snapshot inputs — users=\(users.count) activeOps=\(activeOperatives.count) bookings=\(bookingStore.bookings.count) mgr=\(managerScheduleStore.managerSiteBookings.count) holidays=\(holidayStore.bookings.count) standardPaid=\(policy.standardPaidHours)"
+            "🔥🔥🔥 DEBUG: Warnings refresh snapshot inputs — users=\(users.count) activeOps=\(activeOperatives.count) bookings=\(bookingStore.bookings.count) mgr=\(managerScheduleStore.managerSiteBookings.count) holidays=\(holidayStore.bookings.count) standardPaid=\(policy.standardPaidHours) horizonEnd=\(warningDetection.coverageEnd(from: today, invoicing: invoicingSettings))"
         )
 
         // Yield so Home can finish painting before the heavy snapshot work.
         await Task.yield()
+
+        let materialCutOffEnabled = appSettings.settings.notifications.materialOrderCutOff
+        let hour = cal.component(.hour, from: Date())
+        var materialItemsForTomorrow: [MaterialItem] = []
+        var materialsDataLoaded = false
+        // Only fetch when cut-off rules can fire — avoids launch jetsam and false empty-list warnings.
+        if materialCutOffEnabled, hour >= 16,
+           let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+            materialsDataLoaded = true
+            for project in projectsTomorrow.prefix(25) {
+                if let items = try? await firebaseBackend.loadMaterialItems(
+                    organizationId: orgId,
+                    projectId: project.id
+                ) {
+                    materialItemsForTomorrow.append(
+                        contentsOf: items.filter { cal.isDate($0.date, inSameDayAs: tomorrow) }
+                    )
+                }
+            }
+        }
 
         await WarningsService.shared.updateWarningsAsync(
             operatives: activeOperatives,
@@ -157,10 +177,13 @@ enum WarningsRefreshHelper {
             payrollTimePolicy: policy,
             warningDetection: warningDetection,
             invoicingSettings: invoicingSettings,
-            materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
+            materialOrderCutOffEnabled: materialCutOffEnabled,
             materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
             materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
-            projectsWithTomorrowBookings: projectsTomorrow
+            projectsWithTomorrowBookings: projectsTomorrow,
+            materialItemsForTomorrow: materialItemsForTomorrow,
+            materialsDataLoaded: materialsDataLoaded,
+            pruneDismissals: true
         )
 
         let unbookedToday = WarningsService.shared.activeWarnings.filter {
