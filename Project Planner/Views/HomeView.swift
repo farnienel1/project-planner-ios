@@ -21,12 +21,6 @@ struct HomeView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
     @State private var homeWarningCount: Int = 0
-    /// One-shot post-quiet warnings recompute — avoids empty "All clear" after jetsam guards
-    /// removed per-derived-refresh warnings work, without re-entering the launch load storm.
-    @State private var didSchedulePostQuietWarningsRefresh = false
-    /// True after the first successful detection pass (even if count is 0).
-    @State private var homeWarningsDetectionCompleted = false
-    @State private var isPreparingWarningsSheet = false
     @State private var cachedUpNextSections: [HomeUpNextDaySection] = []
     @State private var cachedOverviewMetrics = HomeOverviewMetrics()
     @State private var showingCreateClient = false
@@ -40,10 +34,10 @@ struct HomeView: View {
     @State private var showingAddUser = false
     @State private var showingManageUsers = false
     @State private var showingDailyOverview = false
-    @State private var weeklyReportLaunch: WeeklyReportDependencies?
+    @State private var showingWeeklyReport = false
     @State private var showingOrgSitesMap = false
     @State private var showingMySchedule = false
-    @State private var warningsSheetPayload: WarningsDisplaySnapshot?
+    @State private var showingWarningsDetail = false
     @State private var showingTasksDetail = false
     @State private var showingWholesalers = false
     @State private var showingMaterialCatalogue = false
@@ -79,10 +73,8 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar(.hidden, for: .navigationBar)
         .background(homeCanvasBackground.ignoresSafeArea(edges: .top))
-        .sheet(item: $warningsSheetPayload) { payload in
-            // Frozen snapshot — sheet must not observe WarningsService.shared.
+        .sheet(isPresented: $showingWarningsDetail) {
             WarningsDetailView(
-                snapshot: payload,
                 warningsService: WarningsService.shared,
                 projectStore: projectStore,
                 userStore: userStore,
@@ -96,25 +88,6 @@ struct HomeView: View {
                 subcontractorStore: subcontractorStore,
                 taskStore: taskStore
             )
-        }
-        .onChange(of: warningsSheetPayload?.id) { _, newId in
-            // Own the visibility flag here — nested sheets inside Warnings must not clear it.
-            let isPresented = newId != nil
-            WarningsRefreshHelper.isWarningsSheetVisible = isPresented
-            if !isPresented {
-                Task { @MainActor in
-                    // Safe to compute now that the sheet is gone.
-                    await refreshWarningsFromHome(force: true)
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .warningsNeedsHomeRefresh)) { _ in
-            Task { @MainActor in
-                // Fired as Warnings dismisses — wait a beat so the sheet is fully gone.
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                guard !WarningsRefreshHelper.isWarningsSheetVisible else { return }
-                await refreshWarningsFromHome(force: true)
-            }
         }
         .sheet(isPresented: $showingTasksDetail) {
             TasksDetailView()
@@ -234,21 +207,21 @@ struct HomeView: View {
                 .environmentObject(taskStore)
                 .environmentObject(notificationService)
         }
-        .sheet(item: $weeklyReportLaunch) { deps in
-            // Store-free boot first; report view only after Continue.
-            WeeklyReportFlowView(deps: deps)
+        .sheet(isPresented: $showingWeeklyReport) {
+            WeeklyReportView()
+                .environmentObject(bookingStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
+                .environmentObject(holidayStore)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(subcontractorStore)
+                .environmentObject(appSettings)
+                .environmentObject(notificationService)
+                .environmentObject(taskStore)
         }
-        .onChange(of: weeklyReportLaunch?.id) { _, newId in
-            let isPresented = newId != nil
-            WarningsRefreshHelper.isWeeklyReportVisible = isPresented
-            if isPresented {
-                WarningsRefreshHelper.cancelInFlightRefresh()
-            } else {
-                Task { @MainActor in
-                    await refreshWarningsFromHome(force: true)
-                }
-            }
-        }
+
         .sheet(isPresented: $showingOrgSitesMap) {
             OrgSitesMapView()
                 .environmentObject(firebaseBackend)
@@ -578,8 +551,7 @@ struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
             // Do not recompute warnings here — that raced launch quiet / deferred loads
-            // and jetsamed Simulator. Badge updates from the one-shot post-quiet refresh,
-            // Warnings sheet refresh, or `.warningsDidRecompute`.
+            // and jetsamed Simulator. Badge tracks shared service; Warnings sheet refreshes on open.
             guard userStore.hasAdminAccess() else { return }
             homeWarningCount = WarningsService.shared.warningCount
         }
@@ -589,23 +561,6 @@ struct HomeView: View {
             } else {
                 homeWarningCount = WarningsService.shared.warningCount
             }
-            homeWarningsDetectionCompleted = true
-        }
-        .onChange(of: bookingStore.bookings.count) { _, _ in
-            guard userStore.hasAdminAccess() else { return }
-            guard !WarningsRefreshHelper.isHeavySheetVisible else { return }
-            guard didSchedulePostQuietWarningsRefresh || homeWarningsDetectionCompleted else { return }
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
-                guard !Task.isCancelled else { return }
-                guard !WarningsRefreshHelper.isHeavySheetVisible else { return }
-                await refreshWarningsFromHome(force: false)
-            }
-        }
-        .task(id: userStore.currentUser?.id) {
-            didSchedulePostQuietWarningsRefresh = false
-            homeWarningsDetectionCompleted = false
-            await schedulePostQuietWarningsRefreshIfNeeded()
         }
         .onChange(of: showingAdminOverviewCustomize) { _, isOpen in
             if isOpen {
@@ -977,22 +932,7 @@ struct HomeView: View {
         case HomeQuickActionID.opSettings.rawValue, HomeQuickActionID.staffSettings.rawValue:
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 5])
         case HomeQuickActionID.staffWeeklyReport.rawValue:
-            WarningsRefreshHelper.isWeeklyReportVisible = true
-            WarningsRefreshHelper.cancelInFlightRefresh()
-            weeklyReportLaunch = WeeklyReportDependencies(
-                bookingStore: bookingStore,
-                managerScheduleStore: managerScheduleStore,
-                projectStore: projectStore,
-                operativeStore: operativeStore,
-                holidayStore: holidayStore,
-                userStore: userStore,
-                firebaseBackend: firebaseBackend,
-                subcontractorStore: subcontractorStore,
-                appSettings: appSettings,
-                notificationService: notificationService,
-                taskStore: taskStore
-            )
-            print("🔥🔥🔥 DEBUG: Weekly Report launch sheet requested")
+            showingWeeklyReport = true
         case HomeQuickActionID.staffDailyOverview.rawValue:
             showingDailyOverview = true
         case HomeQuickActionID.staffManagers.rawValue:
@@ -1299,40 +1239,20 @@ struct HomeView: View {
     }
 
     private var warningsPillValue: String {
-        if isPreparingWarningsSheet { return "Loading…" }
         if homeWarningCount > 0 { return "\(homeWarningCount) active" }
-        if homeWarningsDetectionCompleted || didSchedulePostQuietWarningsRefresh {
-            return "All clear"
-        }
-        return "Checking…"
+        return "All clear"
     }
 
     private func presentTasksDetail() {
-        WarningsRefreshHelper.isWarningsSheetVisible = false
-        warningsSheetPayload = nil
+        showingWarningsDetail = false
         showingTasksDetail = true
     }
 
-    /// Present immediately — never wait on MainActor for a detection pass.
-    /// Waiting looked like a crash (UI frozen) while the process stayed alive
-    /// (terminal PID watcher never printed DIED).
     private func presentWarningsDetail() {
         showingTasksDetail = false
-        let shared = WarningsService.shared
-        let detectionDone = didSchedulePostQuietWarningsRefresh
-            || homeWarningsDetectionCompleted
-            || !shared.activeWarnings.isEmpty
-        let payload = WarningsDisplaySnapshot(
-            from: shared,
-            detectionCompleted: detectionDone
-        )
-        WarningsRefreshHelper.isWarningsSheetVisible = true
-        warningsSheetPayload = payload
-        isPreparingWarningsSheet = false
-        print(
-            "🔥🔥🔥 DEBUG: Warnings sheet presented immediately count=\(shared.activeWarnings.count) detectionDone=\(detectionDone)"
-        )
+        showingWarningsDetail = true
     }
+
 
     /// Rebuild Up Next + overview metrics; warnings refresh stays off the main thread via `WarningsRefreshHelper`.
     @MainActor
@@ -1396,143 +1316,11 @@ struct HomeView: View {
 
         if userStore.hasAdminAccess() {
             // Never kick warnings on every derived refresh (jetsam). Badge tracks the
-            // shared service; `.task` below runs a single post-quiet refresh once stores settle.
+            // shared service; Warnings sheet refreshes on open (main path).
             homeWarningCount = WarningsService.shared.warningCount
         }
     }
 
-    /// Runs warnings detection once after launch quiet + core stores finish loading.
-    @MainActor
-    private func refreshWarningsFromHome(force: Bool) async {
-        guard userStore.hasAdminAccess() else { return }
-        guard !WarningsRefreshHelper.isWarningsSheetVisible else {
-            print("🔥🔥🔥 DEBUG: Home warnings refresh skipped (Warnings sheet still visible)")
-            return
-        }
-        guard !WarningsRefreshHelper.isWeeklyReportVisible else {
-            print("🔥🔥🔥 DEBUG: Home warnings refresh skipped (Weekly Report still visible)")
-            return
-        }
-        let didRun = await WarningsRefreshHelper.refreshSharedWarnings(
-            operativeStore: operativeStore,
-            bookingStore: bookingStore,
-            projectStore: projectStore,
-            userStore: userStore,
-            managerScheduleStore: managerScheduleStore,
-            holidayStore: holidayStore,
-            firebaseBackend: firebaseBackend,
-            appSettings: appSettings,
-            force: force,
-            bypassSoftStoreGates: true,
-            includeMaterialsFetch: false
-        )
-        if didRun {
-            didSchedulePostQuietWarningsRefresh = true
-            homeWarningsDetectionCompleted = true
-            homeWarningCount = WarningsService.shared.warningCount
-            print("🔥🔥🔥 DEBUG: Home warnings refresh finished count=\(homeWarningCount)")
-        }
-    }
-
-    /// Runs warnings detection once after launch quiet + core stores finish loading.
-    @MainActor
-    private func schedulePostQuietWarningsRefreshIfNeeded() async {
-        guard userStore.hasAdminAccess() else { return }
-        guard !didSchedulePostQuietWarningsRefresh else { return }
-        guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
-
-        let deadline = Date().addingTimeInterval(90)
-        let softBypassAfter = Date().addingTimeInterval(45)
-        // If Warnings is opened during the wait, keep waiting for it to close (capped)
-        // so we still run one org-horizon refresh afterward.
-        let absoluteDeadline = Date().addingTimeInterval(300)
-        while Date() < absoluteDeadline {
-            if didSchedulePostQuietWarningsRefresh { return }
-
-            let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
-            let hardBusy = bookingStore.isLoading
-                || operativeStore.isLoading
-                || projectStore.isLoading
-            let softBusy = holidayStore.isLoading || managerScheduleStore.isLoading
-            let rosterEmpty = operativeStore.allOperatives.isEmpty && userStore.organizationUsers.isEmpty
-            let allowSoftBypass = Date() >= softBypassAfter
-            let pastInitialDeadline = Date() >= deadline
-
-            if WarningsRefreshHelper.isHeavySheetVisible {
-                print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh waiting (heavy sheet visible)")
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                if Task.isCancelled { return }
-                continue
-            }
-
-            let blocked = firebaseBackend.isBootstrappingOrgDataLoad
-                || !firebaseBackend.hasBootstrappedOrgDataLoad
-                || quiet
-                || hardBusy
-                || (softBusy && !allowSoftBypass)
-                || (rosterEmpty && !allowSoftBypass)
-
-            if !blocked {
-                print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh starting…")
-                let didRun = await WarningsRefreshHelper.refreshSharedWarnings(
-                    operativeStore: operativeStore,
-                    bookingStore: bookingStore,
-                    projectStore: projectStore,
-                    userStore: userStore,
-                    managerScheduleStore: managerScheduleStore,
-                    holidayStore: holidayStore,
-                    firebaseBackend: firebaseBackend,
-                    appSettings: appSettings,
-                    force: true,
-                    bypassSoftStoreGates: allowSoftBypass || softBusy,
-                    includeMaterialsFetch: false
-                )
-                if didRun {
-                    didSchedulePostQuietWarningsRefresh = true
-                    homeWarningsDetectionCompleted = true
-                    homeWarningCount = WarningsService.shared.warningCount
-                    print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh finished count=\(homeWarningCount)")
-                    // Do not follow up with materials fetch — that secondary pass jetsams Simulator.
-                    return
-                }
-            } else if pastInitialDeadline {
-                break
-            }
-
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if Task.isCancelled { return }
-        }
-
-        // Last chance after waiting — soft/hard store flags can stick true on hung fetches.
-        // Still skip while Warnings is open, and never pull materials on this path.
-        if WarningsRefreshHelper.isHeavySheetVisible {
-            print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh timed out while heavy sheet visible — will not force under sheet")
-            return
-        }
-        print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh final bypass attempt…")
-        let didRun = await WarningsRefreshHelper.refreshSharedWarnings(
-            operativeStore: operativeStore,
-            bookingStore: bookingStore,
-            projectStore: projectStore,
-            userStore: userStore,
-            managerScheduleStore: managerScheduleStore,
-            holidayStore: holidayStore,
-            firebaseBackend: firebaseBackend,
-            appSettings: appSettings,
-            force: true,
-            bypassSoftStoreGates: true,
-            bypassAllStoreGates: true,
-            includeMaterialsFetch: false
-        )
-        if didRun {
-            didSchedulePostQuietWarningsRefresh = true
-            homeWarningsDetectionCompleted = true
-            homeWarningCount = WarningsService.shared.warningCount
-            print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh finished (bypass) count=\(homeWarningCount)")
-        } else {
-            print("🔥🔥🔥 DEBUG: Home post-quiet warnings refresh timed out without running")
-        }
-    }
     
     private var assignedTasksCount: Int {
         if userStore.isOperativeMode() {

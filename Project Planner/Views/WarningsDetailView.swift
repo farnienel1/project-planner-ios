@@ -2,62 +2,20 @@
 //  WarningsDetailView.swift
 //  Project Planner
 //
-//  Display-only sheet: presents a frozen snapshot so opening never observes
-//  WarningsService (or rebuilds heavy clash cards when the shared service publishes).
-//
 
 import SwiftUI
 
-/// Value copy of warnings at the moment the sheet is presented.
-struct WarningsDisplaySnapshot: Identifiable, Equatable {
-    let id: UUID
-    let warnings: [Warning]
-    let activeCount: Int
-    let highCount: Int
-    let mediumCount: Int
-    let lowCount: Int
-    /// False when Home has not finished a detection pass yet — empty list is not "all clear".
-    let detectionCompleted: Bool
-
-    init(
-        id: UUID = UUID(),
-        warnings: [Warning],
-        activeCount: Int,
-        highCount: Int,
-        mediumCount: Int,
-        lowCount: Int,
-        detectionCompleted: Bool = true
-    ) {
-        self.id = id
-        self.warnings = warnings
-        self.activeCount = activeCount
-        self.highCount = highCount
-        self.mediumCount = mediumCount
-        self.lowCount = lowCount
-        self.detectionCompleted = detectionCompleted
-    }
-
-    @MainActor
-    init(from service: WarningsService, detectionCompleted: Bool, id: UUID = UUID()) {
-        self.id = id
-        self.warnings = service.warningsSortedByDate()
-        self.activeCount = service.warningCount
-        self.highCount = service.highCount
-        self.mediumCount = service.mediumCount
-        self.lowCount = service.lowCount
-        self.detectionCompleted = detectionCompleted
-    }
+/// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
+enum WarningsBuildStamp {
+    static let id = "wfix-restore-main-open"
+    static let homePillTitle = "Warnings · \(id)"
 }
 
 struct WarningsDetailView: View {
-    private static let maxVisibleRows = 60
-    private static let maxUnbookedNames = 12
-
     @Environment(\.dismiss) private var dismiss
-
-    let snapshot: WarningsDisplaySnapshot
-    /// Used only for dismiss/approve mutations — never observed while the sheet is open.
-    let warningsService: WarningsService
+    /// Only the warnings list needs observation. Holding the other stores as `let`
+    /// avoids subscribing to ~11 large ObservableObjects (jetsam on Simulator sheet open).
+    @ObservedObject var warningsService: WarningsService
     let projectStore: ProjectStore
     let userStore: UserStore
     let operativeStore: OperativeStore
@@ -70,75 +28,39 @@ struct WarningsDetailView: View {
     let subcontractorStore: SubcontractorStore
     let taskStore: ProjectTaskStore
 
-    @State private var displayedWarnings: [Warning]
     @State private var filterChip: WarningsFilterChip = .all
     @State private var openDayDate: IdentifiableDay?
     @State private var openBookLabourDate: IdentifiableDay?
     @State private var warningPendingDismiss: Warning?
     @State private var showingWarningsSettings = false
-    @State private var selectedWarning: Warning?
-    @State private var canManageAdminActions: Bool
-    @State private var detectionCompleted: Bool
-    @State private var activeCount: Int
-    @State private var highCount: Int
-    @State private var mediumCount: Int
-    @State private var lowCount: Int
-    @State private var isFillInRefreshRunning = false
-
-    init(
-        snapshot: WarningsDisplaySnapshot,
-        warningsService: WarningsService,
-        projectStore: ProjectStore,
-        userStore: UserStore,
-        operativeStore: OperativeStore,
-        bookingStore: BookingStore,
-        managerScheduleStore: ManagerScheduleStore,
-        firebaseBackend: FirebaseBackend,
-        appSettings: AppSettingsStore,
-        holidayStore: HolidayStore,
-        notificationService: NotificationService,
-        subcontractorStore: SubcontractorStore,
-        taskStore: ProjectTaskStore
-    ) {
-        self.snapshot = snapshot
-        self.warningsService = warningsService
-        self.projectStore = projectStore
-        self.userStore = userStore
-        self.operativeStore = operativeStore
-        self.bookingStore = bookingStore
-        self.managerScheduleStore = managerScheduleStore
-        self.firebaseBackend = firebaseBackend
-        self.appSettings = appSettings
-        self.holidayStore = holidayStore
-        self.notificationService = notificationService
-        self.subcontractorStore = subcontractorStore
-        self.taskStore = taskStore
-        _displayedWarnings = State(initialValue: snapshot.warnings)
-        _canManageAdminActions = State(initialValue: userStore.hasAdminAccess())
-        _detectionCompleted = State(initialValue: snapshot.detectionCompleted)
-        _activeCount = State(initialValue: snapshot.activeCount)
-        _highCount = State(initialValue: snapshot.highCount)
-        _mediumCount = State(initialValue: snapshot.mediumCount)
-        _lowCount = State(initialValue: snapshot.lowCount)
-    }
+    @State private var isRefreshing = false
+    @State private var didScheduleRefresh = false
 
     var body: some View {
         NavigationStack {
             Group {
-                if displayedWarnings.isEmpty {
+                if warningsService.activeWarnings.isEmpty {
                     emptyState
                 } else {
-                    warningsList
+                    warningsScroll
                 }
             }
             .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
-            .navigationTitle("Warnings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") { dismiss() }
                 }
-                if canManageAdminActions {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 1) {
+                        Text("Warnings")
+                            .font(.headline)
+                        Text(WarningsBuildStamp.id)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if userStore.hasAdminAccess() {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button {
                             showingWarningsSettings = true
@@ -151,17 +73,74 @@ struct WarningsDetailView: View {
                 }
             }
             .appChromeNavigationBarSurface()
+            .overlay(alignment: .top) {
+                if isRefreshing {
+                    ProgressView()
+                        .padding(8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.top, 8)
+                }
+            }
+            .onAppear {
+                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id)")
+            }
+            .task {
+                // Defer recompute so the sheet can paint first.
+                guard !didScheduleRefresh else { return }
+                didScheduleRefresh = true
+                try? await Task.sleep(nanoseconds: 750_000_000)
+                guard !Task.isCancelled else { return }
+                await refreshAfterLaunchQuietIfNeeded()
+            }
             .sheet(isPresented: $showingWarningsSettings) {
-                warningsSettingsSheet
+                NavigationStack {
+                    OrganisationWarningsSettingsView(
+                        exitsToHomeOnBack: true,
+                        onExitToHome: {
+                            showingWarningsSettings = false
+                            dismiss()
+                        },
+                        onSaved: {
+                            showingWarningsSettings = false
+                        }
+                    )
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(operativeStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(userStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(holidayStore)
+                    .environmentObject(appSettings)
+                }
             }
             .sheet(item: $openDayDate) { day in
-                dailyOverviewSheet(for: day.date)
+                NavigationStack {
+                    DailyOverviewView(displayDate: day.date)
+                        .environmentObject(bookingStore)
+                        .environmentObject(projectStore)
+                        .environmentObject(operativeStore)
+                        .environmentObject(userStore)
+                        .environmentObject(holidayStore)
+                        .environmentObject(managerScheduleStore)
+                        .environmentObject(subcontractorStore)
+                        .environmentObject(firebaseBackend)
+                        .environmentObject(appSettings)
+                        .environmentObject(taskStore)
+                        .environmentObject(notificationService)
+                }
             }
             .fullScreenCover(item: $openBookLabourDate) { day in
-                bookLabourCover(for: day.date)
-            }
-            .sheet(item: $selectedWarning) { warning in
-                warningActionSheet(warning)
+                BookLabourFlowView(bookDate: day.date)
+                    .environmentObject(appSettings)
+                    .environmentObject(bookingStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(userStore)
+                    .environmentObject(holidayStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(notificationService)
             }
             .alert(
                 "Remove this warning?",
@@ -180,137 +159,49 @@ struct WarningsDetailView: View {
             } message: { warning in
                 Text("Are you sure you want to remove this warning? It will be hidden from the list and other admins will be notified. You may still need to resolve the issue manually.\n\n\(warning.removalNotificationDetail)")
             }
-            .task(id: snapshot.id) {
-                await fillInIfStillChecking()
-            }
         }
-    }
-
-    /// One-shot fill while sheet is open — does not observe live publishes.
-    @MainActor
-    private func fillInIfStillChecking() async {
-        guard !detectionCompleted, displayedWarnings.isEmpty, !isFillInRefreshRunning else { return }
-        isFillInRefreshRunning = true
-        defer { isFillInRefreshRunning = false }
-        // Let the sheet paint "Checking…" before any MainActor snapshot work.
-        await Task.yield()
-        try? await Task.sleep(nanoseconds: 350_000_000)
-        guard !Task.isCancelled else { return }
-        print("🔥🔥🔥 DEBUG: Warnings sheet fill-in refresh starting")
-        let didRun = await WarningsRefreshHelper.refreshSharedWarnings(
-            operativeStore: operativeStore,
-            bookingStore: bookingStore,
-            projectStore: projectStore,
-            userStore: userStore,
-            managerScheduleStore: managerScheduleStore,
-            holidayStore: holidayStore,
-            firebaseBackend: firebaseBackend,
-            appSettings: appSettings,
-            force: true,
-            bypassSoftStoreGates: true,
-            includeMaterialsFetch: false
-        )
-        guard !Task.isCancelled else { return }
-        let filled = WarningsDisplaySnapshot(
-            from: warningsService,
-            detectionCompleted: true
-        )
-        displayedWarnings = filled.warnings
-        activeCount = filled.activeCount
-        highCount = filled.highCount
-        mediumCount = filled.mediumCount
-        lowCount = filled.lowCount
-        detectionCompleted = true
-        print(
-            "🔥🔥🔥 DEBUG: Warnings sheet fill-in finished didRun=\(didRun) count=\(filled.warnings.count)"
-        )
     }
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            if isFillInRefreshRunning {
-                ProgressView()
-                    .padding(.bottom, 4)
-            }
-            Image(systemName: detectionCompleted ? "checkmark.circle.fill" : "hourglass")
+            Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 56))
-                .foregroundStyle(detectionCompleted
-                                 ? ProjectWorksRevampColors.activeGreen
-                                 : ProjectWorksRevampColors.muted)
-            Text(detectionCompleted ? "All clear" : (isFillInRefreshRunning ? "Checking warnings…" : "Still checking…"))
+                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+            Text("No active warnings")
                 .font(.title3.weight(.semibold))
-            Text(detectionCompleted
-                 ? "High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00."
-                 : "Warnings are calculated in the background. This screen stays open — it will update when detection finishes.")
+            Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
                 .font(.subheadline)
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
-            Button("Close & refresh") {
-                NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
-                dismiss()
-            }
-            .buttonStyle(.borderedProminent)
-            .padding(.top, 4)
+            Text(WarningsBuildStamp.id)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var warningsList: some View {
-        List {
-            Section {
+    private var warningsScroll: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
                 WarningsHeroCard(
-                    activeCount: activeCount,
-                    highCount: highCount,
-                    mediumCount: mediumCount,
-                    lowCount: lowCount
+                    activeCount: warningsService.warningCount,
+                    highCount: warningsService.highCount,
+                    mediumCount: warningsService.mediumCount,
+                    lowCount: warningsService.lowCount
                 )
-                .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 8, trailing: 16))
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
-
                 WarningsFilterChipsRow(selected: $filterChip, counts: filterCounts)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-            }
-
-            Section {
-                ForEach(visibleFilteredWarnings) { warning in
-                    Button {
-                        selectedWarning = warning
-                    } label: {
-                        warningRow(warning)
-                    }
-                    .buttonStyle(.plain)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                }
-
-                if filteredWarnings.count > Self.maxVisibleRows {
-                    Text("Showing first \(Self.maxVisibleRows) of \(filteredWarnings.count). Close & refresh on Home for a full recompute.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                        .listRowBackground(Color.clear)
+                ForEach(filteredWarnings) { warning in
+                    warningCard(warning)
                 }
             }
-
-            Section {
-                Button("Close & refresh") {
-                    NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
-                    dismiss()
-                }
-                .frame(maxWidth: .infinity)
-                .listRowBackground(Color.clear)
-            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 16)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
     }
 
     private var filterCounts: [WarningsFilterChip: Int] {
-        let all = displayedWarnings
+        let all = warningsService.activeWarnings
         return [
             .all: all.count,
             .clashes: all.filter { $0.type == .operativeBookingClash || $0.type == .managerLocationClash }.count,
@@ -320,194 +211,128 @@ struct WarningsDetailView: View {
     }
 
     private var filteredWarnings: [Warning] {
+        let sorted = warningsService.warningsSortedByDate()
         switch filterChip {
-        case .all: return displayedWarnings
+        case .all: return sorted
         case .clashes:
-            return displayedWarnings.filter { $0.type == .operativeBookingClash || $0.type == .managerLocationClash }
+            return sorted.filter { $0.type == .operativeBookingClash || $0.type == .managerLocationClash }
         case .unbooked:
-            return displayedWarnings.filter { $0.type == .unbookedLabour }
+            return sorted.filter { $0.type == .unbookedLabour }
         case .materials:
-            return displayedWarnings.filter { $0.type == .materialsCutoff }
+            return sorted.filter { $0.type == .materialsCutoff }
         }
     }
 
-    private var visibleFilteredWarnings: [Warning] {
-        Array(filteredWarnings.prefix(Self.maxVisibleRows))
+    @ViewBuilder
+    private func warningCard(_ warning: Warning) -> some View {
+        switch warning.type {
+        case .operativeBookingClash:
+            OperativeClashWarningCard(
+                warning: warning,
+                onRemoveA: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingAId) },
+                onRemoveB: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingBId) },
+                onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
+                onRemoveWarning: { requestRemoveWarning(warning) }
+            )
+        case .managerLocationClash:
+            ManagerClashWarningCard(
+                warning: warning,
+                onRemoveA: { removeManagerBooking(warning, entry: warning.managerClash?.entryA) },
+                onRemoveB: { removeManagerBooking(warning, entry: warning.managerClash?.entryB) },
+                onApprove: { warningsService.approveWarning(warning) },
+                onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
+                onRemoveWarning: { requestRemoveWarning(warning) }
+            )
+        case .unbookedLabour:
+            unbookedCard(warning)
+        case .materialsCutoff:
+            materialsCard(warning)
+        case .qualificationExpiry, .operativeNotVerified:
+            legacyCard(warning)
+        }
     }
 
-    private func warningRow(_ warning: Warning) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+    private func unbookedCard(_ warning: Warning) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
                 Text(warning.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                    .multilineTextAlignment(.leading)
-                Spacer(minLength: 0)
-                WarningPriorityBadge(severity: warning.severity)
-            }
-            if let date = warning.occurrenceDate {
-                Text(date, format: .dateTime.weekday(.abbreviated).day().month(.abbreviated))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.system(size: 14, weight: .medium))
+                WarningPriorityBadge(severity: .high)
             }
             Text(warning.message)
                 .font(.system(size: 12))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
-                .multilineTextAlignment(.leading)
-            if warning.type == .unbookedLabour, let names = warning.unbookedLabour?.names {
-                let visible = Array(names.prefix(Self.maxUnbookedNames))
-                Text(visible.map { "• \($0)" }.joined(separator: "\n"))
-                    .font(.system(size: 12))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                if names.count > visible.count {
-                    Text("• …and \(names.count - visible.count) more")
+            if let d = warning.unbookedLabour {
+                ForEach(Array(d.names.enumerated()), id: \.offset) { _, name in
+                    Text("• \(name)")
                         .font(.system(size: 12))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
                 }
-            } else if warning.type == .materialsCutoff, let m = warning.materialsCutoff {
+            }
+            Button { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) } label: {
+                Text("Open day on Daily Overview")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+            }
+            .buttonStyle(.bordered)
+            if userStore.hasAdminAccess(), let warningDay = warning.occurrenceDate {
+                Button {
+                    openBookLabourDate = IdentifiableDay(warningDay)
+                } label: {
+                    Text("Book labour")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            WarningRemoveButton { requestRemoveWarning(warning) }
+        }
+        .padding(16)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func materialsCard(_ warning: Warning) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(warning.title)
+                    .font(.system(size: 14, weight: .medium))
+                WarningPriorityBadge(severity: .low)
+            }
+            Text(warning.message)
+                .font(.system(size: 12))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+            if let m = warning.materialsCutoff {
                 Text("\(m.jobNumber) · \(m.siteName)")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
             }
-            Text("Tap for actions")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.blue)
+            Text("Managers should confirm material lists with site teams.")
+                .font(.system(size: 11))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+            WarningRemoveButton { requestRemoveWarning(warning) }
         }
-        .padding(14)
+        .padding(16)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func legacyCard(_ warning: Warning) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(warning.title)
+                    .font(.system(size: 14, weight: .medium))
+                WarningPriorityBadge(severity: warning.severity)
+            }
+            Text(warning.message)
+                .font(.system(size: 12))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+            WarningRemoveButton { requestRemoveWarning(warning) }
+        }
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    @ViewBuilder
-    private func warningActionSheet(_ warning: Warning) -> some View {
-        NavigationStack {
-            List {
-                Section {
-                    Text(warning.title)
-                        .font(.headline)
-                    Text(warning.message)
-                        .font(.subheadline)
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                }
-
-                if warning.occurrenceDate != nil {
-                    Section("Day") {
-                        Button("Open day on Daily Overview") {
-                            selectedWarning = nil
-                            openDayDate = warning.occurrenceDate.map { IdentifiableDay($0) }
-                        }
-                        if canManageAdminActions, warning.type == .unbookedLabour {
-                            Button("Book labour") {
-                                selectedWarning = nil
-                                if let day = warning.occurrenceDate {
-                                    openBookLabourDate = IdentifiableDay(day)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if warning.type == .operativeBookingClash || warning.type == .managerLocationClash {
-                    Section("Bookings") {
-                        Button("Remove first booking", role: .destructive) {
-                            selectedWarning = nil
-                            if warning.type == .operativeBookingClash {
-                                removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingAId)
-                            } else {
-                                removeManagerBooking(warning, entry: warning.managerClash?.entryA)
-                            }
-                        }
-                        Button("Remove second booking", role: .destructive) {
-                            selectedWarning = nil
-                            if warning.type == .operativeBookingClash {
-                                removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingBId)
-                            } else {
-                                removeManagerBooking(warning, entry: warning.managerClash?.entryB)
-                            }
-                        }
-                    }
-                }
-
-                if warning.requiresWeeklyReportApproval {
-                    Section {
-                        Button("Tick for weekly report") {
-                            warningsService.approveWarning(warning)
-                            removeFromDisplayed(warning)
-                            selectedWarning = nil
-                        }
-                    }
-                }
-
-                Section {
-                    Button("Remove warning", role: .destructive) {
-                        selectedWarning = nil
-                        requestRemoveWarning(warning)
-                    }
-                }
-            }
-            .navigationTitle("Warning")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { selectedWarning = nil }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private var warningsSettingsSheet: some View {
-        NavigationStack {
-            OrganisationWarningsSettingsView(
-                exitsToHomeOnBack: true,
-                onExitToHome: {
-                    showingWarningsSettings = false
-                    dismiss()
-                },
-                onSaved: {
-                    showingWarningsSettings = false
-                }
-            )
-            .environmentObject(firebaseBackend)
-            .environmentObject(operativeStore)
-            .environmentObject(bookingStore)
-            .environmentObject(projectStore)
-            .environmentObject(userStore)
-            .environmentObject(managerScheduleStore)
-            .environmentObject(holidayStore)
-            .environmentObject(appSettings)
-        }
-    }
-
-    private func dailyOverviewSheet(for date: Date) -> some View {
-        NavigationStack {
-            DailyOverviewView(displayDate: date)
-                .environmentObject(bookingStore)
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(userStore)
-                .environmentObject(holidayStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(subcontractorStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(appSettings)
-                .environmentObject(taskStore)
-                .environmentObject(notificationService)
-        }
-    }
-
-    private func bookLabourCover(for date: Date) -> some View {
-        BookLabourFlowView(bookDate: date)
-            .environmentObject(appSettings)
-            .environmentObject(bookingStore)
-            .environmentObject(projectStore)
-            .environmentObject(operativeStore)
-            .environmentObject(userStore)
-            .environmentObject(holidayStore)
-            .environmentObject(managerScheduleStore)
-            .environmentObject(firebaseBackend)
-            .environmentObject(notificationService)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func requestRemoveWarning(_ warning: Warning) {
@@ -520,14 +345,9 @@ struct WarningsDetailView: View {
             ?? userStore.currentUser?.email
             ?? "An admin"
         warningsService.dismissWarning(warning)
-        removeFromDisplayed(warning)
         Task {
             await notificationService.notifyWarningRemoved(warning: warning, removedBy: removedBy)
         }
-    }
-
-    private func removeFromDisplayed(_ warning: Warning) {
-        displayedWarnings.removeAll { $0.id == warning.id }
     }
 
     private func removeOperativeBooking(_ warning: Warning, bookingId: UUID?) {
@@ -535,7 +355,7 @@ struct WarningsDetailView: View {
               let booking = bookingStore.bookings.first(where: { $0.id == id }) else { return }
         Task {
             await bookingStore.deleteBooking(booking)
-            requestRefreshAfterDismiss()
+            refreshWarnings()
         }
     }
 
@@ -545,27 +365,53 @@ struct WarningsDetailView: View {
            let booking = managerScheduleStore.managerSiteBookings.first(where: { $0.id == mgrId }) {
             Task {
                 await managerScheduleStore.deleteBooking(booking)
-                requestRefreshAfterDismiss()
+                refreshWarnings()
             }
             return
         }
         if let opBooking = bookingStore.bookings.first(where: { $0.id == entry.bookingId }) {
             Task {
                 await bookingStore.deleteBooking(opBooking)
-                requestRefreshAfterDismiss()
+                refreshWarnings()
             }
         }
     }
 
-    private func requestRefreshAfterDismiss() {
-        NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
-        dismiss()
+    private func refreshWarnings() {
+        Task { await refreshWarningsAsync() }
+    }
+
+    private func refreshAfterLaunchQuietIfNeeded() async {
+        while firebaseBackend.isBootstrappingOrgDataLoad
+            || !firebaseBackend.hasBootstrappedOrgDataLoad
+            || (firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false) {
+            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting quiet \(WarningsBuildStamp.id)")
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if Task.isCancelled { return }
+        }
+        await refreshWarningsAsync()
+    }
+
+    private func refreshWarningsAsync() async {
+        isRefreshing = true
+        defer { isRefreshing = false }
+        await WarningsRefreshHelper.refreshSharedWarnings(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings,
+            force: true
+        )
     }
 }
 
 /// Sheet/item identity for a calendar day without making `Date` globally Identifiable.
 /// `nonisolated` + no `Calendar.current` — that API is MainActor-isolated and breaks
-/// button / escaping action closures (`init(_:)` in a nonisolated context).
+/// button / escaping action closures.
 private struct IdentifiableDay: Identifiable, Hashable, Sendable {
     let date: Date
     var id: TimeInterval { date.timeIntervalSince1970 }
@@ -578,13 +424,6 @@ private struct IdentifiableDay: Identifiable, Hashable, Sendable {
 
 #Preview {
     WarningsDetailView(
-        snapshot: WarningsDisplaySnapshot(
-            warnings: [],
-            activeCount: 0,
-            highCount: 0,
-            mediumCount: 0,
-            lowCount: 0
-        ),
         warningsService: WarningsService(),
         projectStore: ProjectStore(),
         userStore: UserStore(),
