@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-wr-let-stores"
+    static let id = "wfix-split-scopes"
     static let homePillTitle = "Warnings · \(id)"
 }
 
@@ -421,6 +421,9 @@ struct WarningsDetailView: View {
             firebaseBackend: firebaseBackend,
             appSettings: appSettings,
             force: true
+        )
+        print(
+            "🔥🔥🔥 DEBUG: WARNINGS_SHEET_REFRESHED \(WarningsBuildStamp.id) active=\(warningsService.activeWarnings.count) count=\(warningsService.warningCount)"
         )
     }
 }

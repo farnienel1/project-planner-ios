@@ -21,6 +21,8 @@ struct HomeView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
     @State private var homeWarningCount: Int = 0
+    /// False until first successful post-quiet detection (count may still be 0).
+    @State private var hasCompletedWarningsDetection = false
     @State private var cachedUpNextSections: [HomeUpNextDaySection] = []
     @State private var cachedOverviewMetrics = HomeOverviewMetrics()
     @State private var showingCreateClient = false
@@ -34,7 +36,7 @@ struct HomeView: View {
     @State private var showingAddUser = false
     @State private var showingManageUsers = false
     @State private var showingDailyOverview = false
-    @State private var showingWeeklyReport = false
+    @State private var weeklyReportLaunch: WeeklyReportLaunchToken?
     @State private var showingOrgSitesMap = false
     @State private var showingMySchedule = false
     @State private var showingWarningsDetail = false
@@ -207,20 +209,8 @@ struct HomeView: View {
                 .environmentObject(taskStore)
                 .environmentObject(notificationService)
         }
-        .sheet(isPresented: $showingWeeklyReport) {
-            WeeklyReportView(
-                bookingStore: bookingStore,
-                managerScheduleStore: managerScheduleStore,
-                projectStore: projectStore,
-                operativeStore: operativeStore,
-                holidayStore: holidayStore,
-                userStore: userStore,
-                firebaseBackend: firebaseBackend,
-                subcontractorStore: subcontractorStore,
-                appSettings: appSettings,
-                notificationService: notificationService,
-                taskStore: taskStore
-            )
+        .sheet(item: $weeklyReportLaunch) { token in
+            WeeklyReportOpenShell(token: token)
         }
 
         .sheet(isPresented: $showingOrgSitesMap) {
@@ -562,6 +552,12 @@ struct HomeView: View {
             } else {
                 homeWarningCount = WarningsService.shared.warningCount
             }
+            hasCompletedWarningsDetection = true
+        }
+        .task(id: userStore.currentUser?.id) {
+            guard userStore.hasAdminAccess() else { return }
+            hasCompletedWarningsDetection = false
+            await runPostQuietWarningsDetection()
         }
         .onChange(of: showingAdminOverviewCustomize) { _, isOpen in
             if isOpen {
@@ -571,6 +567,39 @@ struct HomeView: View {
                 draftAdminOverviewMetricIds = Array(base.prefix(3))
             }
         }
+    }
+
+    /// One detection pass after launch quiet — Home "All clear" must mean detection ran, not "never scanned".
+    @MainActor
+    private func runPostQuietWarningsDetection() async {
+        let deadline = Date().addingTimeInterval(120)
+        while Date() < deadline {
+            let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
+            let busy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading
+            if !firebaseBackend.isBootstrappingOrgDataLoad,
+               firebaseBackend.hasBootstrappedOrgDataLoad,
+               !quiet,
+               !busy {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled { return }
+        }
+        print("🔥🔥🔥 DEBUG: Home post-quiet warnings detection starting…")
+        await WarningsRefreshHelper.refreshSharedWarnings(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings,
+            force: true
+        )
+        homeWarningCount = WarningsService.shared.warningCount
+        hasCompletedWarningsDetection = true
+        print("🔥🔥🔥 DEBUG: Home post-quiet warnings detection finished count=\(homeWarningCount)")
     }
 
     private var homeGreetingHeader: some View {
@@ -935,7 +964,19 @@ struct HomeView: View {
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 5])
         case HomeQuickActionID.staffWeeklyReport.rawValue:
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_BUTTON \(WarningsBuildStamp.id)")
-            showingWeeklyReport = true
+            weeklyReportLaunch = WeeklyReportLaunchToken(
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                projectStore: projectStore,
+                operativeStore: operativeStore,
+                holidayStore: holidayStore,
+                userStore: userStore,
+                firebaseBackend: firebaseBackend,
+                subcontractorStore: subcontractorStore,
+                appSettings: appSettings,
+                notificationService: notificationService,
+                taskStore: taskStore
+            )
         case HomeQuickActionID.staffDailyOverview.rawValue:
             showingDailyOverview = true
         case HomeQuickActionID.staffManagers.rawValue:
@@ -1243,7 +1284,8 @@ struct HomeView: View {
 
     private var warningsPillValue: String {
         if homeWarningCount > 0 { return "\(homeWarningCount) active" }
-        return "All clear"
+        if hasCompletedWarningsDetection { return "All clear" }
+        return "Checking…"
     }
 
     private func presentTasksDetail() {

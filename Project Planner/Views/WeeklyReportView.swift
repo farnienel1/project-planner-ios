@@ -139,10 +139,8 @@ struct WeeklyReportView: View {
                         .presentationDragIndicator(.visible)
                 }
                 .onAppear {
-                    print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_APPEARED \(WarningsBuildStamp.id)")
+                    print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_FORM \(WarningsBuildStamp.id)")
                     setThisWeekRange()
-                    // One-shot cheap counts from shared service — no observation, no rescan.
-                    refreshPeriodSummaryFromShared()
                     Task { await loadOrganizationLogo() }
                 }
         }
@@ -156,8 +154,11 @@ struct WeeklyReportView: View {
                     brandHeader
                     quickSelectCard
                     customRangeCard
-                    invoicingPeriodCard
-                    warningsCard
+                    Text("Period warnings and pay breakdown are calculated when you tap Generate — this is separate from Home Warnings (live ops from today forward).")
+                        .font(.system(size: 12))
+                        .foregroundStyle(WeeklyReportColors.muted)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
                     generateSection
                     if let message {
                         Text(message)
