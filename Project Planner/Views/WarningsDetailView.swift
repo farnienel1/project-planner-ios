@@ -88,8 +88,12 @@ struct WarningsDetailView: View {
                 // Defer recompute so the sheet can paint first.
                 guard !didScheduleRefresh else { return }
                 didScheduleRefresh = true
+                isRefreshing = true
                 try? await Task.sleep(nanoseconds: 750_000_000)
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else {
+                    isRefreshing = false
+                    return
+                }
                 await refreshAfterLaunchQuietIfNeeded()
             }
             .sheet(isPresented: $showingWarningsSettings) {
