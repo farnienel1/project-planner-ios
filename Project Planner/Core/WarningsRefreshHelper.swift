@@ -42,30 +42,15 @@ enum WarningsRefreshHelper {
             return false
         }
 
-        // Launch quiet: Home auto-refresh must wait. Sheet open / Retry (`force`) must
-        // NOT return empty forever — wait out the quiet window, then scan. Logs showed
-        // WARNINGS_SHEET repeatedly skipping quiet and publishing count=0.
-        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
-            if force {
-                let remaining = quietUntil.timeIntervalSinceNow
-                let waitNs = UInt64(max(0, min(remaining, 45)) * 1_000_000_000)
-                print("🔥🔥🔥 DEBUG: Warnings force refresh waiting out launch quiet (\(Int(remaining))s)…")
-                if waitNs > 0 {
-                    try? await Task.sleep(nanoseconds: waitNs)
-                }
-                await Task.yield()
-                if firebaseBackend.isBootstrappingOrgDataLoad || !firebaseBackend.hasBootstrappedOrgDataLoad {
-                    print("🔥🔥🔥 DEBUG: Warnings force refresh aborted — bootstrap state changed during quiet wait")
-                    return false
-                }
-                if isWeeklyReportVisible {
-                    print("🔥🔥🔥 DEBUG: Warnings force refresh aborted — Weekly Report opened during quiet wait")
-                    return false
-                }
-            } else {
-                print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
-                return false
-            }
+        // Launch quiet only blocks *automatic* Home refreshes. Sheet open / Retry (`force`)
+        // must scan immediately once bootstrap is done — waiting 20–30s left Warnings empty
+        // and looking broken (see wfix-quiet-4 logs: "waiting out launch quiet (23s)…").
+        if !force, let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
+            return false
+        }
+        if force, let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
+            print("🔥🔥🔥 DEBUG: Warnings force refresh bypassing launch quiet (\(Int(quietUntil.timeIntervalSinceNow))s left)")
         }
 
         if !force {

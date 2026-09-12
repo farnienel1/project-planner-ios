@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-quiet-4"
+    static let id = "wfix-now-5"
     static let homePillTitle = "Warnings · \(id)"
 }
 
@@ -82,8 +82,8 @@ struct WarningsDetailView: View {
             }
             .onAppear {
                 print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id) count=\(warningsService.activeWarnings.count)")
-                // Always join a force refresh when empty — helper waits out launch quiet
-                // instead of returning count=0 forever (see wfix-quiet-4).
+                // Always force-refresh when empty — helper bypasses launch quiet once
+                // bootstrap is done (see wfix-now-5).
                 if warningsService.activeWarnings.isEmpty {
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 350_000_000)
