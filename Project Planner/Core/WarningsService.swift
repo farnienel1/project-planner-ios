@@ -8,7 +8,7 @@ import Combine
 
 @MainActor
 class WarningsService: ObservableObject {
-    /// Shared instance for Warnings sheet / weekly report (avoid duplicating state on Home).
+    /// Shared instance for Warnings sheet / Home badge (avoid duplicating org-horizon state).
     static let shared = WarningsService()
 
     @Published private(set) var allGeneratedWarnings: [Warning] = []
@@ -17,6 +17,8 @@ class WarningsService: ObservableObject {
     @Published private(set) var highCount: Int = 0
     @Published private(set) var mediumCount: Int = 0
     @Published private(set) var lowCount: Int = 0
+    /// True after at least one live scan has published (may be empty = all clear).
+    @Published private(set) var hasCompletedLiveDetection = false
 
     private let resolutionStore: WarningResolutionStore
     private var updateTask: Task<Void, Never>?
@@ -116,11 +118,14 @@ class WarningsService: ObservableObject {
         invoicingSettings: OrganizationInvoicingSettings? = nil,
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
+        scanUnbookedFromCoverageStart: Bool = false,
         materialOrderCutOffEnabled: Bool = true,
         materialCutOffOnSaturday: Bool = false,
         materialCutOffOnSunday: Bool = false,
         projectsWithTomorrowBookings: [Project] = [],
-        materialItemsForTomorrow: [MaterialItem] = []
+        materialItemsForTomorrow: [MaterialItem] = [],
+        materialsDataLoaded: Bool = false,
+        pruneDismissals: Bool = true
     ) {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
         let resolvedWarningDetection = warningDetection ?? .default
@@ -140,11 +145,14 @@ class WarningsService: ObservableObject {
                 invoicingSettings: resolvedInvoicing,
                 labourCoverageStart: labourCoverageStart,
                 labourCoverageEnd: labourCoverageEnd,
+                scanUnbookedFromCoverageStart: scanUnbookedFromCoverageStart,
                 materialOrderCutOffEnabled: materialOrderCutOffEnabled,
                 materialCutOffOnSaturday: materialCutOffOnSaturday,
                 materialCutOffOnSunday: materialCutOffOnSunday,
                 projectsWithTomorrowBookings: projectsWithTomorrowBookings,
-                materialItemsForTomorrow: materialItemsForTomorrow
+                materialItemsForTomorrow: materialItemsForTomorrow,
+                materialsDataLoaded: materialsDataLoaded,
+                pruneDismissals: pruneDismissals
             )
         }
     }
@@ -162,11 +170,14 @@ class WarningsService: ObservableObject {
         invoicingSettings: OrganizationInvoicingSettings? = nil,
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
+        scanUnbookedFromCoverageStart: Bool = false,
         materialOrderCutOffEnabled: Bool = true,
         materialCutOffOnSaturday: Bool = false,
         materialCutOffOnSunday: Bool = false,
         projectsWithTomorrowBookings: [Project] = [],
-        materialItemsForTomorrow: [MaterialItem] = []
+        materialItemsForTomorrow: [MaterialItem] = [],
+        materialsDataLoaded: Bool = false,
+        pruneDismissals: Bool = true
     ) async {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
         let resolvedWarningDetection = warningDetection ?? .default
@@ -185,11 +196,14 @@ class WarningsService: ObservableObject {
             invoicingSettings: resolvedInvoicing,
             labourCoverageStart: labourCoverageStart,
             labourCoverageEnd: labourCoverageEnd,
+            scanUnbookedFromCoverageStart: scanUnbookedFromCoverageStart,
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
             materialCutOffOnSaturday: materialCutOffOnSaturday,
             materialCutOffOnSunday: materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
-            materialItemsForTomorrow: materialItemsForTomorrow
+            materialItemsForTomorrow: materialItemsForTomorrow,
+            materialsDataLoaded: materialsDataLoaded,
+            pruneDismissals: pruneDismissals
         )
     }
 
@@ -205,50 +219,117 @@ class WarningsService: ObservableObject {
         invoicingSettings: OrganizationInvoicingSettings,
         labourCoverageStart: Date?,
         labourCoverageEnd: Date?,
+        scanUnbookedFromCoverageStart: Bool,
         materialOrderCutOffEnabled: Bool,
         materialCutOffOnSaturday: Bool,
         materialCutOffOnSunday: Bool,
         projectsWithTomorrowBookings: [Project],
-        materialItemsForTomorrow: [MaterialItem]
+        materialItemsForTomorrow: [MaterialItem],
+        materialsDataLoaded: Bool,
+        pruneDismissals: Bool
     ) async {
         updateGeneration += 1
         let generation = updateGeneration
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-        let coverageStart = cal.startOfDay(for: labourCoverageStart ?? warningDetection.coverageStart(from: today, calendar: cal))
-        let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal))
+        // Weekly Report passes explicit labourCoverageStart/End — never mutate that.
+        // Live Home/sheet: hard-cap the window. Full invoicing-period lookahead over
+        // ~90 bookings jetsams Simulator the moment the Warnings sheet opens
+        // (wfix-now-5: "scan starting bookings=92" → crash, never "published").
+        let coverageStart = cal.startOfDay(
+            for: labourCoverageStart
+                ?? warningDetection.coverageStart(
+                    from: today,
+                    invoicing: invoicingSettings,
+                    calendar: cal,
+                    liveScanDayCap: 7
+                )
+        )
+        var coverageEnd = cal.startOfDay(
+            for: labourCoverageEnd
+                ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
+        )
+        if labourCoverageEnd == nil {
+            let liveForwardCap = 7
+            let cappedEnd = cal.startOfDay(
+                for: cal.date(byAdding: .day, value: liveForwardCap - 1, to: today) ?? today
+            )
+            if coverageEnd > cappedEnd {
+                coverageEnd = cappedEnd
+            }
+        }
+        // Home live path must NOT auto-scan past unbooked days (jetsams Simulator).
+        // Weekly Report Generate passes scanUnbookedFromCoverageStart: true explicitly.
+        let effectiveScanUnbookedFromStart = scanUnbookedFromCoverageStart
+        // Trim arrays on MainActor before the detached hop — passing the full org
+        // booking history into Task.detached was enough to jetsam with ~90 rows.
+        let windowedBookings = bookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= coverageStart && day <= coverageEnd
+        }
+        let windowedManagerBookings = managerSiteBookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= coverageStart && day <= coverageEnd
+        }
+        let windowedHolidays = holidayBookings.filter { holiday in
+            let start = cal.startOfDay(for: holiday.startDate)
+            let end = cal.startOfDay(for: holiday.endDate)
+            return end >= coverageStart && start <= coverageEnd
+        }
+        print("🔥🔥🔥 DEBUG: WarningsService window bookings=\(windowedBookings.count)/\(bookings.count) mgr=\(windowedManagerBookings.count) end=\(coverageEnd)")
         let input = WarningsComputationInput(
             operatives: operatives,
-            bookings: bookings,
+            bookings: windowedBookings,
             projects: projects,
             users: users,
-            managerSiteBookings: managerSiteBookings,
-            holidayBookings: holidayBookings,
+            managerSiteBookings: windowedManagerBookings,
+            holidayBookings: windowedHolidays,
             payrollTimePolicy: payrollTimePolicy,
             warningDetection: warningDetection,
             coverageStart: coverageStart,
             coverageEnd: coverageEnd,
+            scanUnbookedFromCoverageStart: effectiveScanUnbookedFromStart,
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
             materialCutOffOnSaturday: materialCutOffOnSaturday,
             materialCutOffOnSunday: materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
-            materialItemsForTomorrow: materialItemsForTomorrow
+            materialItemsForTomorrow: materialItemsForTomorrow,
+            materialsDataLoaded: materialsDataLoaded
         )
-        // Snapshot + generate both off main — makeSnapshot alone was enough to jetsam
-        // when opening Warnings forced a refresh right after Home bootstrap.
+        // Snapshot + generate off main. Keep this path simple — a throwing/cancellable
+        // Task wrapper previously swallowed results and left Home Warnings empty.
         let generated = await Task.detached(priority: .utility) {
-            let snapshot = WarningsComputation.makeSnapshot(from: input)
-            return WarningsComputation.generate(snapshot)
+            autoreleasepool {
+                let snapshot = WarningsComputation.makeSnapshot(from: input)
+                return WarningsComputation.generate(snapshot)
+            }
         }.value
+        // Generation guard only — do NOT drop results on Task.isCancelled. Opening Weekly
+        // Report used to cancel the Home refresh Task and discard a finished scan, leaving
+        // Warnings permanently empty until a later force refresh.
         guard generation == updateGeneration else { return }
-        resolutionStore.pruneDismissedUnbookedKeys(
-            from: max(coverageStart, today),
-            through: coverageEnd,
-            calendar: cal
-        )
+        if pruneDismissals {
+            // Only drop dismissals before the live detection start — never wipe future keys
+            // when a report uses a narrower/past window.
+            resolutionStore.pruneDismissedUnbookedKeys(
+                olderThan: coverageStart,
+                calendar: cal
+            )
+        }
         allGeneratedWarnings = generated
         activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
         refreshSeverityCounts()
+        hasCompletedLiveDetection = true
+        WarningsRefreshHelper.postWarningsCountDidChange()
+        print("🔥🔥🔥 DEBUG: WarningsService published generated=\(generated.count) active=\(activeWarnings.count) window=\(coverageStart)…\(coverageEnd)")
+    }
+
+    /// Soft-stop the structured `updateWarnings` Task only. Do not bump `updateGeneration` —
+    /// that discarded finished scans and left the Warnings sheet empty.
+    func cancelInFlightUpdate() {
+        updateTask?.cancel()
+        updateTask = nil
+        print("🔥🔥🔥 DEBUG: WarningsService structured update task cleared (generation kept)")
     }
 
     /// Approve only applies to MEDIUM manager/admin clashes (weekly report tick).

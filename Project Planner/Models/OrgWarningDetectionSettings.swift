@@ -11,6 +11,8 @@ enum WarningClashLookaheadMode: String, Codable, CaseIterable, Identifiable, Sen
     case endOfInvoicingPeriod
     case numberOfDays
     case endOfWorkingWeek
+    /// Full current invoicing period (start→end). Kept for Firestore decode compatibility.
+    case allWorkingDaysInCurrentInvoicingPeriod
 
     var id: String { rawValue }
 
@@ -19,6 +21,7 @@ enum WarningClashLookaheadMode: String, Codable, CaseIterable, Identifiable, Sen
         case .endOfInvoicingPeriod: return "End of invoicing period"
         case .numberOfDays: return "Set number of days"
         case .endOfWorkingWeek: return "End of the working week"
+        case .allWorkingDaysInCurrentInvoicingPeriod: return "All working days within current invoicing period"
         }
     }
 }
@@ -66,7 +69,13 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         detectClashes = try c.decodeIfPresent(Bool.self, forKey: .detectClashes) ?? true
-        clashLookaheadMode = try c.decodeIfPresent(WarningClashLookaheadMode.self, forKey: .clashLookaheadMode) ?? .numberOfDays
+        // Decode as String first — unknown raw values (e.g. a mode saved from a newer build)
+        // must not throw and wipe OrganizationSettings.
+        if let raw = try c.decodeIfPresent(String.self, forKey: .clashLookaheadMode) {
+            clashLookaheadMode = WarningClashLookaheadMode(rawValue: raw) ?? .numberOfDays
+        } else {
+            clashLookaheadMode = .numberOfDays
+        }
         clashLookaheadDays = try c.decodeIfPresent(Int.self, forKey: .clashLookaheadDays) ?? 7
         includeWeekendsForUnbookedLabour = try c.decodeIfPresent(Bool.self, forKey: .includeWeekendsForUnbookedLabour) ?? false
         excludedUserIdsFromUnbookedWarnings = try c.decodeIfPresent([String].self, forKey: .excludedUserIdsFromUnbookedWarnings) ?? []
@@ -90,19 +99,49 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         let start = calendar.startOfDay(for: today)
         switch clashLookaheadMode {
         case .numberOfDays:
+            // Inclusive window: "7 days" = today through today+6 (not today+7).
             let days = max(1, min(clashLookaheadDays, 366))
-            return calendar.startOfDay(for: calendar.date(byAdding: .day, value: days, to: start) ?? start)
+            let offset = days - 1
+            return calendar.startOfDay(for: calendar.date(byAdding: .day, value: offset, to: start) ?? start)
         case .endOfWorkingWeek:
             return Self.endOfWorkingWeek(from: start, calendar: calendar)
-        case .endOfInvoicingPeriod:
+        case .endOfInvoicingPeriod, .allWorkingDaysInCurrentInvoicingPeriod:
             return InvoicingPeriodResolver.warningCoverageEnd(invoicing: invoicing, referenceDate: start, calendar: calendar)
         }
     }
 
-    /// Past window for warnings (unchanged default: 14 days back).
-    func coverageStart(from today: Date, calendar: Calendar = .current) -> Date {
+    /// When true, unbooked-labour scan includes days before today back to `coverageStart`.
+    var scansUnbookedFromCoverageStart: Bool {
+        clashLookaheadMode == .allWorkingDaysInCurrentInvoicingPeriod
+    }
+
+    /// Past window for warnings. Full-period mode starts at the invoicing period start,
+    /// but is capped for live Home scans so Simulator does not jetsam on long periods.
+    func coverageStart(
+        from today: Date,
+        invoicing: OrganizationInvoicingSettings = .default,
+        calendar: Calendar = .current,
+        liveScanDayCap: Int? = nil
+    ) -> Date {
         let start = calendar.startOfDay(for: today)
-        return calendar.startOfDay(for: calendar.date(byAdding: .day, value: -14, to: start) ?? start)
+        switch clashLookaheadMode {
+        case .allWorkingDaysInCurrentInvoicingPeriod:
+            let period = InvoicingPeriodResolver.resolve(
+                invoicing: invoicing,
+                referenceDate: start,
+                calendar: calendar
+            )
+            var from = calendar.startOfDay(for: period.currentPeriodStart)
+            if let liveScanDayCap {
+                let floor = calendar.startOfDay(
+                    for: calendar.date(byAdding: .day, value: -max(1, liveScanDayCap), to: start) ?? start
+                )
+                if from < floor { from = floor }
+            }
+            return from
+        case .numberOfDays, .endOfWorkingWeek, .endOfInvoicingPeriod:
+            return calendar.startOfDay(for: calendar.date(byAdding: .day, value: -14, to: start) ?? start)
+        }
     }
 
     func isUnbookedLabourWeekday(_ weekday: Int) -> Bool {
@@ -152,6 +191,8 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
             return "Warnings scan through end of current invoicing period — \(endLabel). Unbooked labour uses this window."
         case .endOfWorkingWeek:
             return "Warnings scan through end of this working week — \(endLabel). Resets each Monday. Unbooked labour uses the same window."
+        case .allWorkingDaysInCurrentInvoicingPeriod:
+            return "Warnings scan the current invoicing period through \(endLabel), including past days in this period for clashes."
         }
     }
 

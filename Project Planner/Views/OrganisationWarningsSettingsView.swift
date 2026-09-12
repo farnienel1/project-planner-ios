@@ -123,6 +123,11 @@ struct OrganisationWarningsSettingsView: View {
                 modeOption(.numberOfDays, label: "Set number of days", description: "Scan a fixed number of days from today — you control the window.")
                 modeOption(.endOfInvoicingPeriod, label: "End of invoicing period", description: "Scan through the end of your current billing period. Automatically adjusts when each new period begins.")
                 modeOption(.endOfWorkingWeek, label: "End of working week", description: "Scan through Friday of the current working week. Resets each Monday.")
+                modeOption(
+                    .allWorkingDaysInCurrentInvoicingPeriod,
+                    label: "All working days within current invoicing period",
+                    description: "Scan every working day in the current billing period — including past days still in that period. Material order cut-off stays same-day."
+                )
             }
 
             if draft.clashLookaheadMode == .numberOfDays {
@@ -130,6 +135,10 @@ struct OrganisationWarningsSettingsView: View {
             }
 
             if draft.clashLookaheadMode == .endOfInvoicingPeriod {
+                invoicingPeriodPanel
+            }
+
+            if draft.clashLookaheadMode == .allWorkingDaysInCurrentInvoicingPeriod {
                 invoicingPeriodPanel
             }
 

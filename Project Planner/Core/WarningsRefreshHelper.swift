@@ -10,6 +10,9 @@ enum WarningsRefreshHelper {
     @MainActor private static var inFlightTask: Task<Void, Never>?
     private static let minRefreshInterval: TimeInterval = 45
 
+    /// When true, Home post-quiet / background refreshes must not start (Weekly Report open).
+    @MainActor static var isWeeklyReportVisible = false
+
     @MainActor
     static func refreshSharedWarnings(
         operativeStore: OperativeStore,
@@ -21,38 +24,50 @@ enum WarningsRefreshHelper {
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore,
         force: Bool = false
-    ) async {
-        guard userStore.hasAdminAccess() else { return }
+    ) async -> Bool {
+        guard userStore.hasAdminAccess() else { return false }
 
-        // Always skip during bootstrap / launch quiet — even when `force` is true.
-        // Opening Warnings used to pass force:true and bypass these guards, which
-        // jetsams the Simulator right after Home bootstrap finishes.
+        if isWeeklyReportVisible {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (Weekly Report visible)")
+            return false
+        }
+
+        // Never scan during active bootstrap — that jetsams Simulator.
         if firebaseBackend.isBootstrappingOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap in progress)")
-            return
-        }
-        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
-            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
-            return
+            return false
         }
         if !firebaseBackend.hasBootstrappedOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap not finished)")
-            return
+            return false
+        }
+
+        // Launch quiet blocks *all* new scans (auto and force). Scanning during quiet
+        // jetsams Simulator. The Warnings sheet must use `awaitWarmCacheOrRefresh`
+        // instead — that waits for Home's post-quiet warm pass (instant once cached).
+        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
+            return false
         }
 
         if !force {
             if bookingStore.isLoading || operativeStore.isLoading || holidayStore.isLoading || projectStore.isLoading {
-                return
+                return false
             }
             let now = Date()
             if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < minRefreshInterval {
-                return
+                return false
             }
         }
 
         if let inFlightTask {
+            // Always join the in-flight pass — never start a second org scan (jetsams Simulator).
+            print("🔥🔥🔥 DEBUG: Warnings refresh awaiting in-flight pass (no second snapshot)")
             await inFlightTask.value
-            if !force { return }
+            // Success = shared service has a published pass. Do not treat Task cancellation
+            // as failure — Weekly Report open used to cancel the joiner and report false
+            // even when (or because) results were discarded.
+            return true
         }
 
         let task = Task { @MainActor in
@@ -73,6 +88,92 @@ enum WarningsRefreshHelper {
         if inFlightTask == task {
             inFlightTask = nil
         }
+        return true
+    }
+
+    /// Sheet open path: show warm cache instantly when available; otherwise wait for
+    /// Home's post-quiet pass (or quiet to end), then run one capped scan. Never starts
+    /// a heavy compute during launch quiet — that crashed with ~90 bookings.
+    @MainActor
+    static func awaitWarmCacheOrRefresh(
+        operativeStore: OperativeStore,
+        bookingStore: BookingStore,
+        projectStore: ProjectStore,
+        userStore: UserStore,
+        managerScheduleStore: ManagerScheduleStore,
+        holidayStore: HolidayStore,
+        firebaseBackend: FirebaseBackend,
+        appSettings: AppSettingsStore
+    ) async -> Bool {
+        let service = WarningsService.shared
+        if !service.activeWarnings.isEmpty || service.hasCompletedLiveDetection {
+            print("🔥🔥🔥 DEBUG: Warnings warm cache hit active=\(service.activeWarnings.count) completed=\(service.hasCompletedLiveDetection)")
+            return true
+        }
+        if let inFlightTask {
+            print("🔥🔥🔥 DEBUG: Warnings warm path joining in-flight scan")
+            await inFlightTask.value
+            return true
+        }
+
+        // Wait for quiet to end *or* Home post-quiet to publish — do not scan yet.
+        let deadline = Date().addingTimeInterval(45)
+        while Date() < deadline {
+            if !service.activeWarnings.isEmpty || service.hasCompletedLiveDetection {
+                print("🔥🔥🔥 DEBUG: Warnings warm cache filled while waiting active=\(service.activeWarnings.count)")
+                return true
+            }
+            if let inFlightTask {
+                print("🔥🔥🔥 DEBUG: Warnings warm path joining late in-flight scan")
+                await inFlightTask.value
+                return true
+            }
+            if isWeeklyReportVisible {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                continue
+            }
+            let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
+            if !quiet,
+               firebaseBackend.hasBootstrappedOrgDataLoad,
+               !firebaseBackend.isBootstrappingOrgDataLoad {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+
+        if !service.activeWarnings.isEmpty || service.hasCompletedLiveDetection {
+            return true
+        }
+        print("🔥🔥🔥 DEBUG: Warnings warm path starting post-quiet scan")
+        return await refreshSharedWarnings(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings,
+            force: true
+        )
+    }
+
+    /// Pause *new* Home scans before opening heavy sheets. Do not cancel an in-flight
+    /// compute — that discarded results and left Warnings empty after Weekly Report.
+    @MainActor
+    static func cancelInFlightRefresh() {
+        WarningsService.shared.cancelInFlightUpdate()
+        print("🔥🔥🔥 DEBUG: Warnings refresh — pausing new scans only (in-flight kept)")
+    }
+
+    /// Mark Weekly Report visible and yield so Home can stop derived work before heavy UI.
+    @MainActor
+    static func prepareForHeavySheet() async {
+        isWeeklyReportVisible = true
+        cancelInFlightRefresh()
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        await Task.yield()
     }
 
     @MainActor
@@ -107,6 +208,7 @@ enum WarningsRefreshHelper {
         // Yield so Home can finish painting before the heavy snapshot work.
         await Task.yield()
 
+        print("🔥🔥🔥 DEBUG: Warnings scan starting bookings=\(bookingStore.bookings.count) operatives=\(activeOperatives.count) users=\(userStore.organizationUsers.count)")
         await WarningsService.shared.updateWarningsAsync(
             operatives: activeOperatives,
             bookings: bookingStore.bookings,
@@ -122,6 +224,7 @@ enum WarningsRefreshHelper {
             materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsTomorrow
         )
+        print("🔥🔥🔥 DEBUG: Warnings scan finished active=\(WarningsService.shared.activeWarnings.count) count=\(WarningsService.shared.warningCount)")
         postWarningsCountDidChange()
     }
 

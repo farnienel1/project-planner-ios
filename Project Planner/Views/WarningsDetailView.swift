@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-let-stores"
+    static let id = "wfix-warm-7"
     static let homePillTitle = "Warnings · \(id)"
 }
 
@@ -34,18 +34,17 @@ struct WarningsDetailView: View {
     @State private var warningPendingDismiss: Warning?
     @State private var showingWarningsSettings = false
     @State private var isRefreshing = false
-    @State private var didScheduleRefresh = false
 
     var body: some View {
         NavigationStack {
-            Group {
+            ZStack {
+                Color(.systemGroupedBackground).ignoresSafeArea()
                 if warningsService.activeWarnings.isEmpty {
                     emptyState
                 } else {
                     warningsScroll
                 }
             }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -82,15 +81,14 @@ struct WarningsDetailView: View {
                 }
             }
             .onAppear {
-                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id)")
-            }
-            .task {
-                // Defer recompute so the sheet can paint first.
-                guard !didScheduleRefresh else { return }
-                didScheduleRefresh = true
-                try? await Task.sleep(nanoseconds: 750_000_000)
-                guard !Task.isCancelled else { return }
-                await refreshAfterLaunchQuietIfNeeded()
+                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id) count=\(warningsService.activeWarnings.count) completed=\(warningsService.hasCompletedLiveDetection)")
+                // Warm-cache path: if Home already published, show instantly. Otherwise
+                // wait for post-quiet (no mid-quiet scan — that jetsammed).
+                if warningsService.activeWarnings.isEmpty && !warningsService.hasCompletedLiveDetection {
+                    Task { @MainActor in
+                        await refreshWarningsAsync(alreadyShowingSpinner: false)
+                    }
+                }
             }
             .sheet(isPresented: $showingWarningsSettings) {
                 NavigationStack {
@@ -164,21 +162,39 @@ struct WarningsDetailView: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 56))
-                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-            Text("No active warnings")
-                .font(.title3.weight(.semibold))
-            Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
-                .font(.subheadline)
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
+            if isRefreshing {
+                ProgressView()
+                    .padding(.bottom, 4)
+                Text("Checking warnings…")
+                    .font(.title3.weight(.semibold))
+                Text("Loading from the background check. Usually instant once Home has settled.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            } else {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 56))
+                    .foregroundStyle(.green)
+                Text("No active warnings")
+                    .font(.title3.weight(.semibold))
+                Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                Button("Retry check") {
+                    Task { await refreshWarningsAsync(alreadyShowingSpinner: false) }
+                }
+                .buttonStyle(.borderedProminent)
+                .padding(.top, 4)
+            }
             Text(WarningsBuildStamp.id)
                 .font(.caption2.weight(.medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
     }
 
     private var warningsScroll: some View {
@@ -378,24 +394,19 @@ struct WarningsDetailView: View {
     }
 
     private func refreshWarnings() {
-        Task { await refreshWarningsAsync() }
+        Task { await refreshWarningsAsync(alreadyShowingSpinner: false) }
     }
 
-    private func refreshAfterLaunchQuietIfNeeded() async {
-        while firebaseBackend.isBootstrappingOrgDataLoad
-            || !firebaseBackend.hasBootstrappedOrgDataLoad
-            || (firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false) {
-            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting quiet \(WarningsBuildStamp.id)")
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            if Task.isCancelled { return }
+    private func refreshWarningsAsync(alreadyShowingSpinner: Bool) async {
+        if !alreadyShowingSpinner {
+            isRefreshing = true
         }
-        await refreshWarningsAsync()
-    }
-
-    private func refreshWarningsAsync() async {
-        isRefreshing = true
-        defer { isRefreshing = false }
-        await WarningsRefreshHelper.refreshSharedWarnings(
+        defer {
+            if !alreadyShowingSpinner {
+                isRefreshing = false
+            }
+        }
+        await WarningsRefreshHelper.awaitWarmCacheOrRefresh(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
             projectStore: projectStore,
@@ -403,19 +414,24 @@ struct WarningsDetailView: View {
             managerScheduleStore: managerScheduleStore,
             holidayStore: holidayStore,
             firebaseBackend: firebaseBackend,
-            appSettings: appSettings,
-            force: true
+            appSettings: appSettings
+        )
+        print(
+            "🔥🔥🔥 DEBUG: WARNINGS_SHEET_REFRESHED \(WarningsBuildStamp.id) active=\(warningsService.activeWarnings.count) count=\(warningsService.warningCount)"
         )
     }
 }
 
 /// Sheet/item identity for a calendar day without making `Date` globally Identifiable.
-private struct IdentifiableDay: Identifiable, Hashable {
+/// `nonisolated` + no `Calendar.current` — that API is MainActor-isolated and breaks
+/// button / escaping action closures.
+private struct IdentifiableDay: Identifiable, Hashable, Sendable {
     let date: Date
-    var id: TimeInterval { Calendar.current.startOfDay(for: date).timeIntervalSince1970 }
+    var id: TimeInterval { date.timeIntervalSince1970 }
 
-    init(_ date: Date) {
-        self.date = Calendar.current.startOfDay(for: date)
+    /// Warning `occurrenceDate` values are already start-of-day from computation.
+    nonisolated init(_ date: Date) {
+        self.date = date
     }
 }
 
