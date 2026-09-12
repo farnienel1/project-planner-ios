@@ -20,8 +20,6 @@ class WarningsService: ObservableObject {
 
     private let resolutionStore: WarningResolutionStore
     private var updateTask: Task<Void, Never>?
-    /// Detached snapshot/generate — cancelled when Weekly Report opens.
-    private var inFlightComputeTask: Task<[Warning], Error>?
     private var updateGeneration = 0
 
     init(resolutionStore: WarningResolutionStore? = nil) {
@@ -267,33 +265,12 @@ class WarningsService: ObservableObject {
             materialItemsForTomorrow: materialItemsForTomorrow,
             materialsDataLoaded: materialsDataLoaded
         )
-        // Detached compute (off main) with cancellation linkage — Weekly Report open must be able
-        // to abort this work or Simulator jetsams under Home + report memory pressure.
-        let computeTask = Task.detached(priority: .utility) {
-            try Task.checkCancellation()
+        // Snapshot + generate off main. Keep this path simple — a throwing/cancellable
+        // Task wrapper previously swallowed results and left Home Warnings empty.
+        let generated = await Task.detached(priority: .utility) {
             let snapshot = WarningsComputation.makeSnapshot(from: input)
-            try Task.checkCancellation()
             return WarningsComputation.generate(snapshot)
-        }
-        inFlightComputeTask?.cancel()
-        inFlightComputeTask = computeTask
-        let generated: [Warning]
-        do {
-            generated = try await withTaskCancellationHandler {
-                try await computeTask.value
-            } onCancel: {
-                computeTask.cancel()
-            }
-        } catch is CancellationError {
-            print("🔥🔥🔥 DEBUG: WarningsService update cancelled before publish")
-            inFlightComputeTask = nil
-            return
-        } catch {
-            print("🔥🔥🔥 DEBUG: WarningsService update failed: \(error)")
-            inFlightComputeTask = nil
-            return
-        }
-        inFlightComputeTask = nil
+        }.value
         guard generation == updateGeneration else { return }
         if Task.isCancelled { return }
         if pruneDismissals {
@@ -314,8 +291,6 @@ class WarningsService: ObservableObject {
         updateGeneration += 1
         updateTask?.cancel()
         updateTask = nil
-        inFlightComputeTask?.cancel()
-        inFlightComputeTask = nil
         print("🔥🔥🔥 DEBUG: WarningsService in-flight update cancelled")
     }
 

@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-ui-back-1"
+    static let id = "wfix-full-2"
     static let homePillTitle = "Warnings · \(id)"
 }
 
@@ -82,8 +82,16 @@ struct WarningsDetailView: View {
             }
             .onAppear {
                 print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id) count=\(warningsService.activeWarnings.count)")
+                // If Home detection was cancelled/empty, do one safe join-refresh after paint.
+                if warningsService.activeWarnings.isEmpty {
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 450_000_000)
+                        guard warningsService.activeWarnings.isEmpty else { return }
+                        guard !WarningsRefreshHelper.isWeeklyReportVisible else { return }
+                        await refreshWarningsAsync(alreadyShowingSpinner: false)
+                    }
+                }
             }
-            // No auto-refresh on open — stacking with Home's scan caused blank/white sheets.
             .sheet(isPresented: $showingWarningsSettings) {
                 NavigationStack {
                     OrganisationWarningsSettingsView(

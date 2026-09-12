@@ -174,6 +174,7 @@ struct WeeklyReportView: View {
                     try? await Task.sleep(nanoseconds: 250_000_000)
                     await Task.yield()
                     showFullChrome = true
+                    refreshPeriodSummaryFromShared()
                     print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_CHROME \(WarningsBuildStamp.id)")
                 }
             }
@@ -184,10 +185,12 @@ struct WeeklyReportView: View {
         ZStack {
             Color(.systemGroupedBackground).ignoresSafeArea()
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 24) {
+                LazyVStack(spacing: 24) {
                     brandHeader
                     quickSelectCard
                     customRangeCard
+                    invoicingPeriodCard
+                    warningsCard
                     Text("Period warnings and pay breakdown are calculated when you tap Generate — this is separate from Home Warnings (live ops from today forward).")
                         .font(.system(size: 12))
                         .foregroundStyle(WeeklyReportColors.muted)
@@ -839,11 +842,57 @@ struct WeeklyReportView: View {
         let range = reportDateRange
         var sections: [WeeklyReportExportBuilder.Section] = []
 
+        let clashWarnings = activeWarningsService.operativeBookingClashes(in: range)
+        let unbookedWarnings = activeWarningsService.unbookedLabourWarnings(in: range)
+        var criticalRows: [[String]] = []
+        for warning in clashWarnings {
+            criticalRows.append([
+                "Booking clash — not actioned",
+                warning.occurrenceDate.map(formatDate) ?? "",
+                warning.affectedPersonNames,
+                warning.title,
+                warning.message,
+            ])
+        }
+        for warning in unbookedWarnings {
+            criticalRows.append([
+                "Missed booking — not actioned",
+                warning.occurrenceDate.map(formatDate) ?? "",
+                warning.affectedPersonNames,
+                warning.title,
+                warning.message,
+            ])
+        }
+        if criticalRows.isEmpty {
+            criticalRows.append(["None", "", "", "No unactioned clashes or missed bookings in this report period", ""])
+        }
+        let criticalPeople = Set(
+            (clashWarnings + unbookedWarnings)
+                .flatMap { $0.affectedPersonNames.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
+                .filter { !$0.isEmpty }
+        ).sorted()
+        let peopleNote: String
+        if criticalPeople.isEmpty {
+            peopleNote = "Scanned for the report date range only (not limited by Warnings settings look-ahead)."
+        } else {
+            peopleNote = "People with unactioned issues: \(criticalPeople.joined(separator: ", ")). Scanned for the report date range only (not limited by Warnings settings look-ahead)."
+        }
+        sections.append(
+            WeeklyReportExportBuilder.Section(
+                title: "Unactioned clashes & missed bookings",
+                headers: ["Issue", "Date", "Person(s)", "Description", "Detail"],
+                rows: criticalRows,
+                totalRow: nil,
+                style: .critical,
+                bannerNote: peopleNote
+            )
+        )
+
         var warningRows: [[String]] = []
-        for warning in activeWarningsService.operativeBookingClashes(in: range) {
+        for warning in clashWarnings {
             warningRows.append(clashExportCells(warning, status: "Active — remove booking"))
         }
-        for warning in activeWarningsService.unbookedLabourWarnings(in: range) {
+        for warning in unbookedWarnings {
             warningRows.append(clashExportCells(warning, status: "Active"))
         }
         for warning in activeWarningsService.unresolvedManagerClashes(in: range) {
