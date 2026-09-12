@@ -32,20 +32,40 @@ enum WarningsRefreshHelper {
             return false
         }
 
-        // Always skip during bootstrap / launch quiet — even when `force` is true.
-        // Opening Warnings used to pass force:true and bypass these guards, which
-        // jetsams the Simulator right after Home bootstrap finishes.
+        // Never scan during active bootstrap — that jetsams Simulator.
         if firebaseBackend.isBootstrappingOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap in progress)")
-            return false
-        }
-        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
-            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
             return false
         }
         if !firebaseBackend.hasBootstrappedOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap not finished)")
             return false
+        }
+
+        // Launch quiet: Home auto-refresh must wait. Sheet open / Retry (`force`) must
+        // NOT return empty forever — wait out the quiet window, then scan. Logs showed
+        // WARNINGS_SHEET repeatedly skipping quiet and publishing count=0.
+        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
+            if force {
+                let remaining = quietUntil.timeIntervalSinceNow
+                let waitNs = UInt64(max(0, min(remaining, 45)) * 1_000_000_000)
+                print("🔥🔥🔥 DEBUG: Warnings force refresh waiting out launch quiet (\(Int(remaining))s)…")
+                if waitNs > 0 {
+                    try? await Task.sleep(nanoseconds: waitNs)
+                }
+                await Task.yield()
+                if firebaseBackend.isBootstrappingOrgDataLoad || !firebaseBackend.hasBootstrappedOrgDataLoad {
+                    print("🔥🔥🔥 DEBUG: Warnings force refresh aborted — bootstrap state changed during quiet wait")
+                    return false
+                }
+                if isWeeklyReportVisible {
+                    print("🔥🔥🔥 DEBUG: Warnings force refresh aborted — Weekly Report opened during quiet wait")
+                    return false
+                }
+            } else {
+                print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
+                return false
+            }
         }
 
         if !force {

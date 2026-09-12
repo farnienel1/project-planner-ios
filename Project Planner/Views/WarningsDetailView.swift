@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-idle-3"
+    static let id = "wfix-quiet-4"
     static let homePillTitle = "Warnings · \(id)"
 }
 
@@ -82,10 +82,11 @@ struct WarningsDetailView: View {
             }
             .onAppear {
                 print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id) count=\(warningsService.activeWarnings.count)")
-                // If Home detection was cancelled/empty, do one safe join-refresh after paint.
+                // Always join a force refresh when empty — helper waits out launch quiet
+                // instead of returning count=0 forever (see wfix-quiet-4).
                 if warningsService.activeWarnings.isEmpty {
                     Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 450_000_000)
+                        try? await Task.sleep(nanoseconds: 350_000_000)
                         guard warningsService.activeWarnings.isEmpty else { return }
                         guard !WarningsRefreshHelper.isWeeklyReportVisible else { return }
                         await refreshWarningsAsync(alreadyShowingSpinner: false)

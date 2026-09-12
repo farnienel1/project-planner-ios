@@ -655,25 +655,29 @@ struct HomeView: View {
             force: true
         )
         if !didRefresh {
-            // Report sheet / quiet race — one retry after a short beat.
-            print("🔥🔥🔥 DEBUG: Home post-quiet warnings first pass skipped — retrying")
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            if Task.isCancelled { return }
-            guard !WarningsRefreshHelper.isWeeklyReportVisible else {
-                print("🔥🔥🔥 DEBUG: Home post-quiet warnings deferred — weekly report open")
-                return
+            // Report sheet open / race — wait for Weekly Report to close, then retry.
+            print("🔥🔥🔥 DEBUG: Home post-quiet warnings first pass skipped — waiting to retry")
+            let retryDeadline = Date().addingTimeInterval(180)
+            while Date() < retryDeadline {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                if Task.isCancelled { return }
+                if WarningsRefreshHelper.isWeeklyReportVisible {
+                    print("🔥🔥🔥 DEBUG: Home post-quiet warnings waiting — weekly report still open")
+                    continue
+                }
+                didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
+                    operativeStore: operativeStore,
+                    bookingStore: bookingStore,
+                    projectStore: projectStore,
+                    userStore: userStore,
+                    managerScheduleStore: managerScheduleStore,
+                    holidayStore: holidayStore,
+                    firebaseBackend: firebaseBackend,
+                    appSettings: appSettings,
+                    force: true
+                )
+                if didRefresh { break }
             }
-            didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
-                operativeStore: operativeStore,
-                bookingStore: bookingStore,
-                projectStore: projectStore,
-                userStore: userStore,
-                managerScheduleStore: managerScheduleStore,
-                holidayStore: holidayStore,
-                firebaseBackend: firebaseBackend,
-                appSettings: appSettings,
-                force: true
-            )
         }
         guard didRefresh else {
             print("🔥🔥🔥 DEBUG: Home post-quiet warnings skipped — refresh did not run")
