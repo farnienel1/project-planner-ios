@@ -17,6 +17,8 @@ class WarningsService: ObservableObject {
     @Published private(set) var highCount: Int = 0
     @Published private(set) var mediumCount: Int = 0
     @Published private(set) var lowCount: Int = 0
+    /// True after at least one live scan has published (may be empty = all clear).
+    @Published private(set) var hasCompletedLiveDetection = false
 
     private let resolutionStore: WarningResolutionStore
     private var updateTask: Task<Void, Never>?
@@ -317,6 +319,7 @@ class WarningsService: ObservableObject {
         allGeneratedWarnings = generated
         activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
         refreshSeverityCounts()
+        hasCompletedLiveDetection = true
         WarningsRefreshHelper.postWarningsCountDidChange()
         print("🔥🔥🔥 DEBUG: WarningsService published generated=\(generated.count) active=\(activeWarnings.count) window=\(coverageStart)…\(coverageEnd)")
     }

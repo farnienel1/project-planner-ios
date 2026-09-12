@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-safe-6"
+    static let id = "wfix-warm-7"
     static let homePillTitle = "Warnings · \(id)"
 }
 
@@ -81,14 +81,11 @@ struct WarningsDetailView: View {
                 }
             }
             .onAppear {
-                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id) count=\(warningsService.activeWarnings.count)")
-                // Always force-refresh when empty — helper bypasses launch quiet once
-                // bootstrap is done (see wfix-safe-6).
-                if warningsService.activeWarnings.isEmpty {
+                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id) count=\(warningsService.activeWarnings.count) completed=\(warningsService.hasCompletedLiveDetection)")
+                // Warm-cache path: if Home already published, show instantly. Otherwise
+                // wait for post-quiet (no mid-quiet scan — that jetsammed).
+                if warningsService.activeWarnings.isEmpty && !warningsService.hasCompletedLiveDetection {
                     Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 350_000_000)
-                        guard warningsService.activeWarnings.isEmpty else { return }
-                        guard !WarningsRefreshHelper.isWeeklyReportVisible else { return }
                         await refreshWarningsAsync(alreadyShowingSpinner: false)
                     }
                 }
@@ -170,7 +167,7 @@ struct WarningsDetailView: View {
                     .padding(.bottom, 4)
                 Text("Checking warnings…")
                     .font(.title3.weight(.semibold))
-                Text("Waiting for the app to settle, then running detection. Keep this sheet open.")
+                Text("Loading from the background check. Usually instant once Home has settled.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -409,7 +406,7 @@ struct WarningsDetailView: View {
                 isRefreshing = false
             }
         }
-        await WarningsRefreshHelper.refreshSharedWarnings(
+        await WarningsRefreshHelper.awaitWarmCacheOrRefresh(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
             projectStore: projectStore,
@@ -417,8 +414,7 @@ struct WarningsDetailView: View {
             managerScheduleStore: managerScheduleStore,
             holidayStore: holidayStore,
             firebaseBackend: firebaseBackend,
-            appSettings: appSettings,
-            force: true
+            appSettings: appSettings
         )
         print(
             "🔥🔥🔥 DEBUG: WARNINGS_SHEET_REFRESHED \(WarningsBuildStamp.id) active=\(warningsService.activeWarnings.count) count=\(warningsService.warningCount)"
