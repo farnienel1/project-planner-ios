@@ -106,12 +106,13 @@ enum WarningsRefreshHelper {
         isWeeklyReportVisible = true
         cancelInFlightRefresh()
         await Task.yield()
-        try? await Task.sleep(nanoseconds: 500_000_000)
+        // Drain cancelled detached snapshot work before constructing report UI.
+        try? await Task.sleep(nanoseconds: 900_000_000)
         await Task.yield()
-        // Second cancel in case a publish raced the first.
         cancelInFlightRefresh()
-        try? await Task.sleep(nanoseconds: 700_000_000)
+        try? await Task.sleep(nanoseconds: 900_000_000)
         await Task.yield()
+        cancelInFlightRefresh()
     }
 
     @MainActor

@@ -994,21 +994,23 @@ struct HomeView: View {
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 5])
         case HomeQuickActionID.staffWeeklyReport.rawValue:
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_BUTTON \(WarningsBuildStamp.id)")
-            WarningsRefreshHelper.isWeeklyReportVisible = true
-            WarningsRefreshHelper.cancelInFlightRefresh()
-            weeklyReportLaunch = WeeklyReportLaunchToken(
-                bookingStore: bookingStore,
-                managerScheduleStore: managerScheduleStore,
-                projectStore: projectStore,
-                operativeStore: operativeStore,
-                holidayStore: holidayStore,
-                userStore: userStore,
-                firebaseBackend: firebaseBackend,
-                subcontractorStore: subcontractorStore,
-                appSettings: appSettings,
-                notificationService: notificationService,
-                taskStore: taskStore
-            )
+            // Cancel + drain Home warnings memory BEFORE the sheet exists.
+            Task { @MainActor in
+                await WarningsRefreshHelper.prepareForHeavySheet()
+                weeklyReportLaunch = WeeklyReportLaunchToken(
+                    bookingStore: bookingStore,
+                    managerScheduleStore: managerScheduleStore,
+                    projectStore: projectStore,
+                    operativeStore: operativeStore,
+                    holidayStore: holidayStore,
+                    userStore: userStore,
+                    firebaseBackend: firebaseBackend,
+                    subcontractorStore: subcontractorStore,
+                    appSettings: appSettings,
+                    notificationService: notificationService,
+                    taskStore: taskStore
+                )
+            }
         case HomeQuickActionID.staffDailyOverview.rawValue:
             showingDailyOverview = true
         case HomeQuickActionID.staffManagers.rawValue:

@@ -118,31 +118,86 @@ struct WeeklyReportView: View {
     }
 
     var body: some View {
+        // CRITICAL: first paint must stay tiny. The old branded ScrollView + WarningsDetail
+        // sheet graph jetsammed Simulator when constructed under Home memory pressure.
         NavigationStack {
-            weeklyReportScrollContent
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { weeklyReportToolbar }
-                .sheet(isPresented: $showingWarningsDetail) { warningsDetailSheet }
-                .sheet(isPresented: $showShareXLSX) {
-                    if let generatedXLSXURL {
-                        WeeklyReportShareSheet(items: [generatedXLSXURL])
+            Form {
+                Section {
+                    Text(WarningsBuildStamp.id)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text("Choose a period, then Generate. Heavy warning scans run only when you tap Generate — never on open.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Quick select") {
+                    Button("This week") { setThisWeekRange() }
+                    Button("Last week") { setLastWeekRange() }
+                }
+
+                Section("Custom range") {
+                    DatePicker("Start", selection: $startDate, displayedComponents: .date)
+                    DatePicker("End", selection: $endDate, displayedComponents: .date)
+                }
+
+                Section {
+                    Button {
+                        generateReports()
+                    } label: {
+                        if isGenerating {
+                            HStack {
+                                ProgressView()
+                                Text("Generating…")
+                            }
+                        } else {
+                            Text("Generate Report")
+                                .fontWeight(.semibold)
+                        }
+                    }
+                    .disabled(isGenerating)
+
+                    if let message {
+                        Text(message)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .sheet(isPresented: $showSharePDF) {
-                    if let generatedPDFURL {
-                        WeeklyReportShareSheet(items: [generatedPDFURL])
+            }
+            .navigationTitle("Weekly Report")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 1) {
+                        Text("Weekly Report").font(.headline)
+                        Text(WarningsBuildStamp.id)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .sheet(isPresented: $showGeneratedSuccess) {
-                    reportGeneratedSuccessSheet
-                        .presentationDetents([.medium, .large])
-                        .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showShareXLSX) {
+                if let generatedXLSXURL {
+                    WeeklyReportShareSheet(items: [generatedXLSXURL])
                 }
-                .onAppear {
-                    print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_FORM \(WarningsBuildStamp.id)")
-                    setThisWeekRange()
-                    // Logo loads on Generate / idle — not on open (Simulator jetsam).
+            }
+            .sheet(isPresented: $showSharePDF) {
+                if let generatedPDFURL {
+                    WeeklyReportShareSheet(items: [generatedPDFURL])
                 }
+            }
+            .sheet(isPresented: $showGeneratedSuccess) {
+                reportGeneratedSuccessSheet
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
+            .onAppear {
+                print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_FORM \(WarningsBuildStamp.id)")
+                setThisWeekRange()
+            }
         }
     }
 

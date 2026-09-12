@@ -287,14 +287,14 @@ class WarningsService: ObservableObject {
             }
         } catch is CancellationError {
             print("🔥🔥🔥 DEBUG: WarningsService update cancelled before publish")
-            if inFlightComputeTask == computeTask { inFlightComputeTask = nil }
+            inFlightComputeTask = nil
             return
         } catch {
             print("🔥🔥🔥 DEBUG: WarningsService update failed: \(error)")
-            if inFlightComputeTask == computeTask { inFlightComputeTask = nil }
+            inFlightComputeTask = nil
             return
         }
-        if inFlightComputeTask == computeTask { inFlightComputeTask = nil }
+        inFlightComputeTask = nil
         guard generation == updateGeneration else { return }
         if Task.isCancelled { return }
         if pruneDismissals {
