@@ -230,15 +230,18 @@ class WarningsService: ObservableObject {
         let generation = updateGeneration
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-                // Live Home passes nil coverage overrides. Cap full-period lookback (see liveScanDayCap).
-        // Weekly Report passes explicit labourCoverageStart/End and must not be capped here.
-        let coverageStart: Date = {
-            if let labourCoverageStart {
-                return cal.startOfDay(for: labourCoverageStart)
-            }
-            // Live Home always uses a short past window — full-period rewind is Weekly Report only.
-            return cal.startOfDay(for: cal.date(byAdding: .day, value: -14, to: today) ?? today)
-        }()
+        // Weekly Report passes explicit labourCoverageStart/End — never mutate that.
+        // Live Home uses org settings, with a short past-day cap so full-period mode
+        // cannot balloon into a Simulator jetsam.
+        let coverageStart = cal.startOfDay(
+            for: labourCoverageStart
+                ?? warningDetection.coverageStart(
+                    from: today,
+                    invoicing: invoicingSettings,
+                    calendar: cal,
+                    liveScanDayCap: 14
+                )
+        )
         let coverageEnd = cal.startOfDay(
             for: labourCoverageEnd
                 ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
@@ -271,8 +274,10 @@ class WarningsService: ObservableObject {
             let snapshot = WarningsComputation.makeSnapshot(from: input)
             return WarningsComputation.generate(snapshot)
         }.value
+        // Generation guard only — do NOT drop results on Task.isCancelled. Opening Weekly
+        // Report used to cancel the Home refresh Task and discard a finished scan, leaving
+        // Warnings permanently empty until a later force refresh.
         guard generation == updateGeneration else { return }
-        if Task.isCancelled { return }
         if pruneDismissals {
             // Only drop dismissals before the live detection start — never wipe future keys
             // when a report uses a narrower/past window.
@@ -284,14 +289,16 @@ class WarningsService: ObservableObject {
         allGeneratedWarnings = generated
         activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
         refreshSeverityCounts()
+        WarningsRefreshHelper.postWarningsCountDidChange()
+        print("🔥🔥🔥 DEBUG: WarningsService published generated=\(generated.count) active=\(activeWarnings.count) window=\(coverageStart)…\(coverageEnd)")
     }
 
-    /// Abort any in-flight detection so heavy sheets (Weekly Report) can open without jetsam.
+    /// Soft-stop the structured `updateWarnings` Task only. Do not bump `updateGeneration` —
+    /// that discarded finished scans and left the Warnings sheet empty.
     func cancelInFlightUpdate() {
-        updateGeneration += 1
         updateTask?.cancel()
         updateTask = nil
-        print("🔥🔥🔥 DEBUG: WarningsService in-flight update cancelled")
+        print("🔥🔥🔥 DEBUG: WarningsService structured update task cleared (generation kept)")
     }
 
     /// Approve only applies to MEDIUM manager/admin clashes (weekly report tick).

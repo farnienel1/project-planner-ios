@@ -62,7 +62,10 @@ enum WarningsRefreshHelper {
             // Always join the in-flight pass — never start a second org scan (jetsams Simulator).
             print("🔥🔥🔥 DEBUG: Warnings refresh awaiting in-flight pass (no second snapshot)")
             await inFlightTask.value
-            return !inFlightTask.isCancelled
+            // Success = shared service has a published pass. Do not treat Task cancellation
+            // as failure — Weekly Report open used to cancel the joiner and report false
+            // even when (or because) results were discarded.
+            return true
         }
 
         let task = Task { @MainActor in
@@ -80,35 +83,28 @@ enum WarningsRefreshHelper {
         inFlightTask = task
         lastRefreshAt = Date()
         await task.value
-        let cancelled = task.isCancelled
         if inFlightTask == task {
             inFlightTask = nil
-        }
-        if cancelled {
-            print("🔥🔥🔥 DEBUG: Warnings refresh finished cancelled — not treating as success")
-            return false
         }
         return true
     }
 
-    /// Cancel any in-flight Home warnings scan before opening heavy sheets (Weekly Report).
+    /// Pause *new* Home scans before opening heavy sheets. Do not cancel an in-flight
+    /// compute — that discarded results and left Warnings empty after Weekly Report.
     @MainActor
     static func cancelInFlightRefresh() {
-        inFlightTask?.cancel()
-        inFlightTask = nil
         WarningsService.shared.cancelInFlightUpdate()
-        print("🔥🔥🔥 DEBUG: Warnings refresh in-flight cancelled for sheet open")
+        print("🔥🔥🔥 DEBUG: Warnings refresh — pausing new scans only (in-flight kept)")
     }
 
-    /// Cancel scans and wait briefly so detached snapshot memory can drain before heavy UI.
+    /// Mark Weekly Report visible and yield so Home can stop derived work before heavy UI.
     @MainActor
     static func prepareForHeavySheet() async {
         isWeeklyReportVisible = true
         cancelInFlightRefresh()
         await Task.yield()
-        try? await Task.sleep(nanoseconds: 350_000_000)
+        try? await Task.sleep(nanoseconds: 250_000_000)
         await Task.yield()
-        cancelInFlightRefresh()
     }
 
     @MainActor
@@ -122,8 +118,6 @@ enum WarningsRefreshHelper {
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore
     ) async {
-        if Task.isCancelled { return }
-
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
@@ -144,7 +138,6 @@ enum WarningsRefreshHelper {
 
         // Yield so Home can finish painting before the heavy snapshot work.
         await Task.yield()
-        if Task.isCancelled { return }
 
         await WarningsService.shared.updateWarningsAsync(
             operatives: activeOperatives,

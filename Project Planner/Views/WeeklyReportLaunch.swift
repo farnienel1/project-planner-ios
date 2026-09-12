@@ -90,28 +90,14 @@ struct WeeklyReportOpenShell: View {
         .task {
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SHELL \(WarningsBuildStamp.id)")
             WarningsRefreshHelper.isWeeklyReportVisible = true
-            WarningsRefreshHelper.cancelInFlightRefresh()
+            // Yield only — do not cancel an in-flight Home warnings scan.
             await Task.yield()
             try? await Task.sleep(nanoseconds: 450_000_000)
             await Task.yield()
             isReady = true
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_READY \(WarningsBuildStamp.id)")
         }
-        .onDisappear {
-            WarningsRefreshHelper.isWeeklyReportVisible = false
-            Task { @MainActor in
-                _ = await WarningsRefreshHelper.refreshSharedWarnings(
-                    operativeStore: token.operativeStore,
-                    bookingStore: token.bookingStore,
-                    projectStore: token.projectStore,
-                    userStore: token.userStore,
-                    managerScheduleStore: token.managerScheduleStore,
-                    holidayStore: token.holidayStore,
-                    firebaseBackend: token.firebaseBackend,
-                    appSettings: token.appSettings,
-                    force: true
-                )
-            }
-        }
+        // Do not clear isWeeklyReportVisible here — Home's sheet onDismiss owns that
+        // so derived Up Next/metrics cannot restart under a still-dismissing sheet.
     }
 }
