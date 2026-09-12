@@ -42,15 +42,31 @@ enum WarningsRefreshHelper {
             return false
         }
 
-        // Launch quiet only blocks *automatic* Home refreshes. Sheet open / Retry (`force`)
-        // must scan immediately once bootstrap is done — waiting 20–30s left Warnings empty
-        // and looking broken (see wfix-quiet-4 logs: "waiting out launch quiet (23s)…").
-        if !force, let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
-            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
-            return false
-        }
-        if force, let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
-            print("🔥🔥🔥 DEBUG: Warnings force refresh bypassing launch quiet (\(Int(quietUntil.timeIntervalSinceNow))s left)")
+        // Launch quiet: Home auto-refresh skips. Sheet open / Retry (`force`) waits with
+        // the spinner showing — do NOT scan immediately during quiet (jetsams Simulator:
+        // wfix-now-5 crashed mid-scan with bookings=92). Do NOT return empty either.
+        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
+            if force {
+                let remaining = quietUntil.timeIntervalSinceNow
+                let waitNs = UInt64(max(0.4, min(remaining + 0.35, 40)) * 1_000_000_000)
+                print("🔥🔥🔥 DEBUG: Warnings force refresh waiting for quiet to end (\(Int(remaining))s)…")
+                try? await Task.sleep(nanoseconds: waitNs)
+                await Task.yield()
+                // Brief settle so Home/deferred loads can release memory before snapshot.
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                await Task.yield()
+                if firebaseBackend.isBootstrappingOrgDataLoad || !firebaseBackend.hasBootstrappedOrgDataLoad {
+                    print("🔥🔥🔥 DEBUG: Warnings force refresh aborted — bootstrap state changed")
+                    return false
+                }
+                if isWeeklyReportVisible {
+                    print("🔥🔥🔥 DEBUG: Warnings force refresh aborted — Weekly Report visible")
+                    return false
+                }
+            } else {
+                print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
+                return false
+            }
         }
 
         if !force {

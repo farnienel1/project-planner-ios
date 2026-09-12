@@ -231,31 +231,57 @@ class WarningsService: ObservableObject {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         // Weekly Report passes explicit labourCoverageStart/End — never mutate that.
-        // Live Home uses org settings, with a short past-day cap so full-period mode
-        // cannot balloon into a Simulator jetsam.
+        // Live Home/sheet: hard-cap the window. Full invoicing-period lookahead over
+        // ~90 bookings jetsams Simulator the moment the Warnings sheet opens
+        // (wfix-now-5: "scan starting bookings=92" → crash, never "published").
         let coverageStart = cal.startOfDay(
             for: labourCoverageStart
                 ?? warningDetection.coverageStart(
                     from: today,
                     invoicing: invoicingSettings,
                     calendar: cal,
-                    liveScanDayCap: 14
+                    liveScanDayCap: 7
                 )
         )
-        let coverageEnd = cal.startOfDay(
+        var coverageEnd = cal.startOfDay(
             for: labourCoverageEnd
                 ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
         )
+        if labourCoverageEnd == nil {
+            let liveForwardCap = 7
+            let cappedEnd = cal.startOfDay(
+                for: cal.date(byAdding: .day, value: liveForwardCap - 1, to: today) ?? today
+            )
+            if coverageEnd > cappedEnd {
+                coverageEnd = cappedEnd
+            }
+        }
         // Home live path must NOT auto-scan past unbooked days (jetsams Simulator).
         // Weekly Report Generate passes scanUnbookedFromCoverageStart: true explicitly.
         let effectiveScanUnbookedFromStart = scanUnbookedFromCoverageStart
+        // Trim arrays on MainActor before the detached hop — passing the full org
+        // booking history into Task.detached was enough to jetsam with ~90 rows.
+        let windowedBookings = bookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= coverageStart && day <= coverageEnd
+        }
+        let windowedManagerBookings = managerSiteBookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= coverageStart && day <= coverageEnd
+        }
+        let windowedHolidays = holidayBookings.filter { holiday in
+            let start = cal.startOfDay(for: holiday.startDate)
+            let end = cal.startOfDay(for: holiday.endDate)
+            return end >= coverageStart && start <= coverageEnd
+        }
+        print("🔥🔥🔥 DEBUG: WarningsService window bookings=\(windowedBookings.count)/\(bookings.count) mgr=\(windowedManagerBookings.count) end=\(coverageEnd)")
         let input = WarningsComputationInput(
             operatives: operatives,
-            bookings: bookings,
+            bookings: windowedBookings,
             projects: projects,
             users: users,
-            managerSiteBookings: managerSiteBookings,
-            holidayBookings: holidayBookings,
+            managerSiteBookings: windowedManagerBookings,
+            holidayBookings: windowedHolidays,
             payrollTimePolicy: payrollTimePolicy,
             warningDetection: warningDetection,
             coverageStart: coverageStart,
@@ -271,8 +297,10 @@ class WarningsService: ObservableObject {
         // Snapshot + generate off main. Keep this path simple — a throwing/cancellable
         // Task wrapper previously swallowed results and left Home Warnings empty.
         let generated = await Task.detached(priority: .utility) {
-            let snapshot = WarningsComputation.makeSnapshot(from: input)
-            return WarningsComputation.generate(snapshot)
+            autoreleasepool {
+                let snapshot = WarningsComputation.makeSnapshot(from: input)
+                return WarningsComputation.generate(snapshot)
+            }
         }.value
         // Generation guard only — do NOT drop results on Task.isCancelled. Opening Weekly
         // Report used to cancel the Home refresh Task and discard a finished scan, leaving
