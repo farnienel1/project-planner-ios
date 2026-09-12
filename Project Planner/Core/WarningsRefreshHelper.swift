@@ -106,11 +106,7 @@ enum WarningsRefreshHelper {
         isWeeklyReportVisible = true
         cancelInFlightRefresh()
         await Task.yield()
-        // Drain cancelled detached snapshot work before constructing report UI.
-        try? await Task.sleep(nanoseconds: 900_000_000)
-        await Task.yield()
-        cancelInFlightRefresh()
-        try? await Task.sleep(nanoseconds: 900_000_000)
+        try? await Task.sleep(nanoseconds: 350_000_000)
         await Task.yield()
         cancelInFlightRefresh()
     }

@@ -43,8 +43,7 @@ struct WeeklyReportLaunchToken: Identifiable {
     }
 }
 
-/// Settling shell only — never nests NavigationStack around the report form.
-/// WeeklyReportView itself is now a tiny Form (Generate still uses the full engine).
+/// Light settle gate, then the real WeeklyReportView (which defers its own branded chrome).
 struct WeeklyReportOpenShell: View {
     let token: WeeklyReportLaunchToken
     @Environment(\.dismiss) private var dismiss
@@ -70,7 +69,7 @@ struct WeeklyReportOpenShell: View {
                 NavigationStack {
                     VStack(spacing: 16) {
                         ProgressView()
-                        Text("Preparing weekly report…")
+                        Text("Opening weekly report…")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                         Text(WarningsBuildStamp.id)
@@ -90,12 +89,29 @@ struct WeeklyReportOpenShell: View {
         }
         .task {
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SHELL \(WarningsBuildStamp.id)")
-            await WarningsRefreshHelper.prepareForHeavySheet()
-            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_READY \(WarningsBuildStamp.id)")
+            WarningsRefreshHelper.isWeeklyReportVisible = true
+            WarningsRefreshHelper.cancelInFlightRefresh()
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            await Task.yield()
             isReady = true
+            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_READY \(WarningsBuildStamp.id)")
         }
         .onDisappear {
             WarningsRefreshHelper.isWeeklyReportVisible = false
+            Task { @MainActor in
+                _ = await WarningsRefreshHelper.refreshSharedWarnings(
+                    operativeStore: token.operativeStore,
+                    bookingStore: token.bookingStore,
+                    projectStore: token.projectStore,
+                    userStore: token.userStore,
+                    managerScheduleStore: token.managerScheduleStore,
+                    holidayStore: token.holidayStore,
+                    firebaseBackend: token.firebaseBackend,
+                    appSettings: token.appSettings,
+                    force: true
+                )
+            }
         }
     }
 }

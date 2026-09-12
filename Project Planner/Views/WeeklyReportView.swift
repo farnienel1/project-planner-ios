@@ -53,6 +53,8 @@ struct WeeklyReportView: View {
     @State private var periodMediumCount = 0
     @State private var periodLowCount = 0
     @State private var periodSummaryReady = false
+    /// Defer branded chrome one beat so sheet presentation cannot jetsam.
+    @State private var showFullChrome = false
 
     init(
         bookingStore: BookingStore,
@@ -118,85 +120,62 @@ struct WeeklyReportView: View {
     }
 
     var body: some View {
-        // CRITICAL: first paint must stay tiny. The old branded ScrollView + WarningsDetail
-        // sheet graph jetsammed Simulator when constructed under Home memory pressure.
         NavigationStack {
-            Form {
-                Section {
-                    Text(WarningsBuildStamp.id)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    Text("Choose a period, then Generate. Heavy warning scans run only when you tap Generate — never on open.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("Quick select") {
-                    Button("This week") { setThisWeekRange() }
-                    Button("Last week") { setLastWeekRange() }
-                }
-
-                Section("Custom range") {
-                    DatePicker("Start", selection: $startDate, displayedComponents: .date)
-                    DatePicker("End", selection: $endDate, displayedComponents: .date)
-                }
-
-                Section {
-                    Button {
-                        generateReports()
-                    } label: {
-                        if isGenerating {
-                            HStack {
-                                ProgressView()
-                                Text("Generating…")
+            Group {
+                if showFullChrome {
+                    weeklyReportScrollContent
+                        .toolbar { weeklyReportToolbar }
+                        .sheet(isPresented: $showingWarningsDetail) { warningsDetailSheet }
+                        .sheet(isPresented: $showShareXLSX) {
+                            if let generatedXLSXURL {
+                                WeeklyReportShareSheet(items: [generatedXLSXURL])
                             }
-                        } else {
-                            Text("Generate Report")
-                                .fontWeight(.semibold)
+                        }
+                        .sheet(isPresented: $showSharePDF) {
+                            if let generatedPDFURL {
+                                WeeklyReportShareSheet(items: [generatedPDFURL])
+                            }
+                        }
+                        .sheet(isPresented: $showGeneratedSuccess) {
+                            reportGeneratedSuccessSheet
+                                .presentationDetents([.medium, .large])
+                                .presentationDragIndicator(.visible)
+                        }
+                } else {
+                    VStack(spacing: 14) {
+                        ProgressView()
+                        Text("Loading weekly report…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Text(WarningsBuildStamp.id)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.systemGroupedBackground).ignoresSafeArea())
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Close") { dismiss() }
+                        }
+                        ToolbarItem(placement: .principal) {
+                            Text("Weekly Report").font(.headline)
                         }
                     }
-                    .disabled(isGenerating)
-
-                    if let message {
-                        Text(message)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
                 }
             }
-            .navigationTitle("Weekly Report")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") { dismiss() }
-                }
-                ToolbarItem(placement: .principal) {
-                    VStack(spacing: 1) {
-                        Text("Weekly Report").font(.headline)
-                        Text(WarningsBuildStamp.id)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .sheet(isPresented: $showShareXLSX) {
-                if let generatedXLSXURL {
-                    WeeklyReportShareSheet(items: [generatedXLSXURL])
-                }
-            }
-            .sheet(isPresented: $showSharePDF) {
-                if let generatedPDFURL {
-                    WeeklyReportShareSheet(items: [generatedPDFURL])
-                }
-            }
-            .sheet(isPresented: $showGeneratedSuccess) {
-                reportGeneratedSuccessSheet
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
-            }
             .onAppear {
                 print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_FORM \(WarningsBuildStamp.id)")
                 setThisWeekRange()
+                guard !showFullChrome else { return }
+                Task { @MainActor in
+                    // Let the sheet finish presenting before building branded chrome.
+                    await Task.yield()
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    await Task.yield()
+                    showFullChrome = true
+                    print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_CHROME \(WarningsBuildStamp.id)")
+                }
             }
         }
     }

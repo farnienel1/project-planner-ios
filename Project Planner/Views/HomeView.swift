@@ -612,7 +612,7 @@ struct HomeView: View {
             return
         }
         print("🔥🔥🔥 DEBUG: Home post-quiet warnings detection starting… bookings=\(bookingStore.bookings.count) operatives=\(operativeStore.allOperatives.count)")
-        let didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
+        var didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
             projectStore: projectStore,
@@ -623,6 +623,27 @@ struct HomeView: View {
             appSettings: appSettings,
             force: true
         )
+        if !didRefresh {
+            // Report sheet / quiet race — one retry after a short beat.
+            print("🔥🔥🔥 DEBUG: Home post-quiet warnings first pass skipped — retrying")
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            if Task.isCancelled { return }
+            guard !WarningsRefreshHelper.isWeeklyReportVisible else {
+                print("🔥🔥🔥 DEBUG: Home post-quiet warnings deferred — weekly report open")
+                return
+            }
+            didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                projectStore: projectStore,
+                userStore: userStore,
+                managerScheduleStore: managerScheduleStore,
+                holidayStore: holidayStore,
+                firebaseBackend: firebaseBackend,
+                appSettings: appSettings,
+                force: true
+            )
+        }
         guard didRefresh else {
             print("🔥🔥🔥 DEBUG: Home post-quiet warnings skipped — refresh did not run")
             return
@@ -994,23 +1015,21 @@ struct HomeView: View {
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 5])
         case HomeQuickActionID.staffWeeklyReport.rawValue:
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_BUTTON \(WarningsBuildStamp.id)")
-            // Cancel + drain Home warnings memory BEFORE the sheet exists.
-            Task { @MainActor in
-                await WarningsRefreshHelper.prepareForHeavySheet()
-                weeklyReportLaunch = WeeklyReportLaunchToken(
-                    bookingStore: bookingStore,
-                    managerScheduleStore: managerScheduleStore,
-                    projectStore: projectStore,
-                    operativeStore: operativeStore,
-                    holidayStore: holidayStore,
-                    userStore: userStore,
-                    firebaseBackend: firebaseBackend,
-                    subcontractorStore: subcontractorStore,
-                    appSettings: appSettings,
-                    notificationService: notificationService,
-                    taskStore: taskStore
-                )
-            }
+            WarningsRefreshHelper.isWeeklyReportVisible = true
+            WarningsRefreshHelper.cancelInFlightRefresh()
+            weeklyReportLaunch = WeeklyReportLaunchToken(
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                projectStore: projectStore,
+                operativeStore: operativeStore,
+                holidayStore: holidayStore,
+                userStore: userStore,
+                firebaseBackend: firebaseBackend,
+                subcontractorStore: subcontractorStore,
+                appSettings: appSettings,
+                notificationService: notificationService,
+                taskStore: taskStore
+            )
         case HomeQuickActionID.staffDailyOverview.rawValue:
             showingDailyOverview = true
         case HomeQuickActionID.staffManagers.rawValue:

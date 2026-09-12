@@ -234,21 +234,20 @@ class WarningsService: ObservableObject {
         let today = cal.startOfDay(for: Date())
                 // Live Home passes nil coverage overrides. Cap full-period lookback (see liveScanDayCap).
         // Weekly Report passes explicit labourCoverageStart/End and must not be capped here.
-        let coverageStart = cal.startOfDay(
-            for: labourCoverageStart
-                ?? warningDetection.coverageStart(
-                    from: today,
-                    invoicing: invoicingSettings,
-                    calendar: cal,
-                    liveScanDayCap: labourCoverageStart == nil ? 21 : nil
-                )
-        )
+        let coverageStart: Date = {
+            if let labourCoverageStart {
+                return cal.startOfDay(for: labourCoverageStart)
+            }
+            // Live Home always uses a short past window — full-period rewind is Weekly Report only.
+            return cal.startOfDay(for: cal.date(byAdding: .day, value: -14, to: today) ?? today)
+        }()
         let coverageEnd = cal.startOfDay(
             for: labourCoverageEnd
                 ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
         )
+        // Home live path must NOT auto-scan past unbooked days (jetsams Simulator).
+        // Weekly Report Generate passes scanUnbookedFromCoverageStart: true explicitly.
         let effectiveScanUnbookedFromStart = scanUnbookedFromCoverageStart
-            || (labourCoverageStart == nil && warningDetection.scansUnbookedFromCoverageStart)
         let input = WarningsComputationInput(
             operatives: operatives,
             bookings: bookings,
