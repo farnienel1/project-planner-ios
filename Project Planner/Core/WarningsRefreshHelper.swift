@@ -144,6 +144,7 @@ enum WarningsRefreshHelper {
         // Yield so Home can finish painting before the heavy snapshot work.
         await Task.yield()
 
+        print("🔥🔥🔥 DEBUG: Warnings scan starting bookings=\(bookingStore.bookings.count) operatives=\(activeOperatives.count) users=\(userStore.organizationUsers.count)")
         await WarningsService.shared.updateWarningsAsync(
             operatives: activeOperatives,
             bookings: bookingStore.bookings,
@@ -159,6 +160,7 @@ enum WarningsRefreshHelper {
             materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsTomorrow
         )
+        print("🔥🔥🔥 DEBUG: Warnings scan finished active=\(WarningsService.shared.activeWarnings.count) count=\(WarningsService.shared.warningCount)")
         postWarningsCountDidChange()
     }
 
