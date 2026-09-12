@@ -209,7 +209,9 @@ struct HomeView: View {
                 .environmentObject(taskStore)
                 .environmentObject(notificationService)
         }
-        .sheet(item: $weeklyReportLaunch) { token in
+        .sheet(item: $weeklyReportLaunch, onDismiss: {
+            WarningsRefreshHelper.isWeeklyReportVisible = false
+        }) { token in
             WeeklyReportOpenShell(token: token)
         }
 
@@ -992,6 +994,8 @@ struct HomeView: View {
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 5])
         case HomeQuickActionID.staffWeeklyReport.rawValue:
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_BUTTON \(WarningsBuildStamp.id)")
+            WarningsRefreshHelper.isWeeklyReportVisible = true
+            WarningsRefreshHelper.cancelInFlightRefresh()
             weeklyReportLaunch = WeeklyReportLaunchToken(
                 bookingStore: bookingStore,
                 managerScheduleStore: managerScheduleStore,

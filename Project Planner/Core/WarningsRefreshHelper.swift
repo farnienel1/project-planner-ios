@@ -10,6 +10,9 @@ enum WarningsRefreshHelper {
     @MainActor private static var inFlightTask: Task<Void, Never>?
     private static let minRefreshInterval: TimeInterval = 45
 
+    /// When true, Home post-quiet / background refreshes must not start (Weekly Report open).
+    @MainActor static var isWeeklyReportVisible = false
+
     @MainActor
     static func refreshSharedWarnings(
         operativeStore: OperativeStore,
@@ -23,6 +26,11 @@ enum WarningsRefreshHelper {
         force: Bool = false
     ) async -> Bool {
         guard userStore.hasAdminAccess() else { return false }
+
+        if isWeeklyReportVisible {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (Weekly Report visible)")
+            return false
+        }
 
         // Always skip during bootstrap / launch quiet — even when `force` is true.
         // Opening Warnings used to pass force:true and bypass these guards, which
@@ -88,7 +96,22 @@ enum WarningsRefreshHelper {
     static func cancelInFlightRefresh() {
         inFlightTask?.cancel()
         inFlightTask = nil
+        WarningsService.shared.cancelInFlightUpdate()
         print("🔥🔥🔥 DEBUG: Warnings refresh in-flight cancelled for sheet open")
+    }
+
+    /// Cancel scans and wait briefly so detached snapshot memory can drain before heavy UI.
+    @MainActor
+    static func prepareForHeavySheet() async {
+        isWeeklyReportVisible = true
+        cancelInFlightRefresh()
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        await Task.yield()
+        // Second cancel in case a publish raced the first.
+        cancelInFlightRefresh()
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        await Task.yield()
     }
 
     @MainActor

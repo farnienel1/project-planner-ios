@@ -20,6 +20,8 @@ class WarningsService: ObservableObject {
 
     private let resolutionStore: WarningResolutionStore
     private var updateTask: Task<Void, Never>?
+    /// Detached snapshot/generate — cancelled when Weekly Report opens.
+    private var inFlightComputeTask: Task<[Warning], Error>?
     private var updateGeneration = 0
 
     init(resolutionStore: WarningResolutionStore? = nil) {
@@ -266,13 +268,35 @@ class WarningsService: ObservableObject {
             materialItemsForTomorrow: materialItemsForTomorrow,
             materialsDataLoaded: materialsDataLoaded
         )
-        // Snapshot + generate both off main — makeSnapshot alone was enough to jetsam
-        // when opening Warnings forced a refresh right after Home bootstrap.
-        let generated = await Task.detached(priority: .utility) {
+        // Detached compute (off main) with cancellation linkage — Weekly Report open must be able
+        // to abort this work or Simulator jetsams under Home + report memory pressure.
+        let computeTask = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
             let snapshot = WarningsComputation.makeSnapshot(from: input)
+            try Task.checkCancellation()
             return WarningsComputation.generate(snapshot)
-        }.value
+        }
+        inFlightComputeTask?.cancel()
+        inFlightComputeTask = computeTask
+        let generated: [Warning]
+        do {
+            generated = try await withTaskCancellationHandler {
+                try await computeTask.value
+            } onCancel: {
+                computeTask.cancel()
+            }
+        } catch is CancellationError {
+            print("🔥🔥🔥 DEBUG: WarningsService update cancelled before publish")
+            if inFlightComputeTask == computeTask { inFlightComputeTask = nil }
+            return
+        } catch {
+            print("🔥🔥🔥 DEBUG: WarningsService update failed: \(error)")
+            if inFlightComputeTask == computeTask { inFlightComputeTask = nil }
+            return
+        }
+        if inFlightComputeTask == computeTask { inFlightComputeTask = nil }
         guard generation == updateGeneration else { return }
+        if Task.isCancelled { return }
         if pruneDismissals {
             // Only drop dismissals before the live detection start — never wipe future keys
             // when a report uses a narrower/past window.
@@ -284,6 +308,16 @@ class WarningsService: ObservableObject {
         allGeneratedWarnings = generated
         activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
         refreshSeverityCounts()
+    }
+
+    /// Abort any in-flight detection so heavy sheets (Weekly Report) can open without jetsam.
+    func cancelInFlightUpdate() {
+        updateGeneration += 1
+        updateTask?.cancel()
+        updateTask = nil
+        inFlightComputeTask?.cancel()
+        inFlightComputeTask = nil
+        print("🔥🔥🔥 DEBUG: WarningsService in-flight update cancelled")
     }
 
     /// Approve only applies to MEDIUM manager/admin clashes (weekly report tick).

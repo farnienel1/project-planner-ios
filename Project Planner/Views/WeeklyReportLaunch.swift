@@ -43,17 +43,23 @@ struct WeeklyReportLaunchToken: Identifiable {
     }
 }
 
-/// Store-free gate. Important: do NOT nest NavigationStack around WeeklyReportView —
-/// that produces a blank white sheet on Simulator.
+/// Store-free gate → settle → report. Do NOT nest NavigationStack around WeeklyReportView
+/// (blank white sheet on Simulator). WeeklyReportView is only constructed after memory settles.
 struct WeeklyReportOpenShell: View {
     let token: WeeklyReportLaunchToken
     @Environment(\.dismiss) private var dismiss
-    @State private var showReport = false
-    @State private var isOpeningReport = false
+    private enum Phase {
+        case gate
+        case settling
+        case report
+    }
+
+    @State private var phase: Phase = .gate
 
     var body: some View {
         Group {
-            if showReport {
+            switch phase {
+            case .report:
                 WeeklyReportView(
                     bookingStore: token.bookingStore,
                     managerScheduleStore: token.managerScheduleStore,
@@ -67,7 +73,28 @@ struct WeeklyReportOpenShell: View {
                     notificationService: token.notificationService,
                     taskStore: token.taskStore
                 )
-            } else {
+            case .settling:
+                NavigationStack {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                        Text("Opening weekly report…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Text(WarningsBuildStamp.id)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Button("Close") { dismiss() }
+                            .padding(.top, 8)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.systemGroupedBackground).ignoresSafeArea())
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Close") { dismiss() }
+                        }
+                    }
+                }
+            case .gate:
                 NavigationStack {
                     VStack(spacing: 20) {
                         Image(systemName: "doc.text")
@@ -84,31 +111,20 @@ struct WeeklyReportOpenShell: View {
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.secondary)
                         Button {
-                            guard !isOpeningReport else { return }
-                            isOpeningReport = true
                             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_CONTINUE \(WarningsBuildStamp.id)")
+                            phase = .settling
                             Task { @MainActor in
-                                // Drop any in-flight Home warnings scan so Continue does not jetsam.
-                                WarningsRefreshHelper.cancelInFlightRefresh()
-                                await Task.yield()
-                                try? await Task.sleep(nanoseconds: 350_000_000)
-                                await Task.yield()
-                                showReport = true
+                                await WarningsRefreshHelper.prepareForHeavySheet()
+                                print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SETTLED \(WarningsBuildStamp.id)")
+                                phase = .report
                             }
                         } label: {
-                            if isOpeningReport {
-                                ProgressView()
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 14)
-                            } else {
-                                Text("Continue")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 14)
-                            }
+                            Text("Continue")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(isOpeningReport)
                         .padding(.horizontal, 28)
                         Button("Close") { dismiss() }
                     }
@@ -124,6 +140,12 @@ struct WeeklyReportOpenShell: View {
         }
         .onAppear {
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SHELL \(WarningsBuildStamp.id)")
+            WarningsRefreshHelper.isWeeklyReportVisible = true
+            WarningsRefreshHelper.cancelInFlightRefresh()
+        }
+        .onDisappear {
+            WarningsRefreshHelper.isWeeklyReportVisible = false
+            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SHELL_DISMISS \(WarningsBuildStamp.id)")
         }
     }
 }

@@ -141,7 +141,7 @@ struct WeeklyReportView: View {
                 .onAppear {
                     print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_FORM \(WarningsBuildStamp.id)")
                     setThisWeekRange()
-                    Task { await loadOrganizationLogo() }
+                    // Logo loads on Generate / idle — not on open (Simulator jetsam).
                 }
         }
     }
