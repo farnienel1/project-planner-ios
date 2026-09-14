@@ -10,7 +10,13 @@ enum WarningsRefreshHelper {
     @MainActor private static var inFlightTask: Task<Void, Never>?
     private static let minRefreshInterval: TimeInterval = 45
 
+    /// Home must not start a live scan while Weekly Report is open.
+    @MainActor static var isWeeklyReportVisible = false
+    /// Never start a live scan while the Warnings sheet is presented (jetsam).
+    @MainActor static var isWarningsSheetVisible = false
+
     @MainActor
+    @discardableResult
     static func refreshSharedWarnings(
         operativeStore: OperativeStore,
         bookingStore: BookingStore,
@@ -21,41 +27,49 @@ enum WarningsRefreshHelper {
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore,
         force: Bool = false
-    ) async {
-        guard userStore.hasAdminAccess() else { return }
+    ) async -> Bool {
+        guard userStore.hasAdminAccess() else { return false }
 
-        // Never scan during active bootstrap. Launch quiet only blocks *automatic*
-        // refreshes — force (Warnings sheet) may run the lite live window immediately.
-        // Waiting out quiet then doing a full-horizon scan was the 30s→crash path.
+        if isWarningsSheetVisible {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (Warnings sheet visible)")
+            return false
+        }
+        if isWeeklyReportVisible {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (Weekly Report visible)")
+            return false
+        }
+
+        // Never scan during bootstrap — jetsams Simulator.
         if firebaseBackend.isBootstrappingOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap in progress)")
-            return
+            return false
         }
         if !firebaseBackend.hasBootstrappedOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap not finished)")
-            return
+            return false
         }
-        if !force, let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
+
+        // Launch quiet blocks *all* scans — including force. Scanning mid-quiet with
+        // ~90 bookings jetsams Simulator. Home warms the cache after quiet ends.
+        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
-            return
-        }
-        if force, let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
-            print("🔥🔥🔥 DEBUG: Warnings force refresh during quiet (lite live window only)")
+            return false
         }
 
         if !force {
             if bookingStore.isLoading || operativeStore.isLoading || holidayStore.isLoading || projectStore.isLoading {
-                return
+                return false
             }
             let now = Date()
             if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < minRefreshInterval {
-                return
+                return false
             }
         }
 
         if let inFlightTask {
+            print("🔥🔥🔥 DEBUG: Warnings refresh awaiting in-flight pass (no second snapshot)")
             await inFlightTask.value
-            if !force { return }
+            return true
         }
 
         let task = Task { @MainActor in
@@ -76,6 +90,7 @@ enum WarningsRefreshHelper {
         if inFlightTask == task {
             inFlightTask = nil
         }
+        return true
     }
 
     @MainActor
@@ -107,7 +122,6 @@ enum WarningsRefreshHelper {
         let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
         let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
 
-        // Yield so Home can finish painting before the heavy snapshot work.
         await Task.yield()
 
         await WarningsService.shared.updateWarningsAsync(

@@ -7,9 +7,9 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-lite-8"
-    /// Impossible to miss on Home — if you still see plain "Warnings", you are not on this build.
-    static let homePillTitle = "Warnings FIX"
+    static let id = "wfix-noscan-9"
+    /// Impossible to miss on Home — if you still see plain "Warnings" / FIX / 8, you are not on this build.
+    static let homePillTitle = "Warnings SAFE"
     static let homePillValueWhenClear = "\(id) · All clear"
     static func homePillValue(activeCount: Int) -> String {
         activeCount == 0 ? homePillValueWhenClear : "\(id) · \(activeCount) active"
@@ -38,8 +38,6 @@ struct WarningsDetailView: View {
     @State private var openBookLabourDate: IdentifiableDay?
     @State private var warningPendingDismiss: Warning?
     @State private var showingWarningsSettings = false
-    @State private var isRefreshing = false
-    @State private var didScheduleRefresh = false
 
     var body: some View {
         NavigationStack {
@@ -78,24 +76,14 @@ struct WarningsDetailView: View {
                 }
             }
             .appChromeNavigationBarSurface()
-            .overlay(alignment: .top) {
-                if isRefreshing {
-                    ProgressView()
-                        .padding(8)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .padding(.top, 8)
-                }
-            }
             .onAppear {
-                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id)")
+                WarningsRefreshHelper.isWarningsSheetVisible = true
+                print(
+                    "🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED \(WarningsBuildStamp.id) count=\(warningsService.activeWarnings.count) completed=\(warningsService.hasCompletedLiveDetection) — display only, no scan"
+                )
             }
-            .task {
-                // Defer recompute so the sheet can paint first.
-                guard !didScheduleRefresh else { return }
-                didScheduleRefresh = true
-                try? await Task.sleep(nanoseconds: 750_000_000)
-                guard !Task.isCancelled else { return }
-                await refreshAfterLaunchQuietIfNeeded()
+            .onDisappear {
+                WarningsRefreshHelper.isWarningsSheetVisible = false
             }
             .sheet(isPresented: $showingWarningsSettings) {
                 NavigationStack {
@@ -169,17 +157,7 @@ struct WarningsDetailView: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            if isRefreshing {
-                ProgressView()
-                    .controlSize(.large)
-                Text("Checking…")
-                    .font(.title3.weight(.semibold))
-                Text("Scanning the next few days for clashes and unbooked labour.")
-                    .font(.subheadline)
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-            } else {
+            if warningsService.hasCompletedLiveDetection {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 56))
                     .foregroundStyle(ProjectWorksRevampColors.activeGreen)
@@ -190,6 +168,23 @@ struct WarningsDetailView: View {
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
+            } else {
+                Image(systemName: "hourglass")
+                    .font(.system(size: 56))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                Text("Warming up on Home")
+                    .font(.title3.weight(.semibold))
+                Text("This screen never scans while open (that crashed Simulator). Home runs a short check after launch settles — close and reopen in a few seconds.")
+                    .font(.subheadline)
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                Button("Close & refresh on Home") {
+                    NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .padding(.top, 4)
             }
             Text(WarningsBuildStamp.id)
                 .font(.caption2.weight(.medium))
@@ -372,7 +367,9 @@ struct WarningsDetailView: View {
               let booking = bookingStore.bookings.first(where: { $0.id == id }) else { return }
         Task {
             await bookingStore.deleteBooking(booking)
-            refreshWarnings()
+            // Never rescan while the sheet is open — hide this row and ask Home to refresh after dismiss.
+            warningsService.dismissWarning(warning)
+            NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
         }
     }
 
@@ -382,57 +379,18 @@ struct WarningsDetailView: View {
            let booking = managerScheduleStore.managerSiteBookings.first(where: { $0.id == mgrId }) {
             Task {
                 await managerScheduleStore.deleteBooking(booking)
-                refreshWarnings()
+                warningsService.dismissWarning(warning)
+                NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
             }
             return
         }
         if let opBooking = bookingStore.bookings.first(where: { $0.id == entry.bookingId }) {
             Task {
                 await bookingStore.deleteBooking(opBooking)
-                refreshWarnings()
+                warningsService.dismissWarning(warning)
+                NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
             }
         }
-    }
-
-    private func refreshWarnings() {
-        Task { await refreshWarningsAsync() }
-    }
-
-    private func refreshAfterLaunchQuietIfNeeded() async {
-        // Do not sit on a 30s spinner for launch quiet — that felt broken and still
-        // crashed when a full-horizon scan finally ran. Wait briefly for bootstrap
-        // only, then force the lite live scan (3-day cap in WarningsService).
-        var waited = 0
-        while waited < 10,
-              (firebaseBackend.isBootstrappingOrgDataLoad || !firebaseBackend.hasBootstrappedOrgDataLoad) {
-            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET bootstrap wait \(WarningsBuildStamp.id) t=\(waited)")
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            waited += 1
-            if Task.isCancelled { return }
-            if !warningsService.activeWarnings.isEmpty { return }
-        }
-        if firebaseBackend.isBootstrappingOrgDataLoad || !firebaseBackend.hasBootstrappedOrgDataLoad {
-            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET skip — bootstrap still incomplete")
-            return
-        }
-        await refreshWarningsAsync()
-    }
-
-    private func refreshWarningsAsync() async {
-        isRefreshing = true
-        defer { isRefreshing = false }
-        await WarningsRefreshHelper.refreshSharedWarnings(
-            operativeStore: operativeStore,
-            bookingStore: bookingStore,
-            projectStore: projectStore,
-            userStore: userStore,
-            managerScheduleStore: managerScheduleStore,
-            holidayStore: holidayStore,
-            firebaseBackend: firebaseBackend,
-            appSettings: appSettings,
-            force: true
-        )
-        print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_REFRESHED \(WarningsBuildStamp.id) active=\(warningsService.activeWarnings.count)")
     }
 }
 

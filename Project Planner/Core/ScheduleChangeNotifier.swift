@@ -11,6 +11,8 @@ extension Notification.Name {
     static let bookingStoreDidChange = Notification.Name("bookingStoreDidChange")
     /// Posted after warnings are recomputed (e.g. settings saved). `userInfo["count"]` = active warning count.
     static let warningsDidRecompute = Notification.Name("warningsDidRecompute")
+    /// Warnings sheet asks Home to run a live scan after the sheet dismisses (never while open).
+    static let warningsNeedsHomeRefresh = Notification.Name("warningsNeedsHomeRefresh")
 }
 
 enum ScheduleChangeNotifier {

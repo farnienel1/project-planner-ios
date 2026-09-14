@@ -73,7 +73,12 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar(.hidden, for: .navigationBar)
         .background(homeCanvasBackground.ignoresSafeArea(edges: .top))
-        .sheet(isPresented: $showingWarningsDetail) {
+        .sheet(isPresented: $showingWarningsDetail, onDismiss: {
+            WarningsRefreshHelper.isWarningsSheetVisible = false
+            Task { @MainActor in
+                await runHomeWarningsRefresh(force: true, reason: "warnings-sheet-dismiss")
+            }
+        }) {
             WarningsDetailView(
                 warningsService: WarningsService.shared,
                 projectStore: projectStore,
@@ -209,7 +214,12 @@ struct HomeView: View {
                 .environmentObject(taskStore)
                 .environmentObject(notificationService)
         }
-        .sheet(isPresented: $showingWeeklyReport) {
+        .sheet(isPresented: $showingWeeklyReport, onDismiss: {
+            WarningsRefreshHelper.isWeeklyReportVisible = false
+            Task { @MainActor in
+                await runHomeWarningsRefresh(force: true, reason: "weekly-report-dismiss")
+            }
+        }) {
             WeeklyReportView()
                 .environmentObject(bookingStore)
                 .environmentObject(managerScheduleStore)
@@ -222,6 +232,9 @@ struct HomeView: View {
                 .environmentObject(appSettings)
                 .environmentObject(notificationService)
                 .environmentObject(taskStore)
+                .onAppear {
+                    WarningsRefreshHelper.isWeeklyReportVisible = true
+                }
         }
         .sheet(isPresented: $showingOrgSitesMap) {
             OrgSitesMapView()
@@ -551,9 +564,13 @@ struct HomeView: View {
             await refreshHomeDerivedData()
             print("🔥🔥🔥 DEBUG: Home derived refresh finished")
         }
+        .task(id: userStore.currentUser?.id) {
+            guard userStore.hasAdminAccess() else { return }
+            await runPostQuietWarningsDetection()
+        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
             // Do not recompute warnings here — that raced launch quiet / deferred loads
-            // and jetsamed Simulator. Badge updates when Warnings sheet refreshes or
+            // and jetsamed Simulator. Badge updates when Home warms warnings or
             // when `.warningsDidRecompute` is posted.
             guard userStore.hasAdminAccess() else { return }
             homeWarningCount = WarningsService.shared.warningCount
@@ -565,6 +582,14 @@ struct HomeView: View {
                 homeWarningCount = WarningsService.shared.warningCount
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .warningsNeedsHomeRefresh)) { _ in
+            Task { @MainActor in
+                await runHomeWarningsRefresh(force: true, reason: "sheet-requested")
+            }
+        }
+        .onChange(of: showingWarningsDetail) { _, isOpen in
+            WarningsRefreshHelper.isWarningsSheetVisible = isOpen
+        }
         .onChange(of: showingAdminOverviewCustomize) { _, isOpen in
             if isOpen {
                 let base = persistedAdminOverviewMetricIds.isEmpty
@@ -572,6 +597,71 @@ struct HomeView: View {
                     : persistedAdminOverviewMetricIds
                 draftAdminOverviewMetricIds = Array(base.prefix(3))
             }
+        }
+    }
+
+    /// One lite live pass after launch quiet — never while Warnings/Weekly Report sheets are open.
+    @MainActor
+    private func runPostQuietWarningsDetection() async {
+        let deadline = Date().addingTimeInterval(120)
+        while Date() < deadline {
+            let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
+            let busy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading
+            if !firebaseBackend.isBootstrappingOrgDataLoad,
+               firebaseBackend.hasBootstrappedOrgDataLoad,
+               !quiet,
+               !busy,
+               userStore.hasAdminAccess() {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled { return }
+        }
+        guard userStore.hasAdminAccess() else {
+            print("🔥🔥🔥 DEBUG: Home post-quiet warnings skipped — no admin access yet")
+            return
+        }
+        let dataDeadline = Date().addingTimeInterval(45)
+        while Date() < dataDeadline {
+            let hasPeople = !operativeStore.allOperatives.isEmpty || !userStore.organizationUsers.isEmpty
+            let hasBookings = !bookingStore.bookings.isEmpty || !managerScheduleStore.managerSiteBookings.isEmpty
+            if hasPeople || hasBookings { break }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled { return }
+        }
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        if Task.isCancelled { return }
+        await runHomeWarningsRefresh(force: true, reason: "post-quiet")
+    }
+
+    @MainActor
+    private func runHomeWarningsRefresh(force: Bool, reason: String) async {
+        guard userStore.hasAdminAccess() else { return }
+        if showingWarningsDetail || WarningsRefreshHelper.isWarningsSheetVisible {
+            print("🔥🔥🔥 DEBUG: Home warnings refresh deferred (\(reason)) — sheet open")
+            return
+        }
+        if showingWeeklyReport || WarningsRefreshHelper.isWeeklyReportVisible {
+            print("🔥🔥🔥 DEBUG: Home warnings refresh deferred (\(reason)) — weekly report open")
+            return
+        }
+        print("🔥🔥🔥 DEBUG: Home warnings refresh starting (\(reason)) bookings=\(bookingStore.bookings.count)")
+        let didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings,
+            force: force
+        )
+        if didRefresh {
+            homeWarningCount = WarningsService.shared.warningCount
+            print("🔥🔥🔥 DEBUG: Home warnings refresh finished (\(reason)) count=\(homeWarningCount)")
+        } else {
+            print("🔥🔥🔥 DEBUG: Home warnings refresh skipped (\(reason))")
         }
     }
 
