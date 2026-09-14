@@ -32,22 +32,58 @@ enum InvoicingPeriodResolver {
         return dateRangePeriod(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
     }
 
-    /// Start date of the invoicing period that contains `referenceDate` (used for warnings look-ahead).
+    /// Start date of the invoicing period that contains `referenceDate` (reports / UI “current period”).
     static func warningCoverageStart(
         invoicing: OrganizationInvoicingSettings,
         referenceDate: Date = Date(),
         calendar: Calendar = .current
     ) -> Date {
-        resolve(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar).currentPeriodStart
+        warningScanBounds(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar).start
     }
 
-    /// End date of the invoicing period that contains `referenceDate` (used for warnings look-ahead).
+    /// End date for warnings look-ahead (see `warningScanBounds`).
     static func warningCoverageEnd(
         invoicing: OrganizationInvoicingSettings,
         referenceDate: Date = Date(),
         calendar: Calendar = .current
     ) -> Date {
-        resolve(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar).currentPeriodEnd
+        warningScanBounds(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar).end
+    }
+
+    /// Warnings “Invoicing period” window driven by payment-run settings.
+    /// - Recurring runs: the current recurring period (e.g. Mon–Sun).
+    /// - Date ranges: the full span of **all** configured payment-run ranges in the
+    ///   current month cycle (e.g. 1–15 and 16–31 → 1st through month-end), so past,
+    ///   present, and future dates in that payment-run calendar are included — not only
+    ///   the single half-month segment that contains today.
+    static func warningScanBounds(
+        invoicing: OrganizationInvoicingSettings,
+        referenceDate: Date = Date(),
+        calendar: Calendar = .current
+    ) -> (start: Date, end: Date, label: String) {
+        if invoicing.paymentRunMode == .recurringTimeframe {
+            let period = recurringPeriod(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
+            return (period.currentPeriodStart, period.currentPeriodEnd, period.currentPeriodLabel)
+        }
+
+        let today = calendar.startOfDay(for: referenceDate)
+        let ranges = invoicing.normalizedRanges
+        var starts: [Date] = []
+        var ends: [Date] = []
+        for range in ranges {
+            if let bounds = dateRangeBounds(for: range, containing: today, calendar: calendar) {
+                starts.append(bounds.start)
+                ends.append(bounds.end)
+            }
+        }
+
+        if let start = starts.min(), let end = ends.max(), start <= end {
+            return (start, end, periodLabel(start: start, end: end, calendar: calendar))
+        }
+
+        // No usable ranges — fall back to the single current-period resolver (may be today).
+        let period = dateRangePeriod(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
+        return (period.currentPeriodStart, period.currentPeriodEnd, period.currentPeriodLabel)
     }
 
     // MARK: - Private

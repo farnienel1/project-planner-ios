@@ -166,6 +166,8 @@ enum WarningsRefreshHelper {
         let coverageEnd = cal.startOfDay(
             for: warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
         )
+        let dayCount = max(1, (cal.dateComponents([.day], from: coverageStart, to: coverageEnd).day ?? 0) + 1)
+        print("🔥🔥🔥 DEBUG: Warnings coverage mode=\(warningDetection.clashLookaheadMode.displayName) days=\(dayCount) \(coverageStart)…\(coverageEnd)")
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
         let tomorrowIds = Set(
             bookingStore.bookings
@@ -209,10 +211,13 @@ enum WarningsRefreshHelper {
             payrollTimePolicy: policy,
             warningDetection: warningDetection,
             invoicingSettings: invoicingSettings,
+            labourCoverageStart: coverageStart,
+            labourCoverageEnd: coverageEnd,
             materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
             materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
             materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
-            projectsWithTomorrowBookings: projectsTomorrow
+            projectsWithTomorrowBookings: projectsTomorrow,
+            publishToLiveCache: true
         )
         postWarningsCountDidChange()
     }

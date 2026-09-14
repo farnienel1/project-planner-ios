@@ -37,6 +37,11 @@ struct OrganisationWarningsSettingsView: View {
         InvoicingPeriodResolver.resolve(invoicing: invoicingSettings)
     }
 
+    /// Full payment-run span used by Warnings “Invoicing period” mode (may be wider than the single current segment).
+    private var warningsInvoicingScanLabel: String {
+        InvoicingPeriodResolver.warningScanBounds(invoicing: invoicingSettings).label
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -121,7 +126,7 @@ struct OrganisationWarningsSettingsView: View {
 
             VStack(spacing: 10) {
                 modeOption(.numberOfDays, label: "Set number of days", description: "Scan today through the next N calendar days (inclusive). Example: 7 days = today + the next 6 days.")
-                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan every warning in the current payment-run / invoicing period — past, present, and future dates from period start through period end.")
+                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan the full payment-run calendar from your invoicing settings — all date ranges in the current cycle (past, present, and future). Recurring runs use the current recurring period.")
                 modeOption(.endOfWorkingWeek, label: "End of working week", description: "Scan today through Friday of the current working week. Resets each Monday.")
             }
 
@@ -254,14 +259,14 @@ struct OrganisationWarningsSettingsView: View {
                     Image(systemName: "calendar")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.green)
-                    Text("CURRENT INVOICING PERIOD")
+                    Text("WARNINGS SCAN WINDOW")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.green)
                 }
-                Text(invoicingPeriod.currentPeriodLabel)
+                Text(warningsInvoicingScanLabel)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color(red: 0.08, green: 0.33, blue: 0.18))
-                Text("Warnings will include every clash and unbooked-labour issue dated anywhere in the current invoicing period (\(invoicingPeriod.currentPeriodLabel)) — past, present, and future. Driven by your payment-run settings. Resets when a new period begins.")
+                Text("Uses your payment-run settings. Scans past, present, and future dates across every payment-run range in this cycle (not only the single segment that contains today).")
                     .font(.caption)
                     .foregroundStyle(Color(red: 0.09, green: 0.40, blue: 0.20))
             }

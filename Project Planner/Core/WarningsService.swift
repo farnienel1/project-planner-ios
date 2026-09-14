@@ -238,7 +238,8 @@ class WarningsService: ObservableObject {
                 materialCutOffOnSaturday: materialCutOffOnSaturday,
                 materialCutOffOnSunday: materialCutOffOnSunday,
                 projectsWithTomorrowBookings: projectsWithTomorrowBookings,
-                materialItemsForTomorrow: materialItemsForTomorrow
+                materialItemsForTomorrow: materialItemsForTomorrow,
+                publishToLiveCache: true
             )
         }
     }
@@ -260,7 +261,8 @@ class WarningsService: ObservableObject {
         materialCutOffOnSaturday: Bool = false,
         materialCutOffOnSunday: Bool = false,
         projectsWithTomorrowBookings: [Project] = [],
-        materialItemsForTomorrow: [MaterialItem] = []
+        materialItemsForTomorrow: [MaterialItem] = [],
+        publishToLiveCache: Bool = true
     ) async {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
         let resolvedWarningDetection = warningDetection ?? .default
@@ -283,7 +285,8 @@ class WarningsService: ObservableObject {
             materialCutOffOnSaturday: materialCutOffOnSaturday,
             materialCutOffOnSunday: materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
-            materialItemsForTomorrow: materialItemsForTomorrow
+            materialItemsForTomorrow: materialItemsForTomorrow,
+            publishToLiveCache: publishToLiveCache
         )
     }
 
@@ -303,15 +306,16 @@ class WarningsService: ObservableObject {
         materialCutOffOnSaturday: Bool,
         materialCutOffOnSunday: Bool,
         projectsWithTomorrowBookings: [Project],
-        materialItemsForTomorrow: [MaterialItem]
+        materialItemsForTomorrow: [MaterialItem],
+        publishToLiveCache: Bool
     ) async {
         updateGeneration += 1
         let generation = updateGeneration
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-        // Weekly Report may pass an explicit labour window; live scans use org detection settings
-        // (number of days / working week / current invoicing period).
-        let isLiveScan = labourCoverageStart == nil && labourCoverageEnd == nil
+        // Explicit coverage (from refresh helper) still publishes to the live Warnings list
+        // when publishToLiveCache is true. Period-only callers can set it false.
+        let isLiveScan = publishToLiveCache
         let coverageStart = cal.startOfDay(
             for: labourCoverageStart
                 ?? warningDetection.coverageStart(from: today, invoicing: invoicingSettings, calendar: cal)

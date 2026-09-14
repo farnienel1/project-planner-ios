@@ -110,8 +110,8 @@ struct WarningsDetailView: View {
                             showingWarningsSettings = false
                         },
                         onSaved: {
+                            // Save already forced a refresh — only close settings here.
                             showingWarningsSettings = false
-                            Task { await refreshWarningsTodayOnly() }
                         }
                     )
                     .environmentObject(firebaseBackend)
@@ -685,9 +685,13 @@ struct WarningsDetailView: View {
         if did {
             let detection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
             let invoicing = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
-            let endLabel = detection.detectionHorizonEndLabel(invoicing: invoicing)
+            let start = detection.coverageStart(from: Date(), invoicing: invoicing)
+            let end = detection.coverageEnd(from: Date(), invoicing: invoicing)
+            let formatter = DateFormatter()
+            formatter.dateFormat = "d MMM"
             let mode = detection.clashLookaheadMode.displayName
-            refreshMessage = "Updated · \(warningsService.activeWarnings.count) active · \(mode) through \(endLabel)"
+            let window = "\(formatter.string(from: start))–\(formatter.string(from: end))"
+            refreshMessage = "Updated · \(warningsService.activeWarnings.count) active · \(mode) · \(window)"
         } else {
             refreshMessage = "Could not refresh yet (still loading). Try again in a few seconds."
         }
