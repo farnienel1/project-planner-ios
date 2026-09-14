@@ -20,7 +20,7 @@ enum AppBranding {
 struct AppLaunchSplashView: View {
     var body: some View {
         ZStack {
-            Color.white.ignoresSafeArea()
+            ProjectWorksRevampColors.canvas.ignoresSafeArea()
             VStack(spacing: 20) {
                 Image("AppLogo")
                     .resizable()

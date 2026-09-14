@@ -212,7 +212,7 @@ struct ClashTimelineDiagram: View {
             timeAxisRow
         }
         .padding(13)
-        .background(Color(red: 0.969, green: 0.973, blue: 0.980))
+        .background(ProjectWorksRevampColors.canvas)
         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
     }
 
@@ -247,10 +247,10 @@ struct ClashTimelineDiagram: View {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.white)
+                        .fill(ProjectWorksRevampColors.surface)
                         .overlay(
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
+                                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
                         )
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(accent.barGradient)
@@ -533,7 +533,7 @@ private struct BookingClashWarningCard: View {
             WarningRemoveButton(action: onRemoveWarning)
         }
         .padding(16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -555,7 +555,7 @@ private struct BookingClashWarningCard: View {
             .foregroundStyle(ProjectWorksRevampColors.ink)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -597,7 +597,7 @@ private struct BookingClashWarningCard: View {
             .foregroundStyle(ProjectWorksRevampColors.muted)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
-            .background(Color(red: 0.969, green: 0.973, blue: 0.980))
+            .background(ProjectWorksRevampColors.canvas)
             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 11, style: .continuous)

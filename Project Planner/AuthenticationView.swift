@@ -115,7 +115,7 @@ struct AuthenticationView: View {
                             }
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.surface)
                             .foregroundColor(.blue)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12)

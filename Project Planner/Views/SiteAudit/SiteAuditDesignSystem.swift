@@ -8,29 +8,38 @@
 import SwiftUI
 
 enum SiteAuditColors {
-    static let pageBackground = Color(red: 0.969, green: 0.973, blue: 0.980) // #F7F8FA
-    static let card = Color.white
-    static let text = Color(red: 0.043, green: 0.063, blue: 0.125) // #0B1020
-    static let textSecondary = Color(red: 0.420, green: 0.447, blue: 0.502) // #6B7280
-    static let textDisabled = Color(red: 0.773, green: 0.788, blue: 0.824) // #C5C9D2
-    static let border = Color(red: 0.933, green: 0.941, blue: 0.953) // #EEF0F3
-    static let borderStrong = Color(red: 0.898, green: 0.906, blue: 0.922) // #E5E7EB
-    static let primary = Color(red: 0.094, green: 0.373, blue: 0.647) // #185FA5
-    static let primaryTint = Color(red: 0.902, green: 0.945, blue: 0.984) // #E6F1FB
-    static let success = Color(red: 0.059, green: 0.431, blue: 0.337) // #0F6E56
-    static let successTint = Color(red: 0.882, green: 0.961, blue: 0.933) // #E1F5EE
-    static let warn = Color(red: 0.522, green: 0.310, blue: 0.043) // #854F0B
-    static let warnTint = Color(red: 0.980, green: 0.933, blue: 0.855) // #FAEEDA
-    static let danger = Color(red: 0.639, green: 0.176, blue: 0.176) // #A32D2D
-    static let dangerTint = Color(red: 0.988, green: 0.922, blue: 0.922) // #FCEBEB
-    static let purple = Color(red: 0.325, green: 0.290, blue: 0.718) // #534AB7
-    static let purpleTint = Color(red: 0.933, green: 0.929, blue: 0.996) // #EEEDFE
-    static let pink = Color(red: 0.600, green: 0.208, blue: 0.337) // #993556
-    static let pinkTint = Color(red: 0.984, green: 0.918, blue: 0.941) // #FBEAF0
+    static let pageBackground = ProjectWorksRevampColors.canvas
+    static let card = ProjectWorksRevampColors.surface
+    static let text = ProjectWorksRevampColors.ink
+    static let textSecondary = ProjectWorksRevampColors.muted
+    static let textDisabled = ProjectWorksRevampColors.placeholderInk
+    static let border = ProjectWorksRevampColors.border
+    static let borderStrong = ProjectWorksRevampColors.searchBorder
+    static let primary = ProjectWorksRevampColors.blue
+    static let primaryTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.902, 0.945, 0.984),
+        dark: AppAdaptiveColor.rgb(0.110, 0.173, 0.247)
+    )
+    static let success = ProjectWorksRevampColors.activeGreen
+    static let successTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.882, 0.961, 0.933),
+        dark: AppAdaptiveColor.rgb(0.090, 0.220, 0.165)
+    )
+    static let warn = ProjectWorksRevampColors.upcomingAmber
+    static let warnTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.980, 0.933, 0.855),
+        dark: AppAdaptiveColor.rgb(0.239, 0.180, 0.090)
+    )
+    static let danger = ProjectWorksRevampColors.requiredPillFg
+    static let dangerTint = ProjectWorksRevampColors.requiredPillBg
+    static let purple = ProjectWorksRevampColors.jobTypePillInk
+    static let purpleTint = ProjectWorksRevampColors.jobTypePillBg
+    static let pink = ProjectWorksRevampColors.pinRoseFg
+    static let pinkTint = ProjectWorksRevampColors.pinRoseBg
     static let headerGradientStart = Color(red: 0.043, green: 0.063, blue: 0.125)
     static let headerGradientEnd = Color(red: 0.102, green: 0.141, blue: 0.278)
-    static let heroGradientStart = Color(red: 0.094, green: 0.373, blue: 0.647)
-    static let heroGradientEnd = Color(red: 0.216, green: 0.541, blue: 0.867)
+    static let heroGradientStart = ProjectWorksRevampColors.blue
+    static let heroGradientEnd = ProjectWorksRevampColors.blueLight
 }
 
 enum SiteAuditTypeStyle {
@@ -172,7 +181,7 @@ struct SiteAuditToolbarPill: View {
                         Capsule().fill(disabled ? SiteAuditColors.textDisabled : SiteAuditColors.primary)
                     } else {
                         Capsule()
-                            .fill(Color.white)
+                            .fill(SiteAuditColors.card)
                             .overlay(Capsule().strokeBorder(SiteAuditColors.borderStrong, lineWidth: 0.5))
                     }
                 }

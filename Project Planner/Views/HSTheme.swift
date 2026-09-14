@@ -17,21 +17,33 @@ extension Color {
 }
 
 enum HS {
-    static let bg = Color(hex: "#f1f3f6")
-    static let card = Color.white
-    static let line = Color(hex: "#eef1f5")
-    static let ink = Color(hex: "#16202e")
-    static let slate = Color(hex: "#6b7888")
-    static let slate2 = Color(hex: "#9aa6b4")
+    static let bg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.945, 0.953, 0.965),
+        dark: AppAdaptiveColor.rgb(0.071, 0.078, 0.102)
+    )
+    static let card = ProjectWorksRevampColors.surface
+    static let line = ProjectWorksRevampColors.border
+    static let ink = ProjectWorksRevampColors.ink
+    static let slate = ProjectWorksRevampColors.muted
+    static let slate2 = ProjectWorksRevampColors.placeholderInk
     static let blue = Color(hex: "#2F73F0")
     static let blue2 = Color(hex: "#2563eb")
     static let teal = Color(hex: "#0fae9e")
     static let green = Color(hex: "#1aa564")
-    static let greenBg = Color(hex: "#e4f7ee")
+    static let greenBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.894, 0.969, 0.933),
+        dark: AppAdaptiveColor.rgb(0.090, 0.220, 0.165)
+    )
     static let amber = Color(hex: "#e08a1e")
-    static let amberBg = Color(hex: "#fdf2e0")
+    static let amberBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.992, 0.949, 0.878),
+        dark: AppAdaptiveColor.rgb(0.239, 0.180, 0.090)
+    )
     static let red = Color(hex: "#e2493f")
-    static let redBg = Color(hex: "#fdeaea")
+    static let redBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.992, 0.918, 0.918),
+        dark: AppAdaptiveColor.rgb(0.239, 0.125, 0.137)
+    )
 }
 
 extension View {

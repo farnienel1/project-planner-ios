@@ -671,7 +671,7 @@ struct ScheduleOperativeView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -831,7 +831,7 @@ struct ScheduleOperativeView: View {
             .padding(.horizontal, 12)
         }
         .padding(.vertical, 6)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -920,7 +920,7 @@ struct ScheduleOperativeView: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1048,7 +1048,7 @@ struct ScheduleOperativeView: View {
                 }
             }
             .padding(12)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -1107,7 +1107,7 @@ struct ScheduleOperativeView: View {
                 calendarGridCompact
             }
             .padding(8)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1260,7 +1260,7 @@ struct ScheduleOperativeView: View {
                 .padding(.horizontal, 14)
             }
             .padding(.vertical, 12)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
         }
     }
     

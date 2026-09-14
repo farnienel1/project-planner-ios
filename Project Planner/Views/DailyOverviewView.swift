@@ -450,7 +450,7 @@ struct DailyOverviewView: View {
             .foregroundStyle(ProjectWorksRevampColors.ink)
             .frame(maxWidth: .infinity)
             .padding(14)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -494,7 +494,7 @@ struct DailyOverviewView: View {
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 8)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -744,7 +744,7 @@ struct DailyOverviewView: View {
         HStack(alignment: .top, spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.white)
+                    .fill(ProjectWorksRevampColors.surface)
                     .frame(width: 34, height: 34)
                 Image(systemName: "person.fill.questionmark")
                     .font(.system(size: 17, weight: .medium))
@@ -783,7 +783,7 @@ struct DailyOverviewView: View {
                             }
                             .padding(.horizontal, 9)
                             .padding(.vertical, 4)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.surface)
                             .clipShape(Capsule())
                         }
                     }
@@ -821,7 +821,7 @@ struct DailyOverviewView: View {
                 }
             }
             .padding(14)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -883,7 +883,7 @@ struct DailyOverviewView: View {
                     }
                 }
                 .padding(14)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1008,7 +1008,7 @@ struct DailyOverviewView: View {
                 .foregroundStyle(ProjectWorksRevampColors.blue)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
-                .background(Color(red: 0.969, green: 0.973, blue: 0.980))
+                .background(ProjectWorksRevampColors.canvas)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -1019,7 +1019,7 @@ struct DailyOverviewView: View {
             .buttonStyle(.plain)
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1081,7 +1081,7 @@ struct DailyOverviewView: View {
             }
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)

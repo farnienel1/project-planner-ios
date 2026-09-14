@@ -8,16 +8,16 @@
 import SwiftUI
 
 private enum MyTasksScreenPalette {
-    static let canvas = Color(red: 247 / 255, green: 248 / 255, blue: 250 / 255)
-    static let ink = Color(red: 11 / 255, green: 16 / 255, blue: 32 / 255)
-    static let muted = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255)
-    static let border = Color(red: 238 / 255, green: 240 / 255, blue: 243 / 255)
-    static let blue = Color(red: 24 / 255, green: 95 / 255, blue: 165 / 255)
-    static let blueLight = Color(red: 55 / 255, green: 138 / 255, blue: 221 / 255)
-    static let todoCount = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255)
-    static let inProgressCount = Color(red: 133 / 255, green: 79 / 255, blue: 11 / 255)
-    static let overdueCount = Color(red: 163 / 255, green: 45 / 255, blue: 45 / 255)
-    static let doneCount = Color(red: 15 / 255, green: 110 / 255, blue: 86 / 255)
+    static let canvas = ProjectWorksRevampColors.canvas
+    static let ink = ProjectWorksRevampColors.ink
+    static let muted = ProjectWorksRevampColors.muted
+    static let border = ProjectWorksRevampColors.border
+    static let blue = ProjectWorksRevampColors.blue
+    static let blueLight = ProjectWorksRevampColors.blueLight
+    static let todoCount = ProjectWorksRevampColors.muted
+    static let inProgressCount = ProjectWorksRevampColors.upcomingAmber
+    static let overdueCount = ProjectWorksRevampColors.requiredPillFg
+    static let doneCount = ProjectWorksRevampColors.activeGreen
     static let stripTodo = Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255)
 }
 
@@ -208,7 +208,7 @@ struct TasksDetailView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Color.white)
+                    .background(ProjectWorksRevampColors.surface)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -290,7 +290,7 @@ struct TasksDetailView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
         .padding(.horizontal, 6)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(MyTasksScreenPalette.border, lineWidth: 0.5))
     }
@@ -332,7 +332,7 @@ struct TasksDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(32)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MyTasksScreenPalette.border, lineWidth: 0.5))
     }
@@ -376,7 +376,7 @@ struct TasksDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(24)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
@@ -658,7 +658,7 @@ private struct MyTasksRedesignTaskCard: View {
             }
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)

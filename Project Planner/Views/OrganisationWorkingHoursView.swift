@@ -10,19 +10,37 @@ import SwiftUI
 // MARK: - Palette (TSX reference)
 
 private enum WorkingHoursPalette {
-    static let canvas = Color(red: 0.965, green: 0.969, blue: 0.984) // #f6f7fb
-    static let cardBorder = Color(red: 0.886, green: 0.910, blue: 0.941) // slate-200
-    static let ink = Color(red: 0.059, green: 0.090, blue: 0.165) // slate-900
-    static let muted = Color(red: 0.392, green: 0.455, blue: 0.545) // slate-500
+    static let canvas = ProjectWorksRevampColors.canvas
+    static let cardBorder = ProjectWorksRevampColors.searchBorder
+    static let ink = ProjectWorksRevampColors.ink
+    static let muted = ProjectWorksRevampColors.muted
     static let indigo = Color(red: 0.310, green: 0.275, blue: 0.898) // #4f46e5
     static let amber = Color(red: 0.851, green: 0.467, blue: 0.024) // #d97706
     static let rose = Color(red: 0.882, green: 0.114, blue: 0.282) // #e11d48
-    static let indigoGradientTop = Color(red: 0.933, green: 0.941, blue: 0.992)
-    static let indigoGradientBottom = Color(red: 0.953, green: 0.910, blue: 0.992)
-    static let amberGradientTop = Color(red: 1.0, green: 0.953, blue: 0.878)
-    static let amberGradientBottom = Color(red: 1.0, green: 0.969, blue: 0.929)
-    static let roseGradientTop = Color(red: 1.0, green: 0.894, blue: 0.910)
-    static let roseGradientBottom = Color(red: 1.0, green: 0.941, blue: 0.961)
+    static let indigoGradientTop = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.933, 0.941, 0.992),
+        dark: AppAdaptiveColor.rgb(0.145, 0.149, 0.259)
+    )
+    static let indigoGradientBottom = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.953, 0.910, 0.992),
+        dark: AppAdaptiveColor.rgb(0.165, 0.133, 0.239)
+    )
+    static let amberGradientTop = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(1.0, 0.953, 0.878),
+        dark: AppAdaptiveColor.rgb(0.239, 0.180, 0.090)
+    )
+    static let amberGradientBottom = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(1.0, 0.969, 0.929),
+        dark: AppAdaptiveColor.rgb(0.220, 0.173, 0.110)
+    )
+    static let roseGradientTop = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(1.0, 0.894, 0.910),
+        dark: AppAdaptiveColor.rgb(0.239, 0.125, 0.145)
+    )
+    static let roseGradientBottom = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(1.0, 0.941, 0.961),
+        dark: AppAdaptiveColor.rgb(0.220, 0.133, 0.157)
+    )
 }
 
 // MARK: - Main view

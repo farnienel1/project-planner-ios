@@ -289,7 +289,7 @@ struct WarningsDetailView: View {
             WarningRemoveButton { requestRemoveWarning(warning) }
         }
         .padding(16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
@@ -313,7 +313,7 @@ struct WarningsDetailView: View {
             WarningRemoveButton { requestRemoveWarning(warning) }
         }
         .padding(16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
@@ -331,7 +331,7 @@ struct WarningsDetailView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 

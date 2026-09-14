@@ -14,6 +14,8 @@ class AppSettingsStore: ObservableObject {
     @Published var settings: AppSettings = AppSettings()
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
+
+    private static let appearanceDefaultsKey = "appAppearanceMode"
     
     private let persistenceService: PersistenceService
     private weak var firebaseBackend: FirebaseBackend?
@@ -21,6 +23,10 @@ class AppSettingsStore: ObservableObject {
     
     init(persistenceService: PersistenceService? = nil) {
         self.persistenceService = persistenceService ?? PersistenceService()
+        if let raw = UserDefaults.standard.string(forKey: Self.appearanceDefaultsKey),
+           let stored = ThemePreference(rawValue: raw) {
+            settings.theme = stored
+        }
     }
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {
@@ -97,6 +103,7 @@ class AppSettingsStore: ObservableObject {
             do {
                 let loadedSettings = try await persistenceService.loadAppSettings()
                 self.settings = Self.mergedSettings(loaded: loadedSettings, preserving: previousOptions)
+                UserDefaults.standard.set(self.settings.theme.rawValue, forKey: Self.appearanceDefaultsKey)
                 self.isLoading = false
             } catch {
                 self.errorMessage = error.localizedDescription
@@ -166,6 +173,8 @@ class AppSettingsStore: ObservableObject {
     
     func updateTheme(_ theme: ThemePreference) async {
         settings.theme = theme
+        UserDefaults.standard.set(theme.rawValue, forKey: Self.appearanceDefaultsKey)
+        theme.applyToKeyWindows()
         await saveSettingsLocallyOnly()
     }
     
