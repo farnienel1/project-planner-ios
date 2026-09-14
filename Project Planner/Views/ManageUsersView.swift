@@ -1323,6 +1323,7 @@ struct EditUserView: View {
     @State private var operativeTransitionSiteAudit = true
     @State private var isApplyingUserType = false
     @State private var userTypeChangeMessage: String?
+    @State private var showingPromoteToAdminConfirmation = false
     @State private var showingDeactivateConfirmation = false
     @State private var annualLeaveDaysText: String
     @State private var annualLeaveStartMonth: Int
@@ -1563,6 +1564,11 @@ struct EditUserView: View {
             return "person.badge.key.fill"
         }
         return "person.fill"
+    }
+
+    private var isPromotingToAdministrator: Bool {
+        let currentKind = UserRoleTransitionPolicy.kind(for: permissions)
+        return changeUserTypeDraft == .administrator && (currentKind == .manager || currentKind == .operative)
     }
 
     private var changeUserTypeIsNoOp: Bool {
@@ -2101,7 +2107,11 @@ struct EditUserView: View {
                     }
 
                     Button {
-                        Task { await applyChangeUserType() }
+                        if isPromotingToAdministrator {
+                            showingPromoteToAdminConfirmation = true
+                        } else {
+                            Task { await applyChangeUserType() }
+                        }
                     } label: {
                         if isApplyingUserType {
                             ProgressView()
@@ -2126,9 +2136,78 @@ struct EditUserView: View {
                     Button("Close") {
                         showingChangeUserType = false
                         userTypeChangeMessage = nil
+                        showingPromoteToAdminConfirmation = false
                     }
                 }
             }
+        }
+        .overlay {
+            if showingPromoteToAdminConfirmation {
+                promoteToAdminConfirmationOverlay
+            }
+        }
+    }
+
+    private var promoteToAdminConfirmationOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    guard !isApplyingUserType else { return }
+                    showingPromoteToAdminConfirmation = false
+                }
+
+            VStack(spacing: 16) {
+                Image(systemName: "person.badge.key.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(ManageUserProfilePalette.chipPurpleFg)
+                    .frame(width: 56, height: 56)
+                    .background(ManageUserProfilePalette.chipPurpleBg)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                Text("Make this user an administrator?")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                    .multilineTextAlignment(.center)
+
+                Text("\(user.fullName) will get full administrator access, including user management and organisation settings. Only another administrator can change this later.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .multilineTextAlignment(.center)
+
+                VStack(spacing: 10) {
+                    Button {
+                        showingPromoteToAdminConfirmation = false
+                        Task { await applyChangeUserType() }
+                    } label: {
+                        Text("Yes, make administrator")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(ManageUserProfilePalette.primaryBlue)
+                    .disabled(isApplyingUserType)
+
+                    Button {
+                        showingPromoteToAdminConfirmation = false
+                    } label: {
+                        Text("Cancel")
+                            .font(.system(size: 15, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .disabled(isApplyingUserType)
+                }
+            }
+            .padding(22)
+            .frame(maxWidth: 340)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .shadow(color: Color.black.opacity(0.16), radius: 24, y: 10)
+            .padding(.horizontal, 28)
         }
     }
 
@@ -2827,6 +2906,7 @@ struct EditUserView: View {
                             changeUserTypeDraft = UserRoleTransitionPolicy.kind(for: permissions)
                             applyDraftsForChangeUserTypeSelection()
                             userTypeChangeMessage = nil
+                            showingPromoteToAdminConfirmation = false
                             showingChangeUserType = true
                         }
                     )

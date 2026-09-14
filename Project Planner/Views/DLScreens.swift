@@ -954,8 +954,12 @@ struct DLEditDeadlineScreen: View {
     @State private var pickedFileURL: URL?
     @State private var pickedFileName: String?
 
-    private let locationPresets = ["Ground Floor", "1st Floor", "2nd Floor", "3rd Floor",
-                                   "Roof", "Risers", "External", "Basement"]
+    private let locationPresets = [
+        "Ground Floor",
+        "1st Floor", "2nd Floor", "3rd Floor", "4th Floor",
+        "5th Floor", "6th Floor", "7th Floor", "8th Floor",
+        "Roof", "Risers", "External", "Basement"
+    ]
 
     private var canSave: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty }
 

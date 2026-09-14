@@ -813,46 +813,54 @@ struct HomeView: View {
         .contentShape(Rectangle())
     }
 
-    private var quickActionStorageKey: String {
-        let uid = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "anonymous"
-        return "homeQuickActionOrder.\(uid)"
+    private var quickActionStorageKeyUserId: String? {
+        userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? LocalLayoutPreferences.signedInUserId
     }
 
     private var quickActionCustomizeHintKey: String {
-        let uid = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "anonymous"
+        let uid = quickActionStorageKeyUserId ?? "anonymous"
         return "homeQuickActionCustomizeHint.\(uid)"
     }
 
     private func loadPersistedQuickActionsIfNeeded() {
-        let userKey = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "anonymous"
-        guard hasLoadedQuickActionLayoutForUserKey != userKey else { return }
+        guard let uid = quickActionStorageKeyUserId else { return }
         guard userStore.currentUser != nil || !userStore.isHomeProfileLoading else { return }
-        hasLoadedQuickActionLayoutForUserKey = userKey
-        if let saved = UserDefaults.standard.array(forKey: quickActionStorageKey) as? [String], !saved.isEmpty {
-            let allowed = Set(HomeQuickActionRegistry.allEligibleIds(userStore: userStore))
+        guard hasLoadedQuickActionLayoutForUserKey != uid else { return }
+        hasLoadedQuickActionLayoutForUserKey = uid
+        if let saved = LocalLayoutPreferences.loadQuickActionOrder(userId: uid) {
             var seen = Set<String>()
-            let filtered = saved.filter { allowed.contains($0) }.filter { seen.insert($0).inserted }
-            persistedQuickActionIds = filtered.isEmpty
+            let cleaned = saved.filter { id in
+                HomeQuickActionID.barredFromHome.contains(id) == false
+                    && HomeQuickActionRegistry.meta(for: id) != nil
+                    && seen.insert(id).inserted
+            }
+            persistedQuickActionIds = cleaned.isEmpty
                 ? HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
-                : filtered
+                : cleaned
         } else {
             persistedQuickActionIds = HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
         }
     }
 
     private func savePersistedQuickActions() {
-        UserDefaults.standard.set(persistedQuickActionIds, forKey: quickActionStorageKey)
+        guard let uid = quickActionStorageKeyUserId else { return }
+        LocalLayoutPreferences.saveQuickActionOrder(persistedQuickActionIds, userId: uid)
     }
 
     private func sanitizePersistedQuickActionsIfNeeded() {
         guard userStore.currentUser != nil || !userStore.isHomeProfileLoading else { return }
-        if userStore.organizationUsers.isEmpty { return }
-        let allowed = Set(HomeQuickActionRegistry.allEligibleIds(userStore: userStore))
-        let next = persistedQuickActionIds.filter { allowed.contains($0) }
-        if next.count != persistedQuickActionIds.count {
-            persistedQuickActionIds = next.isEmpty
+        var seen = Set<String>()
+        let cleaned = persistedQuickActionIds.filter { id in
+            HomeQuickActionID.barredFromHome.contains(id) == false
+                && HomeQuickActionRegistry.meta(for: id) != nil
+                && seen.insert(id).inserted
+        }
+        // Keep currently ineligible tiles in storage so permission blips at launch
+        // cannot rewrite the user's layout. Display already filters by eligibility.
+        if cleaned != persistedQuickActionIds {
+            persistedQuickActionIds = cleaned.isEmpty
                 ? HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
-                : next
+                : cleaned
             savePersistedQuickActions()
         }
     }
@@ -1090,13 +1098,16 @@ struct HomeView: View {
         .padding(.bottom, 10)
     }
 
+    private var displayedQuickActionIds: [String] {
+        persistedQuickActionIds.filter { HomeQuickActionRegistry.isEligible(id: $0, userStore: userStore) }
+    }
+
     private let quickGrid = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
 
     private var quickActionsIconGrid: some View {
         LazyVGrid(columns: quickGrid, spacing: 10) {
-            ForEach(persistedQuickActionIds, id: \.self) { id in
-                if let meta = HomeQuickActionRegistry.meta(for: id, userStore: userStore),
-                   HomeQuickActionRegistry.isEligible(id: id, userStore: userStore) {
+            ForEach(displayedQuickActionIds, id: \.self) { id in
+                if let meta = HomeQuickActionRegistry.meta(for: id, userStore: userStore) {
                     if isCustomisingQuickActions {
                         quickActionCustomizeTile(id: id, meta: meta)
                     } else {
