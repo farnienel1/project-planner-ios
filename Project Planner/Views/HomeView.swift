@@ -1731,6 +1731,7 @@ struct OperativeQualificationsReadOnlyView: View {
                 .environmentObject(operativeStore)
                 .environmentObject(firebaseBackend)
                 .environmentObject(notificationService)
+                .environmentObject(userStore)
             } else {
                 NavigationStack {
                     ContentUnavailableView(
@@ -1923,7 +1924,7 @@ private struct HomeProfileCardSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     NavigationLink {
-                        SettingsView()
+                        SettingsView(popsNavigationOnBack: true)
                             .environmentObject(firebaseBackend)
                             .environmentObject(projectStore)
                             .environmentObject(operativeStore)

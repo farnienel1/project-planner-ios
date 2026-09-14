@@ -1154,6 +1154,7 @@ private struct EditUserDialogModifier: ViewModifier {
                     .environmentObject(operativeStore)
                     .environmentObject(firebaseBackend)
                     .environmentObject(notificationService)
+                    .environmentObject(userStore)
                 }
             }
             .confirmationDialog("Profile photo", isPresented: $showingProfilePhotoSourcePicker, titleVisibility: .visible) {
@@ -2009,7 +2010,7 @@ struct EditUserView: View {
                                 iconBackground: ManageUserProfilePalette.chipPinkBg,
                                 iconForeground: ManageUserProfilePalette.chipPinkFg,
                                 title: "Manage Qualifications",
-                                description: "When on, this manager can edit Organisation Qualifications. When off, Qualifications in the app shows only My Qualifications.",
+                                description: "When on, this manager can add and edit organisation qualification templates. When off, Qualifications shows only My Qualifications, and they can still assign templates others have already added.",
                                 isOn: $managerTransitionQualifications
                             )
                             ManageUserCardDivider()
@@ -3229,7 +3230,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipPinkBg,
                 iconForeground: ManageUserProfilePalette.chipPinkFg,
                 title: "Manage Qualifications",
-                description: "When on, this manager can edit Organisation Qualifications. When off, Qualifications in the app shows only My Qualifications.",
+                description: "When on, this manager can add and edit organisation qualification templates. When off, Qualifications shows only My Qualifications, and they can still assign templates others have already added.",
                 isOn: $permissions.qualifications,
                 isDisabled: false
             )

@@ -761,7 +761,7 @@ struct AddUserView: View {
                             invitePermissionDivider
                             PermissionToggle(
                                 title: "Manage Qualifications",
-                                description: "When on, this manager can edit Organisation Qualifications. When off, they only see My Qualifications.",
+                                description: "When on, this manager can add and edit organisation qualification templates. When off, they only see My Qualifications, and they can still assign templates others have already added.",
                                 isOn: $permissions.qualifications,
                                 isDisabled: false,
                                 style: .plainInset
