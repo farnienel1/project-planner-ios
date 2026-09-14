@@ -158,15 +158,36 @@ enum WarningsRefreshHelper {
         let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
         let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
 
+        // Pre-window to the live horizon before crossing into WarningsService so we
+        // never hand ~90 bookings + ~70 manager rows into the MainActor snapshot.
+        let liveEnd = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
+        let liveBookings = bookingStore.bookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= today && day <= liveEnd
+        }
+        let liveManager = managerScheduleStore.managerSiteBookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= today && day <= liveEnd
+        }
+        let liveHolidays = holidayStore.bookings.filter { holiday in
+            let start = cal.startOfDay(for: holiday.startDate)
+            let end = cal.startOfDay(for: holiday.endDate)
+            return end >= today && start <= liveEnd
+        }
+        print("🔥🔥🔥 DEBUG: Warnings helper pre-window bookings=\(liveBookings.count)/\(bookingStore.bookings.count) mgr=\(liveManager.count)/\(managerScheduleStore.managerSiteBookings.count)")
+
         await Task.yield()
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        await Task.yield()
+        if Task.isCancelled { return }
 
         await WarningsService.shared.updateWarningsAsync(
             operatives: activeOperatives,
-            bookings: bookingStore.bookings,
+            bookings: liveBookings,
             projects: projects,
             users: userStore.organizationUsers,
-            managerSiteBookings: managerScheduleStore.managerSiteBookings,
-            holidayBookings: holidayStore.bookings,
+            managerSiteBookings: liveManager,
+            holidayBookings: liveHolidays,
             payrollTimePolicy: policy,
             warningDetection: warningDetection,
             invoicingSettings: invoicingSettings,

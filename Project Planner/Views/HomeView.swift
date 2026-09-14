@@ -554,23 +554,20 @@ struct HomeView: View {
             guard userStore.hasAdminAccess() else { return }
             await runPostQuietWarningsDetection()
         }
-        .task(id: firebaseBackend.launchQuietUntil?.timeIntervalSince1970 ?? -1) {
-            // Quiet expiry must re-arm warm even if the userId task already gave up / was skipped.
-            guard userStore.hasAdminAccess() else { return }
-            guard let quietUntil = firebaseBackend.launchQuietUntil else { return }
-            let remaining = quietUntil.timeIntervalSinceNow
-            if remaining > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000) + 400_000_000)
-            }
-            guard !Task.isCancelled else { return }
-            await runHomeWarningsRefresh(force: true, reason: "quiet-expired")
-        }
+        // NOTE: Do NOT add a second quiet-expired warm task — that double-scanned with
+        // post-quiet and jetsamed Home (see wfix-wr11 logs ending at quiet-expired).
         .onChange(of: bookingStore.bookings.count) { oldCount, newCount in
-            // Re-warm once when bookings arrive after a premature empty live publish.
+            // Only schedule a warm if live detection never completed. Never force-scan
+            // the moment bookings arrive during/after bootstrap — that races quiet.
             guard userStore.hasAdminAccess() else { return }
             guard oldCount == 0, newCount > 0 else { return }
+            guard !WarningsService.shared.hasCompletedLiveDetection else { return }
             Task { @MainActor in
-                await runHomeWarningsRefresh(force: true, reason: "bookings-arrived")
+                // Let post-quiet own the first pass; this is a delayed fallback only.
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled else { return }
+                guard !WarningsService.shared.hasCompletedLiveDetection else { return }
+                await runHomeWarningsRefresh(force: true, reason: "bookings-arrived-fallback")
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
@@ -652,14 +649,20 @@ struct HomeView: View {
             try? await Task.sleep(nanoseconds: 500_000_000)
             if Task.isCancelled { return }
         }
-        try? await Task.sleep(nanoseconds: 800_000_000)
+        // After quiet + deferred holiday/subcontractor loads, memory is still high.
+        // Settle before the MainActor snapshot or Home jetsams (wfix-wr11 quiet-expired).
+        print("🔥🔥🔥 DEBUG: Home post-quiet settling before lite warm…")
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        await Task.yield()
         if Task.isCancelled { return }
         var attempts = 0
-        while attempts < 6 {
+        while attempts < 4 {
             attempts += 1
             let did = await runHomeWarningsRefresh(force: true, reason: "post-quiet-\(attempts)")
             if did { return }
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             if Task.isCancelled { return }
         }
         print("🔥🔥🔥 DEBUG: Home post-quiet warnings gave up after retries")
@@ -678,6 +681,11 @@ struct HomeView: View {
             return false
         }
         print("🔥🔥🔥 DEBUG: Home warnings refresh starting (\(reason)) bookings=\(bookingStore.bookings.count) loading=\(bookingStore.isLoading)")
+        // Abort any leftover scan and breathe before MainActor snapshot.
+        WarningsRefreshHelper.cancelInFlightRefresh()
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        await Task.yield()
         let didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
             bookingStore: bookingStore,

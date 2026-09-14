@@ -239,9 +239,10 @@ class WarningsService: ObservableObject {
                 ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
         )
         if isLiveScan {
-            // Match default org horizon (7 days) but stay windowed — never full invoicing span.
+            // Home auto-warm must stay tiny. 7-day live + ~90 bookings jetsamed Home
+            // right after quiet (wfix-wr11). today…tomorrow+1 is enough for the badge/sheet.
             coverageStart = today
-            let liveForwardDays = 6 // today + 6 = 7 calendar days
+            let liveForwardDays = 1 // today + tomorrow only — Home warm must not jetsam
             let cappedEnd = cal.startOfDay(
                 for: cal.date(byAdding: .day, value: liveForwardDays, to: today) ?? today
             )
@@ -260,7 +261,7 @@ class WarningsService: ObservableObject {
             let end = cal.startOfDay(for: holiday.endDate)
             return end >= coverageStart && start <= coverageEnd
         }
-        print("🔥🔥🔥 DEBUG: WarningsService live=\(isLiveScan) window bookings=\(windowedBookings.count)/\(bookings.count) \(coverageStart)…\(coverageEnd)")
+        print("🔥🔥🔥 DEBUG: WarningsService live=\(isLiveScan) window bookings=\(windowedBookings.count)/\(bookings.count) mgr=\(windowedManager.count) \(coverageStart)…\(coverageEnd)")
         let referencedProjectIds = Set(windowedBookings.map(\.projectId))
             .union(windowedManager.compactMap(\.locationId))
             .union(projectsWithTomorrowBookings.map(\.id))
@@ -285,7 +286,10 @@ class WarningsService: ObservableObject {
             materialItemsForTomorrow: materialItemsForTomorrow
         )
         // Snapshot on MainActor (Swift 6 default isolation) over the *windowed* arrays.
-        // Detach only generate.
+        // Detach only generate. Extra yields stop Home quiet-expired jetsam.
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: isLiveScan ? 300_000_000 : 50_000_000)
+        await Task.yield()
         let snapshot = WarningsComputation.makeSnapshot(from: input)
         await Task.yield()
         let generated = await Task.detached(priority: .utility) {
