@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-swift6-iso"
+    static let id = "wfix-lite-8"
     /// Impossible to miss on Home — if you still see plain "Warnings", you are not on this build.
     static let homePillTitle = "Warnings FIX"
     static let homePillValueWhenClear = "\(id) · All clear"
@@ -169,16 +169,28 @@ struct WarningsDetailView: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 56))
-                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-            Text("No active warnings")
-                .font(.title3.weight(.semibold))
-            Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
-                .font(.subheadline)
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
+            if isRefreshing {
+                ProgressView()
+                    .controlSize(.large)
+                Text("Checking…")
+                    .font(.title3.weight(.semibold))
+                Text("Scanning the next few days for clashes and unbooked labour.")
+                    .font(.subheadline)
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            } else {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 56))
+                    .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                Text("No active warnings")
+                    .font(.title3.weight(.semibold))
+                Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
+                    .font(.subheadline)
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
             Text(WarningsBuildStamp.id)
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
@@ -387,12 +399,21 @@ struct WarningsDetailView: View {
     }
 
     private func refreshAfterLaunchQuietIfNeeded() async {
-        while firebaseBackend.isBootstrappingOrgDataLoad
-            || !firebaseBackend.hasBootstrappedOrgDataLoad
-            || (firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false) {
-            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET waiting quiet \(WarningsBuildStamp.id)")
+        // Do not sit on a 30s spinner for launch quiet — that felt broken and still
+        // crashed when a full-horizon scan finally ran. Wait briefly for bootstrap
+        // only, then force the lite live scan (3-day cap in WarningsService).
+        var waited = 0
+        while waited < 10,
+              (firebaseBackend.isBootstrappingOrgDataLoad || !firebaseBackend.hasBootstrappedOrgDataLoad) {
+            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET bootstrap wait \(WarningsBuildStamp.id) t=\(waited)")
             try? await Task.sleep(nanoseconds: 400_000_000)
+            waited += 1
             if Task.isCancelled { return }
+            if !warningsService.activeWarnings.isEmpty { return }
+        }
+        if firebaseBackend.isBootstrappingOrgDataLoad || !firebaseBackend.hasBootstrappedOrgDataLoad {
+            print("🔥🔥🔥 DEBUG: WARNINGS_SHEET skip — bootstrap still incomplete")
+            return
         }
         await refreshWarningsAsync()
     }
@@ -400,7 +421,7 @@ struct WarningsDetailView: View {
     private func refreshWarningsAsync() async {
         isRefreshing = true
         defer { isRefreshing = false }
-        _ = await WarningsRefreshHelper.refreshSharedWarnings(
+        await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
             projectStore: projectStore,
@@ -411,6 +432,7 @@ struct WarningsDetailView: View {
             appSettings: appSettings,
             force: true
         )
+        print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_REFRESHED \(WarningsBuildStamp.id) active=\(warningsService.activeWarnings.count)")
     }
 }
 

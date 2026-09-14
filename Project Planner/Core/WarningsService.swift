@@ -215,15 +215,46 @@ class WarningsService: ObservableObject {
         let generation = updateGeneration
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-        let coverageStart = cal.startOfDay(for: labourCoverageStart ?? warningDetection.coverageStart(from: today, calendar: cal))
-        let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal))
+        // Weekly Report passes explicit coverage. Live Home/sheet MUST stay tiny —
+        // full org horizon + MainActor snapshot jetsams Simulator (~30s after open).
+        let isLiveScan = labourCoverageStart == nil && labourCoverageEnd == nil
+        var coverageStart = cal.startOfDay(
+            for: labourCoverageStart
+                ?? warningDetection.coverageStart(from: today, calendar: cal)
+        )
+        var coverageEnd = cal.startOfDay(
+            for: labourCoverageEnd
+                ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
+        )
+        if isLiveScan {
+            coverageStart = today
+            let liveForwardDays = 2 // today + 2 = 3 calendar days
+            let cappedEnd = cal.startOfDay(
+                for: cal.date(byAdding: .day, value: liveForwardDays, to: today) ?? today
+            )
+            if coverageEnd > cappedEnd { coverageEnd = cappedEnd }
+        }
+        let windowedBookings = bookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= coverageStart && day <= coverageEnd
+        }
+        let windowedManager = managerSiteBookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= coverageStart && day <= coverageEnd
+        }
+        let windowedHolidays = holidayBookings.filter { holiday in
+            let start = cal.startOfDay(for: holiday.startDate)
+            let end = cal.startOfDay(for: holiday.endDate)
+            return end >= coverageStart && start <= coverageEnd
+        }
+        print("🔥🔥🔥 DEBUG: WarningsService live=\(isLiveScan) window bookings=\(windowedBookings.count)/\(bookings.count) \(coverageStart)…\(coverageEnd)")
         let input = WarningsComputationInput(
             operatives: operatives,
-            bookings: bookings,
+            bookings: windowedBookings,
             projects: projects,
             users: users,
-            managerSiteBookings: managerSiteBookings,
-            holidayBookings: holidayBookings,
+            managerSiteBookings: windowedManager,
+            holidayBookings: windowedHolidays,
             payrollTimePolicy: payrollTimePolicy,
             warningDetection: warningDetection,
             coverageStart: coverageStart,
@@ -234,9 +265,10 @@ class WarningsService: ObservableObject {
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
             materialItemsForTomorrow: materialItemsForTomorrow
         )
-        // Snapshot on MainActor (Swift 6 default isolation). Windowed inputs keep this
-        // light; detach only `generate` for clash/unbooked loops.
+        // Snapshot on MainActor (Swift 6 default isolation) over the *windowed* arrays.
+        // Detach only generate.
         let snapshot = WarningsComputation.makeSnapshot(from: input)
+        await Task.yield()
         let generated = await Task.detached(priority: .utility) {
             WarningsComputation.generate(snapshot)
         }.value
@@ -249,6 +281,7 @@ class WarningsService: ObservableObject {
         allGeneratedWarnings = generated
         activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
         refreshSeverityCounts()
+        print("🔥🔥🔥 DEBUG: WarningsService published active=\(activeWarnings.count) generated=\(generated.count)")
     }
 
     /// Approve only applies to MEDIUM manager/admin clashes (weekly report tick).

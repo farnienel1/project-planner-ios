@@ -24,20 +24,23 @@ enum WarningsRefreshHelper {
     ) async {
         guard userStore.hasAdminAccess() else { return }
 
-        // Always skip during bootstrap / launch quiet — even when `force` is true.
-        // Opening Warnings used to pass force:true and bypass these guards, which
-        // jetsams the Simulator right after Home bootstrap finishes.
+        // Never scan during active bootstrap. Launch quiet only blocks *automatic*
+        // refreshes — force (Warnings sheet) may run the lite live window immediately.
+        // Waiting out quiet then doing a full-horizon scan was the 30s→crash path.
         if firebaseBackend.isBootstrappingOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap in progress)")
-            return
-        }
-        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
-            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
             return
         }
         if !firebaseBackend.hasBootstrappedOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap not finished)")
             return
+        }
+        if !force, let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
+            return
+        }
+        if force, let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
+            print("🔥🔥🔥 DEBUG: Warnings force refresh during quiet (lite live window only)")
         }
 
         if !force {
