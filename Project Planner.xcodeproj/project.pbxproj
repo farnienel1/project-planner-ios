@@ -18,9 +18,22 @@
 		27090EBB2E8ADF3000528ADD /* Project Planner.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Project Planner.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		27F1A0C02F9B200200A1D1F1 /* Exceptions for "Project Planner" folder in "Project Planner" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 27090EBA2E8ADF3000528ADD /* Project Planner */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		27090EBD2E8ADF3000528ADD /* Project Planner */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				27F1A0C02F9B200200A1D1F1 /* Exceptions for "Project Planner" folder in "Project Planner" target */,
+			);
 			path = "Project Planner";
 			sourceTree = "<group>";
 		};
