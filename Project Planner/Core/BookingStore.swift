@@ -189,7 +189,33 @@ class BookingStore: ObservableObject {
     
     func deleteBooking(_ booking: Booking) async {
         bookings.removeAll { $0.id == booking.id }
-        await saveData()
+        try? await persistenceService.saveBookingData(bookings: bookings)
+        smartCache?.cacheBookings(bookings)
+        ScheduleChangeNotifier.postBookingStoreDidChange()
+
+        guard let fb = firebaseBackend else { return }
+        let orgId = await DataPersistenceManager.shared.waitForOrganization(
+            firebaseBackend: fb,
+            maxWaitSeconds: smartCache?.isOnline == false ? 1 : 10
+        ) ?? fb.resolvedOrganizationIdForOfflineWrites()
+        guard let orgId else { return }
+
+        if smartCache?.isOnline == false {
+            OfflineOutboxStore.shared.enqueueDeleteBooking(booking.id, organizationId: orgId)
+            return
+        }
+
+        do {
+            try await fb.deleteBooking(booking, organizationId: orgId)
+        } catch {
+            if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
+                OfflineOutboxStore.shared.enqueueDeleteBooking(booking.id, organizationId: orgId)
+                errorMessage = "Removed locally. Will sync when you're back online."
+            } else {
+                errorMessage = error.localizedDescription
+                print("🔥🔥🔥 DEBUG: Error deleting booking from Firebase: \(error)")
+            }
+        }
     }
     
     func cancelBooking(_ booking: Booking) async {
