@@ -5,7 +5,7 @@
 
 import Foundation
 
-struct Warning: Identifiable, Hashable {
+struct Warning: Identifiable, Hashable, Codable {
     var id: String { resolutionKey }
     let resolutionKey: String
     let type: WarningType
@@ -21,7 +21,7 @@ struct Warning: Identifiable, Hashable {
     var bookingClashDetails: BookingClashDetails?
     var operativeEmail: String?
 
-    enum WarningType: String, Hashable {
+    enum WarningType: String, Hashable, Codable {
         case operativeBookingClash
         case managerLocationClash
         case unbookedLabour
@@ -30,7 +30,7 @@ struct Warning: Identifiable, Hashable {
         case operativeNotVerified
     }
 
-    enum WarningSeverity: String, Hashable, CaseIterable {
+    enum WarningSeverity: String, Hashable, CaseIterable, Codable {
         case low
         case medium
         case high

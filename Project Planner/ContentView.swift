@@ -352,9 +352,14 @@ struct ContentView: View {
         appSettings.loadSettings()
         lastLoadedOrganizationId = organizationId
 
-        // Defer non-UI sync / local reminder work well past secondary loads + quiet period.
+        // Defer non-UI sync / local reminder work well past quiet + Home warnings warm.
+        // At ~35s this used to rewrite every operative via updateOperative→saveDataInternal
+        // while Home was also warming warnings — that jetsamed Simulator on Home.
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 35_000_000_000)
+            try? await Task.sleep(nanoseconds: 55_000_000_000)
+            while WarningsRefreshHelper.isHomeWarningsWarmInFlight {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
             print("🔥🔥🔥 DEBUG: Post-quiet side work starting (operative sync + reminders)…")
             await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
             await notificationService.refreshDailyMaterialCutOffReminder()
@@ -393,9 +398,14 @@ struct ContentView: View {
         await userStore.loadCurrentUser()
         appSettings.loadSettings()
 
-        // Defer non-UI sync / local reminder work well past secondary loads + quiet period.
+        // Defer non-UI sync / local reminder work well past quiet + Home warnings warm.
+        // At ~35s this used to rewrite every operative via updateOperative→saveDataInternal
+        // while Home was also warming warnings — that jetsamed Simulator on Home.
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 35_000_000_000)
+            try? await Task.sleep(nanoseconds: 55_000_000_000)
+            while WarningsRefreshHelper.isHomeWarningsWarmInFlight {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
             print("🔥🔥🔥 DEBUG: Post-quiet side work starting (operative sync + reminders)…")
             await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
             await notificationService.refreshDailyMaterialCutOffReminder()

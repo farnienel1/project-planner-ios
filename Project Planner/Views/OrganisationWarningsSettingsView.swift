@@ -37,6 +37,11 @@ struct OrganisationWarningsSettingsView: View {
         InvoicingPeriodResolver.resolve(invoicing: invoicingSettings)
     }
 
+    /// Active payment-run segment used by Warnings “Invoicing period” mode (from Organisation Hub).
+    private var warningsInvoicingScanLabel: String {
+        InvoicingPeriodResolver.warningScanBounds(invoicing: invoicingSettings).label
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -76,7 +81,7 @@ struct OrganisationWarningsSettingsView: View {
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.left")
-                            Text("Back")
+                            Text("Warnings")
                         }
                     }
                 }
@@ -120,9 +125,9 @@ struct OrganisationWarningsSettingsView: View {
             sectionHeader(icon: "clock.fill", title: "Detection period", subtitle: "How far ahead Project Planner scans for clashes, unbooked labour, and material cut-off dates. Warnings refresh automatically each day.")
 
             VStack(spacing: 10) {
-                modeOption(.numberOfDays, label: "Set number of days", description: "Scan a fixed number of days from today — you control the window.")
-                modeOption(.endOfInvoicingPeriod, label: "End of invoicing period", description: "Scan through the end of your current billing period. Automatically adjusts when each new period begins.")
-                modeOption(.endOfWorkingWeek, label: "End of working week", description: "Scan through Friday of the current working week. Resets each Monday.")
+                modeOption(.numberOfDays, label: "Set number of days", description: "Scan today through the next N calendar days (inclusive). Example: 7 days = today + the next 6 days.")
+                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan the active payment-run timeframe from Organisation Hub (e.g. 1–16 or 17–31) — every past, present, and future day inside that timeframe.")
+                modeOption(.endOfWorkingWeek, label: "Full week", description: "This option will include any warnings for your current working week. To exclude weekends, please use the toggle below.")
             }
 
             if draft.clashLookaheadMode == .numberOfDays {
@@ -137,7 +142,7 @@ struct OrganisationWarningsSettingsView: View {
                 infoBox(text: draft.detectionScanSummary(invoicing: invoicingSettings))
             }
 
-            Text("Changing the look-ahead updates warnings immediately — extending the window surfaces new issues; reducing it removes warnings that fall outside the new end date.")
+            Text("Save updates the organisation setting. The Warnings list refreshes automatically when you leave settings; you can also tap Refresh anytime.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .padding(.top, 4)
@@ -254,14 +259,14 @@ struct OrganisationWarningsSettingsView: View {
                     Image(systemName: "calendar")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.green)
-                    Text("CURRENT INVOICING PERIOD")
+                    Text("ACTIVE PAYMENT-RUN PERIOD")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.green)
                 }
-                Text(invoicingPeriod.currentPeriodLabel)
+                Text(warningsInvoicingScanLabel)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color(red: 0.08, green: 0.33, blue: 0.18))
-                Text("Warnings will scan through \(invoicingPeriod.currentPeriodEndLabel). This window resets automatically when the new period begins.")
+                Text("From Organisation Hub payment-run settings. While you are in this timeframe, warnings include every day from period start through period end — past, present, and future.")
                     .font(.caption)
                     .foregroundStyle(Color(red: 0.09, green: 0.40, blue: 0.20))
             }
@@ -412,8 +417,8 @@ struct OrganisationWarningsSettingsView: View {
 
             toggleRow(
                 title: "Include weekends in unbooked labour",
-                subtitle: "When on, Saturday and Sunday are included when checking whether operatives have been booked for every day in the detection window. Enable only if your operatives regularly work weekends.",
-                footnote: "Does not affect clash detection — clashes follow your working week unless a weekend booking exists.",
+                subtitle: "When on, Saturday and Sunday are checked for unbooked labour inside the detection window (including Full week). Turn off to exclude weekends.",
+                footnote: "Clash warnings still appear if someone has overlapping weekend bookings.",
                 isOn: $draft.includeWeekendsForUnbookedLabour
             )
         }
@@ -564,7 +569,7 @@ struct OrganisationWarningsSettingsView: View {
         defer { isSaving = false }
         do {
             try await firebaseBackend.updateOrganizationWarningDetectionSettings(draft)
-            await WarningsRefreshHelper.refreshSharedWarnings(
+            let didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
                 operativeStore: operativeStore,
                 bookingStore: bookingStore,
                 projectStore: projectStore,
@@ -573,8 +578,12 @@ struct OrganisationWarningsSettingsView: View {
                 holidayStore: holidayStore,
                 firebaseBackend: firebaseBackend,
                 appSettings: appSettings,
-                force: true
+                force: true,
+                manualUserInitiated: true
             )
+            if !didRefresh {
+                errorMessage = "Settings saved, but warnings could not refresh yet. Go back and tap Refresh."
+            }
             userHasEdited = false
             if let onSaved {
                 await MainActor.run { onSaved() }
@@ -594,7 +603,7 @@ struct OrganisationWarningsSettingsView: View {
         defer { isSaving = false }
         do {
             try await firebaseBackend.updateOrganizationWarningDetectionSettings(draft)
-            await WarningsRefreshHelper.refreshSharedWarnings(
+            let didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
                 operativeStore: operativeStore,
                 bookingStore: bookingStore,
                 projectStore: projectStore,
@@ -603,8 +612,12 @@ struct OrganisationWarningsSettingsView: View {
                 holidayStore: holidayStore,
                 firebaseBackend: firebaseBackend,
                 appSettings: appSettings,
-                force: true
+                force: true,
+                manualUserInitiated: true
             )
+            if !didRefresh {
+                errorMessage = "Settings saved, but warnings could not refresh yet. Go back and tap Refresh."
+            }
             userHasEdited = false
         } catch {
             errorMessage = error.localizedDescription

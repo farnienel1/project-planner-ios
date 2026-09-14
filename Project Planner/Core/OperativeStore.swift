@@ -61,7 +61,13 @@ class OperativeStore: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 print("🔥🔥🔥 DEBUG: OperativeStore received syncOfflineChanges notification - syncing all data to Firebase")
-                if let self = self, (!self.operatives.isEmpty || !self.managers.isEmpty) {
+                guard let self else { return }
+                if WarningsRefreshHelper.isHomeWarningsWarmInFlight
+                    || self.firebaseBackend?.isBootstrappingOrgDataLoad == true {
+                    print("🔥🔥🔥 DEBUG: OperativeStore offline sync deferred — bootstrap/warm in flight")
+                    return
+                }
+                if !self.operatives.isEmpty || !self.managers.isEmpty {
                     _ = await self.saveDataWithRetry(description: "syncing offline changes to Firebase")
                 }
             }
@@ -355,8 +361,12 @@ class OperativeStore: ObservableObject {
     func updateOperative(_ operative: Operative) async {
         if let index = operatives.firstIndex(where: { $0.id == operative.id }) {
             operatives[index] = operative
-            // CRITICAL: Save immediately with retry logic
-            _ = await saveDataWithRetry(description: "updating operative \(operative.name)")
+            // Save ONLY this operative — rewriting the whole roster on every sync
+            // jetsams Simulator on Home (~35s post-quiet side work).
+            _ = await saveSingleOperativeWithRetry(operative, description: "updating operative \(operative.name)")
+            if let smartCache {
+                smartCache.cacheOperatives(operatives)
+            }
             NotificationCenter.default.post(name: .qualificationExpiryScheduleRefresh, object: nil)
         }
     }
@@ -524,6 +534,26 @@ class OperativeStore: ObservableObject {
             onFailure: { error in
                 print("🔥🔥🔥 DEBUG: ❌❌❌ CRITICAL: Data persistence failed after retries: \(description)")
                 print("🔥🔥🔥 DEBUG: Error: \(error.localizedDescription)")
+            }
+        )
+    }
+
+    private func saveSingleOperativeWithRetry(_ operative: Operative, description: String) async -> Result<Void, Error> {
+        return await DataPersistenceManager.shared.saveWithRetry(
+            operation: {
+                guard let firebaseBackend = self.firebaseBackend,
+                      firebaseBackend.isAuthenticated,
+                      let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+                    throw NSError(domain: "OperativeStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Firebase not available"])
+                }
+                try await firebaseBackend.saveOperative(operative, organizationId: organizationId)
+            },
+            description: description,
+            onSuccess: { _ in
+                print("🔥🔥🔥 DEBUG: ✅ Single operative persistence successful: \(description)")
+            },
+            onFailure: { error in
+                print("🔥🔥🔥 DEBUG: ❌ Single operative persistence failed: \(description) — \(error.localizedDescription)")
             }
         )
     }

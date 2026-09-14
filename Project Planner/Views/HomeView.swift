@@ -34,7 +34,7 @@ struct HomeView: View {
     @State private var showingAddUser = false
     @State private var showingManageUsers = false
     @State private var showingDailyOverview = false
-    @State private var showingWeeklyReport = false
+    @State private var weeklyReportLaunch: WeeklyReportLaunchToken?
     @State private var showingOrgSitesMap = false
     @State private var showingMySchedule = false
     @State private var showingWarningsDetail = false
@@ -73,7 +73,11 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar(.hidden, for: .navigationBar)
         .background(homeCanvasBackground.ignoresSafeArea(edges: .top))
-        .sheet(isPresented: $showingWarningsDetail) {
+        .sheet(isPresented: $showingWarningsDetail, onDismiss: {
+            WarningsRefreshHelper.isWarningsSheetVisible = false
+            // REBUILD: no auto warm on dismiss.
+
+        }) {
             WarningsDetailView(
                 warningsService: WarningsService.shared,
                 projectStore: projectStore,
@@ -177,7 +181,7 @@ struct HomeView: View {
             presentTasksDetail()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToWarnings"))) { _ in
-            print("🔥🔥🔥 DEBUG: WARNINGS_NAVIGATE_SYNC \(WarningsBuildStamp.id)")
+            print("🔥🔥🔥 DEBUG: WARNINGS_NAVIGATE_SYNC")
             showingTasksDetail = false
             showingWarningsDetail = true
         }
@@ -209,19 +213,12 @@ struct HomeView: View {
                 .environmentObject(taskStore)
                 .environmentObject(notificationService)
         }
-        .sheet(isPresented: $showingWeeklyReport) {
-            WeeklyReportView()
-                .environmentObject(bookingStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(holidayStore)
-                .environmentObject(userStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(subcontractorStore)
-                .environmentObject(appSettings)
-                .environmentObject(notificationService)
-                .environmentObject(taskStore)
+        .sheet(item: $weeklyReportLaunch, onDismiss: {
+            WarningsRefreshHelper.isWeeklyReportVisible = false
+            // REBUILD: no auto warm on dismiss.
+
+        }) { token in
+            WeeklyReportOpenShell(token: token)
         }
         .sheet(isPresented: $showingOrgSitesMap) {
             OrgSitesMapView()
@@ -530,6 +527,8 @@ struct HomeView: View {
         .padding(.bottom, 28)
         .onAppear {
             loadPersistedAdminOverviewMetricsIfNeeded()
+            print("🔥🔥🔥 DEBUG: HOME_APPEARED")
+            homeWarningCount = WarningsService.shared.warningCount
         }
         .task(id: homeDataRefreshTrigger) {
             // Coalesce rapid store updates while Firebase batches load.
@@ -548,9 +547,11 @@ struct HomeView: View {
             await refreshHomeDerivedData()
             print("🔥🔥🔥 DEBUG: Home derived refresh finished")
         }
+        // REBUILD: Home never auto-scans warnings (that jetsamed Simulator for days).
+        // Pill reads disk/shared cache only. User refreshes from the Warnings sheet.
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
             // Do not recompute warnings here — that raced launch quiet / deferred loads
-            // and jetsamed Simulator. Badge updates when Warnings sheet refreshes or
+            // and jetsamed Simulator. Badge updates when Home warms warnings or
             // when `.warningsDidRecompute` is posted.
             guard userStore.hasAdminAccess() else { return }
             homeWarningCount = WarningsService.shared.warningCount
@@ -562,6 +563,16 @@ struct HomeView: View {
                 homeWarningCount = WarningsService.shared.warningCount
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .warningsNeedsHomeRefresh)) { _ in
+            // REBUILD: no auto Home warm — only sync badge from shared/disk cache.
+            homeWarningCount = WarningsService.shared.warningCount
+        }
+        .onChange(of: showingWarningsDetail) { _, isOpen in
+            WarningsRefreshHelper.isWarningsSheetVisible = isOpen
+        }
+        .onChange(of: weeklyReportLaunch != nil) { _, isOpen in
+            WarningsRefreshHelper.isWeeklyReportVisible = isOpen
+        }
         .onChange(of: showingAdminOverviewCustomize) { _, isOpen in
             if isOpen {
                 let base = persistedAdminOverviewMetricIds.isEmpty
@@ -571,6 +582,13 @@ struct HomeView: View {
             }
         }
     }
+
+    // REBUILD stubs — auto warm removed. Badge reads shared/disk cache only.
+    @MainActor
+    private func syncHomeWarningBadgeFromCache() {
+        homeWarningCount = WarningsService.shared.warningCount
+    }
+
 
     private var homeGreetingHeader: some View {
         HStack(alignment: .top) {
@@ -729,11 +747,10 @@ struct HomeView: View {
                     icon: "exclamationmark.triangle.fill",
                     iconTint: Color(red: 0.64, green: 0.18, blue: 0.18),
                     iconBackground: Color(red: 0.99, green: 0.92, blue: 0.92),
-                    title: WarningsBuildStamp.homePillTitle,
+                    title: "Warnings",
                     value: homeWarningCount == 0 ? "All clear" : "\(homeWarningCount) active"
                 ) {
-                    // Sync log proves this binary includes the Warnings open fix.
-                    print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON_SYNC \(WarningsBuildStamp.id)")
+                    print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON_SYNC")
                     showingTasksDetail = false
                     showingWarningsDetail = true
                 }
@@ -935,7 +952,19 @@ struct HomeView: View {
         case HomeQuickActionID.opSettings.rawValue, HomeQuickActionID.staffSettings.rawValue:
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 5])
         case HomeQuickActionID.staffWeeklyReport.rawValue:
-            showingWeeklyReport = true
+            weeklyReportLaunch = WeeklyReportLaunchToken(
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                projectStore: projectStore,
+                operativeStore: operativeStore,
+                holidayStore: holidayStore,
+                userStore: userStore,
+                firebaseBackend: firebaseBackend,
+                subcontractorStore: subcontractorStore,
+                appSettings: appSettings,
+                notificationService: notificationService,
+                taskStore: taskStore
+            )
         case HomeQuickActionID.staffDailyOverview.rawValue:
             showingDailyOverview = true
         case HomeQuickActionID.staffManagers.rawValue:

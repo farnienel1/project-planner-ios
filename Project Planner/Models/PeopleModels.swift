@@ -56,11 +56,11 @@ struct Qualification: Identifiable, Codable, Sendable {
 
 // Hashable conformance so Set<Qualification> works. Must be before Operative.
 extension Qualification: Hashable {
-    func hash(into hasher: inout Hasher) {
+    nonisolated func hash(into hasher: inout Hasher) {
         hasher.combine(id)
     }
     
-    static func == (lhs: Qualification, rhs: Qualification) -> Bool {
+    nonisolated static func == (lhs: Qualification, rhs: Qualification) -> Bool {
         lhs.id == rhs.id
     }
 }

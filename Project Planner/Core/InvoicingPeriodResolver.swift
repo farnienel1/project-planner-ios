@@ -32,13 +32,36 @@ enum InvoicingPeriodResolver {
         return dateRangePeriod(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
     }
 
-    /// End date of the invoicing period that contains `referenceDate` (used for warnings look-ahead).
+    /// Start date of the invoicing period that contains `referenceDate` (reports / UI “current period”).
+    static func warningCoverageStart(
+        invoicing: OrganizationInvoicingSettings,
+        referenceDate: Date = Date(),
+        calendar: Calendar = .current
+    ) -> Date {
+        warningScanBounds(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar).start
+    }
+
+    /// End date for warnings look-ahead (see `warningScanBounds`).
     static func warningCoverageEnd(
         invoicing: OrganizationInvoicingSettings,
         referenceDate: Date = Date(),
         calendar: Calendar = .current
     ) -> Date {
-        resolve(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar).currentPeriodEnd
+        warningScanBounds(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar).end
+    }
+
+    /// Warnings “Invoicing period” window driven by payment-run settings.
+    /// Uses the **active** payment-run segment that contains `referenceDate`
+    /// (e.g. ranges 1–16 and 17–31 → while today is the 10th, scan 1st–16th inclusive,
+    /// including past days already in that timeframe). Recurring runs use the current
+    /// recurring period.
+    static func warningScanBounds(
+        invoicing: OrganizationInvoicingSettings,
+        referenceDate: Date = Date(),
+        calendar: Calendar = .current
+    ) -> (start: Date, end: Date, label: String) {
+        let period = resolve(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
+        return (period.currentPeriodStart, period.currentPeriodEnd, period.currentPeriodLabel)
     }
 
     // MARK: - Private

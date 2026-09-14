@@ -23,66 +23,74 @@ struct WarningsHeroCard: View {
     let lowCount: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("ACTIVE ISSUES")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.85))
-                        .tracking(0.4)
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text("\(activeCount)")
-                            .font(.system(size: 24, weight: .medium))
-                        Text("need attention")
-                            .font(.system(size: 14, weight: .regular))
-                            .opacity(0.85)
-                    }
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Active issues")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.6))
+                .textCase(.uppercase)
+                .tracking(0.8)
+
+            HStack(alignment: .center) {
+                Text("\(activeCount) need attention")
+                    .font(.system(size: 26, weight: .bold))
                     .foregroundStyle(.white)
-                }
                 Spacer(minLength: 0)
                 ZStack {
                     Circle()
                         .fill(Color.white.opacity(0.18))
-                        .frame(width: 42, height: 42)
+                        .frame(width: 36, height: 36)
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 20))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
                 }
             }
+            .padding(.top, 4)
+            .padding(.bottom, 14)
+
             HStack(spacing: 8) {
                 priorityStat(value: highCount, label: "High")
                 priorityStat(value: mediumCount, label: "Medium")
                 priorityStat(value: lowCount, label: "Low")
             }
+            .padding(.bottom, 12)
+
             Text("High: operative clashes & unbooked labour · Medium: manager/admin overlaps (tick for weekly report) · Low: materials not ordered by 16:00")
-                .font(.system(size: 10))
-                .foregroundStyle(.white.opacity(0.8))
+                .font(.system(size: 11))
+                .foregroundStyle(Color.white.opacity(0.55))
+                .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(18)
+        .padding(16)
         .background(
             LinearGradient(
-                colors: [Color(red: 0.639, green: 0.176, blue: 0.176), Color(red: 0.753, green: 0.282, blue: 0.282)],
+                colors: [
+                    Color(red: 0.722, green: 0.196, blue: 0.196), // #B83232
+                    Color(red: 0.620, green: 0.165, blue: 0.165)  // #9E2A2A
+                ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
         )
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func priorityStat(value: Int, label: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("\(value)")
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(.white)
             Text(label)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(0.85))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.65))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Color.white.opacity(0.14))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -92,7 +100,7 @@ struct WarningsFilterChipsRow: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 7) {
+            HStack(spacing: 6) {
                 ForEach(WarningsFilterChip.allCases) { chip in
                     let count = counts[chip] ?? 0
                     let isOn = selected == chip
@@ -100,15 +108,15 @@ struct WarningsFilterChipsRow: View {
                         selected = chip
                     } label: {
                         Text("\(chip.rawValue) · \(count)")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(isOn ? Color.white : ProjectWorksRevampColors.muted)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(isOn ? Color.white : Color(red: 0.420, green: 0.447, blue: 0.502))
                             .padding(.horizontal, 13)
                             .padding(.vertical, 6)
-                            .background(isOn ? ProjectWorksRevampColors.blue : Color.white)
+                            .background(isOn ? Color(red: 0.110, green: 0.110, blue: 0.118) : Color.white)
                             .clipShape(Capsule())
                             .overlay(
                                 Capsule()
-                                    .stroke(ProjectWorksRevampColors.border, lineWidth: isOn ? 0 : 0.5)
+                                    .stroke(Color.black.opacity(0.10), lineWidth: isOn ? 0 : 0.5)
                             )
                     }
                     .buttonStyle(.plain)
@@ -122,48 +130,28 @@ struct WarningPriorityBadge: View {
     let severity: Warning.WarningSeverity
 
     var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: iconName)
-                .font(.system(size: 9, weight: .bold))
+        HStack(spacing: 5) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11, weight: .bold))
             Text(label)
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 11, weight: .bold))
         }
-        .foregroundStyle(foreground)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
-        .background(background)
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 4)
+        .background(Color.white.opacity(0.18))
+        .overlay(
+            Capsule()
+                .stroke(Color.white.opacity(0.28), lineWidth: 1)
+        )
+        .clipShape(Capsule())
     }
 
     private var label: String {
         switch severity {
-        case .high: return "High"
-        case .medium: return "Medium"
-        case .low: return "Low"
-        }
-    }
-
-    private var iconName: String {
-        switch severity {
-        case .high: return "exclamationmark.circle.fill"
-        case .medium: return "exclamationmark.triangle.fill"
-        case .low: return "info.circle.fill"
-        }
-    }
-
-    private var background: Color {
-        switch severity {
-        case .high: return Color(red: 0.988, green: 0.922, blue: 0.922)
-        case .medium: return Color(red: 0.98, green: 0.933, blue: 0.855)
-        case .low: return Color(red: 0.949, green: 0.953, blue: 0.961)
-        }
-    }
-
-    private var foreground: Color {
-        switch severity {
-        case .high: return Color(red: 0.639, green: 0.176, blue: 0.176)
-        case .medium: return Color(red: 0.522, green: 0.310, blue: 0.043)
-        case .low: return ProjectWorksRevampColors.muted
+        case .high: return "HIGH"
+        case .medium: return "MEDIUM"
+        case .low: return "LOW"
         }
     }
 }
@@ -461,147 +449,174 @@ private struct BookingClashWarningCard: View {
     let onRemoveWarning: () -> Void
 
     var body: some View {
-        clashCard
-    }
-
-    private var clashCard: some View {
-        let border: Color = severity == .high
-            ? Color(red: 0.988, green: 0.922, blue: 0.922)
-            : Color(red: 0.98, green: 0.933, blue: 0.855)
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(severity == .high ? Color(red: 0.988, green: 0.922, blue: 0.922) : Color(red: 0.98, green: 0.933, blue: 0.855))
-                        .frame(width: 36, height: 36)
-                    Image(systemName: "calendar.badge.exclamationmark")
-                        .font(.system(size: 16))
-                        .foregroundStyle(severity == .high ? Color(red: 0.639, green: 0.176, blue: 0.176) : Color(red: 0.522, green: 0.310, blue: 0.043))
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 7) {
-                        Text(title)
-                            .font(.system(size: 14, weight: .medium))
-                        WarningPriorityBadge(severity: severity)
-                    }
-                    Text(subtitle)
-                        .font(.system(size: 12))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 17, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .tracking(-0.2)
+                Spacer(minLength: 8)
+                WarningPriorityBadge(severity: severity)
             }
-
-            ClashTimelineDiagram(
-                personName: personName,
-                date: date,
-                entryA: entryA,
-                entryB: entryB,
-                overlapMinutes: overlapMinutes
+            .padding(.horizontal, 16)
+            .padding(.vertical, 15)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                LinearGradient(colors: headerColors, startPoint: .topLeading, endPoint: .bottomTrailing)
             )
 
-            HStack(spacing: 9) {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.system(size: 14))
-                    .foregroundStyle(severity == .high ? Color(red: 0.639, green: 0.176, blue: 0.176) : Color(red: 0.522, green: 0.310, blue: 0.043))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(overlapSummary)
-                        .font(.system(size: 12, weight: .medium))
-                    Text(overlapDetail)
-                        .font(.system(size: 11))
-                        .opacity(0.85)
+            VStack(alignment: .leading, spacing: 14) {
+                Text(subtitle)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.216, green: 0.255, blue: 0.318))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                ClashTimelineDiagram(
+                    personName: personName,
+                    date: date,
+                    entryA: entryA,
+                    entryB: entryB,
+                    overlapMinutes: overlapMinutes
+                )
+
+                HStack(spacing: 9) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 14))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(overlapSummary)
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(overlapDetail)
+                            .font(.system(size: 11))
+                            .opacity(0.85)
+                    }
                 }
-                .foregroundStyle(severity == .high ? Color(red: 0.639, green: 0.176, blue: 0.176) : Color(red: 0.522, green: 0.310, blue: 0.043))
+                .foregroundStyle(severity == .high
+                    ? Color(red: 0.639, green: 0.176, blue: 0.176)
+                    : Color(red: 0.522, green: 0.310, blue: 0.043))
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(severity == .high
+                    ? Color(red: 0.988, green: 0.922, blue: 0.922)
+                    : Color(red: 0.98, green: 0.933, blue: 0.855))
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(severity == .high ? Color(red: 0.988, green: 0.922, blue: 0.922) : Color(red: 0.98, green: 0.933, blue: 0.855))
-            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.top, 15)
+            .padding(.bottom, 4)
 
-            Text("Choose how to resolve:")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .padding(.leading, 4)
-
-            HStack(spacing: 8) {
-                resolveButton(title: removeALabel, icon: "trash", action: onRemoveA)
-                resolveButton(title: removeBLabel, icon: "trash", action: onRemoveB)
+            VStack(spacing: 9) {
+                HStack(spacing: 8) {
+                    resolveButton(title: removeALabel, action: onRemoveA)
+                    resolveButton(title: removeBLabel, action: onRemoveB)
+                }
+                if showsApproveForWeeklyReport {
+                    Button(action: onApprove) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("Approve for weekly report")
+                                .font(.system(size: 15, weight: .bold))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                        .background(
+                            LinearGradient(
+                                colors: [Color(red: 0.059, green: 0.431, blue: 0.337), Color(red: 0.086, green: 0.520, blue: 0.400)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+                HStack(spacing: 0) {
+                    Button(action: onOpenDay) {
+                        Text("Open daily overview")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.145, green: 0.388, blue: 0.922))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                    Rectangle()
+                        .fill(Color.black.opacity(0.10))
+                        .frame(width: 0.5)
+                        .padding(.vertical, 8)
+                    Button(action: onRemoveWarning) {
+                        Text("Dismiss")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.420, green: 0.447, blue: 0.502))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .background(ProjectWorksRevampColors.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.black.opacity(0.10), lineWidth: 0.5)
+                )
             }
-            if showsApproveForWeeklyReport {
-                approveButton(title: "Approve for weekly report", action: onApprove)
+            .padding(.horizontal, 14)
+            .padding(.top, 13)
+            .padding(.bottom, 14)
+            .background(Color(red: 0.980, green: 0.980, blue: 0.980))
+            .overlay(alignment: .top) {
+                Rectangle().fill(Color.black.opacity(0.07)).frame(height: 0.5)
             }
-            secondaryButton(title: "Open day to edit manually", icon: "square.and.pencil", action: onOpenDay)
-            WarningRemoveButton(action: onRemoveWarning)
         }
-        .padding(16)
         .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(border, lineWidth: 0.5)
+                .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
         )
-        .shadow(color: border.opacity(0.35), radius: 0, x: 0, y: 0)
+        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
     }
 
-    private func resolveButton(title: String, icon: String, action: @escaping () -> Void) -> some View {
+    private var headerColors: [Color] {
+        switch severity {
+        case .high:
+            return [
+                Color(red: 0.498, green: 0.114, blue: 0.114),
+                Color(red: 0.600, green: 0.106, blue: 0.106),
+                Color(red: 0.725, green: 0.110, blue: 0.110)
+            ]
+        case .medium:
+            return [
+                Color(red: 0.573, green: 0.251, blue: 0.055),
+                Color(red: 0.702, green: 0.337, blue: 0.078),
+                Color(red: 0.820, green: 0.420, blue: 0.120)
+            ]
+        case .low:
+            return [
+                Color(red: 0.216, green: 0.255, blue: 0.318),
+                Color(red: 0.290, green: 0.333, blue: 0.408),
+                Color(red: 0.420, green: 0.447, blue: 0.502)
+            ]
+        }
+    }
+
+    private func resolveButton(title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: icon)
+                Image(systemName: "trash")
                     .font(.system(size: 13))
                     .foregroundStyle(Color(red: 0.639, green: 0.176, blue: 0.176))
                 Text(title)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
             }
-            .foregroundStyle(ProjectWorksRevampColors.ink)
+            .foregroundStyle(Color(red: 0.110, green: 0.110, blue: 0.118))
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 9)
+            .padding(.vertical, 12)
             .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func approveButton(title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark.circle")
-                    .font(.system(size: 14, weight: .medium))
-                Text(title)
-                    .font(.system(size: 12, weight: .medium))
-            }
-            .foregroundStyle(Color(red: 0.059, green: 0.431, blue: 0.337))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 9)
-            .background(Color(red: 0.882, green: 0.961, blue: 0.933))
-            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .stroke(Color(red: 0.059, green: 0.431, blue: 0.337), lineWidth: 0.5)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func secondaryButton(title: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 13))
-                Text(title)
-                    .font(.system(size: 12, weight: .medium))
-            }
-            .foregroundStyle(ProjectWorksRevampColors.muted)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 9)
-            .background(ProjectWorksRevampColors.canvas)
-            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.black.opacity(0.10), lineWidth: 0.5)
             )
         }
         .buttonStyle(.plain)
@@ -613,21 +628,11 @@ struct WarningRemoveButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: "xmark.circle")
-                    .font(.system(size: 13))
-                Text("Remove warning")
-                    .font(.system(size: 12, weight: .medium))
-            }
-            .foregroundStyle(Color(red: 0.639, green: 0.176, blue: 0.176))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 9)
-            .background(Color(red: 0.988, green: 0.922, blue: 0.922))
-            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .stroke(Color(red: 0.639, green: 0.176, blue: 0.176).opacity(0.35), lineWidth: 0.5)
-            )
+            Text("Dismiss")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color(red: 0.420, green: 0.447, blue: 0.502))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
         }
         .buttonStyle(.plain)
     }
