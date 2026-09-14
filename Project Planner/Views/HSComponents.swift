@@ -865,35 +865,43 @@ struct HSChipRow<T: Hashable>: View {
     var tint: Color = HS.teal
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(chips) { chip in
-                    let active = chip.id == selection
-                    Button {
-                        HSHaptic.select()
-                        withAnimation(.easeOut(duration: 0.18)) { selection = chip.id }
-                    } label: {
-                        HStack(spacing: 5) {
-                            Text(chip.title)
-                                .font(.system(size: 13.5, weight: .semibold))
-                                .lineLimit(1).fixedSize()
-                            if let c = chip.count {
-                                Text("\(c)").font(.system(size: 11, weight: .bold))
-                                    .opacity(0.75)
+        // Overlay keeps this row the width of the parent. A bare horizontal
+        // ScrollView inside a vertical ScrollView otherwise expands the page
+        // to fit every chip (All / General / My uploads were stretching H&S).
+        Color.clear
+            .frame(height: 40)
+            .frame(maxWidth: .infinity)
+            .overlay(alignment: .leading) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(chips) { chip in
+                            let active = chip.id == selection
+                            Button {
+                                HSHaptic.select()
+                                withAnimation(.easeOut(duration: 0.18)) { selection = chip.id }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Text(chip.title)
+                                        .font(.system(size: 13.5, weight: .semibold))
+                                        .lineLimit(1)
+                                        .fixedSize()
+                                    if let c = chip.count {
+                                        Text("\(c)").font(.system(size: 11, weight: .bold))
+                                            .opacity(0.75)
+                                    }
+                                }
+                                .foregroundStyle(active ? HS.onAccent : HS.slate)
+                                .padding(.horizontal, 13).padding(.vertical, 8)
+                                .background(active ? tint : HS.card)
+                                .clipShape(Capsule())
+                                .overlay(Capsule().strokeBorder(active ? .clear : HS.line, lineWidth: 1))
                             }
+                            .buttonStyle(.plain)
                         }
-                        .foregroundStyle(active ? HS.onAccent : HS.slate)
-                        .padding(.horizontal, 13).padding(.vertical, 8)
-                        .background(active ? tint : HS.card)
-                        .clipShape(Capsule())
-                        .overlay(Capsule().strokeBorder(active ? .clear : HS.line, lineWidth: 1))
                     }
-                    .buttonStyle(.plain)
+                    .padding(.vertical, 3)
                 }
             }
-            .padding(.horizontal, HSMetric.screenPad)
-            .padding(.vertical, 3)
-        }
     }
 }
 

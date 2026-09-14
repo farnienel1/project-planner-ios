@@ -1247,7 +1247,6 @@ struct ProjectHealthSafetyView: View {
                 chips: tradeFilters.map { HSChipRow<String>.Chip(id: $0, title: $0) },
                 selection: $selectedTradeFilter
             )
-            .padding(.horizontal, -HSMetric.screenPad)
             .padding(.top, 10)
 
             HStack(spacing: 10) {
@@ -1306,11 +1305,7 @@ struct ProjectHealthSafetyView: View {
     }
 
     private func groupHeaderTitle(_ title: String) -> String {
-        switch title {
-        case "General": return "General H&S · All trades"
-        case "My uploads": return "My uploads"
-        default: return title
-        }
+        title
     }
 
     private var managerTracking: some View {
