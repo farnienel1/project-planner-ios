@@ -56,13 +56,27 @@ enum WarningsRefreshHelper {
             return false
         }
 
+        // Even force must not scan while bookings are still mid-load — that published
+        // false empty live results and made Warnings look broken.
+        if bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (stores still loading)")
+            return false
+        }
+
         if !force {
-            if bookingStore.isLoading || operativeStore.isLoading || holidayStore.isLoading || projectStore.isLoading {
+            if holidayStore.isLoading {
                 return false
             }
             let now = Date()
             if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < minRefreshInterval {
                 return false
+            }
+        } else {
+            let now = Date()
+            if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < 8 {
+                // Soft coalesce — avoid stacked force scans from dismiss + notification.
+                print("🔥🔥🔥 DEBUG: Warnings force coalesced (<8s)")
+                return WarningsService.shared.hasCompletedLiveDetection
             }
         }
 

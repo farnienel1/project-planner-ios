@@ -13,12 +13,20 @@ class WarningsService: ObservableObject {
 
     @Published private(set) var allGeneratedWarnings: [Warning] = []
     @Published private(set) var activeWarnings: [Warning] = []
+    /// Period scans for Weekly Report only — never overwrite the live Home/Warnings list.
+    @Published private(set) var periodGeneratedWarnings: [Warning] = []
+    @Published private(set) var hasCompletedPeriodDetection = false
     @Published private(set) var warningCount: Int = 0
     @Published private(set) var highCount: Int = 0
     @Published private(set) var mediumCount: Int = 0
     @Published private(set) var lowCount: Int = 0
-    /// True after at least one live scan has published (empty = all clear for that window).
+    /// True after at least one *live* scan has published (empty = all clear for that window).
     @Published private(set) var hasCompletedLiveDetection = false
+
+    enum WarningListSource {
+        case live
+        case period
+    }
 
     private let resolutionStore: WarningResolutionStore
     private var updateTask: Task<Void, Never>?
@@ -64,37 +72,39 @@ class WarningsService: ObservableObject {
     }
 
     /// HIGH: operative booking clashes still active in range (must be removed — not ticked for report).
-    func operativeBookingClashes(in range: ClosedRange<Date>) -> [Warning] {
-        warningsInRange(range, types: [.operativeBookingClash], activeOnly: true)
+    func operativeBookingClashes(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
+        warningsInRange(range, types: [.operativeBookingClash], activeOnly: true, source: source)
     }
 
     /// MEDIUM: manager/admin overlaps still awaiting tick for weekly report.
-    func unresolvedManagerClashes(in range: ClosedRange<Date>) -> [Warning] {
-        warningsInRange(range, types: [.managerLocationClash], activeOnly: true)
+    func unresolvedManagerClashes(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
+        warningsInRange(range, types: [.managerLocationClash], activeOnly: true, source: source)
     }
 
     /// MEDIUM: manager/admin overlaps ticked on Warnings — included on weekly report CSV.
-    func approvedManagerClashes(in range: ClosedRange<Date>) -> [Warning] {
-        warningsInRange(range, types: [.managerLocationClash], activeOnly: false)
+    func approvedManagerClashes(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
+        warningsInRange(range, types: [.managerLocationClash], activeOnly: false, source: source)
             .filter { resolutionStore.isApproved($0.resolutionKey) }
     }
 
     /// HIGH: unbooked labour per weekday in range.
-    func unbookedLabourWarnings(in range: ClosedRange<Date>) -> [Warning] {
-        warningsInRange(range, types: [.unbookedLabour], activeOnly: true)
+    func unbookedLabourWarnings(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
+        warningsInRange(range, types: [.unbookedLabour], activeOnly: true, source: source)
     }
 
     /// LOW: material orders not placed by 16:00.
-    func materialsCutoffWarnings(in range: ClosedRange<Date>) -> [Warning] {
-        warningsInRange(range, types: [.materialsCutoff], activeOnly: true)
+    func materialsCutoffWarnings(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
+        warningsInRange(range, types: [.materialsCutoff], activeOnly: true, source: source)
     }
 
     private func warningsInRange(
         _ range: ClosedRange<Date>,
         types: Set<Warning.WarningType>,
-        activeOnly: Bool
+        activeOnly: Bool,
+        source: WarningListSource
     ) -> [Warning] {
-        allGeneratedWarnings.filter { w in
+        let pool = source == .period ? periodGeneratedWarnings : allGeneratedWarnings
+        return pool.filter { w in
             guard types.contains(w.type) else { return false }
             guard let day = w.occurrenceDate else { return false }
             guard range.contains(day) else { return false }
@@ -229,8 +239,9 @@ class WarningsService: ObservableObject {
                 ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
         )
         if isLiveScan {
+            // Match default org horizon (7 days) but stay windowed — never full invoicing span.
             coverageStart = today
-            let liveForwardDays = 2 // today + 2 = 3 calendar days
+            let liveForwardDays = 6 // today + 6 = 7 calendar days
             let cappedEnd = cal.startOfDay(
                 for: cal.date(byAdding: .day, value: liveForwardDays, to: today) ?? today
             )
@@ -280,11 +291,18 @@ class WarningsService: ObservableObject {
             through: coverageEnd,
             calendar: cal
         )
-        allGeneratedWarnings = generated
-        activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
-        refreshSeverityCounts()
-        hasCompletedLiveDetection = true
-        print("🔥🔥🔥 DEBUG: WarningsService published active=\(activeWarnings.count) generated=\(generated.count)")
+        if isLiveScan {
+            allGeneratedWarnings = generated
+            activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+            refreshSeverityCounts()
+            hasCompletedLiveDetection = true
+            print("🔥🔥🔥 DEBUG: WarningsService LIVE published active=\(activeWarnings.count) generated=\(generated.count)")
+        } else {
+            // Period scan must not wipe Home/Warnings live cache (that caused empty Warnings after WR).
+            periodGeneratedWarnings = generated
+            hasCompletedPeriodDetection = true
+            print("🔥🔥🔥 DEBUG: WarningsService PERIOD published count=\(generated.count) (live untouched active=\(activeWarnings.count))")
+        }
     }
 
     /// Approve only applies to MEDIUM manager/admin clashes (weekly report tick).

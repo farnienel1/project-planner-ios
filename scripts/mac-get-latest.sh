@@ -44,5 +44,5 @@ else
   echo "WARNING: xcodeproj not found — open the project manually from ${TARGET}"
 fi
 
-echo "Done. Stamp to verify: Warnings SAFE / wfix-noscan-9"
+echo "Done. Stamp to verify: Warnings LAST / wfix-last-10"
 echo "Keep in sync: ./scripts/watch-agent-branch.sh ${BRANCH}"
