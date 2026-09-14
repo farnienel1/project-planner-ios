@@ -121,7 +121,7 @@ struct OrganisationWarningsSettingsView: View {
 
             VStack(spacing: 10) {
                 modeOption(.numberOfDays, label: "Set number of days", description: "Scan today through the next N calendar days (inclusive). Example: 7 days = today + the next 6 days.")
-                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan the whole current invoicing period (period start through period end). Updates automatically when a new period begins.")
+                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan every warning in the current payment-run / invoicing period — past, present, and future dates from period start through period end.")
                 modeOption(.endOfWorkingWeek, label: "End of working week", description: "Scan today through Friday of the current working week. Resets each Monday.")
             }
 
@@ -261,7 +261,7 @@ struct OrganisationWarningsSettingsView: View {
                 Text(invoicingPeriod.currentPeriodLabel)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color(red: 0.08, green: 0.33, blue: 0.18))
-                Text("Warnings will scan the whole current invoicing period (\(invoicingPeriod.currentPeriodLabel)). This window resets automatically when a new period begins.")
+                Text("Warnings will include every clash and unbooked-labour issue dated anywhere in the current invoicing period (\(invoicingPeriod.currentPeriodLabel)) — past, present, and future. Driven by your payment-run settings. Resets when a new period begins.")
                     .font(.caption)
                     .foregroundStyle(Color(red: 0.09, green: 0.40, blue: 0.20))
             }

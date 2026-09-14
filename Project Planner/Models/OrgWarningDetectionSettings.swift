@@ -103,18 +103,20 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
             // Never end before today (e.g. weekend after Friday → next Friday).
             return max(start, friday)
         case .endOfInvoicingPeriod:
-            let periodEnd = InvoicingPeriodResolver.warningCoverageEnd(
-                invoicing: invoicing,
-                referenceDate: start,
-                calendar: calendar
+            // Full current period end (past/present/future days all stay in window).
+            return calendar.startOfDay(
+                for: InvoicingPeriodResolver.warningCoverageEnd(
+                    invoicing: invoicing,
+                    referenceDate: start,
+                    calendar: calendar
+                )
             )
-            return max(start, calendar.startOfDay(for: periodEnd))
         }
     }
 
     /// Inclusive start of the warnings scan window.
     /// - numberOfDays / endOfWorkingWeek: today (matches settings copy “today through …”)
-    /// - endOfInvoicingPeriod: current period start (clashes inside the whole period)
+    /// - endOfInvoicingPeriod: current period start (past + present + future inside the payment-run window)
     func coverageStart(
         from today: Date,
         invoicing: OrganizationInvoicingSettings = .default,
@@ -160,7 +162,7 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         invoicing: OrganizationInvoicingSettings = .default,
         calendar: Calendar = .current
     ) -> Int {
-        let start = calendar.startOfDay(for: today)
+        let start = coverageStart(from: today, invoicing: invoicing, calendar: calendar)
         let end = coverageEnd(from: today, invoicing: invoicing, calendar: calendar)
         let days = calendar.dateComponents([.day], from: start, to: end).day ?? 0
         return max(1, days + 1)
@@ -185,7 +187,7 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
             return "Scans \(count) calendar day\(count == 1 ? "" : "s"): \(startLabel) through \(endLabel). Includes clashes, unbooked labour, and materials cut-off in that window."
         case .endOfInvoicingPeriod:
             let period = InvoicingPeriodResolver.resolve(invoicing: invoicing, referenceDate: today, calendar: calendar)
-            return "Scans the current invoicing period (\(period.currentPeriodLabel)): \(startLabel) through \(endLabel). Clashes use the whole period; unbooked labour from today onward inside it."
+            return "Scans the full current invoicing period (\(period.currentPeriodLabel)): \(startLabel) through \(endLabel). Includes past, present, and future clashes and unbooked labour inside this payment-run window."
         case .endOfWorkingWeek:
             return "Scans today through Friday of this working week: \(startLabel) through \(endLabel). Resets each Monday."
         }
