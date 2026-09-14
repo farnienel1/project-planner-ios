@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import FirebaseAuth
 
 struct ProjectDeadlinesView: View {
     let project: Project
@@ -43,7 +44,7 @@ struct ProjectDeadlinesView: View {
                     canManage: canManage,
                     authorName: authorName,
                     people: people,
-                    siteAudits: siteAudits.map(WorkAccess.siteAuditRef),
+                    siteAudits: siteAudits.map { WorkAccess.siteAuditRef($0) },
                     tradeOptions: ["General"] + StaffTradeType.pickerCases.map(\.rawValue),
                     onCommit: { deadline, fileURL in
                         Task { await commit(deadline, localFileURL: fileURL) }

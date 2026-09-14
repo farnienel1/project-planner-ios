@@ -3516,7 +3516,7 @@ private struct AddProjectTaskView: View {
             }
             .sheet(isPresented: $showingSiteAuditPicker) {
                 DLSiteAuditAttachSheet(
-                    audits: siteAudits.map(WorkAccess.siteAuditRef),
+                    audits: siteAudits.map { WorkAccess.siteAuditRef($0) },
                     selectedId: $selectedSiteAuditId
                 )
             }
