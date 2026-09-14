@@ -51,38 +51,16 @@ enum InvoicingPeriodResolver {
     }
 
     /// Warnings “Invoicing period” window driven by payment-run settings.
-    /// - Recurring runs: the current recurring period (e.g. Mon–Sun).
-    /// - Date ranges: the full span of **all** configured payment-run ranges in the
-    ///   current month cycle (e.g. 1–15 and 16–31 → 1st through month-end), so past,
-    ///   present, and future dates in that payment-run calendar are included — not only
-    ///   the single half-month segment that contains today.
+    /// Uses the **active** payment-run segment that contains `referenceDate`
+    /// (e.g. ranges 1–16 and 17–31 → while today is the 10th, scan 1st–16th inclusive,
+    /// including past days already in that timeframe). Recurring runs use the current
+    /// recurring period.
     static func warningScanBounds(
         invoicing: OrganizationInvoicingSettings,
         referenceDate: Date = Date(),
         calendar: Calendar = .current
     ) -> (start: Date, end: Date, label: String) {
-        if invoicing.paymentRunMode == .recurringTimeframe {
-            let period = recurringPeriod(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
-            return (period.currentPeriodStart, period.currentPeriodEnd, period.currentPeriodLabel)
-        }
-
-        let today = calendar.startOfDay(for: referenceDate)
-        let ranges = invoicing.normalizedRanges
-        var starts: [Date] = []
-        var ends: [Date] = []
-        for range in ranges {
-            if let bounds = dateRangeBounds(for: range, containing: today, calendar: calendar) {
-                starts.append(bounds.start)
-                ends.append(bounds.end)
-            }
-        }
-
-        if let start = starts.min(), let end = ends.max(), start <= end {
-            return (start, end, periodLabel(start: start, end: end, calendar: calendar))
-        }
-
-        // No usable ranges — fall back to the single current-period resolver (may be today).
-        let period = dateRangePeriod(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
+        let period = resolve(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
         return (period.currentPeriodStart, period.currentPeriodEnd, period.currentPeriodLabel)
     }
 

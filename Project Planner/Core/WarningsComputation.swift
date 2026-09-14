@@ -517,8 +517,11 @@ enum WarningsComputation {
         }
 
         let activeOperatives = input.operatives.filter(\.isActive)
-        // coverageStart is today for day/week modes, and period start for invoicing period —
-        // so unbooked labour naturally covers past+present+future only inside invoicing windows.
+        // coverageStart is:
+        // - numberOfDays: today
+        // - Full week: Monday of this week (past days included)
+        // - Invoicing period: payment-run segment start (past days in that timeframe included)
+        // Never clamp to today here — that hid past invoicing/full-week warnings.
         let unbookedScanStart = coverageStart
         var day = unbookedScanStart
         while day <= coverageEnd {

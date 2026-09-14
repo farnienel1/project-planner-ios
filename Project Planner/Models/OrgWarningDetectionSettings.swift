@@ -18,7 +18,7 @@ enum WarningClashLookaheadMode: String, Codable, CaseIterable, Identifiable, Sen
         switch self {
         case .endOfInvoicingPeriod: return "Invoicing period"
         case .numberOfDays: return "Set number of days"
-        case .endOfWorkingWeek: return "End of the working week"
+        case .endOfWorkingWeek: return "Full week"
         }
     }
 }
@@ -83,8 +83,8 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
 
     /// Inclusive end of the warnings scan window.
     /// - numberOfDays: today through today+(N-1)  (N calendar days)
-    /// - endOfWorkingWeek: today through Friday of the current working week
-    /// - endOfInvoicingPeriod: end of the full payment-run calendar span for this cycle
+    /// - endOfWorkingWeek ("Full week"): Sunday of the current week (Mon–Sun)
+    /// - endOfInvoicingPeriod: end of the payment-run segment that contains today
     func coverageEnd(
         from today: Date,
         invoicing: OrganizationInvoicingSettings = .default,
@@ -99,11 +99,10 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
                 for: calendar.date(byAdding: .day, value: days - 1, to: start) ?? start
             )
         case .endOfWorkingWeek:
-            let friday = Self.endOfWorkingWeek(from: start, calendar: calendar)
-            // Never end before today (e.g. weekend after Friday → next Friday).
-            return max(start, friday)
+            // Full calendar week ending Sunday. Weekend unbooked warnings use the toggle below.
+            return Self.endOfCalendarWeek(from: start, calendar: calendar)
         case .endOfInvoicingPeriod:
-            // Full payment-run calendar span (all date ranges in the current cycle).
+            // Active payment-run segment only (e.g. 1–16 while today is in that range).
             return calendar.startOfDay(
                 for: InvoicingPeriodResolver.warningScanBounds(
                     invoicing: invoicing,
@@ -115,8 +114,9 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     }
 
     /// Inclusive start of the warnings scan window.
-    /// - numberOfDays / endOfWorkingWeek: today (matches settings copy “today through …”)
-    /// - endOfInvoicingPeriod: start of the full payment-run calendar span for this cycle
+    /// - numberOfDays: today (forward look-ahead)
+    /// - endOfWorkingWeek ("Full week"): Monday of the current week (includes past days this week)
+    /// - endOfInvoicingPeriod: start of the active payment-run segment containing today
     func coverageStart(
         from today: Date,
         invoicing: OrganizationInvoicingSettings = .default,
@@ -132,7 +132,9 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
                     calendar: calendar
                 ).start
             )
-        case .numberOfDays, .endOfWorkingWeek:
+        case .endOfWorkingWeek:
+            return Self.startOfCalendarWeek(from: start, calendar: calendar)
+        case .numberOfDays:
             return start
         }
     }
@@ -157,7 +159,7 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         return formatter.string(from: end)
     }
 
-    /// Inclusive number of calendar days from today through the detection end date.
+    /// Inclusive number of calendar days in the detection window.
     func detectionHorizonDayCount(
         from today: Date = Date(),
         invoicing: OrganizationInvoicingSettings = .default,
@@ -188,20 +190,27 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
             return "Scans \(count) calendar day\(count == 1 ? "" : "s"): \(startLabel) through \(endLabel). Includes clashes, unbooked labour, and materials cut-off in that window."
         case .endOfInvoicingPeriod:
             let bounds = InvoicingPeriodResolver.warningScanBounds(invoicing: invoicing, referenceDate: today, calendar: calendar)
-            return "Scans the full payment-run calendar (\(bounds.label)): \(startLabel) through \(endLabel). Includes past, present, and future clashes and unbooked labour for every payment-run range in this cycle."
+            return "Scans the active payment-run period (\(bounds.label)): \(startLabel) through \(endLabel). Includes past, present, and future clashes and unbooked labour inside this timeframe."
         case .endOfWorkingWeek:
-            return "Scans today through Friday of this working week: \(startLabel) through \(endLabel). Resets each Monday."
+            return "Scans your current week (\(startLabel) through \(endLabel)). To exclude weekends, use the toggle below."
         }
     }
 
     // MARK: - Private
 
-    /// Friday of the week containing `date` (Calendar weekday: 1 = Sun … 6 = Fri).
-    private static func endOfWorkingWeek(from date: Date, calendar: Calendar) -> Date {
+    /// Monday of the week containing `date` (Calendar weekday: 1 = Sun … 2 = Mon).
+    private static func startOfCalendarWeek(from date: Date, calendar: Calendar) -> Date {
         let weekday = calendar.component(.weekday, from: date)
-        let friday = 6
-        var add = friday - weekday
-        if add < 0 { add += 7 }
+        let monday = 2
+        var subtract = weekday - monday
+        if subtract < 0 { subtract += 7 }
+        return calendar.startOfDay(for: calendar.date(byAdding: .day, value: -subtract, to: date) ?? date)
+    }
+
+    /// Sunday of the week containing `date` (Calendar weekday: 1 = Sun).
+    private static func endOfCalendarWeek(from date: Date, calendar: Calendar) -> Date {
+        let weekday = calendar.component(.weekday, from: date)
+        let add = (8 - weekday) % 7  // days until Sunday; 0 when already Sunday
         return calendar.startOfDay(for: calendar.date(byAdding: .day, value: add, to: date) ?? date)
     }
 

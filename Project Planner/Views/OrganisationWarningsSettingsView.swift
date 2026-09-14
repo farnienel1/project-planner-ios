@@ -37,7 +37,7 @@ struct OrganisationWarningsSettingsView: View {
         InvoicingPeriodResolver.resolve(invoicing: invoicingSettings)
     }
 
-    /// Full payment-run span used by Warnings “Invoicing period” mode (may be wider than the single current segment).
+    /// Active payment-run segment used by Warnings “Invoicing period” mode (from Organisation Hub).
     private var warningsInvoicingScanLabel: String {
         InvoicingPeriodResolver.warningScanBounds(invoicing: invoicingSettings).label
     }
@@ -126,8 +126,8 @@ struct OrganisationWarningsSettingsView: View {
 
             VStack(spacing: 10) {
                 modeOption(.numberOfDays, label: "Set number of days", description: "Scan today through the next N calendar days (inclusive). Example: 7 days = today + the next 6 days.")
-                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan the full payment-run calendar from your invoicing settings — all date ranges in the current cycle (past, present, and future). Recurring runs use the current recurring period.")
-                modeOption(.endOfWorkingWeek, label: "End of working week", description: "Scan today through Friday of the current working week. Resets each Monday.")
+                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan the active payment-run timeframe from Organisation Hub (e.g. 1–16 or 17–31) — every past, present, and future day inside that timeframe.")
+                modeOption(.endOfWorkingWeek, label: "Full week", description: "This option will include any warnings for your current working week. To exclude weekends, please use the toggle below.")
             }
 
             if draft.clashLookaheadMode == .numberOfDays {
@@ -259,14 +259,14 @@ struct OrganisationWarningsSettingsView: View {
                     Image(systemName: "calendar")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.green)
-                    Text("WARNINGS SCAN WINDOW")
+                    Text("ACTIVE PAYMENT-RUN PERIOD")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.green)
                 }
                 Text(warningsInvoicingScanLabel)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color(red: 0.08, green: 0.33, blue: 0.18))
-                Text("Uses your payment-run settings. Scans past, present, and future dates across every payment-run range in this cycle (not only the single segment that contains today).")
+                Text("From Organisation Hub payment-run settings. While you are in this timeframe, warnings include every day from period start through period end — past, present, and future.")
                     .font(.caption)
                     .foregroundStyle(Color(red: 0.09, green: 0.40, blue: 0.20))
             }
@@ -417,8 +417,8 @@ struct OrganisationWarningsSettingsView: View {
 
             toggleRow(
                 title: "Include weekends in unbooked labour",
-                subtitle: "When on, Saturday and Sunday are included when checking whether operatives have been booked for every day in the detection window. Enable only if your operatives regularly work weekends.",
-                footnote: "Does not affect clash detection — clashes follow your working week unless a weekend booking exists.",
+                subtitle: "When on, Saturday and Sunday are checked for unbooked labour inside the detection window (including Full week). Turn off to exclude weekends.",
+                footnote: "Clash warnings still appear if someone has overlapping weekend bookings.",
                 isOn: $draft.includeWeekendsForUnbookedLabour
             )
         }
