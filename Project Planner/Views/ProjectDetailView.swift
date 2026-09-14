@@ -681,6 +681,7 @@ struct ProjectDetailView: View {
                 .environmentObject(managerScheduleStore)
                 .environmentObject(taskStore)
                 .environmentObject(notificationService)
+                .environmentObject(projectStore)
         case .activeUsers:
             ProjectActiveOperativesView(project: project)
                 .environmentObject(bookingStore)

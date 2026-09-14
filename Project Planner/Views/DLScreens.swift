@@ -39,12 +39,13 @@ struct DLDeadlinesScreen: View {
                                   "Steel Fixing", "Plant"]
     var onCommit: ((DLDeadline, URL?) -> Void)? = nil
     var onBack: (() -> Void)? = nil
+    var project: Project? = nil
+    var jobSiteAudits: [SiteAudit] = []
 
     @State private var mode: DLViewMode = .list
     @State private var selectedDay: Date? = nil
     @State private var openItem: DLDeadline? = nil
     @State private var showingAdd = false
-    @State private var editingItem: DLDeadline? = nil
 
     private let cal = Calendar.current
 
@@ -86,29 +87,17 @@ struct DLDeadlinesScreen: View {
                 canManage: canManage,
                 authorName: authorName,
                 siteAudits: siteAudits,
-                onEdit: canManage ? { editingItem = $0 } : nil
+                project: project,
+                jobSiteAudits: jobSiteAudits,
+                people: people,
+                tradeOptions: tradeOptions,
+                contextKind: contextKind,
+                onCommit: onCommit
             )
         }
         .sheet(isPresented: $showingAdd) {
             DLEditDeadlineScreen(
                 contextKind: contextKind,
-                people: people,
-                siteAudits: siteAudits,
-                tradeOptions: tradeOptions,
-                authorName: authorName,
-                onSave: { deadline, fileURL in
-                    if let onCommit {
-                        onCommit(deadline, fileURL)
-                    } else {
-                        store.upsert(deadline)
-                    }
-                }
-            )
-        }
-        .sheet(item: $editingItem) { item in
-            DLEditDeadlineScreen(
-                contextKind: contextKind,
-                existing: item,
                 people: people,
                 siteAudits: siteAudits,
                 tradeOptions: tradeOptions,
@@ -390,13 +379,20 @@ struct DLDeadlineDetailSheet: View {
     var canManage: Bool = true
     var authorName: String = "Farnie Nel"
     var siteAudits: [DLSiteAuditRef] = []
-    var onEdit: ((DLDeadline) -> Void)? = nil
+    var project: Project? = nil
+    var jobSiteAudits: [SiteAudit] = []
+    var people: [DLPerson] = []
+    var tradeOptions: [String] = ["General"]
+    var contextKind: String = "Project"
+    var onCommit: ((DLDeadline, URL?) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var showReschedule = false
+    @State private var showingEdit = false
     @State private var percent: Int = 0
     @State private var confirmComplete = false
     @State private var preview: HSDocumentPreviewItem?
+    @State private var openAudit: SiteAudit?
 
     private var live: DLDeadline { store.items.first(where: { $0.id == item.id }) ?? item }
 
@@ -405,7 +401,22 @@ struct DLDeadlineDetailSheet: View {
             HSNavBar(title: "Deadline",
                      subtitle: live.location,
                      onBack: { dismiss() },
-                     backSymbol: "xmark") { EmptyView() }
+                     backSymbol: "xmark") {
+                if canManage {
+                    Button {
+                        HSHaptic.tap()
+                        showingEdit = true
+                    } label: {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(HS.teal)
+                            .frame(width: 34, height: 34)
+                            .background(HS.tealBg)
+                            .clipShape(Circle())
+                    }
+                    .accessibilityLabel("Edit deadline")
+                }
+            }
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
@@ -427,14 +438,6 @@ struct DLDeadlineDetailSheet: View {
             if canManage {
                 HSBottomBar {
                     HStack(spacing: 10) {
-                        if let onEdit {
-                            Button {
-                                HSHaptic.tap(); onEdit(live)
-                            } label: {
-                                Label("Edit", systemImage: "pencil")
-                            }
-                            .buttonStyle(HSGhostButton(tint: HS.slate))
-                        }
                         Button {
                             HSHaptic.tap(); showReschedule = true
                         } label: {
@@ -461,8 +464,28 @@ struct DLDeadlineDetailSheet: View {
         .sheet(isPresented: $showReschedule) {
             DLRescheduleSheet(item: live, store: store, authorName: authorName)
         }
+        .sheet(isPresented: $showingEdit) {
+            DLEditDeadlineScreen(
+                contextKind: contextKind,
+                existing: live,
+                people: people,
+                siteAudits: siteAudits,
+                tradeOptions: tradeOptions,
+                authorName: authorName,
+                onSave: { deadline, fileURL in
+                    if let onCommit {
+                        onCommit(deadline, fileURL)
+                    } else {
+                        store.upsert(deadline)
+                    }
+                }
+            )
+        }
         .sheet(item: $preview) { item in
             InAppRemoteDocumentViewer(source: item.source, title: item.title, noun: item.noun)
+        }
+        .sheet(item: $openAudit) { audit in
+            SiteAuditDetailView(audit: audit, project: project)
         }
     }
 
@@ -594,11 +617,26 @@ struct DLDeadlineDetailSheet: View {
                         HSDivider(inset: 62)
                     }
                     if live.siteAuditId != nil {
-                        DLFieldRow(icon: "clipboard.fill", tint: HS.teal, label: "Site audit") {
-                            Text(audit?.title ?? live.siteAuditTitle ?? "Attached site audit")
-                                .font(.system(size: 14.5, weight: .semibold))
-                                .foregroundStyle(HS.ink).hsNoClip(2)
+                        Button {
+                            HSHaptic.tap()
+                            if let audit = jobSiteAudits.first(where: { $0.id == live.siteAuditId }) {
+                                openAudit = audit
+                            }
+                        } label: {
+                            DLFieldRow(icon: "clipboard.fill", tint: HS.teal, label: "Site audit") {
+                                HStack(spacing: 6) {
+                                    Text(audit?.title ?? live.siteAuditTitle ?? "Attached site audit")
+                                        .font(.system(size: 14.5, weight: .semibold))
+                                        .foregroundStyle(HS.ink)
+                                        .hsNoClip(2)
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundStyle(HS.slate2)
+                                }
+                            }
                         }
+                        .buttonStyle(HSPressStyle())
+                        .disabled(jobSiteAudits.first(where: { $0.id == live.siteAuditId }) == nil)
                     }
                 }
                 .hsGutter()
@@ -900,6 +938,7 @@ struct DLEditDeadlineScreen: View {
 
     @State private var title = ""
     @State private var location = ""
+    @State private var locationIsCustom = false
     @State private var trade = "General"
     @State private var due = Date()
     @State private var start = Date()
@@ -915,8 +954,8 @@ struct DLEditDeadlineScreen: View {
     @State private var pickedFileURL: URL?
     @State private var pickedFileName: String?
 
-    private let commonAreas = ["Ground Floor", "1st Floor", "2nd Floor", "3rd Floor",
-                               "Roof", "Risers", "External", "Basement"]
+    private let locationPresets = ["Ground Floor", "1st Floor", "2nd Floor", "3rd Floor",
+                                   "Roof", "Risers", "External", "Basement"]
 
     private var canSave: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -1011,11 +1050,6 @@ struct DLEditDeadlineScreen: View {
     private var whereSection: some View {
         VStack(alignment: .leading, spacing: HSMetric.sectionGapBot) {
             HSSectionHeader(title: "Where").hsGutter()
-            TextField("Floor or area", text: $location)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(HS.ink)
-                .hsCard()
-                .hsGutter()
 
             Color.clear
                 .frame(height: 38)
@@ -1023,26 +1057,51 @@ struct DLEditDeadlineScreen: View {
                 .overlay(alignment: .leading) {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
-                            ForEach(commonAreas, id: \.self) { area in
-                                Button {
-                                    HSHaptic.select(); location = area
-                                } label: {
-                                    Text(area)
-                                        .font(.system(size: 12.5, weight: .semibold))
-                                        .foregroundStyle(location == area ? HS.onAccent : HS.slate)
-                                        .fixedSize()
-                                        .padding(.horizontal, 12).padding(.vertical, 7)
-                                        .background(location == area ? HS.teal : HS.fill)
-                                        .clipShape(Capsule())
+                            locationChip(title: "Custom", selected: locationIsCustom) {
+                                HSHaptic.select()
+                                if !locationIsCustom {
+                                    if locationPresets.contains(location) {
+                                        location = ""
+                                    }
+                                    locationIsCustom = true
                                 }
-                                .buttonStyle(HSPressStyle())
+                            }
+                            ForEach(locationPresets, id: \.self) { area in
+                                locationChip(title: area, selected: !locationIsCustom && location == area) {
+                                    HSHaptic.select()
+                                    locationIsCustom = false
+                                    location = area
+                                }
                             }
                         }
                         .hsGutter()
                     }
                 }
+
+            if locationIsCustom {
+                TextField("Type floor or area", text: $location)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(HS.ink)
+                    .hsCard()
+                    .hsGutter()
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .padding(.top, HSMetric.sectionGapTop)
+        .animation(.easeOut(duration: 0.18), value: locationIsCustom)
+    }
+
+    private func locationChip(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(selected ? HS.onAccent : HS.slate)
+                .fixedSize()
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(selected ? HS.teal : HS.fill)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(HSPressStyle())
     }
 
     private var whenSection: some View {
@@ -1252,6 +1311,10 @@ struct DLEditDeadlineScreen: View {
         guard let e = existing else { return }
         title = e.title
         location = e.location ?? ""
+        locationIsCustom = {
+            guard let loc = e.location, !loc.isEmpty else { return false }
+            return !locationPresets.contains(loc)
+        }()
         trade = e.trade ?? (tradeOptions.first ?? "General")
         due = e.due
         hasStart = e.start != nil

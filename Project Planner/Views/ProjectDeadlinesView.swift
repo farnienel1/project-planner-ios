@@ -13,6 +13,7 @@ struct ProjectDeadlinesView: View {
     @EnvironmentObject private var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject private var taskStore: ProjectTaskStore
     @EnvironmentObject private var notificationService: NotificationService
+    @EnvironmentObject private var projectStore: ProjectStore
 
     @StateObject private var store = DLStore(items: [])
     @State private var isLoading = true
@@ -49,7 +50,9 @@ struct ProjectDeadlinesView: View {
                     onCommit: { deadline, fileURL in
                         Task { await commit(deadline, localFileURL: fileURL) }
                     },
-                    onBack: { dismiss() }
+                    onBack: { dismiss() },
+                    project: project,
+                    jobSiteAudits: siteAudits
                 )
             }
         }
