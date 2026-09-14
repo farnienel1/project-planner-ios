@@ -14,6 +14,8 @@ enum WarningsRefreshHelper {
     @MainActor static var isWeeklyReportVisible = false
     /// Never start a live scan while the Warnings sheet is presented (jetsam).
     @MainActor static var isWarningsSheetVisible = false
+    /// True while Home is running its post-quiet lite warm — blocks roster full-sync writes.
+    @MainActor static var isHomeWarningsWarmInFlight = false
 
     @MainActor
     @discardableResult

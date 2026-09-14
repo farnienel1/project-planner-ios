@@ -2146,6 +2146,10 @@ class UserStore: ObservableObject {
     
     /// Keeps roster `Operative.isActive` in sync with active operative app-user accounts so scheduling pickers include them.
     func syncActiveOperativesWithUserAccounts(operativeStore: OperativeStore) async {
+        if WarningsRefreshHelper.isHomeWarningsWarmInFlight {
+            print("🔥🔥🔥 DEBUG: Skipping operative roster sync — Home warnings warm in flight")
+            return
+        }
         for user in organizationUsers where user.permissions.operativeMode && user.isActive {
             let em = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             guard let idx = operativeStore.operatives.firstIndex(where: {
@@ -2190,6 +2194,7 @@ class UserStore: ObservableObject {
                 op.updatedAt = Date()
                 await operativeStore.updateOperative(op)
                 print("🔥🔥🔥 DEBUG: ✅ Synced operative roster for linked user \(em)")
+                await Task.yield()
             }
         }
     }

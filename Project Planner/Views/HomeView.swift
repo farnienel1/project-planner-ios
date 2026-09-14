@@ -683,6 +683,8 @@ struct HomeView: View {
         print("🔥🔥🔥 DEBUG: Home warnings refresh starting (\(reason)) bookings=\(bookingStore.bookings.count) loading=\(bookingStore.isLoading)")
         // Abort any leftover scan and breathe before MainActor snapshot.
         WarningsRefreshHelper.cancelInFlightRefresh()
+        WarningsRefreshHelper.isHomeWarningsWarmInFlight = true
+        defer { WarningsRefreshHelper.isHomeWarningsWarmInFlight = false }
         await Task.yield()
         try? await Task.sleep(nanoseconds: 400_000_000)
         await Task.yield()
