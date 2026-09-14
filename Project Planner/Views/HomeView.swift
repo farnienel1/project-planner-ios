@@ -181,7 +181,7 @@ struct HomeView: View {
             presentTasksDetail()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToWarnings"))) { _ in
-            print("🔥🔥🔥 DEBUG: WARNINGS_NAVIGATE_SYNC \(WarningsBuildStamp.id)")
+            print("🔥🔥🔥 DEBUG: WARNINGS_NAVIGATE_SYNC")
             showingTasksDetail = false
             showingWarningsDetail = true
         }
@@ -529,7 +529,7 @@ struct HomeView: View {
         .padding(.bottom, 28)
         .onAppear {
             loadPersistedAdminOverviewMetricsIfNeeded()
-            print("🔥🔥🔥 DEBUG: HOME_APPEARED \(WarningsBuildStamp.id) — pill must say '\(WarningsBuildStamp.homePillTitle)'")
+            print("🔥🔥🔥 DEBUG: HOME_APPEARED")
             homeWarningCount = WarningsService.shared.warningCount
         }
         .task(id: homeDataRefreshTrigger) {
@@ -749,11 +749,10 @@ struct HomeView: View {
                     icon: "exclamationmark.triangle.fill",
                     iconTint: Color(red: 0.64, green: 0.18, blue: 0.18),
                     iconBackground: Color(red: 0.99, green: 0.92, blue: 0.92),
-                    title: WarningsBuildStamp.homePillTitle,
-                    value: WarningsBuildStamp.homePillValue(activeCount: homeWarningCount)
+                    title: "Warnings",
+                    value: homeWarningCount == 0 ? "All clear" : "\(homeWarningCount) active"
                 ) {
-                    // Sync log proves this binary includes the Warnings open fix.
-                    print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON_SYNC \(WarningsBuildStamp.id)")
+                    print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON_SYNC")
                     showingTasksDetail = false
                     showingWarningsDetail = true
                 }

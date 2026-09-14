@@ -2,11 +2,27 @@
 //  AuthenticationView.swift
 //  Project Planner
 //
-//  Created by Assistant on 29/09/2025.
+//  Login UI matched to LoginScreen.tsx / login.html brand design.
 //
 
 import SwiftUI
 import FirebaseAuth
+
+private enum LoginBrand {
+    static let bgDeep = Color(red: 0.024, green: 0.055, blue: 0.102) // #060E1A
+    static let bgMid = Color(red: 0.043, green: 0.094, blue: 0.157) // #0B1828
+    static let bgBottom = Color(red: 0.027, green: 0.078, blue: 0.133) // #071422
+    static let cyan = Color(red: 0.133, green: 0.898, blue: 1.0) // #22E5FF
+    static let blue = Color(red: 0.102, green: 0.420, blue: 0.961) // #1A6BF5
+    static let blueMid = Color(red: 0.055, green: 0.310, blue: 0.847) // #0E4FD8
+    static let blueDark = Color(red: 0.039, green: 0.243, blue: 0.769) // #0A3EC4
+    static let fieldFill = Color.white.opacity(0.05)
+    static let fieldFillFocus = Color.white.opacity(0.08)
+    static let borderField = Color.white.opacity(0.10)
+    static let textSecondary = Color.white.opacity(0.50)
+    static let textMuted = Color.white.opacity(0.25)
+    static let textDim = Color.white.opacity(0.18)
+}
 
 struct AuthenticationView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
@@ -14,128 +30,66 @@ struct AuthenticationView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var showingForgotPassword = false
-    
+    @State private var showPassword = false
+    @FocusState private var focusedField: Field?
+
+    private enum Field {
+        case email, password
+    }
+
     var body: some View {
         ZStack {
-            Color(.systemGroupedBackground).ignoresSafeArea()
+            LinearGradient(
+                colors: [LoginBrand.bgDeep, LoginBrand.bgMid, LoginBrand.bgBottom],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            // Ambient glows
+            Circle()
+                .fill(LoginBrand.cyan.opacity(0.12))
+                .frame(width: 300, height: 300)
+                .blur(radius: 60)
+                .offset(y: -220)
+                .allowsHitTesting(false)
+
+            Circle()
+                .fill(LoginBrand.blue.opacity(0.15))
+                .frame(width: 220, height: 220)
+                .blur(radius: 50)
+                .offset(x: 100, y: 320)
+                .allowsHitTesting(false)
+
+            // Subtle grid texture
+            loginGridOverlay
+                .opacity(0.5)
+                .allowsHitTesting(false)
+
             ScrollView {
-                VStack(spacing: 28) {
-                    VStack(spacing: 16) {
-                        Image(systemName: "building.2.crop.circle.fill")
-                            .font(.system(size: 80))
-                            .foregroundColor(.blue)
+                VStack(spacing: 0) {
+                    logoSection
+                        .padding(.top, 52)
+                        .padding(.bottom, 44)
 
-                        Text("Project Planner")
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
-                            .foregroundColor(.blue)
-
-                        Text("Welcome back")
-                            .font(.headline)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding(.top, 30)
-
-                    VStack(spacing: 18) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Email")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                            TextField("Enter your email", text: $email)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .keyboardType(.emailAddress)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .submitLabel(.next)
-                        }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Password")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                            CustomSecureField(title: "Enter your password", text: $password)
-                        }
-                    }
-                    .padding(.horizontal, 32)
-
-                    if let errorMessage = firebaseBackend.errorMessage {
-                        Text(errorMessage)
-                            .foregroundColor(.red)
-                            .font(.caption)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 32)
-                    }
-                    if let errorMessage = userStore.errorMessage, !errorMessage.isEmpty, firebaseBackend.errorMessage == nil {
-                        Text(errorMessage)
-                            .foregroundColor(.red)
-                            .font(.caption)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 32)
-                    }
-
-                    VStack(spacing: 14) {
-                        Button(action: signIn) {
-                            HStack {
-                                if firebaseBackend.isLoading {
-                                    ProgressView()
-                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                        .scaleEffect(0.8)
-                                }
-                                Text("Sign In")
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.blue)
-                            .cornerRadius(12)
-                        }
-                        .disabled(firebaseBackend.isLoading)
-                        .opacity(firebaseBackend.isLoading ? 0.6 : 1.0)
-                        .padding(.horizontal, 32)
-
-                        Button("Forgot Password?") {
-                            showingForgotPassword = true
-                        }
-                        .font(.subheadline)
-                        .foregroundColor(.blue)
-                    }
-
-                    VStack(spacing: 10) {
-                        Text("New organisation?")
-                            .font(.callout)
-                            .foregroundColor(.secondary)
-
-                        Button(action: { AppBranding.openOrganisationSetup() }) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "safari")
-                                Text("Set up on the web")
-                                    .font(.headline)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.white)
-                            .foregroundColor(.blue)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.blue, lineWidth: 1.5)
-                            )
-                        }
-                        .padding(.horizontal, 32)
-                    }
-                    .padding(.bottom, 20)
+                    formSection
                 }
+                .padding(.horizontal, 28)
+                .padding(.bottom, 40)
                 .frame(maxWidth: .infinity)
             }
             .scrollDismissesKeyboard(.interactively)
         }
+        .preferredColorScheme(.dark)
         .onAppear {
-            // Safety reset: if a previous auth attempt was interrupted, keep login interactive.
             firebaseBackend.isLoading = false
         }
         .onSubmit {
-            if isFormValid { signIn() }
+            if focusedField == .email {
+                focusedField = .password
+            } else if isFormValid {
+                signIn()
+            }
         }
         .onChange(of: email) { _, _ in
             firebaseBackend.errorMessage = nil
@@ -150,13 +104,262 @@ struct AuthenticationView: View {
                 .environmentObject(firebaseBackend)
         }
     }
-    
+
+    private var loginGridOverlay: some View {
+        Canvas { context, size in
+            let step: CGFloat = 40
+            var path = Path()
+            var x: CGFloat = 0
+            while x <= size.width {
+                path.move(to: CGPoint(x: x, y: 0))
+                path.addLine(to: CGPoint(x: x, y: size.height))
+                x += step
+            }
+            var y: CGFloat = 0
+            while y <= size.height {
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: size.width, y: y))
+                y += step
+            }
+            context.stroke(path, with: .color(Color(red: 0, green: 0.706, blue: 1).opacity(0.04)), lineWidth: 1)
+        }
+        .ignoresSafeArea()
+    }
+
+    private var logoSection: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.051, green: 0.106, blue: 0.180),
+                                Color(red: 0.039, green: 0.082, blue: 0.145)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .stroke(Color(red: 0, green: 0.831, blue: 1).opacity(0.25), lineWidth: 1)
+                    )
+                    .shadow(color: LoginBrand.cyan.opacity(0.18), radius: 18, x: 0, y: 0)
+
+                Image("AppLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 64, height: 64)
+            }
+            .frame(width: 88, height: 88)
+            .padding(.bottom, 28)
+
+            VStack(spacing: 2) {
+                Text("PROJECT")
+                    .font(.system(size: 30, weight: .black))
+                    .foregroundStyle(.white)
+                    .tracking(-0.5)
+                Text("PLANNER")
+                    .font(.system(size: 30, weight: .black))
+                    .foregroundStyle(LoginBrand.cyan)
+                    .tracking(-0.5)
+            }
+            .padding(.bottom, 10)
+
+            Text("Built for construction teams")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(LoginBrand.textSecondary)
+                .tracking(1.5)
+                .textCase(.uppercase)
+                .padding(.top, 8)
+        }
+    }
+
+    private var formSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            fieldGroup(label: "Email") {
+                TextField("your@email.com", text: $email)
+                    .keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textContentType(.emailAddress)
+                    .submitLabel(.next)
+                    .focused($focusedField, equals: .email)
+                    .foregroundStyle(.white)
+                    .tint(LoginBrand.cyan)
+            }
+            .padding(.bottom, 16)
+
+            fieldGroup(label: "Password") {
+                HStack(spacing: 0) {
+                    Group {
+                        if showPassword {
+                            TextField("Enter your password", text: $password)
+                        } else {
+                            SecureField("Enter your password", text: $password)
+                        }
+                    }
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textContentType(.password)
+                    .submitLabel(.done)
+                    .focused($focusedField, equals: .password)
+                    .foregroundStyle(.white)
+                    .tint(LoginBrand.cyan)
+
+                    Button {
+                        showPassword.toggle()
+                    } label: {
+                        Image(systemName: showPassword ? "eye" : "eye.slash")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(showPassword ? LoginBrand.cyan : LoginBrand.textMuted)
+                            .frame(width: 40, height: 52)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.bottom, 12)
+
+            if let errorMessage = activeErrorMessage {
+                Text(errorMessage)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color(red: 1, green: 0.42, blue: 0.42))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(12)
+                    .background(Color(red: 1, green: 0.235, blue: 0.235).opacity(0.10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color(red: 1, green: 0.235, blue: 0.235).opacity(0.20), lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .padding(.bottom, 12)
+            }
+
+            HStack {
+                Spacer()
+                Button("Forgot password?") {
+                    showingForgotPassword = true
+                }
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(LoginBrand.cyan.opacity(0.8))
+            }
+            .padding(.bottom, 28)
+            .padding(.top, -4)
+
+            Button(action: signIn) {
+                ZStack {
+                    if firebaseBackend.isLoading {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    } else {
+                        Text("Sign In")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(.white)
+                            .tracking(0.3)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 56)
+                .background(
+                    LinearGradient(
+                        colors: isFormValid && !firebaseBackend.isLoading
+                            ? [LoginBrand.blue, LoginBrand.blueMid, LoginBrand.blueDark]
+                            : [LoginBrand.blue.opacity(0.4), LoginBrand.blueDark.opacity(0.4)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .shadow(color: LoginBrand.blue.opacity(isFormValid ? 0.45 : 0.15), radius: 16, x: 0, y: 4)
+            }
+            .buttonStyle(.plain)
+            .disabled(firebaseBackend.isLoading || !isFormValid)
+            .padding(.bottom, 24)
+
+            HStack(spacing: 12) {
+                Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+                Text("New to Project Planner?")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(LoginBrand.textMuted)
+                    .fixedSize()
+                Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+            }
+            .padding(.bottom, 20)
+
+            Button(action: { AppBranding.openOrganisationSetup() }) {
+                HStack(spacing: 9) {
+                    Image(systemName: "globe")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("Set up your organisation on the web")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundStyle(LoginBrand.cyan)
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(LoginBrand.cyan.opacity(0.2), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+
+            Text(versionLine)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(LoginBrand.textDim)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 28)
+        }
+    }
+
+    private func fieldGroup<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
+        let isFocused: Bool = {
+            switch label {
+            case "Email": return focusedField == .email
+            case "Password": return focusedField == .password
+            default: return false
+            }
+        }()
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(label)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(LoginBrand.textSecondary)
+                .tracking(0.8)
+                .textCase(.uppercase)
+
+            content()
+                .padding(.leading, 18)
+                .frame(height: 52)
+                .background(isFocused ? LoginBrand.fieldFillFocus : LoginBrand.fieldFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(isFocused ? LoginBrand.cyan.opacity(0.5) : LoginBrand.borderField, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: isFocused ? LoginBrand.cyan.opacity(0.12) : .clear, radius: 12, x: 0, y: 0)
+        }
+    }
+
+    private var activeErrorMessage: String? {
+        if let errorMessage = firebaseBackend.errorMessage, !errorMessage.isEmpty {
+            return errorMessage
+        }
+        if let errorMessage = userStore.errorMessage, !errorMessage.isEmpty {
+            return errorMessage
+        }
+        return nil
+    }
+
+    private var versionLine: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        return "v\(v) · Project Planner"
+    }
+
     private var isFormValid: Bool {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Keep sign-in permissive so users can always submit and receive a concrete backend error.
         return !trimmedEmail.isEmpty && !password.isEmpty
     }
-    
+
     private func signIn() {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -179,7 +382,6 @@ struct AuthenticationView: View {
                 if let uid = Auth.auth().currentUser?.uid, !uid.isEmpty {
                     NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: ["uid": uid])
                 }
-                // Don’t block leaving the login screen on Firestore; profile loads on the main shell.
                 Task { await userStore.loadCurrentUser() }
             } catch {
                 if firebaseBackend.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {

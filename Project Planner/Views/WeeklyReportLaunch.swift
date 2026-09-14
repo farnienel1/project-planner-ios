@@ -80,9 +80,6 @@ struct WeeklyReportOpenShell: View {
                         Text("Opening weekly report…")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                        Text(WarningsBuildStamp.id)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
                         Button("Close") { dismiss() }
                             .padding(.top, 8)
                     }
@@ -97,16 +94,16 @@ struct WeeklyReportOpenShell: View {
             }
         }
         .task {
-            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SHELL \(WarningsBuildStamp.id)")
+            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SHELL")
             WarningsRefreshHelper.isWeeklyReportVisible = true
             WarningsRefreshHelper.cancelInFlightRefresh()
             await WarningsRefreshHelper.prepareForHeavySheet()
-            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SETTLED \(WarningsBuildStamp.id)")
+            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SETTLED")
             phase = .report
         }
         .onDisappear {
             WarningsRefreshHelper.isWeeklyReportVisible = false
-            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SHELL_DISMISS \(WarningsBuildStamp.id)")
+            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SHELL_DISMISS")
         }
     }
 }

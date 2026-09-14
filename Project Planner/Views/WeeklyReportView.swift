@@ -127,7 +127,7 @@ struct WeeklyReportView: View {
                         .presentationDragIndicator(.visible)
                 }
                 .onAppear {
-                    print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_FORM \(WarningsBuildStamp.id)")
+                    print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_FORM")
                     setThisWeekRange()
                     // Logo loads on Generate / idle — not on open (Simulator jetsam).
                 }
@@ -181,13 +181,8 @@ struct WeeklyReportView: View {
             }
         }
         ToolbarItem(placement: .principal) {
-            VStack(spacing: 1) {
-                Text("Weekly Report")
-                    .font(.system(size: 17, weight: .semibold))
-                Text(WarningsBuildStamp.id)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
+            Text("Weekly Report")
+                .font(.system(size: 17, weight: .semibold))
         }
     }
 
