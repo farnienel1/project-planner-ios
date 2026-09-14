@@ -342,9 +342,9 @@ enum ScheduleCalendarExport {
         case .apple:
             return store.defaultCalendarForNewEvents
         case .google:
-            return writable.first(where: isGoogleCalendar)
+            return writable.first(where: { calendar in isGoogleCalendar(calendar) })
         case .outlook:
-            return writable.first(where: isOutlookCalendar)
+            return writable.first(where: { calendar in isOutlookCalendar(calendar) })
         }
     }
 

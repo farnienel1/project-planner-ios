@@ -1074,6 +1074,7 @@ private struct EditUserDialogModifier: ViewModifier {
     let canEditPermissionsMatrix: Bool
     let operativeStore: OperativeStore
     let firebaseBackend: FirebaseBackend
+    let userStore: UserStore
     @Binding var showingProfilePhotoSourcePicker: Bool
     @Binding var profilePhotoPickerSource: UIImagePickerController.SourceType
     @Binding var showingProfileImagePicker: Bool
@@ -1145,17 +1146,7 @@ private struct EditUserDialogModifier: ViewModifier {
                 Text("When the day rate is changed, the weekly report and invoicing (invoicing will be available in a future update) use the new rate from the working day you choose. If you want the new rate to apply from tomorrow, choose Tomorrow.")
             }
             .sheet(isPresented: $showingQualificationsEditor, onDismiss: { operativeForQualificationsEditor = nil }) {
-                if let operative = operativeForQualificationsEditor ?? linkedOperative {
-                    OperativeQualificationsEditorView(
-                        operative: operative,
-                        title: "Qualifications",
-                        canEditAssignments: canEditPermissionsMatrix
-                    )
-                    .environmentObject(operativeStore)
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(notificationService)
-                    .environmentObject(userStore)
-                }
+                qualificationsEditorSheet
             }
             .confirmationDialog("Profile photo", isPresented: $showingProfilePhotoSourcePicker, titleVisibility: .visible) {
                 if UIImagePickerController.isSourceTypeAvailable(.camera) {
@@ -1185,6 +1176,21 @@ private struct EditUserDialogModifier: ViewModifier {
                     Text(profilePhotoUploadMessage)
                 }
             }
+    }
+
+    @ViewBuilder
+    private var qualificationsEditorSheet: some View {
+        if let operative = operativeForQualificationsEditor ?? linkedOperative {
+            OperativeQualificationsEditorView(
+                operative: operative,
+                title: "Qualifications",
+                canEditAssignments: canEditPermissionsMatrix
+            )
+            .environmentObject(operativeStore)
+            .environmentObject(firebaseBackend)
+            .environmentObject(notificationService)
+            .environmentObject(userStore)
+        }
     }
 
     private var saveErrorPresented: Binding<Bool> {
@@ -1795,6 +1801,7 @@ struct EditUserView: View {
             canEditPermissionsMatrix: canEditPermissionsMatrix,
             operativeStore: operativeStore,
             firebaseBackend: firebaseBackend,
+            userStore: userStore,
             showingProfilePhotoSourcePicker: $showingProfilePhotoSourcePicker,
             profilePhotoPickerSource: $profilePhotoPickerSource,
             showingProfileImagePicker: $showingProfileImagePicker,

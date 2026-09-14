@@ -8231,7 +8231,7 @@ extension FirebaseBackend {
             reminder = nil
         }
         let historyRaw = map["history"] as? [[String: Any]] ?? []
-        var item = DLDeadline(
+        let item = DLDeadline(
             id: id,
             title: (map["title"] as? String) ?? "Untitled deadline",
             location: location?.isEmpty == false ? location : nil,
