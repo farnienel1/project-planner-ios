@@ -7,8 +7,8 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-rebuild-1"
-    /// Impossible to miss — if you still see H13 / HOME / OPEN, you are not on this build.
+    static let id = "wfix-rebuild-2"
+    /// Impossible to miss — if you still see H13 / HOME / OPEN / rebuild-1, you are not on this build.
     static let homePillTitle = "Warnings REBUILD"
     static let homePillValueWhenClear = "\(id) · All clear"
     static func homePillValue(activeCount: Int) -> String {
