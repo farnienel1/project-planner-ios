@@ -64,6 +64,9 @@ class LocalNotificationService {
         case .taskCreated:
             content.title = "New Task Created"
             content.body = details.isEmpty ? "A new task has been assigned: Complete site inspection." : details
+        case .deadlineAssigned:
+            content.title = "Deadline assigned"
+            content.body = details.isEmpty ? "A deadline has been assigned to you." : details
         case .taskCompleted:
             content.title = "Task Completed"
             content.body = details.isEmpty ? "Task 'Complete site inspection' has been completed." : details

@@ -144,13 +144,13 @@ struct UserPermissions: Codable, Hashable {
     var skills: Bool
     var qualifications: Bool // Manage organisation qualification templates (admins always; managers when enabled)
     var materials: Bool    // Operative materials visibility/access inside project detail
-    var projects: Bool     // Can create and manage projects
-    var smallWorks: Bool   // Can create and manage small works
+    var projects: Bool     // Create / edit / add projects. Off still allows assigned or booked jobs.
+    var smallWorks: Bool   // Create / edit / add small works. Off still allows assigned or booked jobs.
     var operativeMode: Bool // Operative mode - limited view of app
     var annualLeaveSelfBook: Bool // Managers can self-book annual leave without approval
-    var weeklyReports: Bool // Managers can access weekly reports
-    var dailyOverview: Bool // Managers can access Daily Overview
-    var subContractors: Bool // Managers can add/manage sub contractors
+    var weeklyReports: Bool // Weekly Report home tile
+    var dailyOverview: Bool // Daily Overview home tile
+    var subContractors: Bool // Sub Contractors directory on Home/menus. Booking on jobs is separate.
     var siteAudit: Bool // Operative can access site audits
     /// Managers: view quote/order history in Wholesalers and on project materials.
     var wholesalersOrderHistory: Bool
