@@ -15,6 +15,7 @@ struct SmallWorksView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var taskStore: ProjectTaskStore
     /// Default to Active so the list opens on current jobs; use All / Completed chips for older work.
     @State private var selectedStatus: ProjectStatus? = .active
     @State private var selectedProject: Project? = nil
@@ -22,6 +23,7 @@ struct SmallWorksView: View {
     @State private var navigationPath = NavigationPath()
     @State private var searchText = ""
     @State private var showingCreateSmallWorks = false
+    @State private var deadlineAssignedProjectIds: Set<UUID> = []
 
     private var listCounts: WorksListStatusCounts {
         WorksListStatusCounts.from(smallWorksBeforeStatusFilter)
@@ -98,6 +100,9 @@ struct SmallWorksView: View {
                 if selectedStatus == .inactive || selectedStatus == nil {
                     selectedStatus = .active
                 }
+            }
+            .task {
+                await refreshDeadlineAssignedProjectIds()
             }
             .sheet(isPresented: $showingEditProject) {
                 if let project = selectedProject {
@@ -267,16 +272,18 @@ struct SmallWorksView: View {
         var works = smallWorksProjects
         
         if userStore.isOperativeMode() {
-            guard let operative = resolvedCurrentOperative,
-                  let currentUserId = userStore.currentUser?.id else {
+            guard let currentUserId = userStore.currentUser?.id else {
                 return []
             }
-            let assignedProjectIds = Set(bookingStore.bookings
-                .filter {
-                    $0.operativeId == operative.id &&
-                    ($0.status == .confirmed || $0.status == .tentative)
-                }
-                .map { $0.projectId })
+            let assignedProjectIds = WorkAccess.operativeVisibleProjectIds(
+                currentUser: userStore.currentUser,
+                operative: resolvedCurrentOperative,
+                operatives: operativeStore.allOperatives,
+                managers: operativeStore.allManagers,
+                bookingStore: bookingStore,
+                taskStore: taskStore,
+                deadlineAssignedProjectIds: deadlineAssignedProjectIds
+            )
             works = works.filter {
                 assignedProjectIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId)
             }
@@ -306,6 +313,17 @@ struct SmallWorksView: View {
             $0.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == first &&
             $0.lastName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == last
         })
+    }
+
+    private func refreshDeadlineAssignedProjectIds() async {
+        guard userStore.isOperativeMode(),
+              let userId = userStore.currentUser?.id,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId else {
+            await MainActor.run { deadlineAssignedProjectIds = [] }
+            return
+        }
+        let ids = await firebaseBackend.loadDeadlineAssignedProjectIds(userId: userId, organizationId: orgId)
+        await MainActor.run { deadlineAssignedProjectIds = ids }
     }
     
     private var isEmptyDueToStatusFilterOnly: Bool {

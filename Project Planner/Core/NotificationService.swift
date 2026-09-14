@@ -559,6 +559,32 @@ class NotificationService: ObservableObject {
         }
     }
 
+    func notifyDeadlineAssigned(
+        deadlineId: UUID,
+        title: String,
+        projectName: String,
+        assignedUserIds: [String],
+        createdBy: String
+    ) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        for rawId in assignedUserIds {
+            let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(rawId)
+            let dedupeId = syntheticNotificationId(from: "deadlineAssigned|\(deadlineId.uuidString)|\(canonicalUserId)")
+            let notification = AppNotification(
+                id: dedupeId,
+                organizationId: organizationId,
+                type: .deadlineAssigned,
+                title: "Deadline assigned",
+                message: "\(createdBy) assigned you a deadline on \(projectName): \(title)",
+                userId: canonicalUserId,
+                relatedId: deadlineId,
+                requiresPermission: nil
+            )
+            await saveNotification(notification)
+        }
+    }
+
     /// `excludeUserIdMatchingRequester` should be the Firebase Auth uid (or app user id) of the person who submitted the request.
     /// They must not receive the "someone requested leave" admin notification or OS banner.
     func notifyHolidayRequestSubmitted(

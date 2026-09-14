@@ -2148,6 +2148,8 @@ class FirebaseBackend: ObservableObject {
             let attachedFileURL = data["attachedFileURL"] as? String
             let attachedFileName = data["attachedFileName"] as? String
             let attachedImageURLs = data["attachedImageURLs"] as? [String] ?? []
+            let attachedSiteAuditId = (data["attachedSiteAuditId"] as? String).flatMap(UUID.init(uuidString:))
+            let attachedSiteAuditTitle = data["attachedSiteAuditTitle"] as? String
             
             // Load items (multi-item tasks)
             var items: [ProjectTaskItem] = []
@@ -2180,6 +2182,8 @@ class FirebaseBackend: ObservableObject {
                 attachedFileURL: attachedFileURL,
                 attachedFileName: attachedFileName,
                 attachedImageURLs: attachedImageURLs,
+                attachedSiteAuditId: attachedSiteAuditId,
+                attachedSiteAuditTitle: attachedSiteAuditTitle,
                 completedBy: completedBy,
                 completedAt: completedAt,
                 completionImages: completionImages,
@@ -2250,6 +2254,18 @@ class FirebaseBackend: ObservableObject {
         // Add attached images
         if !task.attachedImageURLs.isEmpty {
             data["attachedImageURLs"] = task.attachedImageURLs
+        }
+        if let fileURL = task.attachedFileURL, !fileURL.isEmpty {
+            data["attachedFileURL"] = fileURL
+        }
+        if let fileName = task.attachedFileName, !fileName.isEmpty {
+            data["attachedFileName"] = fileName
+        }
+        if let auditId = task.attachedSiteAuditId {
+            data["attachedSiteAuditId"] = auditId.uuidString
+        }
+        if let auditTitle = task.attachedSiteAuditTitle, !auditTitle.isEmpty {
+            data["attachedSiteAuditTitle"] = auditTitle
         }
         
         // Add items and completedItemIds (multi-item tasks)
@@ -8067,6 +8083,265 @@ extension FirebaseBackend {
         ]
         let ref = hsStateDocumentRef(organizationId: orgId, project: project)
         try await ref.setData(payload, merge: true)
+    }
+
+    // MARK: - Deadlines (Project / Small Works)
+
+    private func deadlinesStateDocumentRef(organizationId: String, project: Project) -> DocumentReference {
+        let docId = "deadlines_\(hsCollectionName(for: project))_\(project.id.uuidString)"
+        return db.collection("organizations")
+            .document(organizationId)
+            .collection("settings")
+            .document(docId)
+    }
+
+    private func deadlineAssignmentsDocumentRef(organizationId: String) -> DocumentReference {
+        db.collection("organizations")
+            .document(organizationId)
+            .collection("settings")
+            .document("deadlineAssignments")
+    }
+
+    private func deadlineChangeMap(_ change: DLChange) -> [String: Any] {
+        var map: [String: Any] = [
+            "id": change.id.uuidString,
+            "at": Timestamp(date: change.at),
+            "author": change.author
+        ]
+        switch change.kind {
+        case .created(let due):
+            map["type"] = "created"
+            map["due"] = Timestamp(date: due)
+        case .rescheduled(let from, let to, let reason):
+            map["type"] = "rescheduled"
+            map["from"] = Timestamp(date: from)
+            map["to"] = Timestamp(date: to)
+            map["reason"] = reason
+        case .progress(let pct):
+            map["type"] = "progress"
+            map["progress"] = pct
+        case .status(let status):
+            map["type"] = "status"
+            map["status"] = status.rawValue
+        case .note(let text):
+            map["type"] = "note"
+            map["note"] = text
+        case .completed(let on):
+            map["type"] = "completed"
+            map["completedOn"] = Timestamp(date: on)
+        case .assigned(let who):
+            map["type"] = "assigned"
+            map["assignedTo"] = who
+        case .fileAttached(let name):
+            map["type"] = "fileAttached"
+            map["name"] = name
+        case .siteAuditAttached(let name):
+            map["type"] = "siteAuditAttached"
+            map["name"] = name
+        }
+        return map
+    }
+
+    private func parseDeadlineChange(_ map: [String: Any]) -> DLChange? {
+        let id = (map["id"] as? String).flatMap(UUID.init(uuidString:)) ?? UUID()
+        let at = (map["at"] as? Timestamp)?.dateValue() ?? Date()
+        let author = (map["author"] as? String) ?? ""
+        let type = (map["type"] as? String) ?? "note"
+        let kind: DLChange.Kind
+        switch type {
+        case "created":
+            kind = .created(due: (map["due"] as? Timestamp)?.dateValue() ?? Date())
+        case "rescheduled":
+            kind = .rescheduled(
+                from: (map["from"] as? Timestamp)?.dateValue() ?? Date(),
+                to: (map["to"] as? Timestamp)?.dateValue() ?? Date(),
+                reason: (map["reason"] as? String) ?? ""
+            )
+        case "progress":
+            kind = .progress(to: map["progress"] as? Int ?? 0)
+        case "status":
+            kind = .status(to: DLStatus(rawValue: (map["status"] as? String) ?? "") ?? .notStarted)
+        case "note":
+            kind = .note((map["note"] as? String) ?? "")
+        case "completed":
+            kind = .completed(on: (map["completedOn"] as? Timestamp)?.dateValue() ?? Date())
+        case "assigned":
+            kind = .assigned(to: (map["assignedTo"] as? String) ?? "")
+        case "fileAttached":
+            kind = .fileAttached(name: (map["name"] as? String) ?? "File")
+        case "siteAuditAttached":
+            kind = .siteAuditAttached(name: (map["name"] as? String) ?? "Site audit")
+        default:
+            kind = .note(type)
+        }
+        return DLChange(id: id, at: at, author: author, kind: kind)
+    }
+
+    private func deadlineMap(_ item: DLDeadline) -> [String: Any] {
+        [
+            "id": item.id.uuidString,
+            "title": item.title,
+            "location": item.location ?? "",
+            "trade": item.trade ?? "",
+            "detail": item.detail ?? "",
+            "start": item.start.map(Timestamp.init(date:)) as Any,
+            "due": Timestamp(date: item.due),
+            "completedAt": item.completedAt.map(Timestamp.init(date:)) as Any,
+            "assignees": item.assignees,
+            "assigneeUserIds": item.assigneeUserIds,
+            "company": item.company ?? "",
+            "status": item.status.rawValue,
+            "progress": item.progress,
+            "isCritical": item.isCritical,
+            "dependsOn": item.dependsOn.map(\.uuidString),
+            "blockedReason": item.blockedReason ?? "",
+            "reminderDaysBefore": item.reminderDaysBefore as Any,
+            "originalDue": item.originalDue.map(Timestamp.init(date:)) as Any,
+            "history": item.history.map(deadlineChangeMap),
+            "contextKind": item.contextKind,
+            "projectId": item.projectId?.uuidString ?? "",
+            "createdByUserId": item.createdByUserId,
+            "fileURL": item.fileURL ?? "",
+            "fileName": item.fileName ?? "",
+            "siteAuditId": item.siteAuditId?.uuidString ?? "",
+            "siteAuditTitle": item.siteAuditTitle ?? ""
+        ]
+    }
+
+    private func parseDeadline(_ map: [String: Any], fallbackProjectId: UUID) -> DLDeadline? {
+        guard let idString = map["id"] as? String, let id = UUID(uuidString: idString) else { return nil }
+        let status = DLStatus(rawValue: (map["status"] as? String) ?? "") ?? .notStarted
+        let due = (map["due"] as? Timestamp)?.dateValue() ?? Date()
+        let location = (map["location"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trade = (map["trade"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let detail = (map["detail"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let company = (map["company"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let blocked = (map["blockedReason"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileURL = (map["fileURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileName = (map["fileName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let siteTitle = (map["siteAuditTitle"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let projectId = (map["projectId"] as? String).flatMap(UUID.init(uuidString:)) ?? fallbackProjectId
+        let siteAuditId = (map["siteAuditId"] as? String).flatMap(UUID.init(uuidString:))
+        let reminder: Int?
+        if let n = map["reminderDaysBefore"] as? Int {
+            reminder = n
+        } else if let n = map["reminderDaysBefore"] as? NSNumber {
+            reminder = n.intValue
+        } else {
+            reminder = nil
+        }
+        let historyRaw = map["history"] as? [[String: Any]] ?? []
+        var item = DLDeadline(
+            id: id,
+            title: (map["title"] as? String) ?? "Untitled deadline",
+            location: location?.isEmpty == false ? location : nil,
+            trade: trade?.isEmpty == false ? trade : nil,
+            detail: detail?.isEmpty == false ? detail : nil,
+            start: (map["start"] as? Timestamp)?.dateValue(),
+            due: due,
+            completedAt: (map["completedAt"] as? Timestamp)?.dateValue(),
+            assignees: map["assignees"] as? [String] ?? [],
+            assigneeUserIds: map["assigneeUserIds"] as? [String] ?? [],
+            company: company?.isEmpty == false ? company : nil,
+            status: status,
+            progress: map["progress"] as? Double ?? 0,
+            isCritical: map["isCritical"] as? Bool ?? false,
+            dependsOn: (map["dependsOn"] as? [String] ?? []).compactMap(UUID.init(uuidString:)),
+            blockedReason: blocked?.isEmpty == false ? blocked : nil,
+            reminderDaysBefore: reminder,
+            originalDue: (map["originalDue"] as? Timestamp)?.dateValue(),
+            history: historyRaw.compactMap(parseDeadlineChange),
+            contextKind: (map["contextKind"] as? String) ?? "Project",
+            projectId: projectId,
+            createdByUserId: (map["createdByUserId"] as? String) ?? "",
+            fileURL: fileURL?.isEmpty == false ? fileURL : nil,
+            fileName: fileName?.isEmpty == false ? fileName : nil,
+            siteAuditId: siteAuditId,
+            siteAuditTitle: siteTitle?.isEmpty == false ? siteTitle : nil
+        )
+        return item
+    }
+
+    func loadDeadlines(project: Project, organizationId: String) async throws -> [DLDeadline] {
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else { return [] }
+        let orgId = try await ensureReadableOrganization(resolved)
+        let ref = deadlinesStateDocumentRef(organizationId: orgId, project: project)
+        let doc: DocumentSnapshot
+        do {
+            doc = try await ref.getDocument(source: .server)
+        } catch {
+            if isFirestorePermissionDenied(error) {
+                doc = try await ref.getDocument(source: .cache)
+            } else {
+                throw error
+            }
+        }
+        guard let data = doc.data() else { return [] }
+        let raw = data["items"] as? [[String: Any]] ?? []
+        return raw.compactMap { parseDeadline($0, fallbackProjectId: project.id) }
+            .sorted { $0.due < $1.due }
+    }
+
+    func saveDeadlines(_ items: [DLDeadline], project: Project, organizationId: String) async throws {
+        guard currentUser != nil else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "You must be signed in to save deadlines."]
+            )
+        }
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings -> Force Reload Data, then retry."]
+            )
+        }
+        let orgId = try await ensureReadableOrganization(resolved)
+        do {
+            try await ensureUserDocumentLinked(organizationId: orgId)
+        } catch {
+            print("🔥🔥🔥 DEBUG: [saveDeadlines] ensureUserDocumentLinked: \(error.localizedDescription)")
+        }
+        await repairCurrentUserOrganizationAccess(organizationId: orgId)
+        try await validateDataIntegrity(organizationId: orgId)
+
+        let payload: [String: Any] = [
+            "items": items.map(deadlineMap),
+            "updatedAt": Timestamp(date: Date()),
+            "projectId": project.id.uuidString
+        ]
+        let ref = deadlinesStateDocumentRef(organizationId: orgId, project: project)
+        try await ref.setData(payload, merge: true)
+
+        let assigneeIds = Array(Set(items.flatMap(\.assigneeUserIds))).sorted()
+        try await deadlineAssignmentsDocumentRef(organizationId: orgId).setData([
+            "projects.\(project.id.uuidString)": assigneeIds,
+            "updatedAt": Timestamp(date: Date())
+        ], merge: true)
+    }
+
+    func loadDeadlineAssignedProjectIds(userId: String, organizationId: String) async -> Set<UUID> {
+        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else { return [] }
+        do {
+            let orgId = try await ensureReadableOrganization(resolved)
+            let snap = try await deadlineAssignmentsDocumentRef(organizationId: orgId).getDocument()
+            guard let projects = snap.data()?["projects"] as? [String: [String]] else { return [] }
+            return Set(projects.compactMap { key, ids in
+                ids.contains(trimmed) ? UUID(uuidString: key) : nil
+            })
+        } catch {
+            print("🔥🔥🔥 DEBUG: [loadDeadlineAssignedProjectIds] \(error.localizedDescription)")
+            return []
+        }
     }
 }
 
