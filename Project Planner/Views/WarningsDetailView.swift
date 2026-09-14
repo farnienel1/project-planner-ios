@@ -101,16 +101,17 @@ struct WarningsDetailView: View {
             .onDisappear {
                 WarningsRefreshHelper.isWarningsSheetVisible = false
             }
-            .sheet(isPresented: $showingWarningsSettings) {
+            // fullScreenCover avoids nested-sheet bug that dismissed Warnings back to Home.
+            .fullScreenCover(isPresented: $showingWarningsSettings) {
                 NavigationStack {
                     OrganisationWarningsSettingsView(
                         exitsToHomeOnBack: true,
                         onExitToHome: {
                             showingWarningsSettings = false
-                            dismiss()
                         },
                         onSaved: {
                             showingWarningsSettings = false
+                            Task { await refreshWarningsTodayOnly() }
                         }
                     )
                     .environmentObject(firebaseBackend)
@@ -681,9 +682,15 @@ struct WarningsDetailView: View {
             manualUserInitiated: true
         )
         // no sheet-gate dance needed with manualUserInitiated
-        refreshMessage = did
-            ? "Updated · \(warningsService.activeWarnings.count) active"
-            : "Could not refresh yet (still loading). Try again in a few seconds."
+        if did {
+            let detection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
+            let invoicing = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
+            let endLabel = detection.detectionHorizonEndLabel(invoicing: invoicing)
+            let mode = detection.clashLookaheadMode.displayName
+            refreshMessage = "Updated · \(warningsService.activeWarnings.count) active · \(mode) through \(endLabel)"
+        } else {
+            refreshMessage = "Could not refresh yet (still loading). Try again in a few seconds."
+        }
         print("🔥🔥🔥 DEBUG: WARNINGS_MANUAL_REFRESH_DONE did=\(did) active=\(warningsService.activeWarnings.count)")
         NotificationCenter.default.post(name: .warningsDidRecompute, object: nil, userInfo: ["count": warningsService.warningCount])
     }

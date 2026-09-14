@@ -76,7 +76,7 @@ struct OrganisationWarningsSettingsView: View {
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.left")
-                            Text("Back")
+                            Text("Warnings")
                         }
                     }
                 }
@@ -120,9 +120,9 @@ struct OrganisationWarningsSettingsView: View {
             sectionHeader(icon: "clock.fill", title: "Detection period", subtitle: "How far ahead Project Planner scans for clashes, unbooked labour, and material cut-off dates. Warnings refresh automatically each day.")
 
             VStack(spacing: 10) {
-                modeOption(.numberOfDays, label: "Set number of days", description: "Scan a fixed number of days from today — you control the window.")
-                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan for warnings within your current invoicing period (period start through period end). Updates automatically when a new period begins.")
-                modeOption(.endOfWorkingWeek, label: "End of working week", description: "Scan through Friday of the current working week. Resets each Monday.")
+                modeOption(.numberOfDays, label: "Set number of days", description: "Scan today through the next N calendar days (inclusive). Example: 7 days = today + the next 6 days.")
+                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan the whole current invoicing period (period start through period end). Updates automatically when a new period begins.")
+                modeOption(.endOfWorkingWeek, label: "End of working week", description: "Scan today through Friday of the current working week. Resets each Monday.")
             }
 
             if draft.clashLookaheadMode == .numberOfDays {
@@ -137,7 +137,7 @@ struct OrganisationWarningsSettingsView: View {
                 infoBox(text: draft.detectionScanSummary(invoicing: invoicingSettings))
             }
 
-            Text("After you Save, go back to Warnings and tap Refresh to rescan with the new window. Extending the period can surface new issues; narrowing it hides ones outside the new range.")
+            Text("Save updates the organisation setting. The Warnings list refreshes automatically when you leave settings; you can also tap Refresh anytime.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .padding(.top, 4)

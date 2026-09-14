@@ -81,7 +81,10 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         try c.encode(excludedUserIdsFromUnbookedWarnings, forKey: .excludedUserIdsFromUnbookedWarnings)
     }
 
-    /// How far ahead (from `today`) warnings should scan for clashes, unbooked labour, and materials.
+    /// Inclusive end of the warnings scan window.
+    /// - numberOfDays: today through today+(N-1)  (N calendar days)
+    /// - endOfWorkingWeek: today through Friday of the current working week
+    /// - endOfInvoicingPeriod: end of the current invoicing period
     func coverageEnd(
         from today: Date,
         invoicing: OrganizationInvoicingSettings = .default,
@@ -91,16 +94,27 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         switch clashLookaheadMode {
         case .numberOfDays:
             let days = max(1, min(clashLookaheadDays, 366))
-            return calendar.startOfDay(for: calendar.date(byAdding: .day, value: days, to: start) ?? start)
+            // Inclusive window: N=1 → today only; N=7 → today … today+6.
+            return calendar.startOfDay(
+                for: calendar.date(byAdding: .day, value: days - 1, to: start) ?? start
+            )
         case .endOfWorkingWeek:
-            return Self.endOfWorkingWeek(from: start, calendar: calendar)
+            let friday = Self.endOfWorkingWeek(from: start, calendar: calendar)
+            // Never end before today (e.g. weekend after Friday → next Friday).
+            return max(start, friday)
         case .endOfInvoicingPeriod:
-            return InvoicingPeriodResolver.warningCoverageEnd(invoicing: invoicing, referenceDate: start, calendar: calendar)
+            let periodEnd = InvoicingPeriodResolver.warningCoverageEnd(
+                invoicing: invoicing,
+                referenceDate: start,
+                calendar: calendar
+            )
+            return max(start, calendar.startOfDay(for: periodEnd))
         }
     }
 
-    /// Start of the warnings scan window.
-    /// Invoicing-period mode uses the current period start; other modes look 14 days back.
+    /// Inclusive start of the warnings scan window.
+    /// - numberOfDays / endOfWorkingWeek: today (matches settings copy “today through …”)
+    /// - endOfInvoicingPeriod: current period start (clashes inside the whole period)
     func coverageStart(
         from today: Date,
         invoicing: OrganizationInvoicingSettings = .default,
@@ -116,7 +130,7 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
             ).currentPeriodStart
             return calendar.startOfDay(for: periodStart)
         case .numberOfDays, .endOfWorkingWeek:
-            return calendar.startOfDay(for: calendar.date(byAdding: .day, value: -14, to: start) ?? start)
+            return start
         }
     }
 
@@ -158,16 +172,22 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         invoicing: OrganizationInvoicingSettings = .default,
         calendar: Calendar = .current
     ) -> String {
-        let endLabel = detectionHorizonEndLabel(from: today, invoicing: invoicing, calendar: calendar)
+        let start = coverageStart(from: today, invoicing: invoicing, calendar: calendar)
+        let end = coverageEnd(from: today, invoicing: invoicing, calendar: calendar)
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        let startLabel = formatter.string(from: start)
+        let endLabel = formatter.string(from: end)
         switch clashLookaheadMode {
         case .numberOfDays:
             let count = max(1, min(clashLookaheadDays, 366))
-            return "Warnings scan \(count) day\(count == 1 ? "" : "s") — today through \(endLabel). Unbooked labour uses this window."
+            return "Scans \(count) calendar day\(count == 1 ? "" : "s"): \(startLabel) through \(endLabel). Includes clashes, unbooked labour, and materials cut-off in that window."
         case .endOfInvoicingPeriod:
             let period = InvoicingPeriodResolver.resolve(invoicing: invoicing, referenceDate: today, calendar: calendar)
-            return "Warnings scan the current invoicing period — \(period.currentPeriodLabel). Any clashes, unbooked labour, or material cut-offs inside this window are included."
+            return "Scans the current invoicing period (\(period.currentPeriodLabel)): \(startLabel) through \(endLabel). Clashes use the whole period; unbooked labour from today onward inside it."
         case .endOfWorkingWeek:
-            return "Warnings scan through end of this working week — \(endLabel). Resets each Monday. Unbooked labour uses the same window."
+            return "Scans today through Friday of this working week: \(startLabel) through \(endLabel). Resets each Monday."
         }
     }
 
