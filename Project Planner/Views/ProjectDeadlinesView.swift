@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct ProjectDeadlinesView: View {
     let project: Project

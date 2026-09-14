@@ -12,6 +12,7 @@
 //
 
 import SwiftUI
+import Combine
 
 // MARK: - Status
 //
@@ -428,6 +429,7 @@ struct DLGroup: Identifiable {
 // Swap the sample array for your real source. Everything below the `items`
 // property is presentation logic the screens call directly.
 
+@MainActor
 final class DLStore: ObservableObject {
 
     @Published var items: [DLDeadline]
