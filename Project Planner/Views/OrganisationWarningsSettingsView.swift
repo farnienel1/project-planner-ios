@@ -121,7 +121,7 @@ struct OrganisationWarningsSettingsView: View {
 
             VStack(spacing: 10) {
                 modeOption(.numberOfDays, label: "Set number of days", description: "Scan a fixed number of days from today — you control the window.")
-                modeOption(.endOfInvoicingPeriod, label: "End of invoicing period", description: "Scan through the end of your current billing period. Automatically adjusts when each new period begins.")
+                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan for warnings within your current invoicing period (period start through period end). Updates automatically when a new period begins.")
                 modeOption(.endOfWorkingWeek, label: "End of working week", description: "Scan through Friday of the current working week. Resets each Monday.")
             }
 
@@ -137,7 +137,7 @@ struct OrganisationWarningsSettingsView: View {
                 infoBox(text: draft.detectionScanSummary(invoicing: invoicingSettings))
             }
 
-            Text("Changing the look-ahead updates warnings immediately — extending the window surfaces new issues; reducing it removes warnings that fall outside the new end date.")
+            Text("After you Save, go back to Warnings and tap Refresh to rescan with the new window. Extending the period can surface new issues; narrowing it hides ones outside the new range.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .padding(.top, 4)
@@ -261,7 +261,7 @@ struct OrganisationWarningsSettingsView: View {
                 Text(invoicingPeriod.currentPeriodLabel)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color(red: 0.08, green: 0.33, blue: 0.18))
-                Text("Warnings will scan through \(invoicingPeriod.currentPeriodEndLabel). This window resets automatically when the new period begins.")
+                Text("Warnings will scan the whole current invoicing period (\(invoicingPeriod.currentPeriodLabel)). This window resets automatically when a new period begins.")
                     .font(.caption)
                     .foregroundStyle(Color(red: 0.09, green: 0.40, blue: 0.20))
             }
@@ -564,7 +564,7 @@ struct OrganisationWarningsSettingsView: View {
         defer { isSaving = false }
         do {
             try await firebaseBackend.updateOrganizationWarningDetectionSettings(draft)
-            _ = await WarningsRefreshHelper.refreshSharedWarnings(
+            let didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
                 operativeStore: operativeStore,
                 bookingStore: bookingStore,
                 projectStore: projectStore,
@@ -573,8 +573,12 @@ struct OrganisationWarningsSettingsView: View {
                 holidayStore: holidayStore,
                 firebaseBackend: firebaseBackend,
                 appSettings: appSettings,
-                force: true
+                force: true,
+                manualUserInitiated: true
             )
+            if !didRefresh {
+                errorMessage = "Settings saved, but warnings could not refresh yet. Go back and tap Refresh."
+            }
             userHasEdited = false
             if let onSaved {
                 await MainActor.run { onSaved() }
@@ -594,7 +598,7 @@ struct OrganisationWarningsSettingsView: View {
         defer { isSaving = false }
         do {
             try await firebaseBackend.updateOrganizationWarningDetectionSettings(draft)
-            _ = await WarningsRefreshHelper.refreshSharedWarnings(
+            let didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
                 operativeStore: operativeStore,
                 bookingStore: bookingStore,
                 projectStore: projectStore,
@@ -603,8 +607,12 @@ struct OrganisationWarningsSettingsView: View {
                 holidayStore: holidayStore,
                 firebaseBackend: firebaseBackend,
                 appSettings: appSettings,
-                force: true
+                force: true,
+                manualUserInitiated: true
             )
+            if !didRefresh {
+                errorMessage = "Settings saved, but warnings could not refresh yet. Go back and tap Refresh."
+            }
             userHasEdited = false
         } catch {
             errorMessage = error.localizedDescription

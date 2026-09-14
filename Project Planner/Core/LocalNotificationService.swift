@@ -71,8 +71,8 @@ class LocalNotificationService {
             content.title = "Booking Clash Detected"
             content.body = details.isEmpty ? "A booking clash has been detected for John Smith on December 1, 2025." : details
         case .warningRemoved:
-            content.title = "Warning Removed"
-            content.body = details.isEmpty ? "An admin removed a booking clash warning. Review and resolve manually if still needed." : details
+            content.title = "Warning dismissed"
+            content.body = details.isEmpty ? "An admin dismissed a warning. Dismissed warnings do not reappear." : details
         case .holidayRequestSubmitted:
             content.title = "Holiday Request"
             content.body = details.isEmpty ? "An operative has submitted a holiday request." : details

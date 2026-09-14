@@ -32,6 +32,15 @@ enum InvoicingPeriodResolver {
         return dateRangePeriod(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
     }
 
+    /// Start date of the invoicing period that contains `referenceDate` (used for warnings look-ahead).
+    static func warningCoverageStart(
+        invoicing: OrganizationInvoicingSettings,
+        referenceDate: Date = Date(),
+        calendar: Calendar = .current
+    ) -> Date {
+        resolve(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar).currentPeriodStart
+    }
+
     /// End date of the invoicing period that contains `referenceDate` (used for warnings look-ahead).
     static func warningCoverageEnd(
         invoicing: OrganizationInvoicingSettings,

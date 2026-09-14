@@ -16,7 +16,7 @@ enum WarningClashLookaheadMode: String, Codable, CaseIterable, Identifiable, Sen
 
     var displayName: String {
         switch self {
-        case .endOfInvoicingPeriod: return "End of invoicing period"
+        case .endOfInvoicingPeriod: return "Invoicing period"
         case .numberOfDays: return "Set number of days"
         case .endOfWorkingWeek: return "End of the working week"
         }
@@ -99,10 +99,25 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         }
     }
 
-    /// Past window for warnings (unchanged default: 14 days back).
-    func coverageStart(from today: Date, calendar: Calendar = .current) -> Date {
+    /// Start of the warnings scan window.
+    /// Invoicing-period mode uses the current period start; other modes look 14 days back.
+    func coverageStart(
+        from today: Date,
+        invoicing: OrganizationInvoicingSettings = .default,
+        calendar: Calendar = .current
+    ) -> Date {
         let start = calendar.startOfDay(for: today)
-        return calendar.startOfDay(for: calendar.date(byAdding: .day, value: -14, to: start) ?? start)
+        switch clashLookaheadMode {
+        case .endOfInvoicingPeriod:
+            let periodStart = InvoicingPeriodResolver.resolve(
+                invoicing: invoicing,
+                referenceDate: start,
+                calendar: calendar
+            ).currentPeriodStart
+            return calendar.startOfDay(for: periodStart)
+        case .numberOfDays, .endOfWorkingWeek:
+            return calendar.startOfDay(for: calendar.date(byAdding: .day, value: -14, to: start) ?? start)
+        }
     }
 
     func isUnbookedLabourWeekday(_ weekday: Int) -> Bool {
@@ -149,7 +164,8 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
             let count = max(1, min(clashLookaheadDays, 366))
             return "Warnings scan \(count) day\(count == 1 ? "" : "s") — today through \(endLabel). Unbooked labour uses this window."
         case .endOfInvoicingPeriod:
-            return "Warnings scan through end of current invoicing period — \(endLabel). Unbooked labour uses this window."
+            let period = InvoicingPeriodResolver.resolve(invoicing: invoicing, referenceDate: today, calendar: calendar)
+            return "Warnings scan the current invoicing period — \(period.currentPeriodLabel). Any clashes, unbooked labour, or material cut-offs inside this window are included."
         case .endOfWorkingWeek:
             return "Warnings scan through end of this working week — \(endLabel). Resets each Monday. Unbooked labour uses the same window."
         }

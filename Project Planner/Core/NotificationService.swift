@@ -446,17 +446,30 @@ class NotificationService: ObservableObject {
         await saveNotification(notification2)
     }
 
-    /// Notifies admins with warnings access when someone removes a warning without resolving the underlying issue.
+    /// Notifies all admins when someone dismisses a warning. Appears in the home notification centre.
     func notifyWarningRemoved(warning: Warning, removedBy: String) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
 
         let detail = warning.removalNotificationDetail
+        let typeLabel: String = {
+            switch warning.type {
+            case .operativeBookingClash: return "Operative booking clash"
+            case .managerLocationClash: return "Manager / admin location clash"
+            case .unbookedLabour: return "Unbooked labour"
+            case .materialsCutoff: return "Materials cut-off"
+            case .qualificationExpiry: return "Qualification expiry"
+            case .operativeNotVerified: return "Operative not verified"
+            }
+        }()
+        // Unique per dismiss so repeated dismissals of different warnings never collapse in the inbox.
+        let dedupeId = UUID()
         let notification = AppNotification(
+            id: dedupeId,
             organizationId: organizationId,
             type: .warningRemoved,
-            title: "Warning Removed",
-            message: "\(removedBy) removed a warning: \(detail) Review and resolve manually if still needed.",
+            title: "Warning dismissed by \(removedBy)",
+            message: "\(removedBy) dismissed a \(typeLabel.lowercased()) warning. Dismissed warnings do not reappear.\n\n\(detail)",
             relatedId: nil,
             requiresPermission: "hasAdminAccess"
         )

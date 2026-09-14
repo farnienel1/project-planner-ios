@@ -151,22 +151,15 @@ struct WarningsDetailView: View {
                     .environmentObject(firebaseBackend)
                     .environmentObject(notificationService)
             }
-            .alert(
-                "Remove this warning?",
-                isPresented: Binding(
-                    get: { warningPendingDismiss != nil },
-                    set: { if !$0 { warningPendingDismiss = nil } }
-                ),
-                presenting: warningPendingDismiss
-            ) { warning in
-                Button("Cancel", role: .cancel) {
-                    warningPendingDismiss = nil
-                }
-                Button("Remove warning", role: .destructive) {
-                    confirmRemoveWarning(warning)
-                }
-            } message: { warning in
-                Text("Are you sure you want to remove this warning? It will be hidden from the list and other admins will be notified. You may still need to resolve the issue manually.\n\n\(warning.removalNotificationDetail)")
+            .sheet(item: $warningPendingDismiss) { warning in
+                WarningDismissConfirmationSheet(
+                    warning: warning,
+                    onCancel: { warningPendingDismiss = nil },
+                    onConfirm: { confirmRemoveWarning(warning) }
+                )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
             }
         }
     }
@@ -693,6 +686,124 @@ struct WarningsDetailView: View {
             : "Could not refresh yet (still loading). Try again in a few seconds."
         print("🔥🔥🔥 DEBUG: WARNINGS_MANUAL_REFRESH_DONE did=\(did) active=\(warningsService.activeWarnings.count)")
         NotificationCenter.default.post(name: .warningsDidRecompute, object: nil, userInfo: ["count": warningsService.warningCount])
+    }
+}
+
+
+/// Polished confirmation for permanently dismissing a warning.
+private struct WarningDismissConfirmationSheet: View {
+    let warning: Warning
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    private let accent = Color(red: 0.722, green: 0.196, blue: 0.196)
+    private let ink = Color(red: 0.110, green: 0.110, blue: 0.118)
+    private let muted = Color(red: 0.420, green: 0.447, blue: 0.502)
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color.black.opacity(0.12))
+                .frame(width: 36, height: 5)
+                .padding(.top, 10)
+                .padding(.bottom, 18)
+
+            ZStack {
+                Circle()
+                    .fill(accent.opacity(0.12))
+                    .frame(width: 72, height: 72)
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(accent)
+            }
+            .padding(.bottom, 16)
+
+            Text("Dismiss this warning?")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(ink)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+
+            Text("Are you sure you would like to dismiss this warning? Any warnings that are dismissed will not reappear again.")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(muted)
+                .multilineTextAlignment(.center)
+                .lineSpacing(3)
+                .padding(.top, 10)
+                .padding(.horizontal, 28)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(warning.title)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(ink)
+                Text(warning.removalNotificationDetail)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(muted)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "bell.badge.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.145, green: 0.388, blue: 0.922))
+                        .padding(.top, 1)
+                    Text("All admins will get a notification with who dismissed it and what was dismissed. It also appears in the notification centre on Home.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 4)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(red: 0.969, green: 0.969, blue: 0.980))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.black.opacity(0.06), lineWidth: 0.5)
+            )
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+
+            Spacer(minLength: 16)
+
+            VStack(spacing: 10) {
+                Button(action: onConfirm) {
+                    Text("Dismiss permanently")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                        .background(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.722, green: 0.196, blue: 0.196),
+                                    Color(red: 0.620, green: 0.165, blue: 0.165)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onCancel) {
+                    Text("Keep warning")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(ink)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                        .background(Color(red: 0.949, green: 0.949, blue: 0.969))
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 28)
+        }
+        .background(Color.white.ignoresSafeArea())
     }
 }
 

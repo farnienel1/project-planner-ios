@@ -309,27 +309,17 @@ class WarningsService: ObservableObject {
         let generation = updateGeneration
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-        // Weekly Report passes explicit coverage. Live Home/sheet MUST stay tiny —
-        // full org horizon + MainActor snapshot jetsams Simulator (~30s after open).
+        // Weekly Report may pass an explicit labour window; live scans use org detection settings
+        // (number of days / working week / current invoicing period).
         let isLiveScan = labourCoverageStart == nil && labourCoverageEnd == nil
-        var coverageStart = cal.startOfDay(
+        let coverageStart = cal.startOfDay(
             for: labourCoverageStart
-                ?? warningDetection.coverageStart(from: today, calendar: cal)
+                ?? warningDetection.coverageStart(from: today, invoicing: invoicingSettings, calendar: cal)
         )
-        var coverageEnd = cal.startOfDay(
+        let coverageEnd = cal.startOfDay(
             for: labourCoverageEnd
                 ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
         )
-        if isLiveScan {
-            // Home auto-warm must stay tiny. 7-day live + ~90 bookings jetsamed Home
-            // right after quiet (wfix-wr11). today…tomorrow+1 is enough for the badge/sheet.
-            coverageStart = today
-            let liveForwardDays = 1 // today + tomorrow only — Home warm must not jetsam
-            let cappedEnd = cal.startOfDay(
-                for: cal.date(byAdding: .day, value: liveForwardDays, to: today) ?? today
-            )
-            if coverageEnd > cappedEnd { coverageEnd = cappedEnd }
-        }
         let windowedBookings = bookings.filter {
             let day = cal.startOfDay(for: $0.date)
             return day >= coverageStart && day <= coverageEnd
@@ -378,11 +368,6 @@ class WarningsService: ObservableObject {
             WarningsComputation.generate(snapshot)
         }.value
         guard generation == updateGeneration else { return }
-        resolutionStore.pruneDismissedUnbookedKeys(
-            from: max(coverageStart, today),
-            through: coverageEnd,
-            calendar: cal
-        )
         if isLiveScan {
             allGeneratedWarnings = generated
             activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }

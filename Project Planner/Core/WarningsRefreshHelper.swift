@@ -42,7 +42,26 @@ enum WarningsRefreshHelper {
             return false
         }
 
-        // Never scan during bootstrap — jetsams Simulator.
+        // Launch quiet blocks automatic scans. Explicit user Refresh may proceed.
+        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil, !manualUserInitiated {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
+            return false
+        }
+
+        // Avoid scanning while stores/bootstrap are mid-load (publishes false empty results).
+        // Manual Refresh (and settings Save) retries briefly — Firestore saves often race a short reload.
+        if manualUserInitiated {
+            for attempt in 0..<8 {
+                let bootstrapping = firebaseBackend.isBootstrappingOrgDataLoad
+                let storesBusy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading
+                if !bootstrapping && firebaseBackend.hasBootstrappedOrgDataLoad && !storesBusy {
+                    break
+                }
+                print("🔥🔥🔥 DEBUG: Warnings refresh waiting (attempt \(attempt + 1)/8 bootstrapping=\(bootstrapping) storesBusy=\(storesBusy))")
+                try? await Task.sleep(nanoseconds: 450_000_000)
+            }
+        }
+
         if firebaseBackend.isBootstrappingOrgDataLoad {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap in progress)")
             return false
@@ -51,15 +70,6 @@ enum WarningsRefreshHelper {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap not finished)")
             return false
         }
-
-        // Launch quiet blocks automatic scans. Explicit user Refresh may run a tiny today+tomorrow pass.
-        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil, !manualUserInitiated {
-            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
-            return false
-        }
-
-        // Even force must not scan while bookings are still mid-load — that published
-        // false empty live results and made Warnings look broken.
         if bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (stores still loading)")
             return false
@@ -144,6 +154,18 @@ enum WarningsRefreshHelper {
     ) async {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
+        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
+        let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
+        let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
+
+        // Honor Organisation Warnings detection horizon (days / working week / invoicing period).
+        let coverageStart = cal.startOfDay(
+            for: warningDetection.coverageStart(from: today, invoicing: invoicingSettings, calendar: cal)
+        )
+        let coverageEnd = cal.startOfDay(
+            for: warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
+        )
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
         let tomorrowIds = Set(
             bookingStore.bookings
@@ -155,28 +177,22 @@ enum WarningsRefreshHelper {
         )
         let projects = projectStore.projects
         let projectsTomorrow = projects.filter { tomorrowIds.contains($0.id) }
-        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
-        let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
-        let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
-        let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
 
-        // Pre-window to the live horizon before crossing into WarningsService so we
-        // never hand ~90 bookings + ~70 manager rows into the MainActor snapshot.
-        let liveEnd = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
+        // Pre-window to the detection horizon before WarningsService snapshot work.
         let liveBookings = bookingStore.bookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= today && day <= liveEnd
+            return day >= coverageStart && day <= coverageEnd
         }
         let liveManager = managerScheduleStore.managerSiteBookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= today && day <= liveEnd
+            return day >= coverageStart && day <= coverageEnd
         }
         let liveHolidays = holidayStore.bookings.filter { holiday in
             let start = cal.startOfDay(for: holiday.startDate)
             let end = cal.startOfDay(for: holiday.endDate)
-            return end >= today && start <= liveEnd
+            return end >= coverageStart && start <= coverageEnd
         }
-        print("🔥🔥🔥 DEBUG: Warnings helper pre-window bookings=\(liveBookings.count)/\(bookingStore.bookings.count) mgr=\(liveManager.count)/\(managerScheduleStore.managerSiteBookings.count)")
+        print("🔥🔥🔥 DEBUG: Warnings helper pre-window \(coverageStart)…\(coverageEnd) bookings=\(liveBookings.count)/\(bookingStore.bookings.count) mgr=\(liveManager.count)/\(managerScheduleStore.managerSiteBookings.count)")
 
         await Task.yield()
         try? await Task.sleep(nanoseconds: 250_000_000)
