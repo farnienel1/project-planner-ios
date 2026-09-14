@@ -517,14 +517,9 @@ enum WarningsComputation {
         }
 
         let activeOperatives = input.operatives.filter(\.isActive)
-        // Invoicing period: include past + today + future days inside the period.
-        // Other modes: only from today forward (horizon is a forward look-ahead).
-        let unbookedScanStart: Date = {
-            if input.warningDetection.clashLookaheadMode == .endOfInvoicingPeriod {
-                return coverageStart
-            }
-            return max(coverageStart, today)
-        }()
+        // coverageStart is today for day/week modes, and period start for invoicing period —
+        // so unbooked labour naturally covers past+present+future only inside invoicing windows.
+        let unbookedScanStart = coverageStart
         var day = unbookedScanStart
         while day <= coverageEnd {
             let weekday = cal.component(.weekday, from: day)
