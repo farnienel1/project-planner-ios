@@ -444,8 +444,14 @@ final class DLStore: ObservableObject {
     /// Called after every mutation so the host can persist + reschedule notifications.
     var onItemsChanged: (([DLDeadline]) -> Void)? = nil
 
-    init(items: [DLDeadline] = DLStore.sample()) {
+    init(items: [DLDeadline]) {
         self.items = items
+    }
+
+    /// Preview / sample store. Kept off the `items:` default argument so Swift
+    /// does not evaluate `sample()` in a nonisolated context.
+    convenience init() {
+        self.init(items: Self.sample())
     }
 
     var scopedItems: [DLDeadline] {
