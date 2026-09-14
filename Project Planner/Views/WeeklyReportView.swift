@@ -142,6 +142,7 @@ struct WeeklyReportView: View {
                     brandHeader
                     quickSelectCard
                     customRangeCard
+                    invoicingPeriodCard
                     Text("Period warnings and pay breakdown are calculated when you tap Generate — this is separate from Home Warnings (live ops from today forward).")
                         .font(.system(size: 12))
                         .foregroundStyle(WeeklyReportColors.muted)
@@ -269,6 +270,12 @@ struct WeeklyReportView: View {
                 quickWeekRow(label: "This Week", subLabel: rangeLabel(thisWeekRange), range: thisWeekRange)
                 Divider().padding(.leading, 16)
                 quickWeekRow(label: "Last Week", subLabel: rangeLabel(lastWeekRange), range: lastWeekRange)
+                Divider().padding(.leading, 16)
+                quickWeekRow(
+                    label: "Current invoicing period",
+                    subLabel: invoicingPeriod.currentPeriodLabel,
+                    range: (invoicingPeriod.currentPeriodStart, invoicingPeriod.currentPeriodEnd)
+                )
             }
         }
     }
@@ -311,19 +318,27 @@ struct WeeklyReportView: View {
                     Divider().padding(.leading, 16)
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("CURRENT INVOICING PERIOD")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(WeeklyReportColors.greenTx)
-                    Text(invoicingPeriod.currentPeriodLabel)
-                        .font(.subheadline.weight(.semibold))
-                    Text("Organisation payment runs are configured in Settings → Invoicing.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                Button {
+                    startDate = invoicingPeriod.currentPeriodStart
+                    endDate = invoicingPeriod.currentPeriodEnd
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("CURRENT INVOICING PERIOD")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(WeeklyReportColors.greenTx)
+                        Text(invoicingPeriod.currentPeriodLabel)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("Tap to use this range · configured in Settings → Invoicing.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(WeeklyReportColors.greenBg)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(WeeklyReportColors.greenBg)
+                .buttonStyle(.plain)
             }
         }
     }
