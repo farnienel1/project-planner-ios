@@ -9,36 +9,51 @@ import SwiftUI
 import UIKit
 
 enum ManageUserProfilePalette {
-    static let primaryBlue = Color(red: 0x18 / 255, green: 0x5F / 255, blue: 0xA5 / 255)
-    static let pageBackground = Color(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255)
-    static let segmentedBackground = Color(red: 0xE9 / 255, green: 0xE9 / 255, blue: 0xEC / 255)
-    static let searchBackground = Color(red: 0xE9 / 255, green: 0xE9 / 255, blue: 0xEC / 255)
-    static let listBlue = Color(red: 0x25 / 255, green: 0x63 / 255, blue: 0xEB / 255)
-    static let cardBackground = Color.white
-    static let cardBorder = Color(red: 0xEE / 255, green: 0xF0 / 255, blue: 0xF3 / 255)
-    static let textPrimary = Color(red: 0x0B / 255, green: 0x10 / 255, blue: 0x20 / 255)
-    static let textSecondary = Color(red: 0x6B / 255, green: 0x72 / 255, blue: 0x80 / 255)
+    static let primaryBlue = ProjectWorksRevampColors.blue
+    static let pageBackground = ProjectWorksRevampColors.canvas
+    static let segmentedBackground = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.914, 0.914, 0.925),
+        dark: AppAdaptiveColor.rgb(0.145, 0.157, 0.196)
+    )
+    static let searchBackground = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.914, 0.914, 0.925),
+        dark: AppAdaptiveColor.rgb(0.145, 0.157, 0.196)
+    )
+    static let listBlue = ProjectWorksRevampColors.blue
+    static let cardBackground = ProjectWorksRevampColors.surface
+    static let cardBorder = ProjectWorksRevampColors.border
+    static let textPrimary = ProjectWorksRevampColors.ink
+    static let textSecondary = ProjectWorksRevampColors.muted
 
     static let avatarGradientTop = Color(red: 0x7F / 255, green: 0x77 / 255, blue: 0xDD / 255)
     static let avatarGradientBottom = Color(red: 0x53 / 255, green: 0x4A / 255, blue: 0xB7 / 255)
 
-    static let chipBlueBg = Color(red: 0xE6 / 255, green: 0xF1 / 255, blue: 0xFB / 255)
-    static let chipTealBg = Color(red: 0xE1 / 255, green: 0xF5 / 255, blue: 0xEE / 255)
-    static let chipAmberBg = Color(red: 0xFA / 255, green: 0xEE / 255, blue: 0xDA / 255)
-    static let chipPurpleBg = Color(red: 0xEE / 255, green: 0xED / 255, blue: 0xFE / 255)
-    static let chipCoralBg = Color(red: 0xFA / 255, green: 0xEC / 255, blue: 0xE7 / 255)
-    static let chipPinkBg = Color(red: 0xFB / 255, green: 0xEA / 255, blue: 0xF0 / 255)
-    static let chipRedBg = Color(red: 0xFC / 255, green: 0xEB / 255, blue: 0xEB / 255)
+    static let chipBlueBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.902, 0.945, 0.984),
+        dark: AppAdaptiveColor.rgb(0.110, 0.173, 0.247)
+    )
+    static let chipTealBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.882, 0.961, 0.933),
+        dark: AppAdaptiveColor.rgb(0.090, 0.220, 0.165)
+    )
+    static let chipAmberBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.980, 0.933, 0.855),
+        dark: AppAdaptiveColor.rgb(0.239, 0.180, 0.090)
+    )
+    static let chipPurpleBg = ProjectWorksRevampColors.jobTypePillBg
+    static let chipCoralBg = ProjectWorksRevampColors.endDateBg
+    static let chipPinkBg = ProjectWorksRevampColors.pinRoseBg
+    static let chipRedBg = ProjectWorksRevampColors.requiredPillBg
 
     static let chipBlueFg = primaryBlue
-    static let chipTealFg = Color(red: 0x0F / 255, green: 0x6E / 255, blue: 0x56 / 255)
-    static let chipAmberFg = Color(red: 0x85 / 255, green: 0x4F / 255, blue: 0x0B / 255)
-    static let chipPurpleFg = Color(red: 0x53 / 255, green: 0x4A / 255, blue: 0xB7 / 255)
-    static let chipCoralFg = Color(red: 0x99 / 255, green: 0x3C / 255, blue: 0x1D / 255)
-    static let chipPinkFg = Color(red: 0x99 / 255, green: 0x35 / 255, blue: 0x56 / 255)
-    static let chipRedFg = Color(red: 0xA3 / 255, green: 0x2D / 255, blue: 0x2D / 255)
+    static let chipTealFg = ProjectWorksRevampColors.activeGreen
+    static let chipAmberFg = ProjectWorksRevampColors.upcomingAmber
+    static let chipPurpleFg = ProjectWorksRevampColors.jobTypePillInk
+    static let chipCoralFg = ProjectWorksRevampColors.endDateFg
+    static let chipPinkFg = ProjectWorksRevampColors.pinRoseFg
+    static let chipRedFg = ProjectWorksRevampColors.requiredPillFg
 
-    static let operativeChipLabel = Color(red: 0x3C / 255, green: 0x34 / 255, blue: 0x89 / 255)
+    static let operativeChipLabel = ProjectWorksRevampColors.jobTypePillInk
 
     static let cardCornerRadius: CGFloat = 18
     static let iconChipSize: CGFloat = 34

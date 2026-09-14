@@ -573,7 +573,7 @@ struct MaterialsOrderHistorySheet: View {
                 .padding(.bottom, 14)
             }
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(
             RoundedRectangle(cornerRadius: 14)

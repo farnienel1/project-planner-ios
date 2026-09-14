@@ -9,26 +9,35 @@
 import SwiftUI
 
 enum SchedulingV2Palette {
-    static let pageBg = Color(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255)
-    static let ink = Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255)
-    static let muted = Color(red: 0x8E / 255, green: 0x8E / 255, blue: 0x93 / 255)
-    static let softMuted = Color(red: 0x9C / 255, green: 0xA3 / 255, blue: 0xAF / 255)
-    static let weekendMute = Color(red: 0xC7 / 255, green: 0xCA / 255, blue: 0xD0 / 255)
-    static let projectCode = Color(red: 0x3B / 255, green: 0x5F / 255, blue: 0xA3 / 255)
-    static let today = Color(red: 0x2C / 255, green: 0x5B / 255, blue: 0xBF / 255)
+    static let pageBg = ProjectWorksRevampColors.canvas
+    static let ink = ProjectWorksRevampColors.ink
+    static let muted = ProjectWorksRevampColors.muted
+    static let softMuted = ProjectWorksRevampColors.placeholderInk
+    static let weekendMute = ProjectWorksRevampColors.placeholderInk
+    static let projectCode = ProjectWorksRevampColors.blue
+    static let today = ProjectWorksRevampColors.blue
     static let std = Color(red: 0x3B / 255, green: 0x6B / 255, blue: 0xBF / 255)
     static let ot = Color(red: 0x1E / 255, green: 0x3A / 255, blue: 0x7A / 255)
     static let al = Color(red: 0x9A / 255, green: 0x5B / 255, blue: 0x27 / 255)
     static let half = Color(red: 0x5B / 255, green: 0x82 / 255, blue: 0xC7 / 255)
-    static let opsBtn = Color(red: 0x2C / 255, green: 0x5B / 255, blue: 0xBF / 255)
+    static let opsBtn = ProjectWorksRevampColors.blue
     static let subsBtn = Color(red: 0x5B / 255, green: 0x3F / 255, blue: 0xA8 / 255)
-    static let opsPillBg = Color(red: 0xEE / 255, green: 0xF0 / 255, blue: 0xF8 / 255)
-    static let opsPillText = Color(red: 0x3B / 255, green: 0x5F / 255, blue: 0xA3 / 255)
-    static let subsPillBg = Color(red: 0xF0 / 255, green: 0xED / 255, blue: 0xF8 / 255)
-    static let subsPillText = Color(red: 0x6B / 255, green: 0x48 / 255, blue: 0xB5 / 255)
-    static let countHasBg = Color(red: 0xEE / 255, green: 0xF3 / 255, blue: 0xFF / 255)
-    static let countTodayBg = Color(red: 0xD8 / 255, green: 0xE4 / 255, blue: 0xFF / 255)
-    static let cardBorder = Color.black.opacity(0.08)
+    static let opsPillBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0xEE / 255, 0xF0 / 255, 0xF8 / 255),
+        dark: AppAdaptiveColor.rgb(0.145, 0.157, 0.216)
+    )
+    static let opsPillText = ProjectWorksRevampColors.blue
+    static let subsPillBg = ProjectWorksRevampColors.jobTypePillBg
+    static let subsPillText = ProjectWorksRevampColors.jobTypePillInk
+    static let countHasBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0xEE / 255, 0xF3 / 255, 0xFF / 255),
+        dark: AppAdaptiveColor.rgb(0.110, 0.173, 0.247)
+    )
+    static let countTodayBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0xD8 / 255, 0xE4 / 255, 0xFF / 255),
+        dark: AppAdaptiveColor.rgb(0.133, 0.188, 0.290)
+    )
+    static let cardBorder = ProjectWorksRevampColors.border
 }
 
 enum SchedulingV2CellKind: Equatable {

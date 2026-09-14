@@ -1233,7 +1233,7 @@ private struct SiteAuditSubmitSuccessView: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 11)
                                 .foregroundStyle(SiteAuditColors.primary)
-                                .background(Color.white)
+                                .background(ProjectWorksRevampColors.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1269,7 +1269,7 @@ private struct SiteAuditSubmitSuccessView: View {
     private var pdfThumbnail: some View {
         ZStack(alignment: .bottom) {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Color.white)
+                .fill(ProjectWorksRevampColors.surface)
                 .frame(width: 44, height: 52)
                 .overlay(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)

@@ -8,19 +8,28 @@
 import SwiftUI
 
 enum WholesalersTheme {
-    static let indigo = Color(red: 0.325, green: 0.29, blue: 0.717)
+    static let indigo = ProjectWorksRevampColors.jobTypePillInk
     static let indigoDeep = Color(red: 0.392, green: 0.361, blue: 0.843)
-    static let pageBackground = Color(red: 0.933, green: 0.945, blue: 0.965)
-    static let card = Color.white
-    static let ink = Color(red: 0.043, green: 0.071, blue: 0.125)
-    static let inkSoft = Color(red: 0.278, green: 0.333, blue: 0.412)
-    static let inkMut = Color(red: 0.486, green: 0.541, blue: 0.627)
-    static let border = Color(red: 0.89, green: 0.91, blue: 0.937)
-    static let chipIndigoBg = Color(red: 0.922, green: 0.914, blue: 0.976)
-    static let chipBlueBg = Color(red: 0.902, green: 0.941, blue: 0.988)
-    static let chipGreenBg = Color(red: 0.882, green: 0.969, blue: 0.929)
-    static let chipAmberBg = Color(red: 0.992, green: 0.933, blue: 0.859)
-    static let green = Color(red: 0.086, green: 0.639, blue: 0.290)
+    static let pageBackground = ProjectWorksRevampColors.canvas
+    static let card = ProjectWorksRevampColors.surface
+    static let ink = ProjectWorksRevampColors.ink
+    static let inkSoft = ProjectWorksRevampColors.muted
+    static let inkMut = ProjectWorksRevampColors.muted
+    static let border = ProjectWorksRevampColors.border
+    static let chipIndigoBg = ProjectWorksRevampColors.jobTypePillBg
+    static let chipBlueBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.902, 0.941, 0.988),
+        dark: AppAdaptiveColor.rgb(0.110, 0.173, 0.247)
+    )
+    static let chipGreenBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.882, 0.969, 0.929),
+        dark: AppAdaptiveColor.rgb(0.090, 0.220, 0.165)
+    )
+    static let chipAmberBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.992, 0.933, 0.859),
+        dark: AppAdaptiveColor.rgb(0.239, 0.180, 0.090)
+    )
+    static let green = ProjectWorksRevampColors.activeGreen
 }
 
 // MARK: - List
@@ -329,7 +338,7 @@ private struct WholesalerListCard: View {
                         }
                         .padding(.vertical, 10)
                         .padding(.horizontal, 12)
-                        .background(Color(red: 0.969, green: 0.976, blue: 0.988))
+                        .background(ProjectWorksRevampColors.canvas)
                         .clipShape(RoundedRectangle(cornerRadius: 11))
                     }
                     if wholesaler.contacts.count > 2 {
@@ -1188,7 +1197,7 @@ struct WholesalerEditorSheet: View {
             }
         }
         .padding(12)
-        .background(Color(red: 0.969, green: 0.976, blue: 0.988))
+        .background(ProjectWorksRevampColors.canvas)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 

@@ -408,27 +408,6 @@ struct SettingsNotificationsHubView: View {
 
     var body: some View {
         List {
-            Section {
-                NavigationLink {
-                    GeneralAppSettingsView()
-                        .environmentObject(appSettings)
-                } label: {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("General app options")
-                            Text("My schedule list on this device")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        Image(systemName: "calendar.badge.clock")
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
-                    }
-                }
-            } footer: {
-                Text("Controls extra rows in My Schedule (office, WFH, custom labels).")
-            }
-
             if canConfigureMaterialCutOff {
                 Section {
                     Toggle("Material order cut-off (4:00 PM daily)", isOn: Binding(
@@ -439,6 +418,11 @@ struct SettingsNotificationsHubView: View {
                     ))
                 } footer: {
                     Text("Sends a daily reminder at 4:00 PM for admins and managers.")
+                }
+            } else {
+                Section {
+                    Text("Notification options for your role are managed in Organisation Settings Hub.")
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
                 }
             }
         }

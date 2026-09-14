@@ -143,7 +143,10 @@ struct SettingsView: View {
             return ("Manager", ProjectWorksRevampColors.jobTypePillInk, ProjectWorksRevampColors.jobTypePillBg)
         }
         if u?.permissions.operativeMode == true {
-            return ("Operative", ProjectWorksRevampColors.activeGreen, Color(red: 0.93, green: 0.98, blue: 0.95))
+            return ("Operative", ProjectWorksRevampColors.activeGreen, AppAdaptiveColor.dynamic(
+                light: AppAdaptiveColor.rgb(0.93, 0.98, 0.95),
+                dark: AppAdaptiveColor.rgb(0.090, 0.220, 0.165)
+            ))
         }
         return nil
     }
@@ -243,6 +246,20 @@ struct SettingsView: View {
                     iconFg: ProjectWorksRevampColors.jobTypePillInk,
                     title: "Sign-in & password",
                     subtitle: "Email, password, security"
+                )
+            }
+            .buttonStyle(.plain)
+            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            NavigationLink {
+                AppearanceModeView()
+                    .environmentObject(appSettings)
+            } label: {
+                settingsHubRow(
+                    icon: "circle.lefthalf.filled",
+                    iconBg: ProjectWorksRevampColors.jobTypePillBg,
+                    iconFg: ProjectWorksRevampColors.jobTypePillInk,
+                    title: "Choose Mode",
+                    subtitle: appSettings.settings.theme.displayName
                 )
             }
             .buttonStyle(.plain)
@@ -369,7 +386,10 @@ struct SettingsView: View {
             } label: {
                 settingsHubRow(
                     icon: "doc.text.fill",
-                    iconBg: Color(red: 0.95, green: 0.95, blue: 0.96),
+                    iconBg: AppAdaptiveColor.dynamic(
+                        light: AppAdaptiveColor.rgb(0.95, 0.95, 0.96),
+                        dark: AppAdaptiveColor.rgb(0.145, 0.157, 0.196)
+                    ),
                     iconFg: ProjectWorksRevampColors.muted,
                     title: "Privacy & terms",
                     subtitle: "Legal information"
@@ -395,7 +415,7 @@ struct SettingsView: View {
             .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 13)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)

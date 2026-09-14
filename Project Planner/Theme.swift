@@ -6,6 +6,42 @@
 //
 
 import SwiftUI
+import UIKit
+
+// MARK: - Adaptive colors (light / dark)
+
+enum AppAdaptiveColor {
+    static func dynamic(light: UIColor, dark: UIColor) -> Color {
+        Color(UIColor { trait in
+            trait.userInterfaceStyle == .dark ? dark : light
+        })
+    }
+
+    static func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> UIColor {
+        UIColor(red: r, green: g, blue: b, alpha: 1)
+    }
+}
+
+extension ThemePreference {
+    var uiUserInterfaceStyle: UIUserInterfaceStyle {
+        switch self {
+        case .light: return .light
+        case .dark: return .dark
+        case .system: return .unspecified
+        }
+    }
+
+    @MainActor
+    func applyToKeyWindows() {
+        let style = uiUserInterfaceStyle
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows {
+                window.overrideUserInterfaceStyle = style
+            }
+        }
+    }
+}
 
 // MARK: - Color Theme
 extension Color {

@@ -8,24 +8,98 @@
 import SwiftUI
 
 enum ProjectWorksRevampColors {
-    static let canvas = Color(red: 0.969, green: 0.973, blue: 0.980) // #F7F8FA
-    static let ink = Color(red: 0.043, green: 0.063, blue: 0.125) // #0B1020
-    static let muted = Color(red: 0.420, green: 0.451, blue: 0.490) // #6B7280
-    static let border = Color(red: 0.933, green: 0.941, blue: 0.953) // #EEF0F3
-    static let searchBorder = Color(red: 0.898, green: 0.906, blue: 0.922) // #E5E7EB
-    static let blue = Color(red: 0.094, green: 0.373, blue: 0.647) // #185FA5
-    static let blueLight = Color(red: 0.216, green: 0.541, blue: 0.867) // #378ADD
-    static let activeGreen = Color(red: 0.059, green: 0.431, blue: 0.337) // #0F6E56
-    static let upcomingAmber = Color(red: 0.522, green: 0.310, blue: 0.043) // #854F0B
-    static let jobTypePillBg = Color(red: 0.933, green: 0.929, blue: 0.996) // #EEEDFE
-    static let jobTypePillInk = Color(red: 0.235, green: 0.204, blue: 0.537) // #3C3489
-    static let requiredPillFg = Color(red: 0.639, green: 0.176, blue: 0.176) // #A32D2D
-    static let requiredPillBg = Color(red: 0.988, green: 0.922, blue: 0.922) // #FCEBEB
-    static let placeholderInk = Color(red: 0.773, green: 0.788, blue: 0.824) // #C5C9D2
-    static let pinRoseBg = Color(red: 0.984, green: 0.918, blue: 0.941) // #FBEAF0
-    static let pinRoseFg = Color(red: 0.600, green: 0.208, blue: 0.337) // #993556
-    static let endDateBg = Color(red: 0.980, green: 0.925, blue: 0.906) // #FAECE7
-    static let endDateFg = Color(red: 0.600, green: 0.235, blue: 0.114) // #993C1D
+    static let canvas = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.969, 0.973, 0.980), // #F7F8FA
+        dark: AppAdaptiveColor.rgb(0.071, 0.078, 0.102)   // #12141A
+    )
+    static let surface = AppAdaptiveColor.dynamic(
+        light: .white,
+        dark: AppAdaptiveColor.rgb(0.110, 0.122, 0.157)   // #1C1F28
+    )
+    static let ink = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.043, 0.063, 0.125), // #0B1020
+        dark: AppAdaptiveColor.rgb(0.953, 0.961, 0.973)   // #F3F5F8
+    )
+    static let muted = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.420, 0.451, 0.490), // #6B7280
+        dark: AppAdaptiveColor.rgb(0.620, 0.655, 0.710)   // #9EA7B5
+    )
+    static let border = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.933, 0.941, 0.953), // #EEF0F3
+        dark: AppAdaptiveColor.rgb(0.180, 0.196, 0.247)   // #2E3240
+    )
+    static let searchBorder = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.898, 0.906, 0.922), // #E5E7EB
+        dark: AppAdaptiveColor.rgb(0.220, 0.239, 0.298)   // #383D4C
+    )
+    static let blue = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.094, 0.373, 0.647), // #185FA5
+        dark: AppAdaptiveColor.rgb(0.380, 0.655, 0.910)   // #61A7E8
+    )
+    static let blueLight = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.216, 0.541, 0.867), // #378ADD
+        dark: AppAdaptiveColor.rgb(0.478, 0.722, 0.941)   // #7AB8F0
+    )
+    static let activeGreen = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.059, 0.431, 0.337), // #0F6E56
+        dark: AppAdaptiveColor.rgb(0.290, 0.827, 0.655)   // #4AD3A7
+    )
+    static let upcomingAmber = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.522, 0.310, 0.043), // #854F0B
+        dark: AppAdaptiveColor.rgb(0.957, 0.769, 0.376)   // #F4C460
+    )
+    static let jobTypePillBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.933, 0.929, 0.996), // #EEEDFE
+        dark: AppAdaptiveColor.rgb(0.173, 0.161, 0.314)   // #2C2950
+    )
+    static let jobTypePillInk = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.235, 0.204, 0.537), // #3C3489
+        dark: AppAdaptiveColor.rgb(0.769, 0.718, 0.992)   // #C4B7FD
+    )
+    static let requiredPillFg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.639, 0.176, 0.176), // #A32D2D
+        dark: AppAdaptiveColor.rgb(0.973, 0.506, 0.506)   // #F88181
+    )
+    static let requiredPillBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.988, 0.922, 0.922), // #FCEBEB
+        dark: AppAdaptiveColor.rgb(0.239, 0.125, 0.137)   // #3D2023
+    )
+    static let placeholderInk = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.773, 0.788, 0.824), // #C5C9D2
+        dark: AppAdaptiveColor.rgb(0.420, 0.451, 0.522)   // #6B7385
+    )
+    static let pinRoseBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.984, 0.918, 0.941), // #FBEAF0
+        dark: AppAdaptiveColor.rgb(0.239, 0.133, 0.176)   // #3D222D
+    )
+    static let pinRoseFg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.600, 0.208, 0.337), // #993556
+        dark: AppAdaptiveColor.rgb(0.957, 0.655, 0.753)   // #F4A7C0
+    )
+    static let endDateBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.980, 0.925, 0.906), // #FAECE7
+        dark: AppAdaptiveColor.rgb(0.239, 0.157, 0.125)   // #3D2820
+    )
+    static let endDateFg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.600, 0.235, 0.114), // #993C1D
+        dark: AppAdaptiveColor.rgb(0.941, 0.659, 0.510)   // #F0A882
+    )
+    static let blueTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.902, 0.945, 0.984),
+        dark: AppAdaptiveColor.rgb(0.110, 0.173, 0.247)
+    )
+    static let greenTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.882, 0.961, 0.933),
+        dark: AppAdaptiveColor.rgb(0.090, 0.220, 0.165)
+    )
+    static let amberTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.980, 0.933, 0.855),
+        dark: AppAdaptiveColor.rgb(0.239, 0.180, 0.090)
+    )
+    static let grayTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.949, 0.953, 0.961),
+        dark: AppAdaptiveColor.rgb(0.145, 0.157, 0.196)
+    )
 }
 
 struct WorksListStatusCounts {
@@ -88,7 +162,7 @@ struct WorksListStatsRow: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -114,7 +188,7 @@ struct WorksListSearchRow<FilterMenu: View>: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -153,7 +227,7 @@ struct WorksRevampFilterChip: View {
                 .padding(.vertical, 5)
                 .background(
                     Capsule()
-                        .fill(isSelected ? ProjectWorksRevampColors.blue : Color.white)
+                        .fill(isSelected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.surface)
                 )
                 .overlay(
                     Capsule()
@@ -177,7 +251,7 @@ extension View {
     /// White card with 14pt radius and hairline border (quick actions / list rows in mocks).
     func appChromeCardContainer(cornerRadius: CGFloat = 14) -> some View {
         self
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

@@ -6,8 +6,14 @@
 import SwiftUI
 
 enum AnnualLeaveCalendarChrome {
-    static let weekendFill = Color(red: 0.93, green: 0.93, blue: 0.94)
-    static let weekendStroke = Color(red: 0.78, green: 0.79, blue: 0.82)
+    static let weekendFill = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.93, 0.93, 0.94),
+        dark: AppAdaptiveColor.rgb(0.125, 0.133, 0.165)
+    )
+    static let weekendStroke = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.78, 0.79, 0.82),
+        dark: AppAdaptiveColor.rgb(0.310, 0.325, 0.376)
+    )
     static let bankHolidayStroke = Color(red: 0.45, green: 0.22, blue: 0.62)
 }
 
