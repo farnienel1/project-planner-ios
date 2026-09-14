@@ -30,7 +30,7 @@ private enum WarningsUI {
         return avatarPalette[abs(hash) % avatarPalette.count]
     }
 
-    static func parseUnbookedPerson(_ raw: String) -> (name: String, badge: String?) {
+    nonisolated static func parseUnbookedPerson(_ raw: String) -> (name: String, badge: String?) {
         if let range = raw.range(of: " (missing ") {
             let name = String(raw[..<range.lowerBound])
             var hours = String(raw[range.upperBound...])
@@ -819,12 +819,13 @@ private struct WarningDismissConfirmationSheet: View {
 }
 
 /// Sheet/item identity for a calendar day without making `Date` globally Identifiable.
-private struct IdentifiableDay: Identifiable, Hashable {
+/// Init is `nonisolated` so `.map(IdentifiableDay.init)` is valid under default MainActor isolation.
+private struct IdentifiableDay: Identifiable, Hashable, Sendable {
     let date: Date
-    var id: TimeInterval { Calendar.current.startOfDay(for: date).timeIntervalSince1970 }
+    var id: TimeInterval { date.timeIntervalSince1970 }
 
-    init(_ date: Date) {
-        self.date = Calendar.current.startOfDay(for: date)
+    nonisolated init(_ date: Date) {
+        self.date = date
     }
 }
 
