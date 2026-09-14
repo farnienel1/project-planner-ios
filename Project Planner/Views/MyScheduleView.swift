@@ -572,7 +572,6 @@ struct ManagerScheduleContentView: View {
     @State private var showAddBookingSheet = false
     @State private var addToCalendarMessage: String?
     @State private var showingCalendarDestinationPicker = false
-    @State private var icsShareURL: URL?
     @State private var showingAnnualLeavePage = false
 
     private struct LocationSearchItem: Identifiable {
@@ -896,23 +895,9 @@ struct ManagerScheduleContentView: View {
         .sheet(isPresented: $showingCalendarDestinationPicker) {
             ScheduleCalendarDestinationPicker(
                 events: weekExportEvents,
-                onAppleResult: { addToCalendarMessage = $0 },
-                onDismiss: { showingCalendarDestinationPicker = false },
-                onShareICS: { url in
-                    showingCalendarDestinationPicker = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        icsShareURL = url
-                    }
-                }
+                onResult: { addToCalendarMessage = $0 },
+                onDismiss: { showingCalendarDestinationPicker = false }
             )
-        }
-        .sheet(isPresented: Binding(
-            get: { icsShareURL != nil },
-            set: { if !$0 { icsShareURL = nil } }
-        )) {
-            if let icsShareURL {
-                ScheduleCalendarICSShareSheet(url: icsShareURL)
-            }
         }
     }
 
@@ -2359,7 +2344,6 @@ struct OperativeScheduleContentView: View {
     @State private var weekStart: Date = Date()
     @State private var addToCalendarMessage: String?
     @State private var showingCalendarDestinationPicker = false
-    @State private var icsShareURL: URL?
 
     private var currentOperative: Operative? {
         guard let email = userStore.currentUser?.email else { return nil }
@@ -2462,23 +2446,9 @@ struct OperativeScheduleContentView: View {
         .sheet(isPresented: $showingCalendarDestinationPicker) {
             ScheduleCalendarDestinationPicker(
                 events: weekExportEvents,
-                onAppleResult: { addToCalendarMessage = $0 },
-                onDismiss: { showingCalendarDestinationPicker = false },
-                onShareICS: { url in
-                    showingCalendarDestinationPicker = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        icsShareURL = url
-                    }
-                }
+                onResult: { addToCalendarMessage = $0 },
+                onDismiss: { showingCalendarDestinationPicker = false }
             )
-        }
-        .sheet(isPresented: Binding(
-            get: { icsShareURL != nil },
-            set: { if !$0 { icsShareURL = nil } }
-        )) {
-            if let icsShareURL {
-                ScheduleCalendarICSShareSheet(url: icsShareURL)
-            }
         }
     }
 
