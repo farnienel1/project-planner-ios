@@ -118,32 +118,23 @@ private struct SiteAuditProjectAccess {
         projectStore: ProjectStore,
         bookingStore: BookingStore,
         operativeStore: OperativeStore,
+        managerBookings: [ManagerSiteBooking] = [],
+        taskStore: ProjectTaskStore? = nil,
         extraProjectIds: Set<UUID> = []
     ) -> [Project] {
-        let all = uniqueWorks(projectStore.projects)
         if !userStore.canViewSiteAudit() {
             return []
         }
-        guard userStore.isOperativeMode() else {
-            if let currentUser = userStore.currentUser,
-               !userStore.hasAdminAccess(),
-               currentUser.permissions.manager {
-                return all.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
-            }
-            return all
-        }
-
-        guard let email = userStore.currentUser?.email.lowercased(),
-              let operative = operativeStore.allOperatives.first(where: { $0.email.lowercased() == email }),
-              let currentUserId = userStore.currentUser?.id else {
-            return []
-        }
-
-        var assigned = Set(bookingStore.bookings.filter {
-            $0.operativeId == operative.id && $0.status != .cancelled
-        }.map(\.projectId))
-        assigned.formUnion(extraProjectIds)
-        return all.filter { assigned.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId) }
+        return WorkAccess.visibleWorks(
+            from: uniqueWorks(projectStore.projects),
+            catalogue: .all,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerBookings: managerBookings,
+            taskStore: taskStore,
+            deadlineAssignedProjectIds: extraProjectIds
+        )
     }
 
     static func visibleProjects(
@@ -151,6 +142,8 @@ private struct SiteAuditProjectAccess {
         projectStore: ProjectStore,
         bookingStore: BookingStore,
         operativeStore: OperativeStore,
+        managerBookings: [ManagerSiteBooking] = [],
+        taskStore: ProjectTaskStore? = nil,
         extraProjectIds: Set<UUID> = []
     ) -> [Project] {
         visibleWorks(
@@ -158,6 +151,8 @@ private struct SiteAuditProjectAccess {
             projectStore: projectStore,
             bookingStore: bookingStore,
             operativeStore: operativeStore,
+            managerBookings: managerBookings,
+            taskStore: taskStore,
             extraProjectIds: extraProjectIds
         ).filter { $0.jobType != .smallWorks }
     }
@@ -167,6 +162,8 @@ private struct SiteAuditProjectAccess {
         projectStore: ProjectStore,
         bookingStore: BookingStore,
         operativeStore: OperativeStore,
+        managerBookings: [ManagerSiteBooking] = [],
+        taskStore: ProjectTaskStore? = nil,
         extraProjectIds: Set<UUID> = []
     ) -> [Project] {
         visibleWorks(
@@ -174,6 +171,8 @@ private struct SiteAuditProjectAccess {
             projectStore: projectStore,
             bookingStore: bookingStore,
             operativeStore: operativeStore,
+            managerBookings: managerBookings,
+            taskStore: taskStore,
             extraProjectIds: extraProjectIds
         ).filter { $0.jobType == .smallWorks }
     }
@@ -291,6 +290,7 @@ struct SiteAuditProjectsBrowserView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var taskStore: ProjectTaskStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @State private var selectedFilter: SiteAuditProjectFilter = .all
     @State private var selectedProject: Project?
     @State private var authoredAuditProjectIds: Set<UUID> = []
@@ -305,6 +305,8 @@ struct SiteAuditProjectsBrowserView: View {
                     projectStore: projectStore,
                     bookingStore: bookingStore,
                     operativeStore: operativeStore,
+                    managerBookings: managerScheduleStore.managerSiteBookings,
+                    taskStore: taskStore,
                     extraProjectIds: extraVisibleProjectIds
                 )
             case .smallWorks:
@@ -313,6 +315,8 @@ struct SiteAuditProjectsBrowserView: View {
                     projectStore: projectStore,
                     bookingStore: bookingStore,
                     operativeStore: operativeStore,
+                    managerBookings: managerScheduleStore.managerSiteBookings,
+                    taskStore: taskStore,
                     extraProjectIds: extraVisibleProjectIds
                 )
             }
@@ -586,6 +590,7 @@ struct SiteAuditCreateFlowView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var smartCache: SmartCacheService
     @EnvironmentObject var taskStore: ProjectTaskStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
 
     /// When set, the flow starts on this project and optionally locks the picker.
     var initialProject: Project? = nil
@@ -632,6 +637,8 @@ struct SiteAuditCreateFlowView: View {
                 projectStore: projectStore,
                 bookingStore: bookingStore,
                 operativeStore: operativeStore,
+                managerBookings: managerScheduleStore.managerSiteBookings,
+                taskStore: taskStore,
                 extraProjectIds: extraVisibleProjectIds
             )
         )

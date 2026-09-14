@@ -1983,7 +1983,7 @@ struct EditUserView: View {
                                 iconBackground: ManageUserProfilePalette.chipTealBg,
                                 iconForeground: ManageUserProfilePalette.chipTealFg,
                                 title: "Weekly Report",
-                                description: "Can open and pull weekly reports.",
+                                description: "Can open Weekly Report from Home. If off, that tile is hidden.",
                                 isOn: $managerTransitionWeeklyReports
                             )
                             ManageUserCardDivider()
@@ -1992,7 +1992,7 @@ struct EditUserView: View {
                                 iconBackground: ManageUserProfilePalette.chipTealBg,
                                 iconForeground: ManageUserProfilePalette.chipTealFg,
                                 title: "Daily Overview",
-                                description: "Can open daily overview from the home screen and menus.",
+                                description: "Can open Daily Overview from Home. If off, that tile is hidden.",
                                 isOn: $managerTransitionDailyOverview
                             )
                             ManageUserCardDivider()
@@ -2001,7 +2001,7 @@ struct EditUserView: View {
                                 iconBackground: ManageUserProfilePalette.chipTealBg,
                                 iconForeground: ManageUserProfilePalette.chipTealFg,
                                 title: "Sub Contractors",
-                                description: "Can add and manage sub contractors. If unselected they can still book sub contractors in, but not manage their records.",
+                                description: "Can add and manage sub contractor records. If off, Sub Contractors is hidden on Home and menus. They can still book existing subcontractors on jobs.",
                                 isOn: $managerTransitionSubContractors
                             )
                             ManageUserCardDivider()
@@ -2019,7 +2019,7 @@ struct EditUserView: View {
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
                                 title: "Projects",
-                                description: "Can create and manage projects. If unselected, this manager can still schedule operatives and sub contractors.",
+                                description: "Can create, edit, and add projects. If off, they still see projects they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit project details.",
                                 isOn: $managerTransitionProjects
                             )
                             ManageUserCardDivider()
@@ -2028,7 +2028,7 @@ struct EditUserView: View {
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
                                 title: "Small Works",
-                                description: "Can create and manage small works. If unselected, this manager can still schedule operatives and sub contractors.",
+                                description: "Can create, edit, and add small works. If off, they still see small works they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit small works details.",
                                 isOn: $managerTransitionSmallWorks
                             )
                         }
@@ -3122,6 +3122,8 @@ struct EditUserView: View {
                         permissions.manager = true
                         permissions.projects = true
                         permissions.smallWorks = true
+                        permissions.weeklyReports = true
+                        permissions.dailyOverview = true
                     }
                 }
 
@@ -3133,7 +3135,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                 iconForeground: ManageUserProfilePalette.chipBlueFg,
                 title: "Projects",
-                description: "Can create and manage projects. If unselected, this manager can still schedule operatives and sub contractors.",
+                description: "Can create, edit, and add projects. If off, they still see projects they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit project details.",
                 isOn: $permissions.projects,
                 isDisabled: false
             )
@@ -3145,7 +3147,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                 iconForeground: ManageUserProfilePalette.chipBlueFg,
                 title: "Small Works",
-                description: "Can create and manage small works. If unselected, this manager can still schedule operatives and sub contractors.",
+                description: "Can create, edit, and add small works. If off, they still see small works they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit small works details.",
                 isOn: $permissions.smallWorks,
                 isDisabled: false
             )
@@ -3157,7 +3159,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipTealBg,
                 iconForeground: ManageUserProfilePalette.chipTealFg,
                 title: "Weekly Report",
-                description: "Can open and pull weekly reports.",
+                description: "Can open Weekly Report from Home. If off, that tile is hidden.",
                 isOn: $permissions.weeklyReports,
                 isDisabled: false
             )
@@ -3169,7 +3171,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipTealBg,
                 iconForeground: ManageUserProfilePalette.chipTealFg,
                 title: "Daily Overview",
-                description: "Can open daily overview from the home screen and menus.",
+                description: "Can open Daily Overview from Home. If off, that tile is hidden.",
                 isOn: $permissions.dailyOverview,
                 isDisabled: false
             )
@@ -3181,7 +3183,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipTealBg,
                 iconForeground: ManageUserProfilePalette.chipTealFg,
                 title: "Sub Contractors",
-                description: "Can add and manage sub contractors. If unselected they can still book sub contractors in, but not manage their records.",
+                description: "Can add and manage sub contractor records. If off, Sub Contractors is hidden on Home and menus. They can still book existing subcontractors on jobs.",
                 isOn: $permissions.subContractors,
                 isDisabled: false
             )

@@ -249,11 +249,9 @@ enum HomeQuickActionRegistry {
             return userStore.isOperativeMode() && (userStore.canViewSiteAudit() || userStore.isHomeProfileLoading)
 
         case HomeQuickActionID.staffWeeklyReport.rawValue:
-            return !userStore.isOperativeMode()
-                && (userStore.hasAdminAccess() || userStore.displayUser?.permissions.weeklyReports == true || userStore.isHomeProfileLoading)
+            return !userStore.isOperativeMode() && userStore.canViewWeeklyReports()
         case HomeQuickActionID.staffDailyOverview.rawValue:
-            return !userStore.isOperativeMode()
-                && (userStore.hasAdminAccess() || userStore.displayUser?.permissions.dailyOverview == true || userStore.isHomeProfileLoading)
+            return !userStore.isOperativeMode() && userStore.canViewDailyOverview()
         case HomeQuickActionID.staffProjects.rawValue, HomeQuickActionID.staffSmallWorks.rawValue:
             return !userStore.isOperativeMode() && userStore.canViewProjects()
         case HomeQuickActionID.staffAnnualLeave.rawValue:
@@ -389,16 +387,10 @@ enum HomeQuickActionRegistry {
     }
 
     private static func canCreateProject(_ userStore: UserStore) -> Bool {
-        guard let user = userStore.currentUser else { return false }
-        if user.permissions.operativeMode { return false }
-        if user.isSuperAdmin || user.permissions.adminAccess { return true }
-        return user.permissions.manager && user.permissions.projects
+        userStore.canManageWorkCatalogue(.projects)
     }
 
     private static func canCreateSmallWorks(_ userStore: UserStore) -> Bool {
-        guard let user = userStore.currentUser else { return false }
-        if user.permissions.operativeMode { return false }
-        if user.isSuperAdmin || user.permissions.adminAccess { return true }
-        return user.permissions.manager && user.permissions.smallWorks
+        userStore.canManageWorkCatalogue(.smallWorks)
     }
 }

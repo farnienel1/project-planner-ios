@@ -3,13 +3,116 @@ import UserNotifications
 
 /// Shared visibility + "live people on this job" helpers for Deadlines, Projects, Small Works, and Site Audit.
 enum WorkAccess {
+    enum JobCatalogue: Equatable {
+        case projects
+        case smallWorks
+        case all
+
+        func includes(_ project: Project) -> Bool {
+            switch self {
+            case .projects: return project.jobType != .smallWorks
+            case .smallWorks: return project.jobType == .smallWorks
+            case .all: return true
+            }
+        }
+    }
+
+    /// Admins see every job. Managers with the Projects / Small Works slider on see the full catalogue
+    /// (except jobs hidden from them). With the slider off they only see jobs they are assigned to as a
+    /// manager or booked onto.
+    static func visibleWorks(
+        from projects: [Project],
+        catalogue: JobCatalogue,
+        userStore: UserStore,
+        operativeStore: OperativeStore,
+        bookingStore: BookingStore,
+        managerBookings: [ManagerSiteBooking],
+        taskStore: ProjectTaskStore?,
+        deadlineAssignedProjectIds: Set<UUID> = []
+    ) -> [Project] {
+        let scoped = projects.filter { catalogue.includes($0) }
+        let user = userStore.displayUser ?? userStore.currentUser
+
+        if userStore.isOperativeMode() {
+            guard let user else { return [] }
+            let assignedIds = operativeVisibleProjectIds(
+                currentUser: user,
+                operative: operativeMatching(email: user.email, in: operativeStore.allOperatives),
+                operatives: operativeStore.allOperatives,
+                managers: operativeStore.allManagers,
+                bookingStore: bookingStore,
+                taskStore: taskStore,
+                deadlineAssignedProjectIds: deadlineAssignedProjectIds
+            )
+            return scoped.filter { assignedIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(user.id) }
+        }
+
+        guard let user else { return [] }
+        if user.isExcludedFromManagerVisibilityHiding {
+            return scoped
+        }
+
+        let notHidden = scoped.filter { !$0.hiddenManagerUserIds.contains(user.id) }
+        return notHidden.filter { project in
+            let jobCatalogue: JobCatalogue = project.jobType == .smallWorks ? .smallWorks : .projects
+            if userStore.canManageWorkCatalogue(jobCatalogue) {
+                return true
+            }
+            return isAssignedOrBookedOnto(
+                project,
+                user: user,
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                managerBookings: managerBookings
+            )
+        }
+    }
+
+    static func isAssignedOrBookedOnto(
+        _ project: Project,
+        user: AppUser,
+        operativeStore: OperativeStore,
+        bookingStore: BookingStore,
+        managerBookings: [ManagerSiteBooking]
+    ) -> Bool {
+        let email = normalizedEmail(user.email)
+
+        if let manager = operativeStore.allManagers.first(where: { normalizedEmail($0.email) == email }),
+           project.allAssignedManagerIds.contains(manager.id) {
+            return true
+        }
+
+        if managerBookings.contains(where: { booking in
+            booking.userId == user.id
+                && (booking.locationType == .project || booking.locationType == .smallWork)
+                && booking.locationId == project.id
+        }) {
+            return true
+        }
+
+        if let operative = operativeMatching(email: user.email, in: operativeStore.allOperatives),
+           bookingStore.bookings.contains(where: {
+               $0.operativeId == operative.id && $0.projectId == project.id && $0.status != .cancelled
+           }) {
+            return true
+        }
+
+        return false
+    }
+
+    private static func operativeMatching(email: String, in operatives: [Operative]) -> Operative? {
+        let needle = normalizedEmail(email)
+        guard !needle.isEmpty else { return nil }
+        return operatives.first { normalizedEmail($0.email) == needle }
+    }
+
     static func operativeVisibleProjectIds(
         currentUser: AppUser?,
         operative: Operative?,
         operatives: [Operative],
         managers: [Manager] = [],
         bookingStore: BookingStore,
-        taskStore: ProjectTaskStore,
+        taskStore: ProjectTaskStore?,
         deadlineAssignedProjectIds: Set<UUID>
     ) -> Set<UUID> {
         var ids = Set<UUID>()
@@ -18,12 +121,14 @@ enum WorkAccess {
                 ids.insert(booking.projectId)
             }
         }
-        ids.formUnion(taskAssignedProjectIds(
-            currentUser: currentUser,
-            taskStore: taskStore,
-            operatives: operatives,
-            managers: managers
-        ))
+        if let taskStore {
+            ids.formUnion(taskAssignedProjectIds(
+                currentUser: currentUser,
+                taskStore: taskStore,
+                operatives: operatives,
+                managers: managers
+            ))
+        }
         ids.formUnion(deadlineAssignedProjectIds)
         return ids
     }

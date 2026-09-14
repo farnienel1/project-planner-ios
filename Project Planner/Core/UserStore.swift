@@ -724,6 +724,8 @@ class UserStore: ObservableObject {
         return true
     }
     
+    /// Directory / menu / home tile for adding and editing sub contractor records.
+    /// Booking live subcontractors onto a job is separate and stays available to managers.
     func canManageSubcontractors() -> Bool {
         if isOperativeMode() { return false }
         if isHomeProfileLoading { return true }
@@ -731,7 +733,34 @@ class UserStore: ObservableObject {
         if currentUser.isSuperAdmin || currentUser.permissions.adminAccess || currentUser.role == .admin {
             return true
         }
-        return currentUser.permissions.manager
+        return currentUser.permissions.manager && currentUser.permissions.subContractors
+    }
+
+    /// Create / edit / add projects or small works. Lists stay available when this is off.
+    func canManageWorkCatalogue(_ catalogue: WorkAccess.JobCatalogue) -> Bool {
+        if isOperativeMode() { return false }
+        guard let u = displayUser else { return false }
+        if u.isSuperAdmin || u.permissions.adminAccess || u.role == .admin { return true }
+        guard u.permissions.manager else { return false }
+        switch catalogue {
+        case .projects: return u.permissions.projects
+        case .smallWorks: return u.permissions.smallWorks
+        case .all: return u.permissions.projects && u.permissions.smallWorks
+        }
+    }
+
+    func canViewWeeklyReports() -> Bool {
+        if isOperativeMode() { return false }
+        if isHomeProfileLoading { return true }
+        guard let u = displayUser else { return false }
+        return u.permissions.weeklyReports
+    }
+
+    func canViewDailyOverview() -> Bool {
+        if isOperativeMode() { return false }
+        if isHomeProfileLoading { return true }
+        guard let u = displayUser else { return false }
+        return u.permissions.dailyOverview
     }
     
     /// Super admins, admins, and managers may set whether a site audit is visible to operative-mode users.

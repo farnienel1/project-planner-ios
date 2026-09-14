@@ -588,11 +588,29 @@ struct ManagerScheduleContentView: View {
     }
 
     private var liveProjects: [Project] {
-        projectStore.projects.filter { $0.isLive && $0.jobType != .smallWorks }
+        WorkAccess.visibleWorks(
+            from: projectStore.projects,
+            catalogue: .projects,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            taskStore: nil,
+            deadlineAssignedProjectIds: []
+        ).filter(\.isLive)
     }
 
     private var liveSmallWorks: [Project] {
-        projectStore.projects.filter { $0.isLive && $0.jobType == .smallWorks }
+        WorkAccess.visibleWorks(
+            from: projectStore.projects,
+            catalogue: .smallWorks,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            taskStore: nil,
+            deadlineAssignedProjectIds: []
+        ).filter(\.isLive)
     }
 
     private var myManagerId: UUID? {

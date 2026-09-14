@@ -67,11 +67,7 @@ struct ProjectDetailView: View {
 
     /// Admins and managers with project/small-works management access can configure View visibility and see all tasks on the job.
     private var canConfigureProjectVisibility: Bool {
-        guard let u = userStore.currentUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if userStore.hasAdminAccess() { return true }
-        guard u.permissions.manager else { return false }
-        return project.jobType == .smallWorks ? u.permissions.smallWorks : u.permissions.projects
+        userStore.canManageWorkCatalogue(project.jobType == .smallWorks ? .smallWorks : .projects)
     }
 
     private var canViewAllTasksOnThisJob: Bool { canConfigureProjectVisibility }
@@ -2514,11 +2510,7 @@ struct ProjectDetailView: View {
     }
     
     private var canEditCurrentWorkItem: Bool {
-        guard let u = userStore.currentUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if u.isSuperAdmin || u.permissions.adminAccess { return true }
-        guard u.permissions.manager else { return false }
-        return project.jobType == .smallWorks ? u.permissions.smallWorks : u.permissions.projects
+        userStore.canManageWorkCatalogue(project.jobType == .smallWorks ? .smallWorks : .projects)
     }
 }
 
