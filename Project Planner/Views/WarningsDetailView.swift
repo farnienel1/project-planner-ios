@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-let-stores"
+    static let id = "wfix-swift6-iso"
     /// Impossible to miss on Home — if you still see plain "Warnings", you are not on this build.
     static let homePillTitle = "Warnings FIX"
     static let homePillValueWhenClear = "\(id) · All clear"
@@ -400,7 +400,7 @@ struct WarningsDetailView: View {
     private func refreshWarningsAsync() async {
         isRefreshing = true
         defer { isRefreshing = false }
-        await WarningsRefreshHelper.refreshSharedWarnings(
+        _ = await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
             projectStore: projectStore,

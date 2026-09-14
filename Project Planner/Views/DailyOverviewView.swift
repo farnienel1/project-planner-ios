@@ -1351,7 +1351,7 @@ private extension DailyOverviewView {
     private func refreshScheduleAfterExternalBooking() async {
         managerScheduleStore.loadData()
         scheduleRefreshTick = UUID()
-        await WarningsRefreshHelper.refreshSharedWarnings(
+        _ = await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
             projectStore: projectStore,

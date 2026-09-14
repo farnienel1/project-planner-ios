@@ -145,9 +145,12 @@ struct WarningsComputationSnapshot: Sendable {
 }
 
 enum WarningsComputation {
-    /// Builds the sendable snapshot. Must stay off the main actor — payroll/clash
-    /// interval work over all bookings freezes/jetsams Simulator when run on MainActor.
-    nonisolated static func makeSnapshot(from input: WarningsComputationInput) -> WarningsComputationSnapshot {
+    /// Builds the sendable snapshot on the MainActor.
+    /// With `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, model types/methods are
+    /// MainActor-isolated — this must not be `nonisolated`. Callers should window
+    /// bookings first; only `generate` runs in `Task.detached`.
+    @MainActor
+    static func makeSnapshot(from input: WarningsComputationInput) -> WarningsComputationSnapshot {
         let cal = Calendar.current
 
         let operatives: [WarningsComputationSnapshot.OperativeSnapshot] = input.operatives.map { operative in

@@ -564,7 +564,7 @@ struct OrganisationWarningsSettingsView: View {
         defer { isSaving = false }
         do {
             try await firebaseBackend.updateOrganizationWarningDetectionSettings(draft)
-            await WarningsRefreshHelper.refreshSharedWarnings(
+            _ = await WarningsRefreshHelper.refreshSharedWarnings(
                 operativeStore: operativeStore,
                 bookingStore: bookingStore,
                 projectStore: projectStore,
@@ -594,7 +594,7 @@ struct OrganisationWarningsSettingsView: View {
         defer { isSaving = false }
         do {
             try await firebaseBackend.updateOrganizationWarningDetectionSettings(draft)
-            await WarningsRefreshHelper.refreshSharedWarnings(
+            _ = await WarningsRefreshHelper.refreshSharedWarnings(
                 operativeStore: operativeStore,
                 bookingStore: bookingStore,
                 projectStore: projectStore,

@@ -234,11 +234,11 @@ class WarningsService: ObservableObject {
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
             materialItemsForTomorrow: materialItemsForTomorrow
         )
-        // Snapshot + generate both off main — makeSnapshot alone was enough to jetsam
-        // when opening Warnings forced a refresh right after Home bootstrap.
+        // Snapshot on MainActor (Swift 6 default isolation). Windowed inputs keep this
+        // light; detach only `generate` for clash/unbooked loops.
+        let snapshot = WarningsComputation.makeSnapshot(from: input)
         let generated = await Task.detached(priority: .utility) {
-            let snapshot = WarningsComputation.makeSnapshot(from: input)
-            return WarningsComputation.generate(snapshot)
+            WarningsComputation.generate(snapshot)
         }.value
         guard generation == updateGeneration else { return }
         resolutionStore.pruneDismissedUnbookedKeys(
