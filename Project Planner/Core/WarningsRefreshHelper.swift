@@ -107,6 +107,28 @@ enum WarningsRefreshHelper {
         return true
     }
 
+    /// Cancel any in-flight Home warnings scan before opening heavy sheets (Weekly Report).
+    @MainActor
+    static func cancelInFlightRefresh() {
+        inFlightTask?.cancel()
+        inFlightTask = nil
+        WarningsService.shared.cancelInFlightUpdate()
+        print("🔥🔥🔥 DEBUG: Warnings refresh in-flight cancelled for sheet open")
+    }
+
+    /// Cancel scans and wait briefly so detached snapshot memory can drain before heavy UI.
+    @MainActor
+    static func prepareForHeavySheet() async {
+        isWeeklyReportVisible = true
+        cancelInFlightRefresh()
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        await Task.yield()
+        cancelInFlightRefresh()
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        await Task.yield()
+    }
+
     @MainActor
     private static func performRefresh(
         operativeStore: OperativeStore,

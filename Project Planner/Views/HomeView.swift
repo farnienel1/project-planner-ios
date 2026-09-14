@@ -34,7 +34,7 @@ struct HomeView: View {
     @State private var showingAddUser = false
     @State private var showingManageUsers = false
     @State private var showingDailyOverview = false
-    @State private var showingWeeklyReport = false
+    @State private var weeklyReportLaunch: WeeklyReportLaunchToken?
     @State private var showingOrgSitesMap = false
     @State private var showingMySchedule = false
     @State private var showingWarningsDetail = false
@@ -214,24 +214,13 @@ struct HomeView: View {
                 .environmentObject(taskStore)
                 .environmentObject(notificationService)
         }
-        .sheet(isPresented: $showingWeeklyReport, onDismiss: {
+        .sheet(item: $weeklyReportLaunch, onDismiss: {
             WarningsRefreshHelper.isWeeklyReportVisible = false
             Task { @MainActor in
                 await runHomeWarningsRefresh(force: true, reason: "weekly-report-dismiss")
             }
-        }) {
-            WeeklyReportView()
-                .environmentObject(bookingStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(holidayStore)
-                .environmentObject(userStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(subcontractorStore)
-                .environmentObject(appSettings)
-                .environmentObject(notificationService)
-                .environmentObject(taskStore)
+        }) { token in
+            WeeklyReportOpenShell(token: token)
         }
         .sheet(isPresented: $showingOrgSitesMap) {
             OrgSitesMapView()
@@ -565,6 +554,17 @@ struct HomeView: View {
             guard userStore.hasAdminAccess() else { return }
             await runPostQuietWarningsDetection()
         }
+        .task(id: firebaseBackend.launchQuietUntil?.timeIntervalSince1970 ?? -1) {
+            // Quiet expiry must re-arm warm even if the userId task already gave up / was skipped.
+            guard userStore.hasAdminAccess() else { return }
+            guard let quietUntil = firebaseBackend.launchQuietUntil else { return }
+            let remaining = quietUntil.timeIntervalSinceNow
+            if remaining > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000) + 400_000_000)
+            }
+            guard !Task.isCancelled else { return }
+            await runHomeWarningsRefresh(force: true, reason: "quiet-expired")
+        }
         .onChange(of: bookingStore.bookings.count) { oldCount, newCount in
             // Re-warm once when bookings arrive after a premature empty live publish.
             guard userStore.hasAdminAccess() else { return }
@@ -597,7 +597,7 @@ struct HomeView: View {
         .onChange(of: showingWarningsDetail) { _, isOpen in
             WarningsRefreshHelper.isWarningsSheetVisible = isOpen
         }
-        .onChange(of: showingWeeklyReport) { _, isOpen in
+        .onChange(of: weeklyReportLaunch != nil) { _, isOpen in
             WarningsRefreshHelper.isWeeklyReportVisible = isOpen
         }
         .onChange(of: showingAdminOverviewCustomize) { _, isOpen in
@@ -673,7 +673,7 @@ struct HomeView: View {
             print("🔥🔥🔥 DEBUG: Home warnings refresh deferred (\(reason)) — sheet open")
             return false
         }
-        if showingWeeklyReport || WarningsRefreshHelper.isWeeklyReportVisible {
+        if weeklyReportLaunch != nil || WarningsRefreshHelper.isWeeklyReportVisible {
             print("🔥🔥🔥 DEBUG: Home warnings refresh deferred (\(reason)) — weekly report open")
             return false
         }
@@ -1061,7 +1061,19 @@ struct HomeView: View {
         case HomeQuickActionID.opSettings.rawValue, HomeQuickActionID.staffSettings.rawValue:
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 5])
         case HomeQuickActionID.staffWeeklyReport.rawValue:
-            showingWeeklyReport = true
+            weeklyReportLaunch = WeeklyReportLaunchToken(
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                projectStore: projectStore,
+                operativeStore: operativeStore,
+                holidayStore: holidayStore,
+                userStore: userStore,
+                firebaseBackend: firebaseBackend,
+                subcontractorStore: subcontractorStore,
+                appSettings: appSettings,
+                notificationService: notificationService,
+                taskStore: taskStore
+            )
         case HomeQuickActionID.staffDailyOverview.rawValue:
             showingDailyOverview = true
         case HomeQuickActionID.staffManagers.rawValue:

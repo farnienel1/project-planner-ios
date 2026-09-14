@@ -18,22 +18,26 @@ private enum WeeklyReportColors {
 
 struct WeeklyReportView: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject var bookingStore: BookingStore
-    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
-    @EnvironmentObject var projectStore: ProjectStore
-    @EnvironmentObject var operativeStore: OperativeStore
-    @EnvironmentObject var holidayStore: HolidayStore
-    @EnvironmentObject var userStore: UserStore
-    @EnvironmentObject var firebaseBackend: FirebaseBackend
-    @EnvironmentObject var subcontractorStore: SubcontractorStore
-    @EnvironmentObject var appSettings: AppSettingsStore
-    @EnvironmentObject var notificationService: NotificationService
-    @EnvironmentObject var taskStore: ProjectTaskStore
+    // `let` stores — do NOT use @EnvironmentObject / @ObservedObject here.
+    // Subscribing to Home's hot stores while the sheet is open re-renders this
+    // whole view on every booking/holiday publish and freezes Simulator (process stays alive).
+    let bookingStore: BookingStore
+    let managerScheduleStore: ManagerScheduleStore
+    let projectStore: ProjectStore
+    let operativeStore: OperativeStore
+    let holidayStore: HolidayStore
+    let userStore: UserStore
+    let firebaseBackend: FirebaseBackend
+    let subcontractorStore: SubcontractorStore
+    let appSettings: AppSettingsStore
+    let notificationService: NotificationService
+    let taskStore: ProjectTaskStore
 
-    @ObservedObject private var warningsService = WarningsService.shared
+    /// Private export/scan service — never observe WarningsService.shared on open.
+    @State private var exportWarningsService: WarningsService?
     @State private var showingWarningsDetail = false
-    @State private var startDate: Date = Calendar.current.startOfDay(for: Date())
-    @State private var endDate: Date = Calendar.current.startOfDay(for: Date())
+    @State private var startDate: Date
+    @State private var endDate: Date
     @State private var showStartPicker = false
     @State private var showEndPicker = false
     @State private var isGenerating = false
@@ -45,6 +49,44 @@ struct WeeklyReportView: View {
     @State private var message: String?
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
     @State private var logoImage: UIImage?
+    @State private var periodHighCount = 0
+    @State private var periodMediumCount = 0
+    @State private var periodLowCount = 0
+    @State private var periodSummaryReady = false
+
+    init(
+        bookingStore: BookingStore,
+        managerScheduleStore: ManagerScheduleStore,
+        projectStore: ProjectStore,
+        operativeStore: OperativeStore,
+        holidayStore: HolidayStore,
+        userStore: UserStore,
+        firebaseBackend: FirebaseBackend,
+        subcontractorStore: SubcontractorStore,
+        appSettings: AppSettingsStore,
+        notificationService: NotificationService,
+        taskStore: ProjectTaskStore
+    ) {
+        self.bookingStore = bookingStore
+        self.managerScheduleStore = managerScheduleStore
+        self.projectStore = projectStore
+        self.operativeStore = operativeStore
+        self.holidayStore = holidayStore
+        self.userStore = userStore
+        self.firebaseBackend = firebaseBackend
+        self.subcontractorStore = subcontractorStore
+        self.appSettings = appSettings
+        self.notificationService = notificationService
+        self.taskStore = taskStore
+        let cal = Calendar.current
+        let now = cal.startOfDay(for: Date())
+        let weekday = cal.component(.weekday, from: now)
+        let daysFromMonday = (weekday + 5) % 7
+        let monday = cal.startOfDay(for: cal.date(byAdding: .day, value: -daysFromMonday, to: now) ?? now)
+        let sunday = cal.date(byAdding: .day, value: 6, to: monday) ?? monday
+        _startDate = State(initialValue: monday)
+        _endDate = State(initialValue: sunday)
+    }
 
     private var organizationName: String {
         firebaseBackend.currentOrganization?.name ?? "Organization"
@@ -68,13 +110,11 @@ struct WeeklyReportView: View {
     }
 
     private var hasReportWarnings: Bool {
-        let range = reportDateRange
-        let source = WarningsService.WarningListSource.period
-        return !warningsService.operativeBookingClashes(in: range, source: source).isEmpty
-            || !warningsService.unresolvedManagerClashes(in: range, source: source).isEmpty
-            || !warningsService.approvedManagerClashes(in: range, source: source).isEmpty
-            || !warningsService.unbookedLabourWarnings(in: range, source: source).isEmpty
-            || !warningsService.materialsCutoffWarnings(in: range, source: source).isEmpty
+        periodHighCount + periodMediumCount + periodLowCount > 0
+    }
+
+    private var activeWarningsService: WarningsService {
+        exportWarningsService ?? WarningsService.shared
     }
 
     var body: some View {
@@ -99,12 +139,10 @@ struct WeeklyReportView: View {
                         .presentationDragIndicator(.visible)
                 }
                 .onAppear {
-                    print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_APPEARED \(WarningsBuildStamp.id) — no open scan")
+                    print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_FORM \(WarningsBuildStamp.id)")
                     setThisWeekRange()
-                    Task { await loadOrganizationLogo() }
+                    // Logo loads on Generate / idle — not on open (Simulator jetsam).
                 }
-                // Do NOT refreshReportWarnings on appear / date / booking changes —
-                // that ran up to 3 full-period scans and jetsamed Simulator.
         }
     }
 
@@ -116,8 +154,11 @@ struct WeeklyReportView: View {
                     brandHeader
                     quickSelectCard
                     customRangeCard
-                    invoicingPeriodCard
-                    warningsCard
+                    Text("Period warnings and pay breakdown are calculated when you tap Generate — this is separate from Home Warnings (live ops from today forward).")
+                        .font(.system(size: 12))
+                        .foregroundStyle(WeeklyReportColors.muted)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
                     generateSection
                     if let message {
                         Text(message)
@@ -152,14 +193,19 @@ struct WeeklyReportView: View {
             }
         }
         ToolbarItem(placement: .principal) {
-            Text("Weekly Report")
-                .font(.system(size: 17, weight: .semibold))
+            VStack(spacing: 1) {
+                Text("Weekly Report")
+                    .font(.system(size: 17, weight: .semibold))
+                Text(WarningsBuildStamp.id)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
     private var warningsDetailSheet: some View {
         WarningsDetailView(
-            warningsService: warningsService,
+            warningsService: WarningsService.shared,
             projectStore: projectStore,
             userStore: userStore,
             operativeStore: operativeStore,
@@ -305,35 +351,7 @@ struct WeeklyReportView: View {
             icon: "exclamationmark.triangle.fill",
             iconColor: hasReportWarnings ? WeeklyReportColors.orange : WeeklyReportColors.greenTx
         ) {
-            if !warningsService.hasCompletedPeriodDetection {
-                HStack(spacing: 10) {
-                    ZStack {
-                        Circle().fill(WeeklyReportColors.light).frame(width: 36, height: 36)
-                        Image(systemName: "hourglass").foregroundStyle(WeeklyReportColors.muted)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Calculated on Generate").font(.subheadline.weight(.semibold))
-                        Text("Period warnings run once when you generate — opening this screen never scans.")
-                            .font(.caption).foregroundStyle(WeeklyReportColors.muted)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-                Divider().padding(.leading, 16)
-                Button { showingWarningsDetail = true } label: {
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle")
-                        Text("Open Warnings").font(.subheadline.weight(.medium))
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(WeeklyReportColors.muted)
-                    }
-                    .foregroundStyle(WeeklyReportColors.blue)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                }
-                .buttonStyle(.plain)
-            } else if !hasReportWarnings {
+            if !hasReportWarnings {
                 HStack(spacing: 10) {
                     ZStack {
                         Circle().fill(WeeklyReportColors.greenBg).frame(width: 36, height: 36)
@@ -611,15 +629,15 @@ struct WeeklyReportView: View {
 
     private func periodWarningSummaries(in range: ClosedRange<Date>) -> [PeriodWarningChip] {
         var items: [PeriodWarningChip] = []
-        let source = WarningsService.WarningListSource.period
-        let high = warningsService.operativeBookingClashes(in: range, source: source).count
-            + warningsService.unbookedLabourWarnings(in: range, source: source).count
-        let medium = warningsService.unresolvedManagerClashes(in: range, source: source).count
-            + warningsService.approvedManagerClashes(in: range, source: source).count
-        let low = warningsService.materialsCutoffWarnings(in: range, source: source).count
-        if high > 0 { items.append(.init(label: "High", count: high, foreground: WeeklyReportColors.redText, background: WeeklyReportColors.redBg)) }
-        if medium > 0 { items.append(.init(label: "Medium", count: medium, foreground: Color(red: 0.573, green: 0.251, blue: 0.055), background: WeeklyReportColors.amber)) }
-        if low > 0 { items.append(.init(label: "Low", count: low, foreground: WeeklyReportColors.greenTx, background: WeeklyReportColors.greenBg)) }
+        if periodHighCount > 0 {
+            items.append(.init(label: "High", count: periodHighCount, foreground: WeeklyReportColors.redText, background: WeeklyReportColors.redBg))
+        }
+        if periodMediumCount > 0 {
+            items.append(.init(label: "Medium", count: periodMediumCount, foreground: Color(red: 0.573, green: 0.251, blue: 0.055), background: WeeklyReportColors.amber))
+        }
+        if periodLowCount > 0 {
+            items.append(.init(label: "Low", count: periodLowCount, foreground: WeeklyReportColors.greenTx, background: WeeklyReportColors.greenBg))
+        }
         return items
     }
 
@@ -633,6 +651,8 @@ struct WeeklyReportView: View {
     }
 
     private func refreshReportWarnings() async {
+        let service = exportWarningsService ?? WarningsService()
+        exportWarningsService = service
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
@@ -653,7 +673,7 @@ struct WeeklyReportView: View {
             : operativeStore.activeOperatives
         var materialItemsForTomorrow: [MaterialItem] = []
         if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-            for project in projectsTomorrow {
+            for project in projectsTomorrow.prefix(8) {
                 if let items = try? await firebaseBackend.loadMaterialItems(
                     organizationId: orgId,
                     projectId: project.id
@@ -662,10 +682,11 @@ struct WeeklyReportView: View {
                         contentsOf: items.filter { cal.isDate($0.date, inSameDayAs: tomorrow) }
                     )
                 }
+                await Task.yield()
             }
         }
-        print("🔥🔥🔥 DEBUG: WEEKLY_REPORT period scan \(startDate)…\(endDate) bookings=\(bookingStore.bookings.count)")
-        await warningsService.updateWarningsAsync(
+        print("🔥🔥🔥 DEBUG: WEEKLY_REPORT period scan reason=generate \(startDate)…\(endDate) bookings=\(bookingStore.bookings.count)")
+        await service.updateWarningsAsync(
             operatives: activeOperatives,
             bookings: bookingStore.bookings,
             projects: allProjects,
@@ -683,6 +704,25 @@ struct WeeklyReportView: View {
             projectsWithTomorrowBookings: projectsTomorrow,
             materialItemsForTomorrow: materialItemsForTomorrow
         )
+        let range = reportDateRange
+        periodHighCount = service.operativeBookingClashes(in: range).count
+            + service.unbookedLabourWarnings(in: range).count
+        periodMediumCount = service.unresolvedManagerClashes(in: range).count
+            + service.approvedManagerClashes(in: range).count
+        periodLowCount = service.materialsCutoffWarnings(in: range).count
+        periodSummaryReady = true
+    }
+
+    @MainActor
+    private func refreshPeriodSummaryFromShared() {
+        let range = reportDateRange
+        let shared = WarningsService.shared
+        periodHighCount = shared.operativeBookingClashes(in: range).count
+            + shared.unbookedLabourWarnings(in: range).count
+        periodMediumCount = shared.unresolvedManagerClashes(in: range).count
+            + shared.approvedManagerClashes(in: range).count
+        periodLowCount = shared.materialsCutoffWarnings(in: range).count
+        periodSummaryReady = true
     }
 
     private func setThisWeekRange() {
@@ -723,7 +763,7 @@ struct WeeklyReportView: View {
         message = nil
         showGeneratedSuccess = false
         Task {
-            // One period scan only when generating — never on open.
+            // Period scan only on Generate — never on sheet open.
             await refreshReportWarnings()
             if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
                 dayRateHistoryCollection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
@@ -764,19 +804,19 @@ struct WeeklyReportView: View {
         var sections: [WeeklyReportExportBuilder.Section] = []
 
         var warningRows: [[String]] = []
-        for warning in warningsService.operativeBookingClashes(in: range, source: .period) {
+        for warning in activeWarningsService.operativeBookingClashes(in: range) {
             warningRows.append(clashExportCells(warning, status: "Active — remove booking"))
         }
-        for warning in warningsService.unbookedLabourWarnings(in: range, source: .period) {
+        for warning in activeWarningsService.unbookedLabourWarnings(in: range) {
             warningRows.append(clashExportCells(warning, status: "Active"))
         }
-        for warning in warningsService.unresolvedManagerClashes(in: range, source: .period) {
+        for warning in activeWarningsService.unresolvedManagerClashes(in: range) {
             warningRows.append(clashExportCells(warning, status: "Not ticked for report"))
         }
-        for warning in warningsService.approvedManagerClashes(in: range, source: .period) {
+        for warning in activeWarningsService.approvedManagerClashes(in: range) {
             warningRows.append(clashExportCells(warning, status: "Ticked — on report"))
         }
-        for warning in warningsService.materialsCutoffWarnings(in: range, source: .period) {
+        for warning in activeWarningsService.materialsCutoffWarnings(in: range) {
             warningRows.append(clashExportCells(warning, status: "Active"))
         }
         if warningRows.isEmpty {
@@ -896,26 +936,26 @@ struct WeeklyReportView: View {
         rows.append(["WARNINGS SUMMARY"])
         rows.append(["Status", "Priority", "Type", "Date", "Description", "Detail", "For"])
 
-        for warning in warningsService.operativeBookingClashes(in: range, source: .period) {
+        for warning in activeWarningsService.operativeBookingClashes(in: range) {
             rows.append(clashExportCells(warning, status: "Active — remove booking"))
         }
-        for warning in warningsService.unbookedLabourWarnings(in: range, source: .period) {
+        for warning in activeWarningsService.unbookedLabourWarnings(in: range) {
             rows.append(clashExportCells(warning, status: "Active"))
         }
-        for warning in warningsService.unresolvedManagerClashes(in: range, source: .period) {
+        for warning in activeWarningsService.unresolvedManagerClashes(in: range) {
             rows.append(clashExportCells(warning, status: "Not ticked for report"))
         }
-        for warning in warningsService.approvedManagerClashes(in: range, source: .period) {
+        for warning in activeWarningsService.approvedManagerClashes(in: range) {
             rows.append(clashExportCells(warning, status: "Ticked — on report"))
         }
-        for warning in warningsService.materialsCutoffWarnings(in: range, source: .period) {
+        for warning in activeWarningsService.materialsCutoffWarnings(in: range) {
             rows.append(clashExportCells(warning, status: "Active"))
         }
-        if warningsService.operativeBookingClashes(in: range, source: .period).isEmpty
-            && warningsService.unbookedLabourWarnings(in: range, source: .period).isEmpty
-            && warningsService.unresolvedManagerClashes(in: range, source: .period).isEmpty
-            && warningsService.approvedManagerClashes(in: range, source: .period).isEmpty
-            && warningsService.materialsCutoffWarnings(in: range, source: .period).isEmpty {
+        if activeWarningsService.operativeBookingClashes(in: range).isEmpty
+            && activeWarningsService.unbookedLabourWarnings(in: range).isEmpty
+            && activeWarningsService.unresolvedManagerClashes(in: range).isEmpty
+            && activeWarningsService.approvedManagerClashes(in: range).isEmpty
+            && activeWarningsService.materialsCutoffWarnings(in: range).isEmpty {
             rows.append(["", "", "", "", "No warnings in period", ""])
         }
         rows.append([])

@@ -261,10 +261,16 @@ class WarningsService: ObservableObject {
             return end >= coverageStart && start <= coverageEnd
         }
         print("🔥🔥🔥 DEBUG: WarningsService live=\(isLiveScan) window bookings=\(windowedBookings.count)/\(bookings.count) \(coverageStart)…\(coverageEnd)")
+        let referencedProjectIds = Set(windowedBookings.map(\.projectId))
+            .union(windowedManager.compactMap(\.locationId))
+            .union(projectsWithTomorrowBookings.map(\.id))
+        let slimProjects = referencedProjectIds.isEmpty
+            ? projects
+            : projects.filter { referencedProjectIds.contains($0.id) }
         let input = WarningsComputationInput(
             operatives: operatives,
             bookings: windowedBookings,
-            projects: projects,
+            projects: slimProjects,
             users: users,
             managerSiteBookings: windowedManager,
             holidayBookings: windowedHolidays,
@@ -298,11 +304,24 @@ class WarningsService: ObservableObject {
             hasCompletedLiveDetection = true
             print("🔥🔥🔥 DEBUG: WarningsService LIVE published active=\(activeWarnings.count) generated=\(generated.count)")
         } else {
-            // Period scan must not wipe Home/Warnings live cache (that caused empty Warnings after WR).
+            // Period scan must not wipe Home/Warnings live cache on the shared instance.
             periodGeneratedWarnings = generated
             hasCompletedPeriodDetection = true
-            print("🔥🔥🔥 DEBUG: WarningsService PERIOD published count=\(generated.count) (live untouched active=\(activeWarnings.count))")
+            if self !== WarningsService.shared {
+                // Private Weekly Report export service — local only.
+                allGeneratedWarnings = generated
+                activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+                refreshSeverityCounts()
+            }
+            print("🔥🔥🔥 DEBUG: WarningsService PERIOD published count=\(generated.count) sharedLiveUntouched=\(self === WarningsService.shared) active=\(WarningsService.shared.activeWarnings.count)")
         }
+    }
+
+    func cancelInFlightUpdate() {
+        updateGeneration += 1
+        updateTask?.cancel()
+        updateTask = nil
+        print("🔥🔥🔥 DEBUG: WarningsService cancelInFlightUpdate")
     }
 
     /// Approve only applies to MEDIUM manager/admin clashes (weekly report tick).
