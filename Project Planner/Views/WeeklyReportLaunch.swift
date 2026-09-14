@@ -102,7 +102,7 @@ struct WeeklyReportOpenShell: View {
                             .foregroundStyle(Color(red: 0.145, green: 0.388, blue: 0.922))
                         Text("Weekly Report")
                             .font(.title3.weight(.semibold))
-                        Text("Warnings on Home are live ops (from today forward). This report is a separate period summary — it only recalculates when you tap Generate.")
+                        Text("Opens without scanning. Tap Generate to build the report from your last Warnings Refresh (today/tomorrow cache). If Warnings is empty, Refresh there first.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)

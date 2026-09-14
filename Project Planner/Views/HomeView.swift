@@ -75,9 +75,8 @@ struct HomeView: View {
         .background(homeCanvasBackground.ignoresSafeArea(edges: .top))
         .sheet(isPresented: $showingWarningsDetail, onDismiss: {
             WarningsRefreshHelper.isWarningsSheetVisible = false
-            Task { @MainActor in
-                await runHomeWarningsRefresh(force: true, reason: "warnings-sheet-dismiss")
-            }
+            // REBUILD: no auto warm on dismiss.
+
         }) {
             WarningsDetailView(
                 warningsService: WarningsService.shared,
@@ -216,9 +215,8 @@ struct HomeView: View {
         }
         .sheet(item: $weeklyReportLaunch, onDismiss: {
             WarningsRefreshHelper.isWeeklyReportVisible = false
-            Task { @MainActor in
-                await runHomeWarningsRefresh(force: true, reason: "weekly-report-dismiss")
-            }
+            // REBUILD: no auto warm on dismiss.
+
         }) { token in
             WeeklyReportOpenShell(token: token)
         }
@@ -532,6 +530,7 @@ struct HomeView: View {
         .onAppear {
             loadPersistedAdminOverviewMetricsIfNeeded()
             print("🔥🔥🔥 DEBUG: HOME_APPEARED \(WarningsBuildStamp.id) — pill must say '\(WarningsBuildStamp.homePillTitle)'")
+            homeWarningCount = WarningsService.shared.warningCount
         }
         .task(id: homeDataRefreshTrigger) {
             // Coalesce rapid store updates while Firebase batches load.
@@ -550,26 +549,8 @@ struct HomeView: View {
             await refreshHomeDerivedData()
             print("🔥🔥🔥 DEBUG: Home derived refresh finished")
         }
-        .task(id: userStore.currentUser?.id) {
-            guard userStore.hasAdminAccess() else { return }
-            await runPostQuietWarningsDetection()
-        }
-        // NOTE: Do NOT add a second quiet-expired warm task — that double-scanned with
-        // post-quiet and jetsamed Home (see wfix-wr11 logs ending at quiet-expired).
-        .onChange(of: bookingStore.bookings.count) { oldCount, newCount in
-            // Only schedule a warm if live detection never completed. Never force-scan
-            // the moment bookings arrive during/after bootstrap — that races quiet.
-            guard userStore.hasAdminAccess() else { return }
-            guard oldCount == 0, newCount > 0 else { return }
-            guard !WarningsService.shared.hasCompletedLiveDetection else { return }
-            Task { @MainActor in
-                // Let post-quiet own the first pass; this is a delayed fallback only.
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                guard !Task.isCancelled else { return }
-                guard !WarningsService.shared.hasCompletedLiveDetection else { return }
-                await runHomeWarningsRefresh(force: true, reason: "bookings-arrived-fallback")
-            }
-        }
+        // REBUILD: Home never auto-scans warnings (that jetsamed Simulator for days).
+        // Pill reads disk/shared cache only. User refreshes from the Warnings sheet.
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
             // Do not recompute warnings here — that raced launch quiet / deferred loads
             // and jetsamed Simulator. Badge updates when Home warms warnings or
@@ -585,11 +566,8 @@ struct HomeView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .warningsNeedsHomeRefresh)) { _ in
-            Task { @MainActor in
-                // Defer until sheet has cleared the visible flag.
-                try? await Task.sleep(nanoseconds: 350_000_000)
-                await runHomeWarningsRefresh(force: true, reason: "sheet-requested")
-            }
+            // REBUILD: no auto Home warm — only sync badge from shared/disk cache.
+            homeWarningCount = WarningsService.shared.warningCount
         }
         .onChange(of: showingWarningsDetail) { _, isOpen in
             WarningsRefreshHelper.isWarningsSheetVisible = isOpen
@@ -607,106 +585,12 @@ struct HomeView: View {
         }
     }
 
-    /// One lite live pass after launch quiet — never while Warnings/Weekly Report sheets are open.
+    // REBUILD stubs — auto warm removed. Badge reads shared/disk cache only.
     @MainActor
-    private func runPostQuietWarningsDetection() async {
-        let deadline = Date().addingTimeInterval(180)
-        while Date() < deadline {
-            let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
-            let busy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading || holidayStore.isLoading
-            if !firebaseBackend.isBootstrappingOrgDataLoad,
-               firebaseBackend.hasBootstrappedOrgDataLoad,
-               !quiet,
-               !busy,
-               userStore.hasAdminAccess() {
-                break
-            }
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if Task.isCancelled { return }
-        }
-        guard userStore.hasAdminAccess() else {
-            print("🔥🔥🔥 DEBUG: Home post-quiet warnings skipped — no admin access yet")
-            return
-        }
-        // Require bookings to have settled. Do NOT treat "has people only" as ready —
-        // that published a false all-clear while bookings were still loading.
-        let dataDeadline = Date().addingTimeInterval(60)
-        while Date() < dataDeadline {
-            let quiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
-            let busy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading
-            if quiet || busy {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                if Task.isCancelled { return }
-                continue
-            }
-            let hasBookings = !bookingStore.bookings.isEmpty || !managerScheduleStore.managerSiteBookings.isEmpty
-            let orgLikelyEmpty = firebaseBackend.hasBootstrappedOrgDataLoad
-                && !bookingStore.isLoading
-                && !operativeStore.isLoading
-                && operativeStore.allOperatives.isEmpty
-                && bookingStore.bookings.isEmpty
-            if hasBookings || orgLikelyEmpty { break }
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if Task.isCancelled { return }
-        }
-        // After quiet + deferred holiday/subcontractor loads, memory is still high.
-        // Settle before the MainActor snapshot or Home jetsams (wfix-wr11 quiet-expired).
-        print("🔥🔥🔥 DEBUG: Home post-quiet settling before lite warm…")
-        try? await Task.sleep(nanoseconds: 2_500_000_000)
-        await Task.yield()
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
-        await Task.yield()
-        if Task.isCancelled { return }
-        var attempts = 0
-        while attempts < 4 {
-            attempts += 1
-            let did = await runHomeWarningsRefresh(force: true, reason: "post-quiet-\(attempts)")
-            if did { return }
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            if Task.isCancelled { return }
-        }
-        print("🔥🔥🔥 DEBUG: Home post-quiet warnings gave up after retries")
+    private func syncHomeWarningBadgeFromCache() {
+        homeWarningCount = WarningsService.shared.warningCount
     }
 
-    @MainActor
-    @discardableResult
-    private func runHomeWarningsRefresh(force: Bool, reason: String) async -> Bool {
-        guard userStore.hasAdminAccess() else { return false }
-        if showingWarningsDetail || WarningsRefreshHelper.isWarningsSheetVisible {
-            print("🔥🔥🔥 DEBUG: Home warnings refresh deferred (\(reason)) — sheet open")
-            return false
-        }
-        if weeklyReportLaunch != nil || WarningsRefreshHelper.isWeeklyReportVisible {
-            print("🔥🔥🔥 DEBUG: Home warnings refresh deferred (\(reason)) — weekly report open")
-            return false
-        }
-        print("🔥🔥🔥 DEBUG: Home warnings refresh starting (\(reason)) bookings=\(bookingStore.bookings.count) loading=\(bookingStore.isLoading)")
-        // Abort any leftover scan and breathe before MainActor snapshot.
-        WarningsRefreshHelper.cancelInFlightRefresh()
-        WarningsRefreshHelper.isHomeWarningsWarmInFlight = true
-        defer { WarningsRefreshHelper.isHomeWarningsWarmInFlight = false }
-        await Task.yield()
-        try? await Task.sleep(nanoseconds: 400_000_000)
-        await Task.yield()
-        let didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
-            operativeStore: operativeStore,
-            bookingStore: bookingStore,
-            projectStore: projectStore,
-            userStore: userStore,
-            managerScheduleStore: managerScheduleStore,
-            holidayStore: holidayStore,
-            firebaseBackend: firebaseBackend,
-            appSettings: appSettings,
-            force: force
-        )
-        if didRefresh {
-            homeWarningCount = WarningsService.shared.warningCount
-            print("🔥🔥🔥 DEBUG: Home warnings refresh finished (\(reason)) count=\(homeWarningCount) completed=\(WarningsService.shared.hasCompletedLiveDetection)")
-        } else {
-            print("🔥🔥🔥 DEBUG: Home warnings refresh skipped (\(reason))")
-        }
-        return didRefresh
-    }
 
     private var homeGreetingHeader: some View {
         HStack(alignment: .top) {

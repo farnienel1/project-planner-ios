@@ -7,9 +7,9 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-home13"
-    /// Impossible to miss — if you still see HOME / home12 / OPEN, you are not on this build.
-    static let homePillTitle = "Warnings H13"
+    static let id = "wfix-rebuild-1"
+    /// Impossible to miss — if you still see H13 / HOME / OPEN, you are not on this build.
+    static let homePillTitle = "Warnings REBUILD"
     static let homePillValueWhenClear = "\(id) · All clear"
     static func homePillValue(activeCount: Int) -> String {
         activeCount == 0 ? homePillValueWhenClear : "\(id) · \(activeCount) active"
@@ -38,6 +38,8 @@ struct WarningsDetailView: View {
     @State private var openBookLabourDate: IdentifiableDay?
     @State private var warningPendingDismiss: Warning?
     @State private var showingWarningsSettings = false
+    @State private var isRefreshingWarnings = false
+    @State private var refreshMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -46,6 +48,16 @@ struct WarningsDetailView: View {
                     emptyState
                 } else {
                     warningsScroll
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if let refreshMessage {
+                    Text(refreshMessage)
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.bottom, 16)
                 }
             }
             .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
@@ -63,15 +75,29 @@ struct WarningsDetailView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                if userStore.hasAdminAccess() {
-                    ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    HStack(spacing: 12) {
                         Button {
-                            showingWarningsSettings = true
+                            Task { await refreshWarningsTodayOnly() }
                         } label: {
-                            Image(systemName: "gearshape")
-                                .font(.system(size: 17, weight: .medium))
+                            if isRefreshingWarnings {
+                                ProgressView()
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 17, weight: .medium))
+                            }
                         }
-                        .accessibilityLabel("Warning settings")
+                        .disabled(isRefreshingWarnings)
+                        .accessibilityLabel("Refresh warnings")
+                        if userStore.hasAdminAccess() {
+                            Button {
+                                showingWarningsSettings = true
+                            } label: {
+                                Image(systemName: "gearshape")
+                                    .font(.system(size: 17, weight: .medium))
+                            }
+                            .accessibilityLabel("Warning settings")
+                        }
                     }
                 }
             }
@@ -172,16 +198,15 @@ struct WarningsDetailView: View {
                 Image(systemName: "hourglass")
                     .font(.system(size: 56))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
-                Text("Warming up on Home")
+                Text("Tap Refresh to check")
                     .font(.title3.weight(.semibold))
-                Text("This screen never scans while open (that crashed Simulator). Home runs a short check after launch settles — close and reopen in a few seconds.")
+                Text("Nothing runs automatically anymore (auto-scan crashed Simulator). Tap Refresh (top right) to check today and tomorrow only.")
                     .font(.subheadline)
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
-                Button("Close & refresh on Home") {
-                    NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
-                    dismiss()
+                Button("Refresh now") {
+                    Task { await refreshWarningsTodayOnly() }
                 }
                 .buttonStyle(.borderedProminent)
                 .padding(.top, 4)
@@ -391,6 +416,34 @@ struct WarningsDetailView: View {
                 NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
             }
         }
+    }
+
+    @MainActor
+    private func refreshWarningsTodayOnly() async {
+        guard !isRefreshingWarnings else { return }
+        isRefreshingWarnings = true
+        refreshMessage = nil
+        defer { isRefreshingWarnings = false }
+        print("🔥🔥🔥 DEBUG: WARNINGS_MANUAL_REFRESH_START \(WarningsBuildStamp.id)")
+        // Manual path may run even if sheet visible — temporarily clear the sheet gate.
+        let did = await WarningsRefreshHelper.refreshSharedWarnings(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings,
+            force: true,
+            manualUserInitiated: true
+        )
+        // no sheet-gate dance needed with manualUserInitiated
+        refreshMessage = did
+            ? "Updated · \(warningsService.activeWarnings.count) active"
+            : "Could not refresh yet (still loading). Try again in a few seconds."
+        print("🔥🔥🔥 DEBUG: WARNINGS_MANUAL_REFRESH_DONE did=\(did) active=\(warningsService.activeWarnings.count)")
+        NotificationCenter.default.post(name: .warningsDidRecompute, object: nil, userInfo: ["count": warningsService.warningCount])
     }
 }
 

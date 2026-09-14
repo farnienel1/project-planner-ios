@@ -28,15 +28,16 @@ enum WarningsRefreshHelper {
         holidayStore: HolidayStore,
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore,
-        force: Bool = false
+        force: Bool = false,
+        manualUserInitiated: Bool = false
     ) async -> Bool {
         guard userStore.hasAdminAccess() else { return false }
 
-        if isWarningsSheetVisible {
+        if isWarningsSheetVisible && !manualUserInitiated {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (Warnings sheet visible)")
             return false
         }
-        if isWeeklyReportVisible {
+        if isWeeklyReportVisible && !manualUserInitiated {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (Weekly Report visible)")
             return false
         }
@@ -51,9 +52,8 @@ enum WarningsRefreshHelper {
             return false
         }
 
-        // Launch quiet blocks *all* scans — including force. Scanning mid-quiet with
-        // ~90 bookings jetsams Simulator. Home warms the cache after quiet ends.
-        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil {
+        // Launch quiet blocks automatic scans. Explicit user Refresh may run a tiny today+tomorrow pass.
+        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil, !manualUserInitiated {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
             return false
         }
@@ -73,7 +73,7 @@ enum WarningsRefreshHelper {
             if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < minRefreshInterval {
                 return false
             }
-        } else {
+        } else if !manualUserInitiated {
             let now = Date()
             if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < 8 {
                 // Soft coalesce — avoid stacked force scans from dismiss + notification.

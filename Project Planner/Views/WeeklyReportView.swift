@@ -651,66 +651,36 @@ struct WeeklyReportView: View {
     }
 
     private func refreshReportWarnings() async {
-        let service = exportWarningsService ?? WarningsService()
+        let service = exportWarningsService ?? WarningsService(hydrateFromDisk: false)
         exportWarningsService = service
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
-        let tomorrowProjectIds = Set(
-            bookingStore.bookings
-                .filter {
-                    cal.isDate($0.date, inSameDayAs: tomorrow) &&
-                        ($0.status == .confirmed || $0.status == .tentative)
-                }
-                .map(\.projectId)
-        )
-        let allProjects = projectStore.projects
-        let projectsTomorrow = allProjects.filter { tomorrowProjectIds.contains($0.id) }
-        let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
-        let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
-        let activeOperatives = operativeStore.activeOperatives.isEmpty
-            ? operativeStore.allOperatives.filter(\.isActive)
-            : operativeStore.activeOperatives
-        var materialItemsForTomorrow: [MaterialItem] = []
-        if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-            for project in projectsTomorrow.prefix(8) {
-                if let items = try? await firebaseBackend.loadMaterialItems(
-                    organizationId: orgId,
-                    projectId: project.id
-                ) {
-                    materialItemsForTomorrow.append(
-                        contentsOf: items.filter { cal.isDate($0.date, inSameDayAs: tomorrow) }
-                    )
-                }
-                await Task.yield()
-            }
-        }
-        print("🔥🔥🔥 DEBUG: WEEKLY_REPORT period scan reason=generate \(startDate)…\(endDate) bookings=\(bookingStore.bookings.count)")
-        await service.updateWarningsAsync(
-            operatives: activeOperatives,
-            bookings: bookingStore.bookings,
-            projects: allProjects,
-            users: userStore.organizationUsers,
-            managerSiteBookings: managerScheduleStore.managerSiteBookings,
-            holidayBookings: holidayStore.bookings,
-            payrollTimePolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
-            warningDetection: warningDetection,
-            invoicingSettings: invoicingSettings,
-            labourCoverageStart: startDate,
-            labourCoverageEnd: endDate,
-            materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
-            materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
-            materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
-            projectsWithTomorrowBookings: projectsTomorrow,
-            materialItemsForTomorrow: materialItemsForTomorrow
-        )
         let range = reportDateRange
-        periodHighCount = service.operativeBookingClashes(in: range).count
-            + service.unbookedLabourWarnings(in: range).count
-        periodMediumCount = service.unresolvedManagerClashes(in: range).count
-            + service.approvedManagerClashes(in: range).count
-        periodLowCount = service.materialsCutoffWarnings(in: range).count
+        let cal = Calendar.current
+        let shared = WarningsService.shared
+
+        // REBUILD: prefer live cache filtered by report dates — avoids Generate jetsam.
+        if shared.hasCompletedLiveDetection {
+            let filtered = shared.allGeneratedWarnings.filter { w in
+                guard let raw = w.occurrenceDate else { return false }
+                let day = cal.startOfDay(for: raw)
+                return day >= cal.startOfDay(for: range.lowerBound) && day <= cal.startOfDay(for: range.upperBound)
+            }
+            service.replaceWithPeriodWarnings(filtered)
+            periodHighCount = service.operativeBookingClashes(in: range, source: .period).count
+                + service.unbookedLabourWarnings(in: range, source: .period).count
+            periodMediumCount = service.unresolvedManagerClashes(in: range, source: .period).count
+                + service.approvedManagerClashes(in: range, source: .period).count
+            periodLowCount = service.materialsCutoffWarnings(in: range, source: .period).count
+            periodSummaryReady = true
+            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT period from LIVE cache count=\(filtered.count)")
+            return
+        }
+
+        print("🔥🔥🔥 DEBUG: WEEKLY_REPORT no live cache — open Warnings and tap Refresh first")
+        periodHighCount = 0
+        periodMediumCount = 0
+        periodLowCount = 0
         periodSummaryReady = true
+        message = "Open Warnings and tap Refresh first, then Generate again."
     }
 
     @MainActor
@@ -763,8 +733,13 @@ struct WeeklyReportView: View {
         message = nil
         showGeneratedSuccess = false
         Task {
-            // Period scan only on Generate — never on sheet open.
+            // REBUILD: never period-scan on Generate. Use Warnings live cache only.
             await refreshReportWarnings()
+            let hasLiveCache = await MainActor.run { WarningsService.shared.hasCompletedLiveDetection }
+            guard hasLiveCache else {
+                await MainActor.run { isGenerating = false }
+                return
+            }
             if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
                 dayRateHistoryCollection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
             }

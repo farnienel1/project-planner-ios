@@ -32,8 +32,40 @@ class WarningsService: ObservableObject {
     private var updateTask: Task<Void, Never>?
     private var updateGeneration = 0
 
-    init(resolutionStore: WarningResolutionStore? = nil) {
+    init(resolutionStore: WarningResolutionStore? = nil, hydrateFromDisk: Bool = true) {
         self.resolutionStore = resolutionStore ?? .shared
+        // Rebuild: hydrate from disk immediately so Home/Warnings never need an auto-scan.
+        // Do NOT compare `self === .shared` here — shared is still being created.
+        if hydrateFromDisk {
+            let cache = WarningsDiskCacheStore.load()
+            if cache.hasCompletedLiveDetection || !cache.activeWarnings.isEmpty {
+                allGeneratedWarnings = cache.allGeneratedWarnings
+                activeWarnings = cache.activeWarnings
+                warningCount = cache.warningCount
+                highCount = cache.highCount
+                mediumCount = cache.mediumCount
+                lowCount = cache.lowCount
+                hasCompletedLiveDetection = cache.hasCompletedLiveDetection
+                print("🔥🔥🔥 DEBUG: WarningsService hydrated from disk active=\(activeWarnings.count) completed=\(hasCompletedLiveDetection)")
+            }
+        }
+    }
+
+    private func persistLiveCacheToDisk() {
+        // Only the shared live service writes the Home/Warnings cache.
+        guard self === WarningsService.shared else { return }
+        WarningsDiskCacheStore.save(
+            WarningsDiskCache(
+                savedAt: Date(),
+                hasCompletedLiveDetection: hasCompletedLiveDetection,
+                allGeneratedWarnings: allGeneratedWarnings,
+                activeWarnings: activeWarnings,
+                warningCount: warningCount,
+                highCount: highCount,
+                mediumCount: mediumCount,
+                lowCount: lowCount
+            )
+        )
     }
 
     /// Counts only core priority warnings (operative clashes, unbooked labour, manager clashes, materials).
@@ -306,6 +338,7 @@ class WarningsService: ObservableObject {
             activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
             refreshSeverityCounts()
             hasCompletedLiveDetection = true
+            persistLiveCacheToDisk()
             print("🔥🔥🔥 DEBUG: WarningsService LIVE published active=\(activeWarnings.count) generated=\(generated.count)")
         } else {
             // Period scan must not wipe Home/Warnings live cache on the shared instance.
@@ -319,6 +352,15 @@ class WarningsService: ObservableObject {
             }
             print("🔥🔥🔥 DEBUG: WarningsService PERIOD published count=\(generated.count) sharedLiveUntouched=\(self === WarningsService.shared) active=\(WarningsService.shared.activeWarnings.count)")
         }
+    }
+
+    /// Rebuild: Weekly Report copies live-cache rows into the private period bucket (no heavy rescan).
+    func replaceWithPeriodWarnings(_ warnings: [Warning]) {
+        periodGeneratedWarnings = warnings
+        hasCompletedPeriodDetection = true
+        allGeneratedWarnings = warnings
+        activeWarnings = warnings.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+        refreshSeverityCounts()
     }
 
     func cancelInFlightUpdate() {
@@ -345,6 +387,7 @@ class WarningsService: ObservableObject {
     private func refreshActiveFromGenerated() {
         activeWarnings = allGeneratedWarnings.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
         refreshSeverityCounts()
+        persistLiveCacheToDisk()
     }
 
     private func severityRank(_ severity: Warning.WarningSeverity) -> Int {
