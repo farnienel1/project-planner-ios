@@ -43,8 +43,6 @@ struct WeeklyReportView: View {
     @State private var isGenerating = false
     @State private var generatedXLSXURL: URL?
     @State private var generatedPDFURL: URL?
-    @State private var showShareXLSX = false
-    @State private var showSharePDF = false
     @State private var showGeneratedSuccess = false
     @State private var message: String?
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
@@ -123,16 +121,6 @@ struct WeeklyReportView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { weeklyReportToolbar }
                 .sheet(isPresented: $showingWarningsDetail) { warningsDetailSheet }
-                .sheet(isPresented: $showShareXLSX) {
-                    if let generatedXLSXURL {
-                        WeeklyReportShareSheet(items: [generatedXLSXURL])
-                    }
-                }
-                .sheet(isPresented: $showSharePDF) {
-                    if let generatedPDFURL {
-                        WeeklyReportShareSheet(items: [generatedPDFURL])
-                    }
-                }
                 .sheet(isPresented: $showGeneratedSuccess) {
                     reportGeneratedSuccessSheet
                         .presentationDetents([.medium, .large])
@@ -484,12 +472,8 @@ struct WeeklyReportView: View {
             .padding(.bottom, 20)
 
             HStack(spacing: 12) {
-                exportSharePanel(title: "Excel", subtitle: ".xlsx", systemImage: "tablecells.fill", tint: WeeklyReportColors.greenTx) {
-                    showShareXLSX = true
-                }
-                exportSharePanel(title: "PDF", subtitle: ".pdf", systemImage: "doc.richtext.fill", tint: WeeklyReportColors.blue) {
-                    showSharePDF = true
-                }
+                exportSharePanel(title: "Excel", subtitle: ".xlsx", systemImage: "tablecells.fill", tint: WeeklyReportColors.greenTx, url: generatedXLSXURL)
+                exportSharePanel(title: "PDF", subtitle: ".pdf", systemImage: "doc.richtext.fill", tint: WeeklyReportColors.blue, url: generatedPDFURL)
             }
             .padding(.horizontal, 20)
 
@@ -501,27 +485,35 @@ struct WeeklyReportView: View {
         .background(Color(.systemGroupedBackground))
     }
 
-    private func exportSharePanel(title: String, subtitle: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
+    private func exportSharePanel(title: String, subtitle: String, systemImage: String, tint: Color, url: URL?) -> some View {
         VStack(spacing: 10) {
             Image(systemName: systemImage)
                 .font(.system(size: 28))
                 .foregroundStyle(tint)
             Text(title).font(.headline)
             Text(subtitle).font(.caption).foregroundStyle(.secondary)
-            Button(action: action) {
-                Label("Share", systemImage: "square.and.arrow.up")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+            if let url {
+                // ShareLink presents from this sheet — avoids nested .sheet ("only presenting a single sheet").
+                ShareLink(item: url) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(tint)
+            } else {
+                Text("File not ready")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(tint)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
+
 
     private func reportSectionCard<Content: View>(title: String, icon: String, iconColor: Color, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {

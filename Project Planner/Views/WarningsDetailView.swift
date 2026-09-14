@@ -7,9 +7,9 @@ import SwiftUI
 
 /// Build stamp — change when shipping Warnings open fixes so Home/sheet prove the binary.
 enum WarningsBuildStamp {
-    static let id = "wfix-rebuild-2"
-    /// Impossible to miss — if you still see H13 / HOME / OPEN / rebuild-1, you are not on this build.
-    static let homePillTitle = "Warnings REBUILD"
+    static let id = "wfix-ux-3"
+    /// Small stamp in pill value / sheet proves the binary. Pill title stays “Warnings”.
+    static let homePillTitle = "Warnings"
     static let homePillValueWhenClear = "\(id) · All clear"
     static func homePillValue(activeCount: Int) -> String {
         activeCount == 0 ? homePillValueWhenClear : "\(id) · \(activeCount) active"
@@ -198,9 +198,9 @@ struct WarningsDetailView: View {
                 Image(systemName: "hourglass")
                     .font(.system(size: 56))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
-                Text("Tap Refresh to check")
+                Text("Check for warnings")
                     .font(.title3.weight(.semibold))
-                Text("Nothing runs automatically anymore (auto-scan crashed Simulator). Tap Refresh (top right) to check today and tomorrow only.")
+                Text("Tap Refresh to scan today and tomorrow. Results are saved, so Home and Weekly Report can open instantly from cache.")
                     .font(.subheadline)
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .multilineTextAlignment(.center)

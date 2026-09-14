@@ -43,18 +43,18 @@ struct WeeklyReportLaunchToken: Identifiable {
     }
 }
 
-/// Store-free gate → settle → report. Do NOT nest NavigationStack around WeeklyReportView
-/// (blank white sheet on Simulator). WeeklyReportView is only constructed after memory settles.
+/// Opens straight into Weekly Report after a short settle — no Continue gate.
+/// Do NOT wrap WeeklyReportView in an extra NavigationStack (blank white sheet on Simulator).
 struct WeeklyReportOpenShell: View {
     let token: WeeklyReportLaunchToken
     @Environment(\.dismiss) private var dismiss
+
     private enum Phase {
-        case gate
         case settling
         case report
     }
 
-    @State private var phase: Phase = .gate
+    @State private var phase: Phase = .settling
 
     var body: some View {
         Group {
@@ -94,54 +94,15 @@ struct WeeklyReportOpenShell: View {
                         }
                     }
                 }
-            case .gate:
-                NavigationStack {
-                    VStack(spacing: 20) {
-                        Image(systemName: "doc.text")
-                            .font(.system(size: 40))
-                            .foregroundStyle(Color(red: 0.145, green: 0.388, blue: 0.922))
-                        Text("Weekly Report")
-                            .font(.title3.weight(.semibold))
-                        Text("Opens without scanning. Tap Generate to build the report from your last Warnings Refresh (today/tomorrow cache). If Warnings is empty, Refresh there first.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 28)
-                        Text(WarningsBuildStamp.id)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
-                        Button {
-                            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_CONTINUE \(WarningsBuildStamp.id)")
-                            phase = .settling
-                            Task { @MainActor in
-                                await WarningsRefreshHelper.prepareForHeavySheet()
-                                print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SETTLED \(WarningsBuildStamp.id)")
-                                phase = .report
-                            }
-                        } label: {
-                            Text("Continue")
-                                .font(.system(size: 16, weight: .semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .padding(.horizontal, 28)
-                        Button("Close") { dismiss() }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(.systemGroupedBackground).ignoresSafeArea())
-                    .toolbar {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("Close") { dismiss() }
-                        }
-                    }
-                }
             }
         }
-        .onAppear {
+        .task {
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SHELL \(WarningsBuildStamp.id)")
             WarningsRefreshHelper.isWeeklyReportVisible = true
             WarningsRefreshHelper.cancelInFlightRefresh()
+            await WarningsRefreshHelper.prepareForHeavySheet()
+            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SETTLED \(WarningsBuildStamp.id)")
+            phase = .report
         }
         .onDisappear {
             WarningsRefreshHelper.isWeeklyReportVisible = false
