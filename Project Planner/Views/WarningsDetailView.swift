@@ -242,7 +242,7 @@ struct WarningsDetailView: View {
                     .foregroundStyle(ProjectWorksRevampColors.activeGreen)
                 Text("No active warnings")
                     .font(.title3.weight(.semibold))
-                Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
+                Text("High: operative, manager, and admin booking clashes plus unbooked labour. Tick a clash to note it on the weekly report. Low: material orders not placed by 16:00.")
                     .font(.subheadline)
                     .foregroundStyle(WarningsUI.textMuted)
                     .multilineTextAlignment(.center)
@@ -318,16 +318,15 @@ struct WarningsDetailView: View {
         case .operativeBookingClash:
             OperativeClashWarningCard(
                 warning: warning,
-                onRemoveA: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingAId) },
-                onRemoveB: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingBId) },
+                onRemove: { removeClashEntry(warning, entry: $0) },
+                onApprove: { warningsService.approveWarning(warning) },
                 onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
             )
         case .managerLocationClash:
             ManagerClashWarningCard(
                 warning: warning,
-                onRemoveA: { removeManagerBooking(warning, entry: warning.managerClash?.entryA) },
-                onRemoveB: { removeManagerBooking(warning, entry: warning.managerClash?.entryB) },
+                onRemove: { removeClashEntry(warning, entry: $0) },
                 onApprove: { warningsService.approveWarning(warning) },
                 onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
@@ -627,6 +626,14 @@ struct WarningsDetailView: View {
         warningsService.dismissWarning(warning)
         Task {
             await notificationService.notifyWarningRemoved(warning: warning, removedBy: removedBy)
+        }
+    }
+
+    private func removeClashEntry(_ warning: Warning, entry: Warning.ClashTimelineEntry) {
+        if entry.managerBookingId != nil {
+            removeManagerBooking(warning, entry: entry)
+        } else {
+            removeOperativeBooking(warning, bookingId: entry.bookingId)
         }
     }
 

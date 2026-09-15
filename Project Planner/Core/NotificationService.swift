@@ -455,7 +455,7 @@ class NotificationService: ObservableObject {
         let typeLabel: String = {
             switch warning.type {
             case .operativeBookingClash: return "Operative booking clash"
-            case .managerLocationClash: return "Manager / admin location clash"
+            case .managerLocationClash: return warning.clashPersonKind?.bookingClashTitle ?? "Manager booking clash"
             case .unbookedLabour: return "Unbooked labour"
             case .materialsCutoff: return "Materials cut-off"
             case .qualificationExpiry: return "Qualification expiry"

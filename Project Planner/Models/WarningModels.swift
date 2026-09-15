@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import CoreGraphics
 
 struct Warning: Identifiable, Hashable, Codable {
     var id: String { resolutionKey }
@@ -36,6 +37,21 @@ struct Warning: Identifiable, Hashable, Codable {
         case high
     }
 
+    /// Who the clash belongs to — titles and weekly-report type labels use this.
+    enum ClashPersonKind: String, Hashable, Codable {
+        case operative
+        case manager
+        case admin
+
+        var bookingClashTitle: String {
+            switch self {
+            case .operative: return "Operative booking clash"
+            case .manager: return "Manager booking clash"
+            case .admin: return "Admin booking clash"
+            }
+        }
+    }
+
     /// High / medium / low scheduling warnings (excludes qualification & verification).
     var isCorePriorityWarning: Bool {
         switch type {
@@ -46,9 +62,28 @@ struct Warning: Identifiable, Hashable, Codable {
         }
     }
 
-    /// Only manager/admin schedule overlaps are ticked to appear on the weekly report.
+    /// Operative, manager, and admin booking clashes can be ticked onto the weekly report.
     var requiresWeeklyReportApproval: Bool {
-        type == .managerLocationClash
+        type == .operativeBookingClash || type == .managerLocationClash
+    }
+
+    var clashPersonKind: ClashPersonKind? {
+        if type == .operativeBookingClash { return .operative }
+        return managerClash?.resolvedPersonKind
+    }
+
+    var clashEntries: [ClashTimelineEntry] {
+        if let clash = operativeClash { return clash.allEntries }
+        if let clash = managerClash { return clash.allEntries }
+        return []
+    }
+
+    var clashPersonName: String? {
+        operativeClash?.operativeName ?? managerClash?.personName
+    }
+
+    var clashDate: Date? {
+        operativeClash?.date ?? managerClash?.date ?? occurrenceDate
     }
 
     /// Human-readable summary for admin notifications when a warning is removed without resolving.
@@ -60,15 +95,13 @@ struct Warning: Identifiable, Hashable, Codable {
         switch type {
         case .operativeBookingClash:
             if let clash = operativeClash {
-                let a = Self.clashLocationDescription(clash.entryA)
-                let b = Self.clashLocationDescription(clash.entryB)
-                return "\(clash.operativeName) on \(dateText): \(title). \(a) overlaps with \(b). \(clash.overlapSummary)."
+                let places = clash.allEntries.map(Self.clashLocationDescription).joined(separator: " · ")
+                return "\(clash.operativeName) on \(dateText): \(title). \(places). \(clash.overlapSummary)."
             }
         case .managerLocationClash:
             if let clash = managerClash {
-                let a = Self.clashLocationDescription(clash.entryA)
-                let b = Self.clashLocationDescription(clash.entryB)
-                return "\(clash.personName) on \(dateText): \(title). \(a) overlaps with \(b). \(clash.overlapSummary)."
+                let places = clash.allEntries.map(Self.clashLocationDescription).joined(separator: " · ")
+                return "\(clash.personName) on \(dateText): \(title). \(places). \(clash.overlapSummary)."
             }
         case .unbookedLabour:
             if let detail = unbookedLabour {
@@ -109,6 +142,27 @@ struct Warning: Identifiable, Hashable, Codable {
         var startMinutes: Int
         var endMinutes: Int
         var hoursLabel: String
+
+        /// Full-day / all-day bands (WFH, office, FULL DAY) — hatched on the clash strip.
+        var treatsAsAllDay: Bool {
+            let span = max(0, endMinutes - startMinutes)
+            if span >= (23 * 60) { return true }
+            let t = timeLabel.lowercased()
+            let h = hoursLabel.lowercased()
+            return t.contains("full day") || t == "all day" || t.contains("full-day") || h.contains("full day")
+        }
+
+        var displayTitle: String {
+            if let siteName, let jobNumber {
+                return siteName
+            }
+            return locationLabel
+        }
+
+        var rowId: String {
+            if let managerBookingId { return "m-\(managerBookingId.uuidString)" }
+            return "o-\(bookingId.uuidString)"
+        }
     }
 
     struct OperativeClashWarningDetails: Hashable, Codable {
@@ -122,6 +176,13 @@ struct Warning: Identifiable, Hashable, Codable {
         var overlapMinutes: Int
         var overlapSummary: String
         var overlapDetail: String
+        /// All overlapping bookings for this person on this day. Falls back to A/B for older caches.
+        var entries: [ClashTimelineEntry]? = nil
+
+        var allEntries: [ClashTimelineEntry] {
+            if let entries, entries.count >= 2 { return entries }
+            return [entryA, entryB]
+        }
     }
 
     struct ManagerClashWarningDetails: Hashable, Codable {
@@ -136,6 +197,16 @@ struct Warning: Identifiable, Hashable, Codable {
         var overlapSummary: String
         var overlapDetail: String
         var isLocationClash: Bool
+        var personKind: ClashPersonKind? = nil
+        /// All overlapping bookings for this person on this day. Falls back to A/B for older caches.
+        var entries: [ClashTimelineEntry]? = nil
+
+        var resolvedPersonKind: ClashPersonKind { personKind ?? .manager }
+
+        var allEntries: [ClashTimelineEntry] {
+            if let entries, entries.count >= 2 { return entries }
+            return [entryA, entryB]
+        }
     }
 
     struct UnbookedLabourWarningDetails: Hashable, Codable {
@@ -228,5 +299,135 @@ enum WarningTimelineMath {
             hStr = String(format: "%.1f", hours)
         }
         return ("\(hStr)-hour overlap", "Both bookings active during the overlapping period")
+    }
+
+    static func placeWord(_ count: Int) -> String {
+        switch count {
+        case 2: return "two"
+        case 3: return "three"
+        default: return "\(count)"
+        }
+    }
+
+    struct ClashWindow {
+        var startMinutes: Int
+        var endMinutes: Int
+        var span: Int { max(1, endMinutes - startMinutes) }
+    }
+
+    struct ClashRegion {
+        var startMinutes: Int
+        var endMinutes: Int
+        var concurrency: Int
+    }
+
+    struct ClashAnalysis {
+        var regions: [ClashRegion]
+        var minutes: Int
+        var peak: Int
+        var startMinutes: Int?
+        var endMinutes: Int?
+    }
+
+    static func formatClock(_ minutes: Int) -> String {
+        let clamped = max(0, min(minutes, dayMinutes))
+        if clamped == dayMinutes { return "24:00" }
+        return String(format: "%02d:%02d", clamped / 60, clamped % 60)
+    }
+
+    static func formatDuration(minutes: Int) -> String {
+        let h = Double(max(0, minutes)) / 60.0
+        if h > 0 && h < 1 { return "\(Int((h * 60).rounded()))m" }
+        let r = (h * 10).rounded() / 10
+        if abs(r - r.rounded()) < 0.05 {
+            return "\(Int(r.rounded()))h"
+        }
+        return String(format: "%.1fh", r)
+    }
+
+    /// Fit the timeline to the booked day (prototype: pad 1h, minimum 8h span).
+    static func fitWindow(entries: [Warning.ClashTimelineEntry]) -> ClashWindow {
+        let timed = entries.filter { !$0.treatsAsAllDay }
+        guard !timed.isEmpty else { return ClashWindow(startMinutes: 6 * 60, endMinutes: 20 * 60) }
+        var start = max(0, (timed.map(\.startMinutes).min() ?? 0) / 60 * 60 - 60)
+        var end = min(dayMinutes, Int((Double(timed.map(\.endMinutes).max() ?? dayMinutes) / 60.0).rounded(.up) * 60) + 60)
+        var guardCount = 0
+        while end - start < 8 * 60 && guardCount < 48 {
+            guardCount += 1
+            if start > 0 { start = max(0, start - 60) }
+            else if end < dayMinutes { end = min(dayMinutes, end + 60) }
+            else { break }
+        }
+        return ClashWindow(startMinutes: start, endMinutes: end)
+    }
+
+    static func axisTicks(_ window: ClashWindow) -> [Int] {
+        let spanHours = Double(window.span) / 60.0
+        let steps = [1, 2, 3, 4, 6]
+        for step in steps {
+            if Int(spanHours / Double(step)) + 1 <= 6 {
+                let stepMin = step * 60
+                var ticks: [Int] = []
+                var t = Int((Double(window.startMinutes) / Double(stepMin)).rounded(.up)) * stepMin
+                while t <= window.endMinutes {
+                    ticks.append(t)
+                    t += stepMin
+                }
+                return ticks.isEmpty ? [window.startMinutes, window.endMinutes] : ticks
+            }
+        }
+        return [window.startMinutes, window.endMinutes]
+    }
+
+    static func interval(of entry: Warning.ClashTimelineEntry, window: ClashWindow) -> (Int, Int) {
+        if entry.treatsAsAllDay { return (window.startMinutes, window.endMinutes) }
+        return (entry.startMinutes, entry.endMinutes)
+    }
+
+    static func analyse(entries: [Warning.ClashTimelineEntry], window: ClashWindow) -> ClashAnalysis {
+        let ivs = entries.map { interval(of: $0, window: window) }
+        let pts = Array(Set(ivs.flatMap { [$0.0, $0.1] })).sorted()
+        var raw: [ClashRegion] = []
+        if pts.count >= 2 {
+            for i in 0..<(pts.count - 1) {
+                let start = pts[i]
+                let end = pts[i + 1]
+                let concurrency = ivs.filter { $0.0 < end && $0.1 > start }.count
+                if concurrency >= 2 {
+                    raw.append(ClashRegion(startMinutes: start, endMinutes: end, concurrency: concurrency))
+                }
+            }
+        }
+        var regions: [ClashRegion] = []
+        for r in raw {
+            if let last = regions.last, last.endMinutes == r.startMinutes {
+                regions[regions.count - 1].endMinutes = r.endMinutes
+                regions[regions.count - 1].concurrency = max(last.concurrency, r.concurrency)
+            } else {
+                regions.append(r)
+            }
+        }
+        return ClashAnalysis(
+            regions: regions,
+            minutes: regions.reduce(0) { $0 + ($1.endMinutes - $1.startMinutes) },
+            peak: raw.map(\.concurrency).max() ?? 0,
+            startMinutes: regions.first?.startMinutes,
+            endMinutes: regions.last?.endMinutes
+        )
+    }
+
+    static func clashMinutes(
+        for entry: Warning.ClashTimelineEntry,
+        window: ClashWindow,
+        analysis: ClashAnalysis
+    ) -> Int {
+        let iv = interval(of: entry, window: window)
+        return analysis.regions.reduce(0) { sum, region in
+            sum + max(0, min(region.endMinutes, iv.1) - max(region.startMinutes, iv.0))
+        }
+    }
+
+    static func fraction(in window: ClashWindow, minutes: Int) -> CGFloat {
+        CGFloat(minutes - window.startMinutes) / CGFloat(window.span)
     }
 }

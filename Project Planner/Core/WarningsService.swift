@@ -153,20 +153,24 @@ class WarningsService: ObservableObject {
         }
     }
 
-    /// HIGH: operative booking clashes still active in range (must be removed — not ticked for report).
+    /// HIGH: operative booking clashes still active in range.
     func operativeBookingClashes(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
         warningsInRange(range, types: [.operativeBookingClash], activeOnly: true, source: source)
     }
 
-    /// MEDIUM: manager/admin overlaps still awaiting tick for weekly report.
+    /// HIGH: manager/admin overlaps still awaiting tick for weekly report.
     func unresolvedManagerClashes(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
         warningsInRange(range, types: [.managerLocationClash], activeOnly: true, source: source)
     }
 
-    /// MEDIUM: manager/admin overlaps ticked on Warnings — included on weekly report CSV.
+    /// Booking clashes ticked on Warnings — included on weekly report CSV.
     func approvedManagerClashes(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
-        warningsInRange(range, types: [.managerLocationClash], activeOnly: false, source: source)
+        warningsInRange(range, types: [.operativeBookingClash, .managerLocationClash], activeOnly: false, source: source)
             .filter { resolutionStore.isApproved($0.resolutionKey) }
+    }
+
+    func unresolvedBookingClashes(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
+        warningsInRange(range, types: [.operativeBookingClash, .managerLocationClash], activeOnly: true, source: source)
     }
 
     /// HIGH: unbooked labour per weekday in range.
@@ -409,7 +413,7 @@ class WarningsService: ObservableObject {
         print("🔥🔥🔥 DEBUG: WarningsService cancelInFlightUpdate")
     }
 
-    /// Approve only applies to MEDIUM manager/admin clashes (weekly report tick).
+    /// Approve a booking clash so it is noted on the weekly report.
     func approveWarning(_ warning: Warning) {
         guard warning.requiresWeeklyReportApproval else { return }
         resolutionStore.approve(warning.resolutionKey)
