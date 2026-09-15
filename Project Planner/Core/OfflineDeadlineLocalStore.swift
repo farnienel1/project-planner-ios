@@ -62,16 +62,34 @@ struct OfflineDeadlineChangeRecord: Codable {
 }
 
 enum OfflineDeadlineCodec {
+    @MainActor
     static func records(from items: [DLDeadline]) -> [OfflineDeadlineRecord] {
-        items.map(record(from:))
+        var records: [OfflineDeadlineRecord] = []
+        records.reserveCapacity(items.count)
+        for item in items {
+            records.append(record(from: item))
+        }
+        return records
     }
 
+    @MainActor
     static func items(from records: [OfflineDeadlineRecord]) -> [DLDeadline] {
-        records.map(item(from:))
+        var items: [DLDeadline] = []
+        items.reserveCapacity(records.count)
+        for record in records {
+            items.append(item(from: record))
+        }
+        return items
     }
 
+    @MainActor
     static func record(from item: DLDeadline) -> OfflineDeadlineRecord {
-        OfflineDeadlineRecord(
+        var history: [OfflineDeadlineChangeRecord] = []
+        history.reserveCapacity(item.history.count)
+        for change in item.history {
+            history.append(changeRecord(from: change))
+        }
+        return OfflineDeadlineRecord(
             id: item.id,
             title: item.title,
             location: item.location,
@@ -90,7 +108,7 @@ enum OfflineDeadlineCodec {
             blockedReason: item.blockedReason,
             reminderDaysBefore: item.reminderDaysBefore,
             originalDue: item.originalDue,
-            history: item.history.map(changeRecord(from:)),
+            history: history,
             contextKind: item.contextKind,
             projectId: item.projectId,
             createdByUserId: item.createdByUserId,
@@ -101,8 +119,16 @@ enum OfflineDeadlineCodec {
         )
     }
 
+    @MainActor
     static func item(from record: OfflineDeadlineRecord) -> DLDeadline {
-        DLDeadline(
+        var history: [DLChange] = []
+        history.reserveCapacity(record.history.count)
+        for changeRecord in record.history {
+            if let change = change(from: changeRecord) {
+                history.append(change)
+            }
+        }
+        return DLDeadline(
             id: record.id,
             title: record.title,
             location: record.location,
@@ -121,7 +147,7 @@ enum OfflineDeadlineCodec {
             blockedReason: record.blockedReason,
             reminderDaysBefore: record.reminderDaysBefore,
             originalDue: record.originalDue,
-            history: record.history.compactMap(change(from:)),
+            history: history,
             contextKind: record.contextKind,
             projectId: record.projectId,
             createdByUserId: record.createdByUserId,
@@ -132,6 +158,7 @@ enum OfflineDeadlineCodec {
         )
     }
 
+    @MainActor
     private static func changeRecord(from change: DLChange) -> OfflineDeadlineChangeRecord {
         var record = OfflineDeadlineChangeRecord(id: change.id, at: change.at, author: change.author, type: "note")
         switch change.kind {
@@ -168,6 +195,7 @@ enum OfflineDeadlineCodec {
         return record
     }
 
+    @MainActor
     private static func change(from record: OfflineDeadlineChangeRecord) -> DLChange? {
         let kind: DLChange.Kind
         switch record.type {

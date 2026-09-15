@@ -43,7 +43,7 @@ struct Warning: Identifiable, Hashable, Codable {
         case manager
         case admin
 
-        var bookingClashTitle: String {
+        nonisolated var bookingClashTitle: String {
             switch self {
             case .operative: return "Operative booking clash"
             case .manager: return "Manager booking clash"
@@ -150,7 +150,7 @@ struct Warning: Identifiable, Hashable, Codable {
         var hoursLabel: String
 
         /// Full-day / all-day bands (WFH, office, FULL DAY) — hatched on the clash strip.
-        var treatsAsAllDay: Bool {
+        nonisolated var treatsAsAllDay: Bool {
             let span = max(0, endMinutes - startMinutes)
             if span >= (23 * 60) { return true }
             let t = timeLabel.lowercased()
@@ -260,15 +260,15 @@ struct Warning: Identifiable, Hashable, Codable {
 }
 
 enum WarningTimelineMath {
-    static let dayMinutes = 24 * 60
+    nonisolated static let dayMinutes = 24 * 60
 
-    static func overlapMinutes(_ a: (Int, Int), _ b: (Int, Int)) -> Int {
+    nonisolated static func overlapMinutes(_ a: (Int, Int), _ b: (Int, Int)) -> Int {
         let start = max(a.0, b.0)
         let end = min(a.1, b.1)
         return max(0, end - start)
     }
 
-    static func overlapFraction(_ a: (Int, Int), _ b: (Int, Int)) -> (start: CGFloat, width: CGFloat) {
+    nonisolated static func overlapFraction(_ a: (Int, Int), _ b: (Int, Int)) -> (start: CGFloat, width: CGFloat) {
         let start = max(a.0, b.0)
         let end = min(a.1, b.1)
         guard end > start else { return (0, 0) }
@@ -278,13 +278,13 @@ enum WarningTimelineMath {
         )
     }
 
-    static func barFraction(start: Int, end: Int) -> (left: CGFloat, width: CGFloat) {
+    nonisolated static func barFraction(start: Int, end: Int) -> (left: CGFloat, width: CGFloat) {
         let s = max(0, min(start, dayMinutes))
         let e = max(s, min(end, dayMinutes))
         return (CGFloat(s) / CGFloat(dayMinutes), CGFloat(e - s) / CGFloat(dayMinutes))
     }
 
-    static func formatMinutesRange(_ start: Int, _ end: Int) -> String {
+    nonisolated static func formatMinutesRange(_ start: Int, _ end: Int) -> String {
         func hhmm(_ m: Int) -> String {
             let h = m / 60
             let min = m % 60
@@ -293,7 +293,7 @@ enum WarningTimelineMath {
         return "\(hhmm(start)) – \(hhmm(end))"
     }
 
-    static func formatOverlapSummary(minutes: Int) -> (summary: String, detail: String) {
+    nonisolated static func formatOverlapSummary(minutes: Int) -> (summary: String, detail: String) {
         if minutes >= dayMinutes - 30 {
             return ("Whole day clash", "Two locations booked at the same time")
         }
@@ -307,7 +307,7 @@ enum WarningTimelineMath {
         return ("\(hStr)-hour overlap", "Both bookings active during the overlapping period")
     }
 
-    static func placeWord(_ count: Int) -> String {
+    nonisolated static func placeWord(_ count: Int) -> String {
         switch count {
         case 2: return "two"
         case 3: return "three"
@@ -315,19 +315,19 @@ enum WarningTimelineMath {
         }
     }
 
-    struct ClashWindow {
+    struct ClashWindow: Sendable {
         var startMinutes: Int
         var endMinutes: Int
         var span: Int { max(1, endMinutes - startMinutes) }
     }
 
-    struct ClashRegion {
+    struct ClashRegion: Sendable {
         var startMinutes: Int
         var endMinutes: Int
         var concurrency: Int
     }
 
-    struct ClashAnalysis {
+    struct ClashAnalysis: Sendable {
         var regions: [ClashRegion]
         var minutes: Int
         var peak: Int
@@ -335,13 +335,13 @@ enum WarningTimelineMath {
         var endMinutes: Int?
     }
 
-    static func formatClock(_ minutes: Int) -> String {
+    nonisolated static func formatClock(_ minutes: Int) -> String {
         let clamped = max(0, min(minutes, dayMinutes))
         if clamped == dayMinutes { return "24:00" }
         return String(format: "%02d:%02d", clamped / 60, clamped % 60)
     }
 
-    static func formatDuration(minutes: Int) -> String {
+    nonisolated static func formatDuration(minutes: Int) -> String {
         let h = Double(max(0, minutes)) / 60.0
         if h > 0 && h < 1 { return "\(Int((h * 60).rounded()))m" }
         let r = (h * 10).rounded() / 10
@@ -352,7 +352,7 @@ enum WarningTimelineMath {
     }
 
     /// Fit the timeline to the booked day (prototype: pad 1h, minimum 8h span).
-    static func fitWindow(entries: [Warning.ClashTimelineEntry]) -> ClashWindow {
+    nonisolated static func fitWindow(entries: [Warning.ClashTimelineEntry]) -> ClashWindow {
         let timed = entries.filter { !$0.treatsAsAllDay }
         guard !timed.isEmpty else { return ClashWindow(startMinutes: 6 * 60, endMinutes: 20 * 60) }
         var start = max(0, (timed.map(\.startMinutes).min() ?? 0) / 60 * 60 - 60)
@@ -367,7 +367,7 @@ enum WarningTimelineMath {
         return ClashWindow(startMinutes: start, endMinutes: end)
     }
 
-    static func axisTicks(_ window: ClashWindow) -> [Int] {
+    nonisolated static func axisTicks(_ window: ClashWindow) -> [Int] {
         let spanHours = Double(window.span) / 60.0
         let steps = [1, 2, 3, 4, 6]
         for step in steps {
@@ -385,12 +385,12 @@ enum WarningTimelineMath {
         return [window.startMinutes, window.endMinutes]
     }
 
-    static func interval(of entry: Warning.ClashTimelineEntry, window: ClashWindow) -> (Int, Int) {
+    nonisolated static func interval(of entry: Warning.ClashTimelineEntry, window: ClashWindow) -> (Int, Int) {
         if entry.treatsAsAllDay { return (window.startMinutes, window.endMinutes) }
         return (entry.startMinutes, entry.endMinutes)
     }
 
-    static func analyse(entries: [Warning.ClashTimelineEntry], window: ClashWindow) -> ClashAnalysis {
+    nonisolated static func analyse(entries: [Warning.ClashTimelineEntry], window: ClashWindow) -> ClashAnalysis {
         let ivs = entries.map { interval(of: $0, window: window) }
         let pts = Array(Set(ivs.flatMap { [$0.0, $0.1] })).sorted()
         var raw: [ClashRegion] = []
@@ -422,7 +422,7 @@ enum WarningTimelineMath {
         )
     }
 
-    static func clashMinutes(
+    nonisolated static func clashMinutes(
         for entry: Warning.ClashTimelineEntry,
         window: ClashWindow,
         analysis: ClashAnalysis
@@ -433,7 +433,7 @@ enum WarningTimelineMath {
         }
     }
 
-    static func fraction(in window: ClashWindow, minutes: Int) -> CGFloat {
+    nonisolated static func fraction(in window: ClashWindow, minutes: Int) -> CGFloat {
         CGFloat(minutes - window.startMinutes) / CGFloat(window.span)
     }
 }
