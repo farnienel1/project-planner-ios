@@ -187,6 +187,24 @@ struct ContentView: View {
                 showMoreMenuSheet = false
                 AppSignOut.perform(firebaseBackend: firebaseBackend, userStore: userStore)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .openWorkCatalogueDetail)) { notification in
+                guard let projectId = notification.userInfo?["projectId"] as? UUID else { return }
+                let isSmallWorks = notification.userInfo?["isSmallWorks"] as? Bool ?? false
+                let tab = isSmallWorks ? 2 : 1
+                showMoreMenuSheet = false
+                showingHolidaySheet = false
+                if selectedTab != tab {
+                    previousTab = selectedTab
+                    selectedTab = tab
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    NotificationCenter.default.post(
+                        name: .pushWorkCatalogueDetail,
+                        object: nil,
+                        userInfo: ["projectId": projectId, "isSmallWorks": isSmallWorks]
+                    )
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .qualificationExpiryScheduleRefresh)) { _ in
                 Task { await notificationService.refreshQualificationExpiryReminders() }
             }

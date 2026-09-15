@@ -443,6 +443,8 @@ final class DLStore: ObservableObject {
     var restrictToAssigneeUserId: String? = nil
     /// Called after every mutation so the host can persist + reschedule notifications.
     var onItemsChanged: (([DLDeadline]) -> Void)? = nil
+    /// Remote document `updatedAt` from the last successful load/save. Used for first-writer-wins sync.
+    var lastKnownUpdatedAt: Date? = nil
 
     init(items: [DLDeadline]) {
         self.items = items

@@ -77,7 +77,7 @@ struct OfflineStatusBanner: View {
         if smartCache.pendingSyncCount > 0 {
             return "You are working offline. \(smartCache.pendingSyncCount) change\(smartCache.pendingSyncCount == 1 ? "" : "s") will sync when signal returns. Tap to see the queue."
         }
-        return "You are working offline. Bookings and material changes stay on this device and sync when signal returns. Tap to see the queue."
+        return "You are working offline. Bookings, deadlines, and material changes stay on this device and sync when signal returns. Tap to see the queue."
     }
 
     private var syncingMessage: String {

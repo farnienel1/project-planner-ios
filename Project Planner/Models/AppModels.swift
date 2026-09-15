@@ -10,7 +10,7 @@ import SwiftUI
 
 // MARK: - App Configuration Models
 
-enum ThemePreference: String, CaseIterable, Codable, Sendable {
+enum ThemePreference: String, CaseIterable, Codable, Hashable, Sendable {
     case light = "light"
     case dark = "dark"
     case system = "system"

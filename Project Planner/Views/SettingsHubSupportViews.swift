@@ -125,9 +125,7 @@ struct SettingsProfileDetailView: View {
     }
 
     var body: some View {
-        profileList
-            .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
+        profileScroll
             .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
             .navigationTitle("My profile")
             .navigationBarTitleDisplayMode(.inline)
@@ -160,128 +158,122 @@ struct SettingsProfileDetailView: View {
             }
     }
 
-    private var profileList: some View {
-        List {
-            profileImageSection
-            profileInfoSection
-            billingDetailsSection
-            manualLinkSection
-        }
-    }
-
-    private var profileImageSection: some View {
-        Section("Profile image") {
-            HStack(spacing: 12) {
-                profileAvatar
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Profile photo")
-                        .font(.body.weight(.semibold))
-                    Text("Used across Home and Settings")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+    private var profileScroll: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsHubChrome.sectionTitle("Profile image")
+                SettingsHubChrome.card {
+                    HStack(spacing: 12) {
+                        profileAvatar
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Profile photo")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                            Text("Used across Home and Settings")
+                                .font(.system(size: 11))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                        }
+                        Spacer()
+                        if isUploadingProfilePhoto {
+                            ProgressView()
+                        } else {
+                            Button("Change") {
+                                showingProfilePhotoSourcePicker = true
+                            }
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                        }
+                    }
+                    .padding(.vertical, 12)
                 }
-                Spacer()
-                if isUploadingProfilePhoto {
-                    ProgressView()
-                } else {
-                    Button("Change") {
-                        showingProfilePhotoSourcePicker = true
+
+                SettingsHubChrome.card {
+                    profileValueRow("Name", displayName)
+                    SettingsHubChrome.divider()
+                    if let email = firebaseBackend.currentUser?.email {
+                        profileValueRow("Email", email)
+                        SettingsHubChrome.divider()
+                    }
+                    if let org = firebaseBackend.currentOrganization {
+                        profileValueRow("Organisation", org.name)
+                    } else {
+                        profileValueRow("Organisation", "Not linked", valueColor: ProjectWorksRevampColors.requiredPillFg)
+                    }
+                    if let dayRate = userStore.currentUser?.dayRate {
+                        SettingsHubChrome.divider()
+                        profileValueRow("Day rate", String(format: "£%.2f", dayRate))
+                    } else if let hourly = userStore.currentUser?.hourlyRate {
+                        SettingsHubChrome.divider()
+                        profileValueRow("Hourly rate", String(format: "£%.2f", hourly))
                     }
                 }
+
+                SettingsHubChrome.sectionTitle("Billing details")
+                SettingsHubChrome.card {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("VAT number (if registered)", text: $vatNumberDraft)
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                            .font(.system(size: 13, weight: .medium))
+                            .padding(.top, 12)
+                        SettingsHubChrome.divider()
+                        TextField("UTR number", text: $utrNumberDraft)
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                            .font(.system(size: 13, weight: .medium))
+                        SettingsHubChrome.divider()
+                        Button {
+                            Task { await saveBillingDetails() }
+                        } label: {
+                            HStack {
+                                if isSavingBillingDetails { ProgressView().scaleEffect(0.85) }
+                                Text(isSavingBillingDetails ? "Saving…" : "Save billing details")
+                                    .font(.system(size: 13, weight: .semibold))
+                            }
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                            .padding(.vertical, 12)
+                        }
+                        .disabled(isSavingBillingDetails)
+                        .buttonStyle(.plain)
+                        if let billingSaveMessage {
+                            Text(billingSaveMessage)
+                                .font(.system(size: 11))
+                                .foregroundStyle(billingSaveMessage.contains("saved") ? ProjectWorksRevampColors.activeGreen : ProjectWorksRevampColors.requiredPillFg)
+                                .padding(.bottom, 8)
+                        }
+                    }
+                }
+                SettingsHubChrome.footer("VAT and UTR appear on generated invoices. UTR is recommended before you generate an invoice.")
+
+                if firebaseBackend.currentOrganization == nil {
+                    SettingsHubChrome.card {
+                        Button("Link organisation manually") {
+                            showingManualLinkSheet = true
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .padding(.vertical, 12)
+                        .buttonStyle(.plain)
+                    }
+                    SettingsHubChrome.footer("Use only if automatic linking failed.")
+                }
             }
+            .padding(16)
         }
     }
 
-    private var profileInfoSection: some View {
-        Section {
-            HStack {
-                Text("Name")
-                Spacer()
-                Text(displayName)
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-            }
-            if let email = firebaseBackend.currentUser?.email {
-                HStack {
-                    Text("Email")
-                    Spacer()
-                    Text(email)
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                }
-            }
-            if let org = firebaseBackend.currentOrganization {
-                HStack {
-                    Text("Organisation")
-                    Spacer()
-                    Text(org.name)
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                }
-            } else {
-                HStack {
-                    Text("Organisation")
-                    Spacer()
-                    Text("Not linked")
-                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                }
-            }
-            if let dayRate = userStore.currentUser?.dayRate, dayRate > 0 {
-                HStack {
-                    Text("Day rate")
-                    Spacer()
-                    Text(String(format: "£%.2f", dayRate))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                }
-            } else if let hourly = userStore.currentUser?.hourlyRate, hourly > 0 {
-                HStack {
-                    Text("Hourly rate")
-                    Spacer()
-                    Text(String(format: "£%.2f", hourly))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                }
-            }
+    private func profileValueRow(_ title: String, _ value: String, valueColor: Color = ProjectWorksRevampColors.muted) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
+            Spacer()
+            Text(value)
+                .font(.system(size: 13))
+                .foregroundStyle(valueColor)
+                .multilineTextAlignment(.trailing)
         }
-    }
-
-    private var billingDetailsSection: some View {
-        Section {
-            TextField("VAT number (if registered)", text: $vatNumberDraft)
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-            TextField("UTR number", text: $utrNumberDraft)
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-            Button {
-                Task { await saveBillingDetails() }
-            } label: {
-                HStack {
-                    if isSavingBillingDetails { ProgressView().scaleEffect(0.85) }
-                    Text(isSavingBillingDetails ? "Saving…" : "Save billing details")
-                }
-            }
-            .disabled(isSavingBillingDetails)
-            if let billingSaveMessage {
-                Text(billingSaveMessage)
-                    .font(.caption)
-                    .foregroundStyle(billingSaveMessage.contains("saved") ? .green : .red)
-            }
-        } header: {
-            Text("Billing details")
-        } footer: {
-            Text("VAT and UTR appear on generated invoices. UTR is recommended before you generate an invoice.")
-        }
-    }
-
-    @ViewBuilder
-    private var manualLinkSection: some View {
-        if firebaseBackend.currentOrganization == nil {
-            Section {
-                Button("Link organisation manually") {
-                    showingManualLinkSheet = true
-                }
-                .foregroundStyle(ProjectWorksRevampColors.blue)
-            } footer: {
-                Text("Use only if automatic linking failed.")
-            }
-        }
+        .padding(.vertical, 12)
     }
 
     private func syncBillingDraftsFromUser() {
@@ -376,43 +368,79 @@ struct SettingsNotificationsHubView: View {
     let canConfigureMaterialCutOff: Bool
 
     var body: some View {
-        List {
-            Section {
-                NavigationLink {
-                    GeneralAppSettingsView()
-                        .environmentObject(appSettings)
-                } label: {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("General app options")
-                            Text("My schedule list on this device")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsHubChrome.sectionTitle("General app options")
+                SettingsHubChrome.card {
+                    NavigationLink {
+                        GeneralAppSettingsView()
+                            .environmentObject(appSettings)
+                    } label: {
+                        HStack(spacing: 12) {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(ProjectWorksRevampColors.blue.opacity(0.12))
+                                .frame(width: 30, height: 30)
+                                .overlay(
+                                    Image(systemName: "calendar.badge.clock")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                                )
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("General app options")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                                Text("My schedule list on this device")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
                         }
-                    } icon: {
-                        Image(systemName: "calendar.badge.clock")
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .padding(.vertical, 11)
+                    }
+                    .buttonStyle(.plain)
+                }
+                SettingsHubChrome.footer("Controls extra rows in My Schedule (office, WFH, custom labels).")
+
+                if canConfigureMaterialCutOff {
+                    SettingsHubChrome.sectionTitle("Notifications")
+                    SettingsHubChrome.card {
+                        HStack(spacing: 12) {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(ProjectWorksRevampColors.upcomingAmber.opacity(0.18))
+                                .frame(width: 30, height: 30)
+                                .overlay(
+                                    Image(systemName: "bell.badge.fill")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+                                )
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Material order cut-off")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                                Text("Sends a daily reminder for admins and managers at the cut-off time set in Organisation settings.")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 8)
+                            Toggle("", isOn: Binding(
+                                get: { appSettings.settings.notifications.materialOrderCutOff },
+                                set: { enabled in
+                                    Task { await updateMaterial(enabled) }
+                                }
+                            ))
+                            .labelsHidden()
+                            .tint(ProjectWorksRevampColors.blue)
+                        }
+                        .padding(.vertical, 11)
                     }
                 }
-            } footer: {
-                Text("Controls extra rows in My Schedule (office, WFH, custom labels).")
             }
-
-            if canConfigureMaterialCutOff {
-                Section {
-                    Toggle("Material order cut-off (4:00 PM daily)", isOn: Binding(
-                        get: { appSettings.settings.notifications.materialOrderCutOff },
-                        set: { enabled in
-                            Task { await updateMaterial(enabled) }
-                        }
-                    ))
-                } footer: {
-                    Text("Sends a daily reminder at 4:00 PM for admins and managers.")
-                }
-            }
+            .padding(16)
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
         .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
         .navigationTitle("My notifications")
         .navigationBarTitleDisplayMode(.inline)

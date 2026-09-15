@@ -94,6 +94,15 @@ struct SmallWorksView: View {
                     selectedStatus = .active
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .pushWorkCatalogueDetail)) { notification in
+                let isSmallWorks = notification.userInfo?["isSmallWorks"] as? Bool ?? false
+                guard isSmallWorks,
+                      let id = notification.userInfo?["projectId"] as? UUID,
+                      let project = projectStore.projects.first(where: { $0.id == id }) ?? projectStore.smallWorks.first(where: { $0.id == id }) else { return }
+                selectedStatus = nil
+                navigationPath = NavigationPath()
+                navigationPath.append(project)
+            }
             .onAppear {
                 if selectedStatus == .inactive || selectedStatus == nil {
                     selectedStatus = .active

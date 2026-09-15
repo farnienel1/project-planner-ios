@@ -16,179 +16,183 @@ struct OrganisationInvoicingSettingsView: View {
     @State private var coverageWarning: String?
 
     var body: some View {
-        Form {
-            Section {
-                DisclosureGroup("How payment runs should be configured", isExpanded: $showHelp) {
-                    Text("Date ranges need to cover the full month (days 1 to 31).")
-                    Text("You can set one range or two ranges. Wrapped ranges are supported (for example 27 to 11).")
-                    Text("For shorter months, invoice generation trims the run to that month’s last day.")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsHubChrome.card {
+                    DisclosureGroup("How payment runs should be configured", isExpanded: $showHelp) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Date ranges need to cover the full month (days 1 to 31).")
+                            Text("You can set one range or two ranges. Wrapped ranges are supported (for example 27 to 11).")
+                            Text("For shorter months, invoice generation trims the run to that month’s last day.")
+                        }
+                        .font(.system(size: 13))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .padding(.bottom, 10)
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .padding(.vertical, 10)
+                    .tint(ProjectWorksRevampColors.blue)
                 }
-                .font(.subheadline)
-            }
 
-            Section("Payment runs") {
-                VStack(spacing: 10) {
-                    paymentRunModeButton(
-                        title: "Set payment run date ranges",
-                        mode: .dateRanges
-                    )
-                    paymentRunModeButton(
-                        title: "Choose recurring timeframe",
-                        mode: .recurringTimeframe
-                    )
-                }
-                .padding(.vertical, 2)
-
-                if draft.paymentRunMode == .dateRanges {
-                    let ranges = draft.normalizedRanges
-                    Text("Date ranges")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .textCase(.uppercase)
-                    paymentRunRangeRow(
-                        title: "Payment run date range 1",
-                        index: 0,
-                        item: ranges.first ?? PaymentRunDateRange(startDay: 1, endDay: 2)
-                    )
-                    if ranges.count > 1 {
-                        paymentRunRangeRow(
-                            title: "Payment run date range 2",
-                            index: 1,
-                            item: ranges[1]
+                SettingsHubChrome.sectionTitle("Payment runs")
+                SettingsHubChrome.card {
+                    VStack(spacing: 10) {
+                        paymentRunModeButton(
+                            title: "Set payment run date ranges",
+                            mode: .dateRanges
+                        )
+                        paymentRunModeButton(
+                            title: "Choose recurring timeframe",
+                            mode: .recurringTimeframe
                         )
                     }
+                    .padding(.vertical, 12)
 
-                    if ranges.count < 2 {
-                        Button {
-                            var updated = ranges
-                            let base = updated.first ?? PaymentRunDateRange(startDay: 1, endDay: 2)
-                            let start = base.endDay == 31 ? 1 : base.endDay + 1
-                            updated.append(PaymentRunDateRange(startDay: start, endDay: PaymentRunDateRange.defaultEndDay(for: start)))
-                            draft.paymentRunDateRanges = updated
-                        } label: {
-                            HStack {
-                                Text("Add another payment run date range")
-                                    .foregroundStyle(.primary)
-                                Spacer()
-                                Image(systemName: "plus.circle.fill")
-                                    .foregroundStyle(.blue)
-                            }
+                    if draft.paymentRunMode == .dateRanges {
+                        let ranges = draft.normalizedRanges
+                        Text("Date ranges")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .textCase(.uppercase)
+                            .tracking(0.4)
+                        paymentRunRangeRow(
+                            title: "Payment run date range 1",
+                            index: 0,
+                            item: ranges.first ?? PaymentRunDateRange(startDay: 1, endDay: 2)
+                        )
+                        if ranges.count > 1 {
+                            paymentRunRangeRow(
+                                title: "Payment run date range 2",
+                                index: 1,
+                                item: ranges[1]
+                            )
                         }
-                        .buttonStyle(.plain)
+
+                        if ranges.count < 2 {
+                            Button {
+                                var updated = ranges
+                                let base = updated.first ?? PaymentRunDateRange(startDay: 1, endDay: 2)
+                                let start = base.endDay == 31 ? 1 : base.endDay + 1
+                                updated.append(PaymentRunDateRange(startDay: start, endDay: PaymentRunDateRange.defaultEndDay(for: start)))
+                                draft.paymentRunDateRanges = updated
+                            } label: {
+                                HStack {
+                                    Text("Add another payment run date range")
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                                    Spacer()
+                                    Image(systemName: "plus.circle.fill")
+                                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                                }
+                                .padding(.vertical, 10)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    } else {
+                        dayMenuRow(title: "Start day", selection: $draft.recurringRunStartDay)
+                        dayMenuRow(title: "End day", selection: $draft.recurringRunEndDay)
+                        Text(draft.recurringRunDisplaySummary)
+                            .font(.system(size: 12))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .padding(.bottom, 10)
                     }
-                } else {
-                    dayMenuRow(title: "Start day", selection: $draft.recurringRunStartDay)
-                    dayMenuRow(title: "End day", selection: $draft.recurringRunEndDay)
-                    Text(draft.recurringRunDisplaySummary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
-            }
 
-            Section("Payment Day/Dates") {
-                Picker("Date mode", selection: $draft.paymentDateMode) {
-                    Text("Set Payment date/s").tag(PaymentDateConfigurationMode.specificDates)
-                    Text("Recurring payment date").tag(PaymentDateConfigurationMode.recurringDate)
-                }
-                .pickerStyle(.segmented)
+                SettingsHubChrome.sectionTitle("Payment Day/Dates")
+                SettingsHubChrome.card {
+                    Picker("Date mode", selection: $draft.paymentDateMode) {
+                        Text("Set Payment date/s").tag(PaymentDateConfigurationMode.specificDates)
+                        Text("Recurring payment date").tag(PaymentDateConfigurationMode.recurringDate)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.vertical, 12)
 
-                if draft.paymentDateMode == .specificDates {
-                    let dates = draft.normalizedPaymentDates
-                    numericStepperRow(
-                        title: "Payment date 1",
-                        selection: paymentDateBinding(at: 0, fallback: dates.first ?? 1),
-                        range: 1...31
-                    )
-                    if dates.count > 1 {
+                    if draft.paymentDateMode == .specificDates {
+                        let dates = draft.normalizedPaymentDates
                         numericStepperRow(
-                            title: "Payment date 2",
-                            selection: paymentDateBinding(at: 1, fallback: dates[1]),
+                            title: "Payment date 1",
+                            selection: paymentDateBinding(at: 0, fallback: dates.first ?? 1),
                             range: 1...31
                         )
-                    } else {
-                        Button {
-                            var updated = dates
-                            updated.append(min((dates.first ?? 1) + 14, 31))
-                            draft.paymentDates = Array(updated.prefix(2))
-                        } label: {
-                            HStack {
-                                Text("Add another payment date")
-                                    .foregroundStyle(.primary)
-                                Spacer()
-                                Image(systemName: "plus.circle.fill")
-                                    .foregroundStyle(.blue)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                } else {
-                    dayMenuRow(
-                        title: "Recurring payment date",
-                        selection: $draft.recurringPaymentDay,
-                        prefix: "Every "
-                    )
-                }
-            }
-
-            Section("Note to User") {
-                TextEditor(text: $draft.noteToUsers)
-                    .frame(minHeight: 120)
-                Text("Use this section to explain how payment runs and timesheet requirements work. If there are specific requirements (for example submit price work by Thursday), detail them here. These notes appear on operative timesheet pages.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let coverageWarning {
-                Section {
-                    Text(coverageWarning)
-                        .foregroundStyle(.red)
-                        .font(.subheadline.weight(.semibold))
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(red: 0.992, green: 0.918, blue: 0.918))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                .listRowBackground(Color.clear)
-            }
-
-            if let errorMessage {
-                Section {
-                    Text(errorMessage)
-                        .foregroundStyle(.red)
-                        .font(.subheadline.weight(.semibold))
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(red: 0.992, green: 0.918, blue: 0.918))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                .listRowBackground(Color.clear)
-            }
-
-            Section {
-                Button {
-                    Task { await save() }
-                } label: {
-                    HStack {
-                        Spacer()
-                        if isSaving {
-                            ProgressView()
-                                .tint(.white)
+                        if dates.count > 1 {
+                            numericStepperRow(
+                                title: "Payment date 2",
+                                selection: paymentDateBinding(at: 1, fallback: dates[1]),
+                                range: 1...31
+                            )
                         } else {
-                            Text("Save Payment Run")
-                                .fontWeight(.semibold)
+                            Button {
+                                var updated = dates
+                                updated.append(min((dates.first ?? 1) + 14, 31))
+                                draft.paymentDates = Array(updated.prefix(2))
+                            } label: {
+                                HStack {
+                                    Text("Add another payment date")
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                                    Spacer()
+                                    Image(systemName: "plus.circle.fill")
+                                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                                }
+                                .padding(.vertical, 10)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        Spacer()
+                    } else {
+                        dayMenuRow(
+                            title: "Recurring payment date",
+                            selection: $draft.recurringPaymentDay,
+                            prefix: "Every "
+                        )
+                        .padding(.bottom, 8)
                     }
                 }
-                .listRowBackground(Color.blue)
-                .foregroundStyle(.white)
-                .disabled(isSaving)
+
+                SettingsHubChrome.sectionTitle("Note to User")
+                SettingsHubChrome.card {
+                    TextEditor(text: $draft.noteToUsers)
+                        .frame(minHeight: 120)
+                        .font(.system(size: 13))
+                        .padding(.vertical, 8)
+                    Text("Use this section to explain how payment runs and timesheet requirements work. If there are specific requirements (for example submit price work by Thursday), detail them here. These notes appear on operative timesheet pages.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .padding(.bottom, 12)
+                }
+
+                if let coverageWarning {
+                    Text(coverageWarning)
+                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(ProjectWorksRevampColors.requiredPillBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .padding(.bottom, 8)
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(ProjectWorksRevampColors.requiredPillBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .padding(.bottom, 8)
+                }
+
+                SettingsHubChrome.saveButton("Save Payment Run", isSaving: isSaving) {
+                    Task { await save() }
+                }
             }
+            .padding(16)
         }
+        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
         .navigationTitle("Payment Runs and Timesheets")
         .navigationBarTitleDisplayMode(.inline)
+        .appChromeNavigationBarSurface()
         .onAppear {
             draft = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
             draft.refreshRecurringSummaryFromDays()
@@ -233,7 +237,7 @@ struct OrganisationInvoicingSettingsView: View {
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: draft.paymentRunMode == mode ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(draft.paymentRunMode == mode ? .blue : .secondary)
+                    .foregroundStyle(draft.paymentRunMode == mode ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.muted)
                     .padding(.top, 1)
                 Text(title)
                     .foregroundStyle(.primary)
@@ -246,11 +250,11 @@ struct OrganisationInvoicingSettingsView: View {
             .padding(.horizontal, 10)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(draft.paymentRunMode == mode ? Color.blue.opacity(0.08) : Color(.secondarySystemBackground))
+                    .fill(draft.paymentRunMode == mode ? ProjectWorksRevampColors.blue.opacity(0.08) : ProjectWorksRevampColors.canvas)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(draft.paymentRunMode == mode ? Color.blue.opacity(0.35) : Color.clear, lineWidth: 1)
+                    .stroke(draft.paymentRunMode == mode ? ProjectWorksRevampColors.blue.opacity(0.35) : Color.clear, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -273,11 +277,11 @@ struct OrganisationInvoicingSettingsView: View {
                         .frame(width: 26, height: 26)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.blue)
+                .foregroundStyle(ProjectWorksRevampColors.blue)
 
                 Text("\(selection.wrappedValue)")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(ProjectWorksRevampColors.blue)
                     .frame(minWidth: 28, alignment: .trailing)
 
                 Button {
@@ -289,7 +293,7 @@ struct OrganisationInvoicingSettingsView: View {
                         .frame(width: 26, height: 26)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.blue)
+                .foregroundStyle(ProjectWorksRevampColors.blue)
             }
         }
     }
@@ -312,10 +316,10 @@ struct OrganisationInvoicingSettingsView: View {
                 HStack(spacing: 6) {
                     Text("\(prefix)\(selection.wrappedValue.title)")
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(ProjectWorksRevampColors.blue)
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(ProjectWorksRevampColors.blue)
                 }
             }
         }

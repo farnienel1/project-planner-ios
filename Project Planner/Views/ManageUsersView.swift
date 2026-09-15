@@ -2710,9 +2710,7 @@ struct EditUserView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     Spacer()
-                    Text(entry.dayRate > 0
-                         ? "\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))"
-                         : "Cleared")
+                    Text("\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(ManageUserProfilePalette.textPrimary)
                 }
@@ -2774,8 +2772,8 @@ struct EditUserView: View {
 
     /// Single edit field shows day or hourly — dirty must compare against whichever is currently displayed.
     private func displayedPayrollRate(for user: AppUser) -> Double? {
-        if let day = user.dayRate, day > 0 { return day }
-        if let hourly = user.hourlyRate, hourly > 0 { return hourly }
+        if let day = user.dayRate { return day }
+        if let hourly = user.hourlyRate { return hourly }
         return nil
     }
 
@@ -3574,8 +3572,8 @@ struct EditUserView: View {
     }
 
     private static func formatPayrollRateText(dayRate: Double?, hourlyRate: Double?) -> String {
-        if let dayRate, dayRate > 0 { return String(format: "%.2f", dayRate) }
-        if let hourlyRate, hourlyRate > 0 { return String(format: "%.2f", hourlyRate) }
+        if let dayRate { return String(format: "%.2f", dayRate) }
+        if let hourlyRate { return String(format: "%.2f", hourlyRate) }
         return ""
     }
 

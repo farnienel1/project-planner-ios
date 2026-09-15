@@ -343,44 +343,40 @@ struct SiteAuditProjectsBrowserView: View {
         kind == .projects ? "No Projects" : "No Small Works"
     }
 
+    private var listCounts: WorksListStatusCounts {
+        WorksListStatusCounts.from(mergedWorksForSiteAudit.filter { kind.includes($0) })
+    }
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                Picker("Filter", selection: $selectedFilter) {
-                    ForEach(SiteAuditProjectFilter.allCases) { filter in
-                        Text(filter.rawValue).tag(filter)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .padding()
-
-                if filteredProjects.isEmpty {
-                    ContentUnavailableView(
-                        emptyTitle,
-                        systemImage: kind == .projects ? "folder" : "wrench.and.screwdriver",
-                        description: Text(
-                            userStore.isOperativeMode()
-                            ? "Shows \(kind == .projects ? "projects" : "small works") you are booked onto, plus any job where you previously submitted a site audit."
-                            : "Try switching the filter to All."
-                        )
-                    )
-                } else {
-                    List(filteredProjects) { project in
-                        Button {
-                            selectedProject = project
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(project.jobNumber).font(.headline)
-                                Text(project.siteName).font(.subheadline).foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    filterChipsRow
+                    if filteredProjects.isEmpty {
+                        emptyStateView
+                    } else {
+                        LazyVStack(spacing: 10) {
+                            ForEach(filteredProjects) { project in
+                                Button {
+                                    selectedProject = project
+                                } label: {
+                                    ProjectDetailRowView(project: project)
+                                        .environmentObject(userStore)
+                                        .environmentObject(operativeStore)
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
-                        .buttonStyle(.plain)
+                        .padding(.bottom, 8)
                     }
-                    .listStyle(.plain)
                 }
+                .padding(.horizontal, 18)
+                .padding(.top, 8)
             }
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
             .navigationTitle(kind.navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
+            .appChromeNavigationBarSurface()
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .sheet(item: $selectedProject) { project in
                 SiteAuditProjectAuditsView(project: project)
@@ -392,6 +388,55 @@ struct SiteAuditProjectsBrowserView: View {
             }
             .task { await loadAuthoredAuditProjectIds() }
         }
+    }
+
+    private var filterChipsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                WorksRevampFilterChip(
+                    title: "All · \(listCounts.all)",
+                    isSelected: selectedFilter == .all,
+                    selectedForeground: ProjectWorksRevampColors.activeGreen
+                ) { selectedFilter = .all }
+                WorksRevampFilterChip(
+                    title: "Active · \(listCounts.active)",
+                    isSelected: selectedFilter == .active,
+                    selectedForeground: ProjectWorksRevampColors.activeGreen
+                ) { selectedFilter = .active }
+                WorksRevampFilterChip(
+                    title: "Upcoming · \(listCounts.upcoming)",
+                    isSelected: selectedFilter == .upcoming,
+                    selectedForeground: ProjectWorksRevampColors.upcomingAmber
+                ) { selectedFilter = .upcoming }
+                WorksRevampFilterChip(
+                    title: "Completed · \(listCounts.completed)",
+                    isSelected: selectedFilter == .completed,
+                    selectedForeground: ProjectWorksRevampColors.muted
+                ) { selectedFilter = .completed }
+            }
+        }
+    }
+
+    private var emptyStateView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: kind == .projects ? "folder" : "wrench.and.screwdriver")
+                .font(.system(size: 36))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+            Text(emptyTitle)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
+            Text(
+                userStore.isOperativeMode()
+                ? "Shows \(kind == .projects ? "projects" : "small works") you are booked onto, plus any job where you previously submitted a site audit."
+                : "Try switching the filter to All."
+            )
+            .font(.system(size: 13))
+            .foregroundStyle(ProjectWorksRevampColors.muted)
+            .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 36)
+        .padding(.horizontal, 16)
     }
 
     private func loadAuthoredAuditProjectIds() async {

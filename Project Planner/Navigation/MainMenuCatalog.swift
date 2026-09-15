@@ -18,6 +18,9 @@ extension Notification.Name {
     static let mainMenuResetPassword = Notification.Name("mainMenuResetPassword")
     /// Sign out (clears UserStore and Firebase session).
     static let mainMenuSignOut = Notification.Name("mainMenuSignOut")
+    /// Open the real Projects / Small Works catalogue and push a job (from Daily Overview).
+    static let openWorkCatalogueDetail = Notification.Name("openWorkCatalogueDetail")
+    static let pushWorkCatalogueDetail = Notification.Name("pushWorkCatalogueDetail")
 }
 
 /// Home surfaces opened from either Main Menu or More (HomeView owns the sheets).

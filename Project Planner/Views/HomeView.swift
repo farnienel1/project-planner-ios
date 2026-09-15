@@ -279,8 +279,9 @@ struct HomeView: View {
                 .environmentObject(appSettings)
                 .environmentObject(notificationService)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openOrgSitesMapFromMore"))) { _ in
-            showingOrgSitesMap = true
+        .onReceive(NotificationCenter.default.publisher(for: .openWorkCatalogueDetail)) { _ in
+            showingDailyOverview = false
+            showingWarningsDetail = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openSiteAuditFromMore"))) { _ in
             showingSiteAudit = true

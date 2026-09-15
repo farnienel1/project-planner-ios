@@ -1471,6 +1471,8 @@ private struct MyTimesheetView: View {
                     saveDraft()
                     showPriceWorkSheet = false
                 }
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
             }
         }
         .sheet(isPresented: $showExpenseSheet) {
@@ -1480,6 +1482,8 @@ private struct MyTimesheetView: View {
                     saveDraft()
                     showExpenseSheet = false
                 }
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
             }
         }
         .sheet(isPresented: $showInvoiceUTRWarning) {
@@ -1612,17 +1616,21 @@ private struct MyTimesheetView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color(.systemBackground))
+        .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
     }
 
     @ViewBuilder
     private func sectionHeader(_ value: String) -> some View {
         Text(value)
-            .font(.caption.weight(.bold))
-            .foregroundStyle(.secondary)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(ProjectWorksRevampColors.muted)
             .textCase(.uppercase)
-            .tracking(1.0)
+            .tracking(0.4)
     }
 
     @ViewBuilder
@@ -1683,8 +1691,12 @@ private struct MyTimesheetView: View {
             content()
         }
         .padding(14)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
     }
 
     private func loadDraft() {
@@ -3471,6 +3483,8 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
 
 private struct TimesheetMoneyEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var projectStore: ProjectStore
     let mode: Mode
     let onSaveExpense: (TimesheetExpenseEntry) -> Void
     let onSavePriceWork: (TimesheetPriceWorkEntry) -> Void
@@ -3490,6 +3504,41 @@ private struct TimesheetMoneyEntrySheet: View {
         Double(amountText.replacingOccurrences(of: "£", with: "").trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    private var managerSuggestions: [String] {
+        let query = managerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        var seen = Set<String>()
+        var names: [String] = []
+        for user in userStore.organizationUsers where user.isActive {
+            let isManager = user.permissions.manager || user.role == .manager || user.permissions.adminAccess || user.role == .admin || user.isSuperAdmin
+            guard isManager else { continue }
+            let haystack = "\(user.fullName) \(user.firstName) \(user.surname) \(user.email)"
+            guard haystack.localizedCaseInsensitiveContains(query) else { continue }
+            let name = user.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, name.caseInsensitiveCompare(query) != .orderedSame, seen.insert(name.lowercased()).inserted else { continue }
+            names.append(name)
+        }
+        return Array(names.prefix(6))
+    }
+
+    private var jobSuggestions: [String] {
+        let query = jobNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        var seen = Set<String>()
+        return ProjectWorksMerge.uniqueWorks(projectStore.projects)
+            .compactMap { project -> String? in
+                let number = project.jobNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !number.isEmpty else { return nil }
+                let haystack = "\(number) \(project.siteName)"
+                guard haystack.localizedCaseInsensitiveContains(query),
+                      number.caseInsensitiveCompare(query) != .orderedSame,
+                      seen.insert(number.lowercased()).inserted else { return nil }
+                return number
+            }
+            .prefix(6)
+            .map { $0 }
+    }
+
     init(mode: Mode, onSave: @escaping (TimesheetExpenseEntry) -> Void) {
         self.mode = mode
         self.onSaveExpense = onSave
@@ -3503,75 +3552,103 @@ private struct TimesheetMoneyEntrySheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                TextField(mode == .expense ? "Expense name" : "Price work name", text: $entryTitle)
-                TextField("Description", text: $details, axis: .vertical)
-                    .lineLimit(3, reservesSpace: true)
-                TextField("Job number", text: $jobNumber)
-                TextField("Amount", text: $amountText)
-                    .keyboardType(.decimalPad)
-                DatePicker(mode == .expense ? "Date" : "Start date", selection: $date, displayedComponents: .date)
-                if mode == .expense {
-                    PhotosPicker(selection: $receiptItem, matching: .any(of: [.images, .not(.livePhotos)])) {
-                        HStack {
-                            Label("Upload receipt", systemImage: "paperclip")
-                            Spacer()
-                            Text(receiptName ?? "Required")
-                                .foregroundStyle(receiptName == nil ? Color.secondary : Color.blue)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                moneyCard {
+                    labeledField(mode == .expense ? "Expense name" : "Price work name", text: $entryTitle)
+                    Divider().overlay(ProjectWorksRevampColors.border)
+                    labeledMultiline("Description", text: $details)
+                    Divider().overlay(ProjectWorksRevampColors.border)
+                    labeledField("Job number", text: $jobNumber)
+                    suggestionRow(jobSuggestions) { jobNumber = $0 }
+                    Divider().overlay(ProjectWorksRevampColors.border)
+                    labeledField("Amount", text: $amountText, keyboard: .decimalPad)
+                }
+
+                moneyCard {
+                    DatePicker(mode == .expense ? "Date" : "Start date", selection: $date, displayedComponents: .date)
+                        .font(.system(size: 13, weight: .medium))
+                    if mode == .priceWork {
+                        Divider().overlay(ProjectWorksRevampColors.border)
+                        Toggle("Add end date", isOn: $includeEndDate)
+                            .font(.system(size: 13, weight: .medium))
+                        if includeEndDate {
+                            DatePicker("End date", selection: Binding(
+                                get: { endDate ?? date },
+                                set: { endDate = $0 }
+                            ), displayedComponents: .date)
+                            .font(.system(size: 13, weight: .medium))
                         }
                     }
                 }
+
                 if mode == .priceWork {
-                    TextField("Manager who agreed this", text: $managerName)
-                    Toggle("Add end date", isOn: $includeEndDate)
-                    if includeEndDate {
-                        DatePicker("End date", selection: Binding(
-                            get: { endDate ?? date },
-                            set: { endDate = $0 }
-                        ), displayedComponents: .date)
+                    moneyCard {
+                        labeledField("Manager who agreed this", text: $managerName)
+                        suggestionRow(managerSuggestions) { managerName = $0 }
+                    }
+                }
+
+                if mode == .expense {
+                    moneyCard {
+                        PhotosPicker(selection: $receiptItem, matching: .any(of: [.images, .not(.livePhotos)])) {
+                            HStack {
+                                Image(systemName: "paperclip")
+                                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                                Text("Upload receipt")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                                Spacer()
+                                Text(receiptName ?? "Required")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(receiptName == nil ? ProjectWorksRevampColors.requiredPillFg : ProjectWorksRevampColors.blue)
+                            }
+                        }
                     }
                 }
             }
-            .navigationTitle(mode == .expense ? "Add Expense" : "Add Price Work")
-            .navigationBarBackButtonHidden(true)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(mode == .expense ? "Add expense" : "Add price work") {
-                        guard let amount, amount > 0 else { return }
-                        if mode == .expense {
-                            onSaveExpense(
-                                .init(
-                                    id: UUID(),
-                                    title: entryTitle.isEmpty ? "Untitled expense" : entryTitle,
-                                    details: details,
-                                    jobNumber: jobNumber,
-                                    date: date,
-                                    amount: amount,
-                                    receiptName: receiptName
-                                )
+            .padding(16)
+        }
+        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .navigationTitle(mode == .expense ? "Add Expense" : "Add Price Work")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button(mode == .expense ? "Add expense" : "Add price work") {
+                    guard let amount, amount > 0 else { return }
+                    if mode == .expense {
+                        onSaveExpense(
+                            .init(
+                                id: UUID(),
+                                title: entryTitle.isEmpty ? "Untitled expense" : entryTitle,
+                                details: details,
+                                jobNumber: jobNumber,
+                                date: date,
+                                amount: amount,
+                                receiptName: receiptName
                             )
-                        } else {
-                            onSavePriceWork(
-                                .init(
-                                    id: UUID(),
-                                    title: entryTitle.isEmpty ? "Untitled price work" : entryTitle,
-                                    details: details,
-                                    jobNumber: jobNumber,
-                                    agreedManagerName: managerName.isEmpty ? "Manager" : managerName,
-                                    startDate: date,
-                                    endDate: includeEndDate ? endDate : nil,
-                                    amount: amount
-                                )
+                        )
+                    } else {
+                        onSavePriceWork(
+                            .init(
+                                id: UUID(),
+                                title: entryTitle.isEmpty ? "Untitled price work" : entryTitle,
+                                details: details,
+                                jobNumber: jobNumber,
+                                agreedManagerName: managerName.isEmpty ? "Manager" : managerName,
+                                startDate: date,
+                                endDate: includeEndDate ? endDate : nil,
+                                amount: amount
                             )
-                        }
-                        dismiss()
+                        )
                     }
-                    .disabled(amount == nil || (amount ?? 0) <= 0 || (mode == .expense && receiptName == nil))
+                    dismiss()
                 }
+                .disabled(amount == nil || (amount ?? 0) <= 0 || (mode == .expense && receiptName == nil))
             }
         }
         .onChange(of: receiptItem) { _, newItem in
@@ -3580,6 +3657,69 @@ private struct TimesheetMoneyEntrySheet: View {
                 receiptName = "receipt.\(name)"
             } else {
                 receiptName = "receipt-uploaded"
+            }
+        }
+    }
+
+    private func moneyCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            content()
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    private func labeledField(_ title: String, text: Binding<String>, keyboard: UIKeyboardType = .default) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .tracking(0.4)
+            TextField(title, text: text)
+                .font(.system(size: 14, weight: .medium))
+                .keyboardType(keyboard)
+        }
+    }
+
+    private func labeledMultiline(_ title: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .tracking(0.4)
+            TextField(title, text: text, axis: .vertical)
+                .font(.system(size: 14))
+                .lineLimit(3, reservesSpace: true)
+        }
+    }
+
+    @ViewBuilder
+    private func suggestionRow(_ suggestions: [String], onSelect: @escaping (String) -> Void) -> some View {
+        if !suggestions.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(suggestions, id: \.self) { suggestion in
+                        Button {
+                            onSelect(suggestion)
+                        } label: {
+                            Text(suggestion)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.blue)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(ProjectWorksRevampColors.blue.opacity(0.1))
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.bottom, 4)
             }
         }
     }
@@ -4588,7 +4728,7 @@ private struct InvoiceLineItem {
     }
 
     var resolvedPayrollRate: ResolvedPayrollRate {
-        ResolvedPayrollRate(basis: payrollBasis, dayRate: dayRate > 0 ? dayRate : nil, hourlyRate: hourlyRate)
+        ResolvedPayrollRate(basis: payrollBasis, dayRate: dayRate, hourlyRate: hourlyRate)
     }
 
     var hasPayrollRate: Bool {

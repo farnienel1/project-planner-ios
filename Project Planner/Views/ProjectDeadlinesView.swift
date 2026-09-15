@@ -14,6 +14,7 @@ struct ProjectDeadlinesView: View {
     @EnvironmentObject private var taskStore: ProjectTaskStore
     @EnvironmentObject private var notificationService: NotificationService
     @EnvironmentObject private var projectStore: ProjectStore
+    @EnvironmentObject private var smartCache: SmartCacheService
 
     @StateObject private var store = DLStore(items: [])
     @State private var isLoading = true
@@ -67,16 +68,14 @@ struct ProjectDeadlinesView: View {
         }
         .task {
             store.bindPersistence { items in
-                guard let orgId = organizationId() else { return }
-                do {
-                    try await firebaseBackend.saveDeadlines(items, project: project, organizationId: orgId)
-                } catch {
-                    await MainActor.run { errorMessage = error.localizedDescription }
-                }
+                await persistDeadlines(items)
             } syncNotifications: { items in
                 await DeadlineLocalNotifications.sync(items: items, currentUserId: userStore.currentUser?.id)
             }
             await load()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .offlineSyncDidComplete)) { _ in
+            Task { await load(preferRemote: true) }
         }
         .onAppear {
             store.restrictToAssigneeUserId = canManage ? nil : userStore.currentUser?.id
@@ -99,7 +98,7 @@ struct ProjectDeadlinesView: View {
         firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId
     }
 
-    private func load() async {
+    private func load(preferRemote: Bool = false) async {
         guard let orgId = organizationId() else {
             errorMessage = "Organization is unavailable."
             isLoading = false
@@ -111,14 +110,90 @@ struct ProjectDeadlinesView: View {
             if userStore.organizationUsers.isEmpty {
                 await userStore.loadOrganizationUsers()
             }
-            let items = try await firebaseBackend.loadDeadlines(project: project, organizationId: orgId)
-            store.replaceAll(items)
+            let local = OfflineDeadlineLocalStore.shared.load(projectId: project.id, organizationId: orgId)
+            if !preferRemote, smartCache.isOnline == false, let local {
+                store.replaceAll(local.items)
+                store.lastKnownUpdatedAt = local.updatedAt
+            } else {
+                let state = try await firebaseBackend.loadDeadlinesState(project: project, organizationId: orgId)
+                if smartCache.isOnline == false, let local {
+                    store.replaceAll(local.items)
+                    store.lastKnownUpdatedAt = local.updatedAt ?? state.updatedAt
+                } else {
+                    store.replaceAll(state.items)
+                    store.lastKnownUpdatedAt = state.updatedAt
+                    OfflineDeadlineLocalStore.shared.save(
+                        items: state.items,
+                        projectId: project.id,
+                        organizationId: orgId,
+                        updatedAt: state.updatedAt
+                    )
+                }
+            }
             store.restrictToAssigneeUserId = canManage ? nil : userStore.currentUser?.id
             store.now = Date()
-            siteAudits = try await firebaseBackend.loadSiteAudits(organizationId: orgId, projectId: project.id)
-            await DeadlineLocalNotifications.sync(items: items, currentUserId: userStore.currentUser?.id)
+            if smartCache.isOnline {
+                siteAudits = (try? await firebaseBackend.loadSiteAudits(organizationId: orgId, projectId: project.id)) ?? siteAudits
+            }
+            await DeadlineLocalNotifications.sync(items: store.items, currentUserId: userStore.currentUser?.id)
         } catch {
-            errorMessage = error.localizedDescription
+            if let local = OfflineDeadlineLocalStore.shared.load(projectId: project.id, organizationId: orgId) {
+                store.replaceAll(local.items)
+                store.lastKnownUpdatedAt = local.updatedAt
+                store.restrictToAssigneeUserId = canManage ? nil : userStore.currentUser?.id
+            } else {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func persistDeadlines(_ items: [DLDeadline]) async {
+        guard let orgId = organizationId() else { return }
+        OfflineDeadlineLocalStore.shared.save(
+            items: items,
+            projectId: project.id,
+            organizationId: orgId,
+            updatedAt: store.lastKnownUpdatedAt
+        )
+        if OfflineWriteSupport.shouldQueue(isOnline: smartCache.isOnline) {
+            OfflineOutboxStore.shared.enqueueSaveDeadlines(
+                projectId: project.id,
+                isSmallWorks: project.jobType == .smallWorks,
+                items: items,
+                baseUpdatedAt: store.lastKnownUpdatedAt,
+                organizationId: orgId
+            )
+            return
+        }
+        do {
+            let written = try await firebaseBackend.saveDeadlines(
+                items,
+                project: project,
+                organizationId: orgId,
+                baseUpdatedAt: store.lastKnownUpdatedAt
+            )
+            store.lastKnownUpdatedAt = Date()
+            if written.map(\.id) != items.map(\.id) || written.count != items.count {
+                store.replaceAll(written)
+            }
+            OfflineDeadlineLocalStore.shared.save(
+                items: written,
+                projectId: project.id,
+                organizationId: orgId,
+                updatedAt: store.lastKnownUpdatedAt
+            )
+        } catch {
+            if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache.isOnline) {
+                OfflineOutboxStore.shared.enqueueSaveDeadlines(
+                    projectId: project.id,
+                    isSmallWorks: project.jobType == .smallWorks,
+                    items: items,
+                    baseUpdatedAt: store.lastKnownUpdatedAt,
+                    organizationId: orgId
+                )
+            } else {
+                await MainActor.run { errorMessage = error.localizedDescription }
+            }
         }
     }
 
@@ -134,21 +209,25 @@ struct ProjectDeadlinesView: View {
             item.createdByUserId = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? ""
         }
         if let localFileURL {
-            do {
-                let name = item.fileName ?? localFileURL.lastPathComponent
-                let url = try await firebaseBackend.uploadHealthSafetyFile(
-                    localFileURL,
-                    organizationId: orgId,
-                    projectId: project.id,
-                    category: "deadlines",
-                    fileName: name
-                )
-                item.fileURL = url
-                item.fileName = name
-                item.history.insert(DLChange(at: Date(), author: authorName, kind: .fileAttached(name: name)), at: 0)
-            } catch {
-                errorMessage = error.localizedDescription
-                return
+            if OfflineWriteSupport.shouldQueue(isOnline: smartCache.isOnline) {
+                errorMessage = "Deadline saved on this device. Attach the file again when you’re back online."
+            } else {
+                do {
+                    let name = item.fileName ?? localFileURL.lastPathComponent
+                    let url = try await firebaseBackend.uploadHealthSafetyFile(
+                        localFileURL,
+                        organizationId: orgId,
+                        projectId: project.id,
+                        category: "deadlines",
+                        fileName: name
+                    )
+                    item.fileURL = url
+                    item.fileName = name
+                    item.history.insert(DLChange(at: Date(), author: authorName, kind: .fileAttached(name: name)), at: 0)
+                } catch {
+                    errorMessage = error.localizedDescription
+                    return
+                }
             }
         }
         if let auditId = item.siteAuditId,
