@@ -34,6 +34,7 @@ struct SubcontractorsView: View {
                         NavigationLink {
                             SubcontractorFirmDetailView(subcontractorId: subcontractor.id)
                                 .environmentObject(subcontractorStore)
+                                .environmentObject(firebaseBackend)
                         } label: {
                             subcontractorCard(subcontractor)
                         }
@@ -343,6 +344,7 @@ struct SubcontractorsView: View {
 
 private struct SubcontractorFirmDetailView: View {
     @EnvironmentObject var subcontractorStore: SubcontractorStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     let subcontractorId: UUID
     @State private var showingEdit = false
     @State private var showingAddOperative = false

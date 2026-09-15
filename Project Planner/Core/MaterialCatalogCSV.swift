@@ -115,7 +115,7 @@ enum MaterialCatalogCSV {
             throw csvError(code: 2, "The CSV file is empty.")
         }
 
-        let headers = splitCSVLine(headerLine).map(normalizeHeader)
+        let headers = splitCSVLine(headerLine).map { normalizeHeader($0) }
         func columnIndex(_ names: [String]) -> Int? {
             for name in names {
                 if let idx = headers.firstIndex(of: name) { return idx }
@@ -229,7 +229,7 @@ enum MaterialCatalogCSV {
         return rows
     }
 
-    private static func parseUnit(_ raw: String) -> MaterialUnit {
+    nonisolated private static func parseUnit(_ raw: String) -> MaterialUnit {
         switch raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) {
         case "box": return .box
         case "length": return .length
@@ -239,21 +239,21 @@ enum MaterialCatalogCSV {
         }
     }
 
-    private static func normalizeHeader(_ raw: String) -> String {
+    nonisolated private static func normalizeHeader(_ raw: String) -> String {
         raw.lowercased()
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func csvError(code: Int, _ message: String) -> NSError {
+    nonisolated private static func csvError(code: Int, _ message: String) -> NSError {
         NSError(domain: "MaterialCatalogCSV", code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
-    static func joinCSVFields(_ fields: [String]) -> String {
-        fields.map(escapeCSVField).joined(separator: ",")
+    nonisolated static func joinCSVFields(_ fields: [String]) -> String {
+        fields.map { escapeCSVField($0) }.joined(separator: ",")
     }
 
-    static func escapeCSVField(_ field: String) -> String {
+    nonisolated static func escapeCSVField(_ field: String) -> String {
         let needsQuotes = field.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" })
             || UUID(uuidString: field) != nil
         if needsQuotes {
@@ -262,7 +262,7 @@ enum MaterialCatalogCSV {
         return field
     }
 
-    static func splitCSVLine(_ line: String) -> [String] {
+    nonisolated static func splitCSVLine(_ line: String) -> [String] {
         var result: [String] = []
         var current = ""
         var inQuotes = false
