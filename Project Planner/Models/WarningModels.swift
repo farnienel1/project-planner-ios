@@ -95,12 +95,28 @@ struct Warning: Identifiable, Hashable, Codable {
         switch type {
         case .operativeBookingClash:
             if let clash = operativeClash {
-                let places = clash.allEntries.map(Self.clashLocationDescription).joined(separator: " · ")
+                let places = clash.allEntries.map { entry in
+                    if let jobNumber = entry.jobNumber {
+                        if let siteName = entry.siteName {
+                            return "\(jobNumber) (\(siteName))"
+                        }
+                        return jobNumber
+                    }
+                    return entry.locationLabel
+                }.joined(separator: " · ")
                 return "\(clash.operativeName) on \(dateText): \(title). \(places). \(clash.overlapSummary)."
             }
         case .managerLocationClash:
             if let clash = managerClash {
-                let places = clash.allEntries.map(Self.clashLocationDescription).joined(separator: " · ")
+                let places = clash.allEntries.map { entry in
+                    if let jobNumber = entry.jobNumber {
+                        if let siteName = entry.siteName {
+                            return "\(jobNumber) (\(siteName))"
+                        }
+                        return jobNumber
+                    }
+                    return entry.locationLabel
+                }.joined(separator: " · ")
                 return "\(clash.personName) on \(dateText): \(title). \(places). \(clash.overlapSummary)."
             }
         case .unbookedLabour:
@@ -119,16 +135,6 @@ struct Warning: Identifiable, Hashable, Codable {
             return "\(title). \(message)"
         }
         return "\(title) on \(dateText). \(message)"
-    }
-
-    private static func clashLocationDescription(_ entry: ClashTimelineEntry) -> String {
-        if let jobNumber = entry.jobNumber {
-            if let siteName = entry.siteName {
-                return "\(jobNumber) (\(siteName))"
-            }
-            return jobNumber
-        }
-        return entry.locationLabel
     }
 
     struct ClashTimelineEntry: Hashable, Codable {
@@ -153,7 +159,7 @@ struct Warning: Identifiable, Hashable, Codable {
         }
 
         var displayTitle: String {
-            if let siteName, let jobNumber {
+            if let siteName, jobNumber != nil {
                 return siteName
             }
             return locationLabel

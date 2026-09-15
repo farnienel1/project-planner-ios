@@ -115,7 +115,11 @@ enum MaterialCatalogCSV {
             throw csvError(code: 2, "The CSV file is empty.")
         }
 
-        let headers = splitCSVLine(headerLine).map { normalizeHeader($0) }
+        let headers = splitCSVLine(headerLine).map { raw in
+            raw.lowercased()
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         func columnIndex(_ names: [String]) -> Int? {
             for name in names {
                 if let idx = headers.firstIndex(of: name) { return idx }
@@ -250,7 +254,14 @@ enum MaterialCatalogCSV {
     }
 
     nonisolated static func joinCSVFields(_ fields: [String]) -> String {
-        fields.map { escapeCSVField($0) }.joined(separator: ",")
+        fields.map { field in
+            let needsQuotes = field.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" })
+                || UUID(uuidString: field) != nil
+            if needsQuotes {
+                return "\"" + field.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+            }
+            return field
+        }.joined(separator: ",")
     }
 
     nonisolated static func escapeCSVField(_ field: String) -> String {

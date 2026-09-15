@@ -344,7 +344,6 @@ struct SubcontractorsView: View {
 
 private struct SubcontractorFirmDetailView: View {
     @EnvironmentObject var subcontractorStore: SubcontractorStore
-    @EnvironmentObject var firebaseBackend: FirebaseBackend
     let subcontractorId: UUID
     @State private var showingEdit = false
     @State private var showingAddOperative = false
@@ -400,7 +399,6 @@ private struct SubcontractorFirmDetailView: View {
             if let subcontractor {
                 SubcontractorFirmEditorView(existingSubcontractor: subcontractor)
                     .environmentObject(subcontractorStore)
-                    .environmentObject(firebaseBackend)
             } else {
                 ProgressView("Loading…")
                     .padding()
@@ -411,7 +409,6 @@ private struct SubcontractorFirmDetailView: View {
                 SubcontractorOperativeEditorSheet(firmName: subcontractor.name) { newContact in
                     appendOperative(newContact)
                 }
-                .environmentObject(firebaseBackend)
             } else {
                 ProgressView("Loading…")
                     .padding()
@@ -425,7 +422,6 @@ private struct SubcontractorFirmDetailView: View {
                 ) { updatedContact in
                     upsertOperative(updatedContact)
                 }
-                .environmentObject(firebaseBackend)
             } else {
                 ProgressView("Loading…")
                     .padding()
