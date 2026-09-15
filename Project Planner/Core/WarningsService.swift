@@ -222,7 +222,7 @@ class WarningsService: ObservableObject {
 
         updateTask?.cancel()
         updateTask = Task { @MainActor in
-            await performUpdate(
+            _ = await performUpdate(
                 operatives: operatives,
                 bookings: bookings,
                 projects: projects,
@@ -245,6 +245,7 @@ class WarningsService: ObservableObject {
     }
 
     /// Awaitable update for Home / report (build + compute off main thread).
+    @discardableResult
     func updateWarningsAsync(
         operatives: [Operative],
         bookings: [Booking],
@@ -263,13 +264,13 @@ class WarningsService: ObservableObject {
         projectsWithTomorrowBookings: [Project] = [],
         materialItemsForTomorrow: [MaterialItem] = [],
         publishToLiveCache: Bool = true
-    ) async {
+    ) async -> Bool {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
         let resolvedWarningDetection = warningDetection ?? .default
         let resolvedInvoicing = invoicingSettings ?? .default
 
         updateTask?.cancel()
-        await performUpdate(
+        return await performUpdate(
             operatives: operatives,
             bookings: bookings,
             projects: projects,
@@ -308,9 +309,10 @@ class WarningsService: ObservableObject {
         projectsWithTomorrowBookings: [Project],
         materialItemsForTomorrow: [MaterialItem],
         publishToLiveCache: Bool
-    ) async {
+    ) async -> Bool {
         updateGeneration += 1
         let generation = updateGeneration
+        if Task.isCancelled { return false }
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         // Explicit coverage (from refresh helper) still publishes to the live Warnings list
@@ -366,12 +368,14 @@ class WarningsService: ObservableObject {
         await Task.yield()
         try? await Task.sleep(nanoseconds: isLiveScan ? 300_000_000 : 50_000_000)
         await Task.yield()
+        if Task.isCancelled || generation != updateGeneration { return false }
         let snapshot = WarningsComputation.makeSnapshot(from: input)
         await Task.yield()
+        if Task.isCancelled || generation != updateGeneration { return false }
         let generated = await Task.detached(priority: .utility) {
             WarningsComputation.generate(snapshot)
         }.value
-        guard generation == updateGeneration else { return }
+        if Task.isCancelled || generation != updateGeneration { return false }
         if isLiveScan {
             allGeneratedWarnings = generated
             activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
@@ -391,6 +395,7 @@ class WarningsService: ObservableObject {
             }
             print("🔥🔥🔥 DEBUG: WarningsService PERIOD published count=\(generated.count) sharedLiveUntouched=\(self === WarningsService.shared) active=\(WarningsService.shared.activeWarnings.count)")
         }
+        return true
     }
 
     /// Rebuild: Weekly Report copies live-cache rows into the private period bucket (no heavy rescan).

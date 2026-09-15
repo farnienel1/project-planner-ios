@@ -7,8 +7,12 @@ import Foundation
 
 enum WarningsRefreshHelper {
     @MainActor private static var lastRefreshAt: Date?
-    @MainActor private static var inFlightTask: Task<Void, Never>?
+    @MainActor private static var inFlightTask: Task<Bool, Never>?
+    @MainActor private static var inFlightGeneration = 0
     private static let minRefreshInterval: TimeInterval = 45
+
+    /// Last reason a refresh returned false (manual Refresh / settings Save).
+    @MainActor static var lastSkipMessage: String?
 
     /// Home must not start a live scan while Weekly Report is open.
     @MainActor static var isWeeklyReportVisible = false
@@ -31,7 +35,38 @@ enum WarningsRefreshHelper {
         force: Bool = false,
         manualUserInitiated: Bool = false
     ) async -> Bool {
-        guard userStore.hasAdminAccess() else { return false }
+        if manualUserInitiated {
+            lastSkipMessage = nil
+            // Stale Home/previous scans must not block or swallow an explicit Refresh.
+            if inFlightTask != nil {
+                print("🔥🔥🔥 DEBUG: Warnings manual refresh cancelling stale in-flight scan")
+                cancelInFlightRefresh()
+            }
+            // Device/TestFlight Firestore is slower than Simulator (~3.6s used to give up too soon).
+            for attempt in 0..<60 {
+                if readinessSkipMessage(
+                    userStore: userStore,
+                    bookingStore: bookingStore,
+                    operativeStore: operativeStore,
+                    projectStore: projectStore,
+                    firebaseBackend: firebaseBackend
+                ) == nil {
+                    break
+                }
+                print("🔥🔥🔥 DEBUG: Warnings refresh waiting (attempt \(attempt + 1)/60 bootstrapping=\(firebaseBackend.isBootstrappingOrgDataLoad) storesBusy=\(bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading) profile=\(userStore.isHomeProfileLoading) bookings=\(bookingStore.bookings.count))")
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+
+        if !userStore.hasAdminAccess() {
+            if manualUserInitiated {
+                if userStore.isHomeProfileLoading || userStore.currentUser == nil {
+                    return skip("Admin profile is still loading. Try again in a few seconds.")
+                }
+                return skip("You need admin access to refresh warnings.")
+            }
+            return false
+        }
 
         if isWarningsSheetVisible && !manualUserInitiated {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (Warnings sheet visible)")
@@ -48,35 +83,23 @@ enum WarningsRefreshHelper {
             return false
         }
 
-        // Avoid scanning while stores/bootstrap are mid-load (publishes false empty results).
-        // Manual Refresh (and settings Save) retries briefly — Firestore saves often race a short reload.
-        if manualUserInitiated {
-            for attempt in 0..<8 {
-                let bootstrapping = firebaseBackend.isBootstrappingOrgDataLoad
-                let storesBusy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading
-                if !bootstrapping && firebaseBackend.hasBootstrappedOrgDataLoad && !storesBusy {
-                    break
-                }
-                print("🔥🔥🔥 DEBUG: Warnings refresh waiting (attempt \(attempt + 1)/8 bootstrapping=\(bootstrapping) storesBusy=\(storesBusy))")
-                try? await Task.sleep(nanoseconds: 450_000_000)
+        if let busy = readinessSkipMessage(
+            userStore: userStore,
+            bookingStore: bookingStore,
+            operativeStore: operativeStore,
+            projectStore: projectStore,
+            firebaseBackend: firebaseBackend
+        ) {
+            if manualUserInitiated {
+                return skip(busy)
             }
-        }
-
-        if firebaseBackend.isBootstrappingOrgDataLoad {
-            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap in progress)")
-            return false
-        }
-        if !firebaseBackend.hasBootstrappedOrgDataLoad {
-            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (org bootstrap not finished)")
-            return false
-        }
-        if bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading {
-            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (stores still loading)")
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (\(busy))")
             return false
         }
 
         if !force {
             if holidayStore.isLoading {
+                print("🔥🔥🔥 DEBUG: Warnings refresh skipped (holiday store loading)")
                 return false
             }
             let now = Date()
@@ -94,11 +117,12 @@ enum WarningsRefreshHelper {
 
         if let inFlightTask {
             print("🔥🔥🔥 DEBUG: Warnings refresh awaiting in-flight pass (no second snapshot)")
-            await inFlightTask.value
-            return true
+            return await inFlightTask.value
         }
 
-        let task = Task { @MainActor in
+        inFlightGeneration += 1
+        let generation = inFlightGeneration
+        let task = Task<Bool, Never> { @MainActor in
             await performRefresh(
                 operativeStore: operativeStore,
                 bookingStore: bookingStore,
@@ -112,16 +136,20 @@ enum WarningsRefreshHelper {
         }
         inFlightTask = task
         lastRefreshAt = Date()
-        await task.value
-        if inFlightTask == task {
+        let published = await task.value
+        if inFlightGeneration == generation {
             inFlightTask = nil
         }
-        return true
+        if !published && lastSkipMessage == nil {
+            lastSkipMessage = "Scan did not finish. Keep this screen open and tap Refresh now again."
+        }
+        return published
     }
 
     /// Cancel any in-flight Home warnings scan before opening heavy sheets (Weekly Report).
     @MainActor
     static func cancelInFlightRefresh() {
+        inFlightGeneration += 1
         inFlightTask?.cancel()
         inFlightTask = nil
         WarningsService.shared.cancelInFlightUpdate()
@@ -142,6 +170,41 @@ enum WarningsRefreshHelper {
     }
 
     @MainActor
+    private static func skip(_ message: String) -> Bool {
+        lastSkipMessage = message
+        print("🔥🔥🔥 DEBUG: Warnings refresh skipped (\(message))")
+        return false
+    }
+
+    @MainActor
+    private static func readinessSkipMessage(
+        userStore: UserStore,
+        bookingStore: BookingStore,
+        operativeStore: OperativeStore,
+        projectStore: ProjectStore,
+        firebaseBackend: FirebaseBackend
+    ) -> String? {
+        if userStore.isHomeProfileLoading || userStore.currentUser == nil {
+            return "Admin profile is still loading. Try again in a few seconds."
+        }
+        if firebaseBackend.isBootstrappingOrgDataLoad {
+            return "Organisation data is still loading. Try again in a few seconds."
+        }
+        if !firebaseBackend.hasBootstrappedOrgDataLoad {
+            return "Organisation data has not finished loading. Try again in a few seconds."
+        }
+        if bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading {
+            return "Bookings are still loading. Try again in a few seconds."
+        }
+        // Publishing an empty window before the first bookings fetch finishes made
+        // Warnings look like a successful all-clear on TestFlight.
+        if !bookingStore.hasCompletedInitialLoad && bookingStore.bookings.isEmpty {
+            return "Bookings are still loading. Try again in a few seconds."
+        }
+        return nil
+    }
+
+    @MainActor
     private static func performRefresh(
         operativeStore: OperativeStore,
         bookingStore: BookingStore,
@@ -151,7 +214,7 @@ enum WarningsRefreshHelper {
         holidayStore: HolidayStore,
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore
-    ) async {
+    ) async -> Bool {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
@@ -169,57 +232,132 @@ enum WarningsRefreshHelper {
         let dayCount = max(1, (cal.dateComponents([.day], from: coverageStart, to: coverageEnd).day ?? 0) + 1)
         print("🔥🔥🔥 DEBUG: Warnings coverage mode=\(warningDetection.clashLookaheadMode.displayName) days=\(dayCount) \(coverageStart)…\(coverageEnd)")
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
+        let projects = projectStore.projects
+
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        await Task.yield()
+        if Task.isCancelled { return false }
+
+        // Phase 1: today + tomorrow so TestFlight is not stuck on Refresh now while a
+        // full-week / invoicing-period scan is still running (those can hang/jetsam).
+        let nearPublished = await runScan(
+            start: today,
+            end: tomorrow,
+            activeOperatives: activeOperatives,
+            bookings: bookingStore.bookings,
+            projects: projects,
+            users: userStore.organizationUsers,
+            managerSiteBookings: managerScheduleStore.managerSiteBookings,
+            holidayBookings: holidayStore.bookings,
+            payrollTimePolicy: policy,
+            warningDetection: warningDetection,
+            invoicingSettings: invoicingSettings,
+            materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
+            materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
+            materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday
+        )
+        if nearPublished {
+            lastSkipMessage = nil
+            postWarningsCountDidChange()
+        }
+        if Task.isCancelled {
+            return nearPublished
+        }
+
+        let needsFullWindow = coverageStart < today || coverageEnd > tomorrow
+        var published = nearPublished
+        if needsFullWindow {
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            if Task.isCancelled { return published }
+            print("🔥🔥🔥 DEBUG: Warnings helper starting full coverage pass \(coverageStart)…\(coverageEnd)")
+            let fullPublished = await runScan(
+                start: coverageStart,
+                end: coverageEnd,
+                activeOperatives: activeOperatives,
+                bookings: bookingStore.bookings,
+                projects: projects,
+                users: userStore.organizationUsers,
+                managerSiteBookings: managerScheduleStore.managerSiteBookings,
+                holidayBookings: holidayStore.bookings,
+                payrollTimePolicy: policy,
+                warningDetection: warningDetection,
+                invoicingSettings: invoicingSettings,
+                materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
+                materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
+                materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday
+            )
+            if fullPublished {
+                lastSkipMessage = nil
+                postWarningsCountDidChange()
+            }
+            published = fullPublished || published
+        }
+        return published
+    }
+
+    @MainActor
+    private static func runScan(
+        start: Date,
+        end: Date,
+        activeOperatives: [Operative],
+        bookings: [Booking],
+        projects: [Project],
+        users: [AppUser],
+        managerSiteBookings: [ManagerSiteBooking],
+        holidayBookings: [HolidayBooking],
+        payrollTimePolicy: OrgPayrollTimePolicy,
+        warningDetection: OrgWarningDetectionSettings,
+        invoicingSettings: OrganizationInvoicingSettings,
+        materialOrderCutOffEnabled: Bool,
+        materialCutOffOnSaturday: Bool,
+        materialCutOffOnSunday: Bool
+    ) async -> Bool {
+        let cal = Calendar.current
+        let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: Date())) ?? Date())
         let tomorrowIds = Set(
-            bookingStore.bookings
+            bookings
                 .filter {
                     cal.isDate($0.date, inSameDayAs: tomorrow) &&
                         ($0.status == .confirmed || $0.status == .tentative)
                 }
                 .map(\.projectId)
         )
-        let projects = projectStore.projects
         let projectsTomorrow = projects.filter { tomorrowIds.contains($0.id) }
-
-        // Pre-window to the detection horizon before WarningsService snapshot work.
-        let liveBookings = bookingStore.bookings.filter {
+        let liveBookings = bookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= coverageStart && day <= coverageEnd
+            return day >= start && day <= end
         }
-        let liveManager = managerScheduleStore.managerSiteBookings.filter {
+        let liveManager = managerSiteBookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= coverageStart && day <= coverageEnd
+            return day >= start && day <= end
         }
-        let liveHolidays = holidayStore.bookings.filter { holiday in
-            let start = cal.startOfDay(for: holiday.startDate)
-            let end = cal.startOfDay(for: holiday.endDate)
-            return end >= coverageStart && start <= coverageEnd
+        let liveHolidays = holidayBookings.filter { holiday in
+            let holidayStart = cal.startOfDay(for: holiday.startDate)
+            let holidayEnd = cal.startOfDay(for: holiday.endDate)
+            return holidayEnd >= start && holidayStart <= end
         }
-        print("🔥🔥🔥 DEBUG: Warnings helper pre-window \(coverageStart)…\(coverageEnd) bookings=\(liveBookings.count)/\(bookingStore.bookings.count) mgr=\(liveManager.count)/\(managerScheduleStore.managerSiteBookings.count)")
+        print("🔥🔥🔥 DEBUG: Warnings helper pre-window \(start)…\(end) bookings=\(liveBookings.count)/\(bookings.count) mgr=\(liveManager.count)/\(managerSiteBookings.count)")
 
-        await Task.yield()
-        try? await Task.sleep(nanoseconds: 250_000_000)
-        await Task.yield()
-        if Task.isCancelled { return }
-
-        await WarningsService.shared.updateWarningsAsync(
+        return await WarningsService.shared.updateWarningsAsync(
             operatives: activeOperatives,
             bookings: liveBookings,
             projects: projects,
-            users: userStore.organizationUsers,
+            users: users,
             managerSiteBookings: liveManager,
             holidayBookings: liveHolidays,
-            payrollTimePolicy: policy,
+            payrollTimePolicy: payrollTimePolicy,
             warningDetection: warningDetection,
             invoicingSettings: invoicingSettings,
-            labourCoverageStart: coverageStart,
-            labourCoverageEnd: coverageEnd,
-            materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
-            materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
-            materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
+            labourCoverageStart: start,
+            labourCoverageEnd: end,
+            materialOrderCutOffEnabled: materialOrderCutOffEnabled,
+            materialCutOffOnSaturday: materialCutOffOnSaturday,
+            materialCutOffOnSunday: materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsTomorrow,
             publishToLiveCache: true
         )
-        postWarningsCountDidChange()
     }
 
     @MainActor

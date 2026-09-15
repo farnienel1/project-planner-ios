@@ -582,7 +582,10 @@ struct OrganisationWarningsSettingsView: View {
                 manualUserInitiated: true
             )
             if !didRefresh {
-                errorMessage = "Settings saved, but warnings could not refresh yet. Go back and tap Refresh."
+                let skip = WarningsRefreshHelper.lastSkipMessage
+                errorMessage = skip.map {
+                    "Settings saved, but warnings could not refresh yet. \($0) Go back and tap Refresh."
+                } ?? "Settings saved, but warnings could not refresh yet. Go back and tap Refresh."
             }
             userHasEdited = false
             if let onSaved {
@@ -616,7 +619,10 @@ struct OrganisationWarningsSettingsView: View {
                 manualUserInitiated: true
             )
             if !didRefresh {
-                errorMessage = "Settings saved, but warnings could not refresh yet. Go back and tap Refresh."
+                let skip = WarningsRefreshHelper.lastSkipMessage
+                errorMessage = skip.map {
+                    "Settings saved, but warnings could not refresh yet. \($0) Go back and tap Refresh."
+                } ?? "Settings saved, but warnings could not refresh yet. Go back and tap Refresh."
             }
             userHasEdited = false
         } catch {

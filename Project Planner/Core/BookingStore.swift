@@ -14,12 +14,15 @@ class BookingStore: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
     @Published var isOffline: Bool = false
+    /// False until the first load attempt finishes (success, cache fallback, or timeout).
+    @Published private(set) var hasCompletedInitialLoad: Bool = false
     
     private let persistenceService: PersistenceService
     private var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
     private var cancellables = Set<AnyCancellable>()
     private var pendingReloadAfterCurrentLoad = false
+    private var loadGeneration = 0
     
     init(persistenceService: PersistenceService? = nil) {
         self.persistenceService = persistenceService ?? PersistenceService()
@@ -98,15 +101,30 @@ class BookingStore: ObservableObject {
         }
         isLoading = true
         errorMessage = nil
+        loadGeneration += 1
+        let generation = loadGeneration
         
         Task { @MainActor in
+            let timeoutTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 45_000_000_000)
+                if isLoading && loadGeneration == generation {
+                    print("🔥🔥🔥 DEBUG: ⚠️ BookingStore load timeout - forcing completion")
+                    isLoading = false
+                    hasCompletedInitialLoad = true
+                    errorMessage = "Loading timed out. Please try 'Force Reload Data' in Settings."
+                }
+            }
             defer {
-                self.isLoading = false
-                if self.pendingReloadAfterCurrentLoad {
-                    self.pendingReloadAfterCurrentLoad = false
-                    if self.firebaseBackend?.hasBootstrappedOrgDataLoad == true,
-                       self.firebaseBackend?.isBootstrappingOrgDataLoad != true {
-                        self.loadData()
+                timeoutTask.cancel()
+                if loadGeneration == generation {
+                    self.isLoading = false
+                    self.hasCompletedInitialLoad = true
+                    if self.pendingReloadAfterCurrentLoad {
+                        self.pendingReloadAfterCurrentLoad = false
+                        if self.firebaseBackend?.hasBootstrappedOrgDataLoad == true,
+                           self.firebaseBackend?.isBootstrappingOrgDataLoad != true {
+                            self.loadData()
+                        }
                     }
                 }
             }
