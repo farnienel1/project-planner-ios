@@ -65,7 +65,6 @@ struct WarningsDetailView: View {
     @State private var showingWarningsSettings = false
     @State private var isRefreshingWarnings = false
     @State private var refreshMessage: String?
-    @State private var didAutoRetryEmptyRefresh = false
 
     private var organisationSubtitle: String {
         firebaseBackend.currentOrganization?.name ?? "Organisation"
@@ -98,7 +97,6 @@ struct WarningsDetailView: View {
             .onAppear {
                 WarningsRefreshHelper.isWarningsSheetVisible = true
                 print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED count=\(warningsService.activeWarnings.count) completed=\(warningsService.hasCompletedLiveDetection)")
-                scheduleEmptyStateAutoRetryIfNeeded()
             }
             .onDisappear {
                 WarningsRefreshHelper.isWarningsSheetVisible = false
@@ -237,7 +235,7 @@ struct WarningsDetailView: View {
     private var emptyState: some View {
         ScrollView {
             VStack(spacing: 16) {
-                if isRefreshingWarnings && !warningsService.hasCompletedLiveDetection {
+                if isRefreshingWarnings {
                     ProgressView()
                         .controlSize(.large)
                         .padding(.top, 32)
@@ -259,11 +257,6 @@ struct WarningsDetailView: View {
                         .foregroundStyle(WarningsUI.textMuted)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
-                    if isRefreshingWarnings {
-                        Text("Updating full detection window…")
-                            .font(.footnote.weight(.medium))
-                            .foregroundStyle(WarningsUI.textMuted)
-                    }
                 } else {
                     Button(action: startManualRefresh) {
                         Image(systemName: "arrow.clockwise.circle")
@@ -279,8 +272,8 @@ struct WarningsDetailView: View {
                         .foregroundStyle(WarningsUI.textMuted)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
-                    if let skipReason = refreshMessage ?? WarningsRefreshHelper.lastSkipMessage {
-                        Text(skipReason)
+                    if let refreshMessage {
+                        Text(refreshMessage)
                             .font(.footnote.weight(.medium))
                             .foregroundStyle(WarningsUI.red)
                             .multilineTextAlignment(.center)
@@ -718,18 +711,6 @@ struct WarningsDetailView: View {
         }
     }
 
-    private func scheduleEmptyStateAutoRetryIfNeeded() {
-        guard !warningsService.hasCompletedLiveDetection, !didAutoRetryEmptyRefresh else { return }
-        didAutoRetryEmptyRefresh = true
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard !Task.isCancelled else { return }
-            guard !warningsService.hasCompletedLiveDetection, !isRefreshingWarnings else { return }
-            print("🔥🔥🔥 DEBUG: WARNINGS_EMPTY_AUTO_RETRY")
-            await refreshWarningsTodayOnly()
-        }
-    }
-
     @MainActor
     private func refreshWarningsTodayOnly() async {
         guard !isRefreshingWarnings else { return }
@@ -760,10 +741,9 @@ struct WarningsDetailView: View {
             let window = "\(formatter.string(from: start))–\(formatter.string(from: end))"
             refreshMessage = "Updated · \(warningsService.activeWarnings.count) active · \(mode) · \(window)"
         } else {
-            refreshMessage = WarningsRefreshHelper.lastSkipMessage
-                ?? "Could not refresh yet (still loading). Try again in a few seconds."
+            refreshMessage = "Could not refresh yet (still loading). Try again in a few seconds."
         }
-        print("🔥🔥🔥 DEBUG: WARNINGS_MANUAL_REFRESH_DONE did=\(did) active=\(warningsService.activeWarnings.count) completed=\(warningsService.hasCompletedLiveDetection)")
+        print("🔥🔥🔥 DEBUG: WARNINGS_MANUAL_REFRESH_DONE did=\(did) active=\(warningsService.activeWarnings.count)")
         NotificationCenter.default.post(name: .warningsDidRecompute, object: nil, userInfo: ["count": warningsService.warningCount])
     }
 }
