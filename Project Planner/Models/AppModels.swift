@@ -14,6 +14,14 @@ enum ThemePreference: String, CaseIterable, Codable, Sendable {
     case light = "light"
     case dark = "dark"
     case system = "system"
+
+    var displayName: String {
+        switch self {
+        case .light: return "Light"
+        case .dark: return "Dark"
+        case .system: return "Match system"
+        }
+    }
     
     var colorScheme: ColorScheme? {
         switch self {

@@ -102,7 +102,6 @@ struct SettingsProfileDetailView: View {
     @State private var manualLinkOrganizationId = ""
     @State private var isLinking = false
     @State private var linkError: String?
-    @State private var isUpdatingUser = false
     @State private var showingProfilePhotoSourcePicker = false
     @State private var profilePhotoPickerSource: UIImagePickerController.SourceType = .photoLibrary
     @State private var showingProfileImagePicker = false
@@ -167,7 +166,6 @@ struct SettingsProfileDetailView: View {
             profileInfoSection
             billingDetailsSection
             manualLinkSection
-            debugNameSection
         }
     }
 
@@ -286,23 +284,6 @@ struct SettingsProfileDetailView: View {
         }
     }
 
-    @ViewBuilder
-    private var debugNameSection: some View {
-        if let appUser = userStore.currentUser, appUser.email == "farnienelyt@gmail.com" {
-            Section {
-                Button {
-                    updateUserName()
-                } label: {
-                    HStack {
-                        if isUpdatingUser { ProgressView().scaleEffect(0.85) }
-                        Text(isUpdatingUser ? "Updating…" : "Set display name to Farnie Nel")
-                    }
-                }
-                .disabled(isUpdatingUser)
-            }
-        }
-    }
-
     private func syncBillingDraftsFromUser() {
         vatNumberDraft = userStore.currentUser?.vatNumber ?? ""
         utrNumberDraft = userStore.currentUser?.utrNumber ?? ""
@@ -370,18 +351,6 @@ struct SettingsProfileDetailView: View {
             } else {
                 linkError = "Could not link. Check the organisation ID."
             }
-        }
-    }
-
-    private func updateUserName() {
-        Task {
-            isUpdatingUser = true
-            defer { isUpdatingUser = false }
-            guard var u = userStore.currentUser, u.email == "farnienelyt@gmail.com" else { return }
-            u.firstName = "Farnie"
-            u.surname = "Nel"
-            try? await firebaseBackend.saveUser(u)
-            await userStore.loadCurrentUser()
         }
     }
 

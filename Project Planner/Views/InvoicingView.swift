@@ -1631,22 +1631,21 @@ private struct MyTimesheetView: View {
             Text("Payment Runs and Payouts")
                 .font(.headline)
             if settings.paymentRunMode == .dateRanges {
-                ForEach(settings.normalizedRanges, id: \.id) { range in
+                ForEach(Array(settings.normalizedRanges.enumerated()), id: \.element.id) { index, range in
                     Text("• Run: \(range.startDay) - \(range.endDay)")
                         .font(.subheadline)
+                    if let payout = interleavedPayoutLine(settings: settings, runIndex: index) {
+                        Text(payout)
+                            .font(.subheadline)
+                    }
                 }
             } else {
                 Text("• \(settings.recurringRunDisplaySummary)")
                     .font(.subheadline)
-            }
-            if settings.paymentDateMode == .specificDates {
-                ForEach(settings.normalizedPaymentDates, id: \.self) { day in
-                    Text("• Payout day \(day)")
+                if let payout = interleavedPayoutLine(settings: settings, runIndex: 0) {
+                    Text(payout)
                         .font(.subheadline)
                 }
-            } else {
-                Text("• Payout every \(settings.recurringPaymentDay.title)")
-                    .font(.subheadline)
             }
             if !settings.normalizedUserNote.isEmpty {
                 Divider()
@@ -1665,6 +1664,15 @@ private struct MyTimesheetView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color(.separator), lineWidth: 0.5)
         )
+    }
+
+    private func interleavedPayoutLine(settings: OrganizationInvoicingSettings, runIndex: Int) -> String? {
+        if settings.paymentDateMode == .specificDates {
+            let dates = settings.normalizedPaymentDates
+            guard runIndex < dates.count else { return nil }
+            return "• Payout day \(dates[runIndex])"
+        }
+        return "• Payout every \(settings.recurringPaymentDay.title)"
     }
 
     @ViewBuilder
@@ -4123,32 +4131,29 @@ private struct GenerateInvoiceView: View {
             if settings.paymentRunMode == .dateRanges {
                 ForEach(Array(settings.normalizedRanges.enumerated()), id: \.element.id) { index, range in
                     summaryRow(chip: "\(range.startDay) - \(range.endDay)", text: index == 0 ? "First payment run" : "Second payment run")
+                    if let payout = payoutSummary(forRunIndex: index) {
+                        summaryRow(chip: payout.chip, text: payout.text)
+                    }
                 }
             } else {
                 summaryRow(chip: "\(settings.recurringRunStartDay.title.prefix(3)) - \(settings.recurringRunEndDay.title.prefix(3))", text: settings.recurringRunDisplaySummary)
-            }
-
-            Text("Payment Day / Dates")
-                .font(.footnote.weight(.black))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .tracking(1.2)
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 6)
-                .overlay(alignment: .top) { Divider().padding(.horizontal, 16) }
-
-            if settings.paymentDateMode == .specificDates {
-                ForEach(Array(settings.normalizedPaymentDates.enumerated()), id: \.offset) { index, day in
-                    summaryRow(chip: "Day \(day)", text: index == 0 ? "Run 1 payout" : "Run 2 payout")
+                if let payout = payoutSummary(forRunIndex: 0) {
+                    summaryRow(chip: payout.chip, text: payout.text)
                 }
-            } else {
-                summaryRow(chip: "Every \(settings.recurringPaymentDay.title)", text: "Recurring payout day")
             }
         }
         .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(color: Color.black.opacity(0.07), radius: 8, y: 2)
+    }
+
+    private func payoutSummary(forRunIndex index: Int) -> (chip: String, text: String)? {
+        if settings.paymentDateMode == .specificDates {
+            let dates = settings.normalizedPaymentDates
+            guard index < dates.count else { return nil }
+            return ("Day \(dates[index])", "Payout day")
+        }
+        return ("Every \(settings.recurringPaymentDay.title)", "Payout day")
     }
 
     @ViewBuilder

@@ -105,6 +105,16 @@ class SmartCacheService: ObservableObject {
         await performSync()
     }
 
+    /// Re-check the current network path and push the outbox if we are back online.
+    func refreshConnectionAndSync() async {
+        #if canImport(Network)
+        isOnline = networkMonitor.currentPath.status == .satisfied
+        #endif
+        if isOnline {
+            await performSync()
+        }
+    }
+
     private func performSync() async {
         guard let firebaseBackend else {
             NotificationCenter.default.post(name: .syncOfflineChanges, object: nil)

@@ -43,7 +43,6 @@ struct SettingsView: View {
     @State private var isRunningPushDiagnostic = false
     @State private var deleteTestMessage = ""
     @State private var isTestingDelete = false
-    @State private var isUpdatingUser = false
     @State private var isSeedingPlayground = false
     @State private var playgroundSeedMessage: String?
     private var canConfigureMaterialCutOffNotifications: Bool {
@@ -229,6 +228,20 @@ struct SettingsView: View {
                     iconFg: ProjectWorksRevampColors.blue,
                     title: "My profile",
                     subtitle: "Name, photo, contact details"
+                )
+            }
+            .buttonStyle(.plain)
+            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            NavigationLink {
+                AppearanceSettingsView()
+                    .environmentObject(appSettings)
+            } label: {
+                settingsHubRow(
+                    icon: "circle.lefthalf.filled",
+                    iconBg: Color.primary.opacity(0.08),
+                    iconFg: ProjectWorksRevampColors.ink,
+                    title: "Appearance",
+                    subtitle: appSettings.settings.theme.displayName
                 )
             }
             .buttonStyle(.plain)
@@ -906,38 +919,6 @@ struct SettingsView: View {
         }
         
         print("🔥🔥🔥 DEBUG: ========== DELETE TEST COMPLETE ==========")
-    }
-    
-    private func updateUserName() {
-        Task {
-            await MainActor.run {
-                isUpdatingUser = true
-            }
-            
-            guard let currentUser = userStore.currentUser,
-                  currentUser.email == "farnienelyt@gmail.com" else {
-                await MainActor.run {
-                    isUpdatingUser = false
-                }
-                return
-            }
-            
-            var updatedUser = currentUser
-            updatedUser.firstName = "Farnie"
-            updatedUser.surname = "Nel"
-            
-            do {
-                try await firebaseBackend.saveUser(updatedUser)
-                await userStore.loadCurrentUser() // Reload to refresh UI
-                print("🔥🔥🔥 DEBUG: ✅ Updated user name to Farnie Nel")
-            } catch {
-                print("🔥🔥🔥 DEBUG: ❌ Failed to update user name: \(error.localizedDescription)")
-            }
-            
-            await MainActor.run {
-                isUpdatingUser = false
-            }
-        }
     }
 }
 

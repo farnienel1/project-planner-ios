@@ -21,7 +21,7 @@ struct OrganisationAnnualLeaveDefaultsView: View {
         Form {
             Section("Bank holiday region") {
                 Picker("Region", selection: $bankHolidayRegionId) {
-                    ForEach(BankHolidayRegionDirectory.groupedRegions(), id: \.group) { group in
+                    ForEach(BankHolidayRegionDirectory.pickerRegions(), id: \.group) { group in
                         Section(group.group) {
                             ForEach(group.regions) { region in
                                 Text(region.title).tag(region.id)
@@ -89,8 +89,12 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             startMonth = defaults.startMonth
             endMonth = defaults.endMonth
             carriesOver = defaults.carriesOver
-            bankHolidayRegionId = firebaseBackend.currentOrganization?.settings.bankHolidayRegionId
-                ?? BankHolidayRegionDirectory.defaultRegion(forCountryCode: firebaseBackend.currentOrganization?.countryCode ?? "GB").id
+            bankHolidayRegionId = BankHolidayRegionDirectory.pickerSelection(
+                forStoredRegionId: firebaseBackend.currentOrganization?.settings.bankHolidayRegionId
+                    ?? BankHolidayRegionDirectory.defaultRegion(
+                        forCountryCode: firebaseBackend.currentOrganization?.countryCode ?? "GB"
+                    ).id
+            )
         }
     }
 
@@ -113,12 +117,16 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             carriesOver: carriesOver
         )
         do {
-            try await firebaseBackend.updateOrganizationAnnualLeaveDefaults(defaults)
-            try await firebaseBackend.updateOrganizationBankHolidayRegion(bankHolidayRegionId)
+            try await firebaseBackend.updateOrganizationAnnualLeaveSettings(
+                defaults: defaults,
+                bankHolidayRegionId: bankHolidayRegionId
+            )
             let region = BankHolidayRegionDirectory.region(id: bankHolidayRegionId) ?? BankHolidayRegionDirectory.defaultRegion(forCountryCode: "GB")
-            BankHolidayService.shared.invalidateCache(for: region.id)
-            await BankHolidayService.shared.ensureLoaded(region: region, forceRefresh: true)
             dismiss()
+            Task {
+                BankHolidayService.shared.invalidateCache(for: region.id)
+                await BankHolidayService.shared.ensureLoaded(region: region, forceRefresh: true)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

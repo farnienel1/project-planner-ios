@@ -3694,6 +3694,49 @@ class FirebaseBackend: ObservableObject {
         storeOrganizationLocally(org)
     }
 
+    /// Admin: save annual-leave defaults and bank-holiday region in one write so settings dismiss immediately.
+    func updateOrganizationAnnualLeaveSettings(
+        defaults: OrganizationAnnualLeaveDefaults,
+        bankHolidayRegionId: String
+    ) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
+            )
+        }
+        let trimmed = bankHolidayRegionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Select an annual leave / bank holiday region."]
+            )
+        }
+        let payload: [String: Any] = [
+            "daysPerYear": defaults.daysPerYear,
+            "startMonth": defaults.startMonth,
+            "endMonth": defaults.endMonth,
+            "carriesOver": defaults.carriesOver,
+        ]
+        try await db.collection("organizations").document(orgId).setData(
+            [
+                "annualLeaveDefaults": payload,
+                "bankHolidayRegionId": trimmed,
+                "settings.bankHolidayRegionId": trimmed,
+                "updatedAt": Timestamp(date: Date()),
+            ],
+            merge: true
+        )
+        guard var org = currentOrganization else { return }
+        org.settings.annualLeaveDefaults = defaults
+        org.settings.bankHolidayRegionId = trimmed
+        org.updatedAt = Date()
+        currentOrganization = org
+        storeOrganizationLocally(org)
+    }
+
     /// Admin: organisation currency for rates, reports, and invoicing.
     func updateOrganizationCurrencyCode(_ code: String) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {

@@ -65,6 +65,7 @@ struct BookLabourFlowView: View {
     @State private var isSaving = false
     @State private var projectListSearchText = ""
     @State private var bookLabourOperativeClockEdit: BookLabourOperativeClockEdit?
+    @State private var bookLabourManagerClockEdit: BookLabourManagerClockEdit?
     @State private var pendingOperativeOverlap: PendingOperativeBookLabourOverlap?
     @State private var operativeDraftByProjectId: [UUID: OperativeRectifyDraft] = [:]
 
@@ -80,6 +81,7 @@ struct BookLabourFlowView: View {
         var startMinutes: Int
         var endMinutes: Int
         var breakRemoved: Bool
+        var timeSlot: TimeSlot = .customHours
     }
 
     private var day: Date { calendar.startOfDay(for: bookDate) }
@@ -172,9 +174,22 @@ struct BookLabourFlowView: View {
                     Text(errorBanner ?? "")
                 }
                 .sheet(item: $bookLabourOperativeClockEdit) { ctx in
-                    BookLabourOperativeHoursSheet(
-                        policy: payrollTimePolicy,
-                        onSave: { start, end, breakRemoved in
+                    let draft = operativeDraft(for: ctx.project.id, operativeId: ctx.operative.id)
+                    OperativeCustomHoursSheet(
+                        policy: dayPayrollPolicy,
+                        referenceDay: day,
+                        title: "Custom hours",
+                        subtitle: bookFlowDayLine,
+                        headerName: ctx.operative.name,
+                        headerInitials: PlannerUIInitials.from(ctx.operative.name),
+                        allowsOtMultiplierOverride: true,
+                        initialChoice: OperativeDayBookingChoice(
+                            timeSlot: .customHours,
+                            workStartTime: timeText(from: draft.startMinutes),
+                            workEndTime: timeText(from: draft.endMinutes),
+                            isBreakRemoved: draft.breakRemoved
+                        ),
+                        onSave: { start, end, breakRemoved, otMult in
                             bookLabourOperativeClockEdit = nil
                             saveOperativeBooking(
                                 operative: ctx.operative,
@@ -182,10 +197,42 @@ struct BookLabourFlowView: View {
                                 slot: .customHours,
                                 workStart: start,
                                 workEnd: end,
-                                breakRemoved: breakRemoved
+                                breakRemoved: breakRemoved,
+                                otMultiplierOverride: otMult
                             )
                         },
                         onCancel: { bookLabourOperativeClockEdit = nil }
+                    )
+                }
+                .sheet(item: $bookLabourManagerClockEdit) { ctx in
+                    OperativeCustomHoursSheet(
+                        policy: dayPayrollPolicy,
+                        referenceDay: day,
+                        title: "Custom hours",
+                        subtitle: bookFlowDayLine,
+                        headerName: ctx.person.displayName,
+                        headerInitials: PlannerUIInitials.from(ctx.person.displayName),
+                        allowsOtMultiplierOverride: false,
+                        initialChoice: OperativeDayBookingChoice(
+                            timeSlot: .customHours,
+                            workStartTime: dayPayrollPolicy.standardDayStart,
+                            workEndTime: dayPayrollPolicy.standardDayEnd,
+                            isBreakRemoved: false
+                        ),
+                        onSave: { start, end, breakRemoved, _ in
+                            bookLabourManagerClockEdit = nil
+                            saveManagerBooking(
+                                person: ctx.person,
+                                slot: .customHours,
+                                locationType: ctx.locationType,
+                                locationId: ctx.locationId,
+                                customLocationName: ctx.customLocationName,
+                                workStart: start,
+                                workEnd: end,
+                                breakRemoved: breakRemoved
+                            )
+                        },
+                        onCancel: { bookLabourManagerClockEdit = nil }
                     )
                 }
         }
@@ -583,6 +630,27 @@ struct BookLabourFlowView: View {
                         .disabled(isSaving)
                     }
                 }
+                Button {
+                    bookLabourManagerClockEdit = BookLabourManagerClockEdit(
+                        person: person,
+                        locationType: locationType,
+                        locationId: locationId,
+                        customLocationName: customLocationName
+                    )
+                } label: {
+                    Text("Custom")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color(red: 0.902, green: 0.945, blue: 0.984))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
+                        )
+                }
+                .disabled(isSaving)
             }
             .padding(18)
         }
@@ -595,7 +663,7 @@ struct BookLabourFlowView: View {
             let draft = operativeDraft(for: project.id, operativeId: op.id)
             let existingIntervals = existingIntervalsForOperative(op.id)
             let existingPaidHours = existingPaidHoursForOperative(op.id)
-            let newPaidHours = paidHours(startMinutes: draft.startMinutes, endMinutes: draft.endMinutes, breakRemoved: draft.breakRemoved)
+            let newPaidHours = paidHours(for: draft)
             let combinedPaidHours = existingPaidHours + newPaidHours
             let remainingHours = max(0, max(payrollTimePolicy.standardPaidHours, 0) - combinedPaidHours)
             ZStack(alignment: .top) {
@@ -640,6 +708,11 @@ struct BookLabourFlowView: View {
                             } label: {
                                 quickDraftButtonLabel("PM")
                             }
+                            Button {
+                                bookLabourOperativeClockEdit = BookLabourOperativeClockEdit(operative: op, project: project)
+                            } label: {
+                                quickDraftButtonLabel("CUSTOM")
+                            }
                         }
 
                         HStack(spacing: 8) {
@@ -650,7 +723,12 @@ struct BookLabourFlowView: View {
                             ) { value in
                                 setOperativeDraft(
                                     for: project.id,
-                                    draft: .init(startMinutes: value, endMinutes: draft.endMinutes, breakRemoved: draft.breakRemoved)
+                                    draft: .init(
+                                        startMinutes: value,
+                                        endMinutes: draft.endMinutes,
+                                        breakRemoved: draft.breakRemoved,
+                                        timeSlot: .customHours
+                                    )
                                 )
                             }
                             draftTimePicker(
@@ -660,7 +738,12 @@ struct BookLabourFlowView: View {
                             ) { value in
                                 setOperativeDraft(
                                     for: project.id,
-                                    draft: .init(startMinutes: draft.startMinutes, endMinutes: value, breakRemoved: draft.breakRemoved)
+                                    draft: .init(
+                                        startMinutes: draft.startMinutes,
+                                        endMinutes: value,
+                                        breakRemoved: draft.breakRemoved,
+                                        timeSlot: .customHours
+                                    )
                                 )
                             }
                         }
@@ -670,7 +753,12 @@ struct BookLabourFlowView: View {
                             set: { value in
                                 setOperativeDraft(
                                     for: project.id,
-                                    draft: .init(startMinutes: draft.startMinutes, endMinutes: draft.endMinutes, breakRemoved: value)
+                                    draft: .init(
+                                        startMinutes: draft.startMinutes,
+                                        endMinutes: draft.endMinutes,
+                                        breakRemoved: value,
+                                        timeSlot: draft.timeSlot
+                                    )
                                 )
                             }
                         ))
@@ -704,12 +792,13 @@ struct BookLabourFlowView: View {
                         )
 
                         Button {
+                            let persistTimes = draft.timeSlot == .customHours
                             saveOperativeBooking(
                                 operative: op,
                                 project: project,
-                                slot: .customHours,
-                                workStart: timeText(from: draft.startMinutes),
-                                workEnd: timeText(from: draft.endMinutes),
+                                slot: draft.timeSlot,
+                                workStart: persistTimes ? timeText(from: draft.startMinutes) : nil,
+                                workEnd: persistTimes ? timeText(from: draft.endMinutes) : nil,
                                 breakRemoved: draft.breakRemoved
                             )
                         } label: {
@@ -810,10 +899,18 @@ struct BookLabourFlowView: View {
             .reduce(0.0) { $0 + $1.paidBookedHours(policy: dayPayrollPolicy) }
     }
 
-    private func paidHours(startMinutes: Int, endMinutes: Int, breakRemoved: Bool) -> Double {
-        guard endMinutes > startMinutes else { return 0 }
-        var wall = Double(endMinutes - startMinutes) / 60.0
-        if !breakRemoved {
+    private func paidHours(for draft: OperativeRectifyDraft) -> Double {
+        switch draft.timeSlot {
+        case .morning, .afternoon:
+            return max(payrollTimePolicy.standardPaidHours, 0) / 2
+        case .fullDay:
+            return max(payrollTimePolicy.standardPaidHours, 0)
+        default:
+            break
+        }
+        guard draft.endMinutes > draft.startMinutes else { return 0 }
+        var wall = Double(draft.endMinutes - draft.startMinutes) / 60.0
+        if !draft.breakRemoved {
             wall = max(0, wall - payrollTimePolicy.standardUnpaidBreakHours)
         }
         return wall
@@ -830,13 +927,13 @@ struct BookLabourFlowView: View {
         let next: OperativeRectifyDraft
         switch slot {
         case .fullDay:
-            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved)
+            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved, timeSlot: .fullDay)
         case .morning:
-            next = .init(startMinutes: ds, endMinutes: mid, breakRemoved: breakRemoved)
+            next = .init(startMinutes: ds, endMinutes: mid, breakRemoved: breakRemoved, timeSlot: .morning)
         case .afternoon:
-            next = .init(startMinutes: mid, endMinutes: de, breakRemoved: breakRemoved)
+            next = .init(startMinutes: mid, endMinutes: de, breakRemoved: breakRemoved, timeSlot: .afternoon)
         default:
-            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved)
+            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved, timeSlot: .customHours)
         }
         setOperativeDraft(for: projectId, draft: next)
     }
@@ -1103,14 +1200,17 @@ struct BookLabourFlowView: View {
         slot: ManagerTimeSlot,
         locationType: ManagerLocationType,
         locationId: UUID?,
-        customLocationName: String?
+        customLocationName: String?,
+        workStart: String? = nil,
+        workEnd: String? = nil,
+        breakRemoved: Bool = false
     ) {
         let uid = person.user.id
         if duplicateManagerBooking(userId: uid, slot: slot, locationType: locationType, locationId: locationId, custom: customLocationName) {
             errorBanner = "That slot is already booked for this person."
             return
         }
-        if managerWouldClash(userId: uid, date: day, newSlot: slot) {
+        if managerWouldClash(userId: uid, date: day, newSlot: slot, workStart: workStart, workEnd: workEnd) {
             errorBanner = "This booking overlaps another in time on that day."
             return
         }
@@ -1120,7 +1220,10 @@ struct BookLabourFlowView: View {
             timeSlot: slot,
             locationType: locationType,
             locationId: locationId,
-            customLocationName: customLocationName
+            customLocationName: customLocationName,
+            workStartTime: workStart,
+            workEndTime: workEnd,
+            isBreakRemoved: breakRemoved
         )
         isSaving = true
         Task {
@@ -1140,6 +1243,7 @@ struct BookLabourFlowView: View {
         workStart: String? = nil,
         workEnd: String? = nil,
         breakRemoved: Bool = false,
+        otMultiplierOverride: Double? = nil,
         allowOverlap: Bool = false
     ) {
         guard let bookedBy = firebaseBackend.currentUser?.uid else {
@@ -1154,6 +1258,7 @@ struct BookLabourFlowView: View {
                 $0.workStartTime == workStart &&
                 $0.workEndTime == workEnd &&
                 $0.isBreakRemoved == breakRemoved &&
+                $0.otMultiplierOverride == otMultiplierOverride &&
                 $0.status != .cancelled
         }) {
             errorBanner = "That booking already exists."
@@ -1179,6 +1284,7 @@ struct BookLabourFlowView: View {
                         workStart: workStart,
                         workEnd: workEnd,
                         breakRemoved: breakRemoved,
+                        otMultiplierOverride: otMultiplierOverride,
                         allowOverlap: true
                     )
                 }
@@ -1195,7 +1301,8 @@ struct BookLabourFlowView: View {
                 bookedBy: bookedBy,
                 workStartTime: workStart,
                 workEndTime: workEnd,
-                isBreakRemoved: breakRemoved
+                isBreakRemoved: breakRemoved,
+                otMultiplierOverride: otMultiplierOverride
             )
             await notificationService.notifyBookedUsers(
                 projectName: project.siteName,
@@ -1261,7 +1368,13 @@ struct BookLabourFlowView: View {
         }
     }
 
-    private func managerWouldClash(userId: String, date: Date, newSlot: ManagerTimeSlot) -> Bool {
+    private func managerWouldClash(
+        userId: String,
+        date: Date,
+        newSlot: ManagerTimeSlot,
+        workStart: String? = nil,
+        workEnd: String? = nil
+    ) -> Bool {
         let existing = managerScheduleStore.bookings(for: userId, on: date)
         if existing.isEmpty { return false }
         let policy = payrollTimePolicy
@@ -1270,7 +1383,9 @@ struct BookLabourFlowView: View {
             date: date,
             timeSlot: newSlot,
             locationType: .office,
-            locationId: nil
+            locationId: nil,
+            workStartTime: workStart,
+            workEndTime: workEnd
         )
         return existing.contains { ManagerScheduleInterval.bookingsOverlap(probe, $0, policy: policy) }
     }
@@ -1383,6 +1498,14 @@ private struct BookLabourOperativeClockEdit: Identifiable {
     let id = UUID()
     let operative: Operative
     let project: Project
+}
+
+private struct BookLabourManagerClockEdit: Identifiable {
+    let id = UUID()
+    let person: BookLabourCandidate
+    let locationType: ManagerLocationType
+    let locationId: UUID?
+    let customLocationName: String?
 }
 
 private struct BookLabourOperativeHoursSheet: View {

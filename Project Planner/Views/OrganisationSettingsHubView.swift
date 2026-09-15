@@ -164,83 +164,20 @@ struct OrganisationSettingsHubView: View {
                     }
                     .buttonStyle(.plain)
                     Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 54)
-                    HStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(ProjectWorksRevampColors.upcomingAmber.opacity(0.18))
-                            .frame(width: 30, height: 30)
-                            .overlay(
-                                Image(systemName: "bell.badge.fill")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                            )
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Material cut-off notification to all managers")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
-                            Text(materialReminderSubtitle)
-                                .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
-                        }
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { appSettings.settings.notifications.materialOrderCutOff },
-                            set: { v in Task { await updateMaterial(v) } }
-                        ))
-                            .labelsHidden()
-                            .tint(ProjectWorksRevampColors.blue)
+                    NavigationLink {
+                        OrganisationMaterialCutOffSettingsView()
+                            .environmentObject(appSettings)
+                            .environmentObject(notificationService)
+                    } label: {
+                        hubRowLabel(
+                            icon: "bell.badge.fill",
+                            iconBg: ProjectWorksRevampColors.upcomingAmber.opacity(0.18),
+                            iconFg: ProjectWorksRevampColors.upcomingAmber,
+                            title: "Material cut-off",
+                            subtitle: materialReminderSubtitle
+                        )
                     }
-                    .padding(.vertical, 11)
-                    Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 54)
-                    HStack(spacing: 12) {
-                        Text("Material cut-off time")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                        Spacer()
-                        Picker(
-                            "Material cut-off time",
-                            selection: Binding(
-                                get: { materialCutOffTimeValue },
-                                set: { v in Task { await updateMaterialCutOffTime(v) } }
-                            )
-                        ) {
-                            ForEach(materialCutOffTimeOptions, id: \.self) { value in
-                                Text(materialCutOffTimeLabel(for: value)).tag(value)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .disabled(!appSettings.settings.notifications.materialOrderCutOff)
-                    }
-                    .padding(.vertical, 11)
-                    Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 54)
-                    HStack(spacing: 12) {
-                        Text("Material cut-off email on Saturday")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { appSettings.settings.notifications.materialCutOffOnSaturday },
-                            set: { v in Task { await updateMaterialWeekendSettings(includeSaturday: v, includeSunday: appSettings.settings.notifications.materialCutOffOnSunday) } }
-                        ))
-                            .labelsHidden()
-                            .tint(ProjectWorksRevampColors.blue)
-                            .disabled(!appSettings.settings.notifications.materialOrderCutOff)
-                    }
-                    .padding(.vertical, 11)
-                    Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 54)
-                    HStack(spacing: 12) {
-                        Text("Material cut-off email on Sunday")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { appSettings.settings.notifications.materialCutOffOnSunday },
-                            set: { v in Task { await updateMaterialWeekendSettings(includeSaturday: appSettings.settings.notifications.materialCutOffOnSaturday, includeSunday: v) } }
-                        ))
-                            .labelsHidden()
-                            .tint(ProjectWorksRevampColors.blue)
-                            .disabled(!appSettings.settings.notifications.materialOrderCutOff)
-                    }
-                    .padding(.vertical, 11)
+                    .buttonStyle(.plain)
                 }
 
                 hubSectionTitle("Payment Runs and Timesheets")
@@ -461,53 +398,18 @@ struct OrganisationSettingsHubView: View {
 
     private var materialReminderSubtitle: String {
         if !appSettings.settings.notifications.materialOrderCutOff {
-            return "Material cut-off notifications off"
+            return "Notifications off"
         }
-        return "Daily at \(materialCutOffTimeLabel(for: materialCutOffTimeValue))"
-    }
-
-    private var materialCutOffTimeOptions: [Int] {
-        stride(from: 0, through: 23 * 60 + 30, by: 30).map { $0 }
-    }
-
-    private var materialCutOffTimeValue: Int {
-        (appSettings.settings.notifications.materialCutOffHour * 60) + appSettings.settings.notifications.materialCutOffMinute
-    }
-
-    private func materialCutOffTimeLabel(for value: Int) -> String {
-        let hour24 = max(0, min(23, value / 60))
-        let minute = max(0, min(59, value % 60))
+        let hour24 = max(0, min(23, appSettings.settings.notifications.materialCutOffHour))
+        let minute = max(0, min(59, appSettings.settings.notifications.materialCutOffMinute))
         let hour12 = hour24 == 0 ? 12 : (hour24 > 12 ? hour24 - 12 : hour24)
         let suffix = hour24 >= 12 ? "PM" : "AM"
-        return String(format: "%d:%02d %@", hour12, minute, suffix)
+        return "Daily at \(String(format: "%d:%02d %@", hour12, minute, suffix))"
     }
 
     private func formatMult(_ v: Double) -> String {
         if v == floor(v) { return String(format: "%.0f", v) }
         return String(format: "%.1f", v)
-    }
-
-    private func updateMaterial(_ enabled: Bool) async {
-        var updated = appSettings.settings.notifications
-        updated.materialOrderCutOff = enabled
-        await appSettings.updateNotifications(updated)
-        await notificationService.refreshDailyMaterialCutOffReminder()
-    }
-
-    private func updateMaterialCutOffTime(_ totalMinutes: Int) async {
-        var updated = appSettings.settings.notifications
-        updated.materialCutOffHour = max(0, min(23, totalMinutes / 60))
-        updated.materialCutOffMinute = max(0, min(59, totalMinutes % 60))
-        await appSettings.updateNotifications(updated)
-        await notificationService.refreshDailyMaterialCutOffReminder()
-    }
-
-    private func updateMaterialWeekendSettings(includeSaturday: Bool, includeSunday: Bool) async {
-        var updated = appSettings.settings.notifications
-        updated.materialCutOffOnSaturday = includeSaturday
-        updated.materialCutOffOnSunday = includeSunday
-        await appSettings.updateNotifications(updated)
-        await notificationService.refreshDailyMaterialCutOffReminder()
     }
 
     private var invoicingSubtitle: String {

@@ -8,20 +8,6 @@
 import SwiftUI
 import FirebaseAuth
 
-private enum HolidayChrome {
-    static let canvas = Color(red: 0.97, green: 0.973, blue: 0.98)
-    static let ink = Color(red: 0.043, green: 0.063, blue: 0.125)
-    static let muted = Color(red: 0.42, green: 0.447, blue: 0.502)
-    static let border = Color(red: 0.933, green: 0.941, blue: 0.953)
-    static let accent = Color(red: 0.094, green: 0.373, blue: 0.647)
-    static let taken = Color(red: 0.133, green: 0.545, blue: 0.318)
-    static let pending = Color(red: 0.89, green: 0.22, blue: 0.22)
-    /// Pending request count in summary hero (distinct from calendar request red).
-    static let pendingMetric = Color(red: 0.98, green: 0.62, blue: 0.09)
-    /// Approved half-day on the booking calendar (distinct from pending request orange).
-    static let halfDayBooked = Color(red: 0.95, green: 0.52, blue: 0.12)
-}
-
 struct HolidayView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var holidayStore: HolidayStore
@@ -289,7 +275,7 @@ struct HolidayView: View {
                             switch activeSection {
                             case .calendar:
                                 if let summary = annualLeaveSummary {
-                                    leaveUsageHero(summary: summary)
+                                    AnnualLeaveUsageHeroView(summary: summary)
                                 }
                                 if canShowSelfServeBookedAnnualLeave {
                                     Button {
@@ -517,88 +503,6 @@ struct HolidayView: View {
                 }
             }
         }
-    }
-
-    private func leaveUsageHero(summary: AnnualLeaveUsageSummary) -> some View {
-        let usedPortion = summary.entitlementDays > 0
-            ? min(1, (summary.takenDays + summary.pendingDays) / summary.entitlementDays)
-            : 0
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("Current leave year")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(HolidayChrome.muted)
-            Text(summary.leaveYearLabel)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(HolidayChrome.ink)
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Remaining")
-                        .font(.caption2)
-                        .foregroundStyle(HolidayChrome.muted)
-                    Text(formatLeaveDays(summary.remainingDays))
-                        .font(.title2.weight(.bold))
-                        .foregroundStyle(HolidayChrome.ink)
-                }
-                Spacer(minLength: 12)
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("Allowance")
-                        .font(.caption2)
-                        .foregroundStyle(HolidayChrome.muted)
-                    Text(formatLeaveDays(summary.entitlementDays))
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(HolidayChrome.accent)
-                }
-            }
-            HStack(spacing: 0) {
-                heroMetric(title: "Taken", value: summary.takenDays, color: HolidayChrome.taken)
-                heroMetric(title: "Pending", value: summary.pendingDays, color: HolidayChrome.pendingMetric)
-            }
-            ProgressView(value: usedPortion, total: 1)
-                .tint(HolidayChrome.accent)
-            if summary.carryOverDays > 0.001 {
-                Text("Includes \(formatLeaveDays(summary.carryOverDays)) carried forward")
-                    .font(.caption2)
-                    .foregroundStyle(HolidayChrome.muted)
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.99, green: 0.94, blue: 0.90),
-                            Color(red: 0.96, green: 0.97, blue: 0.99),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(HolidayChrome.border, lineWidth: 1)
-        )
-    }
-
-    private func heroMetric(title: String, value: Double, color: Color) -> some View {
-        VStack(spacing: 4) {
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(HolidayChrome.muted)
-            Text(formatLeaveDays(value))
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(color)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func formatLeaveDays(_ d: Double) -> String {
-        if abs(d - floor(d + 0.0001)) < 0.02 {
-            return String(Int((d * 2).rounded() / 2))
-        }
-        return String(format: "%.1f", d)
     }
 
     private var calendarSection: some View {

@@ -62,6 +62,25 @@ struct OfflineOutboxEntry: Identifiable, Codable, Equatable {
     var attemptCount: Int
     var lastError: String?
 
+    var displayTitle: String {
+        switch operation {
+        case .saveBooking: return "Labour booking"
+        case .deleteBooking: return "Remove labour booking"
+        case .saveManagerSiteBooking: return "Schedule booking"
+        case .deleteManagerSiteBooking: return "Remove schedule booking"
+        case .saveMaterialItem: return "Material catalogue / job item"
+        case .deleteMaterialItem: return "Remove material item"
+        case .sendMaterialRequest: return "Material order"
+        }
+    }
+
+    var displayDetail: String {
+        if let lastError, !lastError.isEmpty {
+            return lastError
+        }
+        return createdAt.formatted(date: .abbreviated, time: .shortened)
+    }
+
     init(
         id: UUID = UUID(),
         organizationId: String,

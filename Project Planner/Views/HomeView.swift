@@ -20,6 +20,7 @@ struct HomeView: View {
     @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var smartCache: SmartCacheService
     @State private var homeWarningCount: Int = 0
     @State private var cachedUpNextSections: [HomeUpNextDaySection] = []
     @State private var cachedOverviewMetrics = HomeOverviewMetrics()
@@ -61,6 +62,7 @@ struct HomeView: View {
     @State private var persistedAdminOverviewMetricIds: [HomeOverviewMetricID] = []
     @State private var hasLoadedAdminOverviewMetrics = false
     @State private var showingHomeProfileCard = false
+    @State private var isRefreshingHomeConnection = false
     
     var body: some View {
         ScrollView {
@@ -73,6 +75,9 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar(.hidden, for: .navigationBar)
         .background(homeCanvasBackground.ignoresSafeArea(edges: .top))
+        .refreshable {
+            await refreshHomeConnection()
+        }
         .sheet(isPresented: $showingWarningsDetail, onDismiss: {
             WarningsRefreshHelper.isWarningsSheetVisible = false
             // REBUILD: no auto warm on dismiss.
@@ -606,6 +611,28 @@ struct HomeView: View {
             Spacer()
             HStack(spacing: 8) {
                 Button {
+                    Task { await refreshHomeConnection() }
+                } label: {
+                    Group {
+                        if isRefreshingHomeConnection {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                    }
+                    .foregroundStyle(homeInk)
+                    .frame(width: 44, height: 44)
+                    .background(Color.white)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .disabled(isRefreshingHomeConnection)
+                .accessibilityLabel("Refresh")
+                .accessibilityHint("Checks your connection and syncs changes waiting on this device")
+                Button {
                     notificationService.prepareInboxPresentation()
                     showingNotifications = true
                 } label: {
@@ -644,6 +671,14 @@ struct HomeView: View {
             }
         }
         .padding(.bottom, 18)
+    }
+
+    @MainActor
+    private func refreshHomeConnection() async {
+        isRefreshingHomeConnection = true
+        defer { isRefreshingHomeConnection = false }
+        await smartCache.refreshConnectionAndSync()
+        await refreshHomeDerivedData()
     }
 
     private var todayOverviewCard: some View {
