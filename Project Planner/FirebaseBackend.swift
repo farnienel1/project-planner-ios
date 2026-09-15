@@ -7475,29 +7475,7 @@ extension FirebaseBackend {
     }
 
     func saveMaterialCatalogueItem(_ item: MaterialCatalogItem, organizationId: String) async throws {
-        guard currentUser != nil else {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 401,
-                userInfo: [NSLocalizedDescriptionKey: "You must be signed in to update the material catalogue."]
-            )
-        }
-        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
-            ?? normalizedOrganizationId(organizationId)
-        guard !resolved.isEmpty else {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 400,
-                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
-            )
-        }
-        let orgId = try await ensureReadableOrganization(resolved)
-        do {
-            try await ensureUserDocumentLinked(organizationId: orgId)
-        } catch {
-            print("🔥🔥🔥 DEBUG: [saveMaterialCatalogueItem] ensureUserDocumentLinked: \(error.localizedDescription)")
-        }
-        await repairCurrentUserOrganizationAccess(organizationId: orgId)
+        let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
         try await db.collection("organizations").document(orgId)
             .collection("materialCatalogue")
             .document(item.id.uuidString)
@@ -7505,6 +7483,73 @@ extension FirebaseBackend {
     }
 
     func deleteMaterialCatalogueItem(_ itemId: UUID, organizationId: String) async throws {
+        let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
+        try await db.collection("organizations").document(orgId)
+            .collection("materialCatalogue")
+            .document(itemId.uuidString)
+            .delete()
+    }
+
+    /// Batched catalogue writes. `onProgress` reports how many items in this call have been committed.
+    func saveMaterialCatalogueItems(
+        _ items: [MaterialCatalogItem],
+        organizationId: String,
+        onProgress: ((Int) -> Void)? = nil
+    ) async throws {
+        guard !items.isEmpty else { return }
+        let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
+        let collection = db.collection("organizations").document(orgId).collection("materialCatalogue")
+        var index = 0
+        var completed = 0
+        while index < items.count {
+            let batch = db.batch()
+            let end = min(index + Self.materialCatalogueBatchSize, items.count)
+            for item in items[index..<end] {
+                batch.setData(
+                    materialCatalogueFirestorePayload(item),
+                    forDocument: collection.document(item.id.uuidString)
+                )
+            }
+            try await batch.commit()
+            completed = end
+            index = end
+            let progressValue = completed
+            await MainActor.run {
+                onProgress?(progressValue)
+            }
+        }
+    }
+
+    /// Batched catalogue deletes. `onProgress` reports how many IDs in this call have been committed.
+    func deleteMaterialCatalogueItems(
+        _ itemIds: [UUID],
+        organizationId: String,
+        onProgress: ((Int) -> Void)? = nil
+    ) async throws {
+        guard !itemIds.isEmpty else { return }
+        let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
+        let collection = db.collection("organizations").document(orgId).collection("materialCatalogue")
+        var index = 0
+        var completed = 0
+        while index < itemIds.count {
+            let batch = db.batch()
+            let end = min(index + Self.materialCatalogueBatchSize, itemIds.count)
+            for itemId in itemIds[index..<end] {
+                batch.deleteDocument(collection.document(itemId.uuidString))
+            }
+            try await batch.commit()
+            completed = end
+            index = end
+            let progressValue = completed
+            await MainActor.run {
+                onProgress?(progressValue)
+            }
+        }
+    }
+
+    private static let materialCatalogueBatchSize = 100
+
+    private func resolvedOrganizationIdForMaterialCatalogueWrite(_ organizationId: String) async throws -> String {
         guard currentUser != nil else {
             throw NSError(
                 domain: "FirebaseBackend",
@@ -7525,13 +7570,10 @@ extension FirebaseBackend {
         do {
             try await ensureUserDocumentLinked(organizationId: orgId)
         } catch {
-            print("🔥🔥🔥 DEBUG: [deleteMaterialCatalogueItem] ensureUserDocumentLinked: \(error.localizedDescription)")
+            print("🔥🔥🔥 DEBUG: [materialCatalogue write] ensureUserDocumentLinked: \(error.localizedDescription)")
         }
         await repairCurrentUserOrganizationAccess(organizationId: orgId)
-        try await db.collection("organizations").document(orgId)
-            .collection("materialCatalogue")
-            .document(itemId.uuidString)
-            .delete()
+        return orgId
     }
 
     func updateMaterialWorkflowStatuses(
