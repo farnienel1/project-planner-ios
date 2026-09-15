@@ -191,9 +191,7 @@ struct WarningsDetailView: View {
             Spacer(minLength: 0)
 
             HStack(spacing: 8) {
-                Button {
-                    Task { await refreshWarningsTodayOnly() }
-                } label: {
+                Button(action: startManualRefresh) {
                     Group {
                         if isRefreshingWarnings {
                             ProgressView()
@@ -235,37 +233,83 @@ struct WarningsDetailView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 16) {
-            if warningsService.hasCompletedLiveDetection {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 56))
-                    .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                Text("No active warnings")
-                    .font(.title3.weight(.semibold))
-                Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
-                    .font(.subheadline)
-                    .foregroundStyle(WarningsUI.textMuted)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-            } else {
-                Image(systemName: "arrow.clockwise.circle")
-                    .font(.system(size: 56))
-                    .foregroundStyle(WarningsUI.textMuted)
-                Text("Check for warnings")
-                    .font(.title3.weight(.semibold))
-                Text("Tap Refresh to scan today and tomorrow. Results are saved so Home and Weekly Report stay fast.")
-                    .font(.subheadline)
-                    .foregroundStyle(WarningsUI.textMuted)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-                Button("Refresh now") {
-                    Task { await refreshWarningsTodayOnly() }
+        ScrollView {
+            VStack(spacing: 16) {
+                if isRefreshingWarnings {
+                    ProgressView()
+                        .controlSize(.large)
+                        .padding(.top, 32)
+                    Text("Scanning for warnings…")
+                        .font(.title3.weight(.semibold))
+                    Text("Keep this screen open until results appear.")
+                        .font(.subheadline)
+                        .foregroundStyle(WarningsUI.textMuted)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                } else if warningsService.hasCompletedLiveDetection {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 56))
+                        .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                    Text("No active warnings")
+                        .font(.title3.weight(.semibold))
+                    Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
+                        .font(.subheadline)
+                        .foregroundStyle(WarningsUI.textMuted)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                } else {
+                    Button(action: startManualRefresh) {
+                        Image(systemName: "arrow.clockwise.circle")
+                            .font(.system(size: 56))
+                            .foregroundStyle(WarningsUI.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHidden(true)
+                    Text("Check for warnings")
+                        .font(.title3.weight(.semibold))
+                    Text("Tap Refresh now, or the refresh icon at the top right. Results are saved so Home and Weekly Report stay fast.")
+                        .font(.subheadline)
+                        .foregroundStyle(WarningsUI.textMuted)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                    if let refreshMessage {
+                        Text(refreshMessage)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(WarningsUI.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                    }
+                    // Device/TestFlight: `.borderedProminent` in this sheet does not receive taps
+                    // (the top-right plain refresh icon does). Use the same plain control.
+                    Button(action: startManualRefresh) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 16, weight: .semibold))
+                            Text("Refresh now")
+                                .font(.system(size: 17, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                        .background(WarningsUI.blue)
+                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 8)
+                    .disabled(isRefreshingWarnings)
+                    .accessibilityLabel("Refresh now")
+                    .highPriorityGesture(TapGesture().onEnded {
+                        startManualRefresh()
+                    })
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(WarningsUI.blue)
-                .padding(.top, 4)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 48)
+            .padding(.bottom, 32)
         }
+        .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -661,6 +705,12 @@ struct WarningsDetailView: View {
         }
     }
 
+    private func startManualRefresh() {
+        Task { @MainActor in
+            await refreshWarningsTodayOnly()
+        }
+    }
+
     @MainActor
     private func refreshWarningsTodayOnly() async {
         guard !isRefreshingWarnings else { return }
@@ -668,7 +718,6 @@ struct WarningsDetailView: View {
         refreshMessage = nil
         defer { isRefreshingWarnings = false }
         print("🔥🔥🔥 DEBUG: WARNINGS_MANUAL_REFRESH_START")
-        // Manual path may run even if sheet visible — temporarily clear the sheet gate.
         let did = await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
@@ -681,7 +730,6 @@ struct WarningsDetailView: View {
             force: true,
             manualUserInitiated: true
         )
-        // no sheet-gate dance needed with manualUserInitiated
         if did {
             let detection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
             let invoicing = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
