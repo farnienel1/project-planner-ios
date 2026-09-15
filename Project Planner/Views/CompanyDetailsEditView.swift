@@ -12,6 +12,8 @@ struct CompanyDetailsEditView: View {
     @Environment(\.dismiss) private var dismiss
     
     @State private var organizationName = ""
+    @State private var documentAbbreviation = ""
+    @State private var showAbbreviationLimitToast = false
     @State private var hasOfficeAddress = true
     @State private var officeAddressLine1 = ""
     @State private var officeCity = ""
@@ -34,6 +36,19 @@ struct CompanyDetailsEditView: View {
                             .font(.system(size: 13, weight: .medium))
                             .padding(.vertical, 12)
                     }
+
+                    SettingsHubChrome.sectionTitle("Abbreviation for site audits and toolbox talks")
+                    SettingsHubChrome.card {
+                        TextField("e.g. RM", text: $documentAbbreviation)
+                            .font(.system(size: 13, weight: .medium))
+                            .textInputAutocapitalization(.characters)
+                            .disableAutocorrection(true)
+                            .padding(.vertical, 12)
+                            .onChange(of: documentAbbreviation) { _, newValue in
+                                handleAbbreviationTyping(newValue)
+                            }
+                    }
+                    SettingsHubChrome.footer("Shown on site audit and toolbox talk headers. Maximum 3 characters.")
 
                     SettingsHubChrome.sectionTitle("Office & country")
                     SettingsHubChrome.card {
@@ -141,6 +156,20 @@ struct CompanyDetailsEditView: View {
                 .padding(16)
             }
             .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .overlay(alignment: .top) {
+                if showAbbreviationLimitToast {
+                    Text("Only 3 characters for the abbreviation")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(ProjectWorksRevampColors.ink.opacity(0.92))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .padding(.top, 12)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.18), value: showAbbreviationLimitToast)
             .navigationTitle("Company details")
             .navigationBarTitleDisplayMode(.inline)
             .appChromeNavigationBarSurface()
@@ -190,6 +219,8 @@ struct CompanyDetailsEditView: View {
     private func applyOrganizationToForm() {
         guard let org = firebaseBackend.currentOrganization else { return }
         organizationName = org.name
+        documentAbbreviation = org.documentAbbreviation
+            ?? OrganizationDocumentAbbreviation.display(abbreviation: nil, organizationName: org.name)
         countryCode = org.countryCode.uppercased()
         if let line1 = org.officeAddressLine1, !line1.isEmpty,
            let city = org.officeCity, !city.isEmpty {
@@ -241,7 +272,8 @@ struct CompanyDetailsEditView: View {
                 officePostcode: hasOfficeAddress ? officePostcode : nil,
                 countryCode: countryCode,
                 defaultLatitude: lat,
-                defaultLongitude: lon
+                defaultLongitude: lon,
+                documentAbbreviation: documentAbbreviation
             )
             if let selectedLogoImage,
                let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
@@ -260,6 +292,20 @@ struct CompanyDetailsEditView: View {
                 isSaving = false
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    private func handleAbbreviationTyping(_ newValue: String) {
+        let cleaned = OrganizationDocumentAbbreviation.normalizeForTyping(newValue)
+        if cleaned.count > OrganizationDocumentAbbreviation.maxLength {
+            documentAbbreviation = String(cleaned.prefix(OrganizationDocumentAbbreviation.maxLength))
+            showAbbreviationLimitToast = true
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_400_000_000)
+                showAbbreviationLimitToast = false
+            }
+        } else if cleaned != newValue {
+            documentAbbreviation = cleaned
         }
     }
 

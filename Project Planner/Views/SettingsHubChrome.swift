@@ -23,7 +23,7 @@ enum SettingsHubChrome {
             content()
         }
         .padding(.horizontal, 14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)

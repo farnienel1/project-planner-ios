@@ -25,6 +25,8 @@ struct SmallWorksView: View {
     @State private var searchText = ""
     @State private var showingCreateSmallWorks = false
     @State private var deadlineAssignedProjectIds: Set<UUID> = []
+    @State private var didApplyDefaultStatus = false
+    @State private var suppressEmptyCatalogueFlash = WorkCatalogueDeepLink.peek(isSmallWorks: true)
 
     private var listCounts: WorksListStatusCounts {
         WorksListStatusCounts.from(smallWorksBeforeStatusFilter)
@@ -55,7 +57,7 @@ struct SmallWorksView: View {
                             .foregroundStyle(ProjectWorksRevampColors.ink)
                             .font(.system(size: 17, weight: .semibold))
                             .frame(width: 36, height: 36)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.card)
                             .clipShape(Circle())
                             .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                     }
@@ -81,7 +83,7 @@ struct SmallWorksView: View {
                 if let userInfo = notification.userInfo,
                    let tab = userInfo["tab"] as? Int,
                    tab == 2 {
-                    // Reset navigation to root
+                    if WorkCatalogueDeepLink.peek(isSmallWorks: true) { return }
                     navigationPath.removeLast(navigationPath.count)
                 }
             }
@@ -89,7 +91,7 @@ struct SmallWorksView: View {
                 if let userInfo = notification.userInfo,
                    let tab = userInfo["tab"] as? Int,
                    tab == 2 {
-                    // Reset navigation when Small Works tab is selected
+                    if WorkCatalogueDeepLink.peek(isSmallWorks: true) { return }
                     navigationPath.removeLast(navigationPath.count)
                     selectedStatus = .active
                 }
@@ -97,16 +99,31 @@ struct SmallWorksView: View {
             .onReceive(NotificationCenter.default.publisher(for: .pushWorkCatalogueDetail)) { notification in
                 let isSmallWorks = notification.userInfo?["isSmallWorks"] as? Bool ?? false
                 guard isSmallWorks,
-                      let id = notification.userInfo?["projectId"] as? UUID,
-                      let project = projectStore.projects.first(where: { $0.id == id }) ?? projectStore.smallWorks.first(where: { $0.id == id }) else { return }
-                selectedStatus = nil
-                navigationPath = NavigationPath()
-                navigationPath.append(project)
+                      let id = notification.userInfo?["projectId"] as? UUID ?? WorkCatalogueDeepLink.take(isSmallWorks: true) else { return }
+                openCatalogueProject(id: id)
             }
             .onAppear {
-                if selectedStatus == .inactive || selectedStatus == nil {
-                    selectedStatus = .active
+                if let id = WorkCatalogueDeepLink.take(isSmallWorks: true) {
+                    openCatalogueProject(id: id)
+                    return
                 }
+                guard navigationPath.isEmpty else { return }
+                if !didApplyDefaultStatus {
+                    if selectedStatus == .inactive || selectedStatus == nil {
+                        selectedStatus = .active
+                    }
+                    didApplyDefaultStatus = true
+                }
+            }
+            .navigationDestination(for: Project.self) { project in
+                ProjectDetailView(project: project)
+                    .environmentObject(bookingStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(projectStore)
+                    .background(
+                        Color.clear
+                            .preference(key: HideBottomMenuKey.self, value: true)
+                    )
             }
             .task {
                 await refreshDeadlineAssignedProjectIds()
@@ -135,7 +152,10 @@ struct SmallWorksView: View {
 
     private var smallWorksRootContent: some View {
         Group {
-            if projectStore.isLoading {
+            if suppressEmptyCatalogueFlash || WorkCatalogueDeepLink.peek(isSmallWorks: true) {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if projectStore.isLoading {
                 ProgressView("Loading small works...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if smallWorksBeforeStatusFilter.isEmpty {
@@ -180,21 +200,24 @@ struct SmallWorksView: View {
                     .padding(.horizontal, 18)
                     .padding(.top, 8)
                 }
-                .navigationDestination(for: Project.self) { project in
-                    ProjectDetailView(project: project)
-                        .environmentObject(bookingStore)
-                        .environmentObject(operativeStore)
-                        .environmentObject(projectStore)
-                        .background(
-                            Color.clear
-                                .preference(key: HideBottomMenuKey.self, value: true)
-                        )
-                }
                 .refreshable {
                     projectStore.loadData()
                 }
             }
         }
+    }
+
+    private func openCatalogueProject(id: UUID) {
+        guard let project = projectStore.projects.first(where: { $0.id == id })
+                ?? projectStore.smallWorks.first(where: { $0.id == id }) else {
+            suppressEmptyCatalogueFlash = false
+            return
+        }
+        selectedStatus = nil
+        didApplyDefaultStatus = true
+        suppressEmptyCatalogueFlash = false
+        navigationPath = NavigationPath()
+        navigationPath.append(project)
     }
 
     private var filterChipsRow: some View {
@@ -346,7 +369,7 @@ struct SmallWorksDetailRowView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -380,7 +403,7 @@ struct SmallWorksDetailRowView: View {
             listProgressSection
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)

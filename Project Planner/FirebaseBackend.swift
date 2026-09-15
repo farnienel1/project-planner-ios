@@ -89,7 +89,9 @@ class FirebaseBackend: ObservableObject {
     @Published var currentUser: FirebaseAuth.User?
     @Published var isLoading = false
     @Published var errorMessage: String?
-    @Published var currentOrganization: Organization?
+    @Published var currentOrganization: Organization? {
+        didSet { OrganizationDocumentAbbreviation.update(from: currentOrganization) }
+    }
     @Published var userRole: UserRole = .basic
     /// Set after the root shell has kicked off the first org-wide store load (prevents duplicate parallel reloads on launch).
     @Published var hasBootstrappedOrgDataLoad = false
@@ -250,6 +252,7 @@ class FirebaseBackend: ObservableObject {
             defaultLatitude: orgData["defaultLatitude"] as? Double,
             defaultLongitude: orgData["defaultLongitude"] as? Double,
             companyLogoURL: orgData["companyLogoURL"] as? String,
+            documentAbbreviation: OrganizationDocumentAbbreviation.normalized(orgData["documentAbbreviation"] as? String),
             creatorUserId: orgData["creatorUserId"] as? String
         )
         currentOrganization = organization
@@ -1185,6 +1188,7 @@ class FirebaseBackend: ObservableObject {
                 defaultLatitude: defaultLatitude,
                 defaultLongitude: defaultLongitude,
                 companyLogoURL: data["companyLogoURL"] as? String,
+                documentAbbreviation: OrganizationDocumentAbbreviation.normalized(data["documentAbbreviation"] as? String),
                 creatorUserId: creatorUserId
             )
             Self.applyPayrollPolicyFields(from: data, to: &organization)
@@ -2560,6 +2564,29 @@ class FirebaseBackend: ObservableObject {
         return downloadURL.absoluteString
     }
 
+    func uploadTimesheetExportPDF(_ data: Data, fileName: String, organizationId: String) async throws -> String {
+        let sanitized = fileName
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: "\\", with: "-")
+        let stamp = Int(Date().timeIntervalSince1970)
+        let path = "organizations/\(organizationId)/timesheetExports/\(stamp)_\(sanitized)"
+        let storageRef = storage.reference().child(path)
+        let metadata = StorageMetadata()
+        metadata.contentType = "application/pdf"
+        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+            storageRef.putData(data, metadata: metadata) { metadata, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let metadata {
+                    continuation.resume(returning: metadata)
+                } else {
+                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+                }
+            }
+        }
+        return try await storageRef.downloadURL().absoluteString
+    }
+
     func updateOrganizationCompanyLogoURL(_ logoURL: String?) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
@@ -3891,7 +3918,8 @@ class FirebaseBackend: ObservableObject {
         officePostcode: String?,
         countryCode: String,
         defaultLatitude: Double?,
-        defaultLongitude: Double?
+        defaultLongitude: Double?,
+        documentAbbreviation: String?
     ) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(
@@ -3933,11 +3961,18 @@ class FirebaseBackend: ObservableObject {
             payload["defaultLatitude"] = defaultLatitude
             payload["defaultLongitude"] = defaultLongitude
         }
+        let abbreviation = OrganizationDocumentAbbreviation.normalized(documentAbbreviation)
+        if let abbreviation {
+            payload["documentAbbreviation"] = abbreviation
+        } else {
+            payload["documentAbbreviation"] = FieldValue.delete()
+        }
         try await db.collection("organizations").document(orgId).updateData(payload)
         
         guard var org = currentOrganization else { return }
         org.name = trimmedName
         org.countryCode = countryCode.uppercased()
+        org.documentAbbreviation = abbreviation
         if hasOfficeAddress {
             let line1 = officeAddressLine1?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let city = officeCity?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

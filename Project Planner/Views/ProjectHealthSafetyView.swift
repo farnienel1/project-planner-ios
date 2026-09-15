@@ -3181,6 +3181,7 @@ private enum HSTalkPDFBuilder {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
         let pageRect = CGRect(x: 0, y: 0, width: 595, height: 842)
         let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
+        let orgBadge = OrganizationDocumentAbbreviation.currentDisplay
 
         let navy = UIColor(red: 0.055, green: 0.122, blue: 0.2, alpha: 1)
         let cyan = UIColor(red: 0.169, green: 0.733, blue: 0.937, alpha: 1)
@@ -3212,6 +3213,7 @@ private enum HSTalkPDFBuilder {
                 UIRectFill(bandRect)
                 amber.setFill()
                 UIRectFill(CGRect(x: 0, y: 92, width: pageRect.width, height: 4))
+                drawOrganizationDocumentBadgePDF(text: orgBadge, in: CGRect(x: pageRect.width - 70, y: 26, width: 50, height: 36))
 
                 ("PROJECT " as NSString).draw(at: CGPoint(x: 26, y: 28), withAttributes: [
                     .font: UIFont.systemFont(ofSize: 13, weight: .bold),

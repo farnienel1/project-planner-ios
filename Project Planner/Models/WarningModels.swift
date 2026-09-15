@@ -386,8 +386,9 @@ enum WarningTimelineMath {
     }
 
     nonisolated static func interval(of entry: Warning.ClashTimelineEntry, window: ClashWindow) -> (Int, Int) {
-        if entry.treatsAsAllDay { return (window.startMinutes, window.endMinutes) }
-        return (entry.startMinutes, entry.endMinutes)
+        let start = max(window.startMinutes, min(entry.startMinutes, window.endMinutes))
+        let end = max(start, min(entry.endMinutes, window.endMinutes))
+        return (start, end)
     }
 
     nonisolated static func analyse(entries: [Warning.ClashTimelineEntry], window: ClashWindow) -> ClashAnalysis {

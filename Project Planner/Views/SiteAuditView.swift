@@ -872,6 +872,7 @@ struct SiteAuditCreateFlowView: View {
                 clientName: project.client.name,
                 items: items,
                 organizationName: firebaseBackend.currentOrganization?.name,
+                organizationAbbreviation: firebaseBackend.currentOrganization?.documentAbbreviation,
                 onEdit: { step = 2 },
                 onSubmit: { submitAudit() },
                 isSubmitting: isSubmitting,
@@ -1096,10 +1097,12 @@ struct SiteAuditCreateFlowView: View {
                 await MainActor.run { submitStatusMessage = "Generating PDF…" }
                 let logoImage = await loadOrganizationLogoImage()
                 let orgName = await MainActor.run { firebaseBackend.currentOrganization?.name }
+                let orgAbbrev = await MainActor.run { firebaseBackend.currentOrganization?.documentAbbreviation }
                 let pdfURL = await SiteAuditPDFBuilder.makePDFAsync(
                     audit: audit,
                     localItems: drafts,
                     organizationName: orgName,
+                    organizationAbbreviation: orgAbbrev,
                     logoImage: logoImage,
                     clientName: project.client.name,
                     siteAddress: project.siteAddress
@@ -1204,6 +1207,7 @@ struct SiteAuditCreateFlowView: View {
                 audit: audit,
                 localItems: drafts,
                 organizationName: firebaseBackend.currentOrganization?.name,
+                organizationAbbreviation: firebaseBackend.currentOrganization?.documentAbbreviation,
                 logoImage: nil,
                 clientName: project.client.name,
                 siteAddress: project.siteAddress
@@ -1867,12 +1871,14 @@ struct SiteAuditDetailView: View {
         }
         let audit = displayAudit
         let orgName = firebaseBackend.currentOrganization?.name
+        let orgAbbrev = firebaseBackend.currentOrganization?.documentAbbreviation
         let client = clientProject?.client.name
         let address = clientProject?.siteAddress
         let generated = await SiteAuditPDFBuilder.makePDFAsync(
             audit: audit,
             localItems: drafts,
             organizationName: orgName,
+            organizationAbbreviation: orgAbbrev,
             logoImage: logo,
             clientName: client,
             siteAddress: address

@@ -449,7 +449,7 @@ struct DailyOverviewView: View {
             .foregroundStyle(ProjectWorksRevampColors.ink)
             .frame(maxWidth: .infinity)
             .padding(14)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.card)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -493,7 +493,7 @@ struct DailyOverviewView: View {
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 8)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -782,7 +782,7 @@ struct DailyOverviewView: View {
                             }
                             .padding(.horizontal, 9)
                             .padding(.vertical, 4)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.card)
                             .clipShape(Capsule())
                         }
                     }
@@ -820,7 +820,7 @@ struct DailyOverviewView: View {
                 }
             }
             .padding(14)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.card)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -882,7 +882,7 @@ struct DailyOverviewView: View {
                     }
                 }
                 .padding(14)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.card)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1018,7 +1018,7 @@ struct DailyOverviewView: View {
             .buttonStyle(.plain)
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1080,7 +1080,7 @@ struct DailyOverviewView: View {
             }
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)

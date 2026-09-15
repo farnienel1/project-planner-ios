@@ -374,14 +374,12 @@ struct HomeView: View {
 
     // MARK: - Home dashboard (HTML / design reference)
 
-    private var homeCanvasBackground: Color {
-        Color(red: 0.97, green: 0.973, blue: 0.98)
-    }
+    private var homeCanvasBackground: Color { ProjectWorksRevampColors.canvas }
 
-    private var homeInk: Color { Color(red: 0.043, green: 0.063, blue: 0.125) }
-    private var homeMuted: Color { Color(red: 0.42, green: 0.45, blue: 0.49) }
-    private var homeBlue: Color { Color(red: 0.094, green: 0.373, blue: 0.647) }
-    private var homeBlueLight: Color { Color(red: 0.216, green: 0.541, blue: 0.867) }
+    private var homeInk: Color { ProjectWorksRevampColors.ink }
+    private var homeMuted: Color { ProjectWorksRevampColors.muted }
+    private var homeBlue: Color { ProjectWorksRevampColors.blue }
+    private var homeBlueLight: Color { ProjectWorksRevampColors.blueLight }
 
     private var greetingFirstName: String {
         if let appUser = userStore.currentUser {
@@ -626,7 +624,7 @@ struct HomeView: View {
                     }
                     .foregroundStyle(homeInk)
                     .frame(width: 44, height: 44)
-                    .background(Color.white)
+                    .background(ProjectWorksRevampColors.card)
                     .clipShape(Circle())
                     .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
                 }
@@ -643,7 +641,7 @@ struct HomeView: View {
                             .font(.system(size: 18))
                             .foregroundStyle(homeInk)
                             .frame(width: 44, height: 44)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.card)
                             .clipShape(Circle())
                             .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
                         if notificationService.unreadCount > 0 {
@@ -839,7 +837,7 @@ struct HomeView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.card)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -1081,7 +1079,7 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity, minHeight: 104, maxHeight: 104)
         .padding(.horizontal, 5)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -1244,7 +1242,7 @@ struct HomeView: View {
                                     .foregroundStyle(Color(red: 0.77, green: 0.79, blue: 0.82))
                             }
                             .padding(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16))
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.card)
                             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1290,7 +1288,7 @@ struct HomeView: View {
             Spacer(minLength: 0)
         }
         .padding(18)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1655,7 +1653,7 @@ struct ProjectCard: View {
             }
         }
         .padding(16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .cornerRadius(12)
         .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
     }
@@ -1720,7 +1718,7 @@ struct ProjectCardFromStore: View {
             }
         }
         .padding(16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .cornerRadius(12)
         .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
     }

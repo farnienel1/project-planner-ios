@@ -262,3 +262,19 @@ struct HSStatusBadge: View {
         return HSBadge(text: text, tone: mapped)
     }
 }
+
+nonisolated func drawOrganizationDocumentBadgePDF(text: String, in rect: CGRect) {
+    let path = UIBezierPath(roundedRect: rect, cornerRadius: 8)
+    UIColor(red: 0.094, green: 0.373, blue: 0.647, alpha: 1).setFill()
+    path.fill()
+    let fontSize: CGFloat = text.count >= 3 ? 12 : 14
+    let attrs: [NSAttributedString.Key: Any] = [
+        .font: UIFont.systemFont(ofSize: fontSize, weight: .bold),
+        .foregroundColor: UIColor.white
+    ]
+    let size = (text as NSString).size(withAttributes: attrs)
+    (text as NSString).draw(
+        at: CGPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2),
+        withAttributes: attrs
+    )
+}

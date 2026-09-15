@@ -62,7 +62,7 @@ struct InvoicingView: View {
                 }
                 .padding(16)
             }
-            .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("Timesheets")
             .navigationBarTitleDisplayMode(.inline)
             .task {
@@ -878,7 +878,7 @@ private struct MyTimesheetsHubView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("My Timesheets")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
@@ -1443,7 +1443,7 @@ private struct MyTimesheetView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Timesheet")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { loadDraft() }
@@ -1931,7 +1931,7 @@ private struct PreviousTimesheetsView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Previous Timesheets")
         .navigationBarTitleDisplayMode(.inline)
         .task {
@@ -2388,7 +2388,7 @@ private struct OperativeTimesheetsView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle(isAdminViewer ? "User Timesheets" : "Operative Timesheets")
         .navigationBarTitleDisplayMode(.inline)
         .task {
@@ -2500,7 +2500,8 @@ private struct OperativeTimesheetsView: View {
             organizationName: orgName,
             scheduleOptions: scheduleOptions,
             recipientEmail: recipientEmail,
-            recipientName: exporter.fullName.isEmpty ? exporter.email : exporter.fullName
+            recipientName: exporter.fullName.isEmpty ? exporter.email : exporter.fullName,
+            firebaseBackend: firebaseBackend
         )
 
         guard result.emailSent else {
@@ -2729,7 +2730,7 @@ private struct OperativeTimesheetReviewView: View {
 
     var body: some View {
         reviewScrollContent
-            .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("Review Timesheet")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
@@ -2914,7 +2915,14 @@ private struct OperativeTimesheetReviewView: View {
 
     @ViewBuilder
     private var reviewSignOffSection: some View {
-        if operative.hasLineManager, draft.managerSignedAt == nil {
+        if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative) {
+            Label("Signed off", systemImage: "checkmark.circle.fill")
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .foregroundStyle(Color.green)
+                .background(Color.green.opacity(0.14))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        } else if operative.hasLineManager, draft.managerSignedAt == nil {
             if needsExtrasReviewMessage {
                 Text("Approve, decline or edit every expense and price-work line before signing off.")
                     .font(.caption)
@@ -3224,15 +3232,13 @@ private struct OperativeTimesheetReviewView: View {
             organizationId: orgId
         ) else { return }
         await MainActor.run { draft = remote }
-        if let current = userStore.displayUser {
-            var updated = remote
-            TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &updated, user: current)
-            if updated.managerSignedAt != remote.managerSignedAt {
-                draft = updated
-                saveDraft()
-            } else {
-                draft = remote
-            }
+        var updated = remote
+        TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &updated, user: operative)
+        if updated.managerSignedAt != remote.managerSignedAt {
+            draft = updated
+            saveDraft()
+        } else {
+            draft = remote
         }
     }
 
@@ -3822,7 +3828,7 @@ private struct SignTimesheetView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Sign Timesheet")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -3873,7 +3879,7 @@ private struct ManagerTimesheetSignOffView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Sign Off")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -4224,7 +4230,7 @@ private struct GenerateInvoiceView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Generate Invoice")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showInvoiceUTRWarning) {
@@ -5137,7 +5143,8 @@ private enum TimesheetExportHelper {
         organizationName: String,
         scheduleOptions: MyScheduleOptions = MyScheduleOptions(),
         recipientEmail: String,
-        recipientName: String
+        recipientName: String,
+        firebaseBackend: FirebaseBackend? = nil
     ) async -> Result {
         var emailedUserIds = Set<String>()
         var failed: [String] = []
@@ -5195,22 +5202,46 @@ private enum TimesheetExportHelper {
             return Result(emailedUserIds: [], failed: failed.isEmpty ? ["No timesheet PDFs could be built"] : failed, emailSent: false)
         }
 
+        var downloadLinks: [(fileName: String, url: String)] = []
+        if let firebaseBackend, let orgId = organization?.firestoreDocumentId {
+            for attachment in attachments {
+                if let url = try? await firebaseBackend.uploadTimesheetExportPDF(
+                    attachment.data,
+                    fileName: attachment.fileName,
+                    organizationId: orgId
+                ) {
+                    downloadLinks.append((attachment.fileName, url))
+                }
+            }
+        }
+
         let html = managerExportEmailHTML(
             recipientName: recipientName,
             weekTitle: week.title,
             paymentRunStamp: paymentRunStamp,
             organizationName: organizationName,
             attachmentNames: attachments.map(\.fileName),
+            downloadLinks: downloadLinks,
             timesheetCount: attachments.count
         )
         let resend = ResendEmailService()
-        let sent = await resend.sendTimesheetExportEmail(
+        let payload = attachments.map { (fileName: $0.fileName, data: $0.data) }
+        var sent = await resend.sendTimesheetExportEmail(
             to: recipientEmail,
             subject: "Signed timesheets for filing — \(paymentRunStamp) — \(organizationName)",
             htmlContent: html,
-            pdfAttachments: attachments.map { (fileName: $0.fileName, data: $0.data) },
+            pdfAttachments: payload,
             fromName: organizationName
         )
+        if !sent {
+            sent = await resend.sendTimesheetExportEmail(
+                to: recipientEmail,
+                subject: "Signed timesheets for filing — \(paymentRunStamp) — \(organizationName)",
+                htmlContent: html,
+                pdfAttachments: [],
+                fromName: organizationName
+            )
+        }
 
         if sent {
             return Result(emailedUserIds: emailedUserIds, failed: failed, emailSent: true)
@@ -5325,14 +5356,23 @@ private enum TimesheetExportHelper {
         paymentRunStamp: String,
         organizationName: String,
         attachmentNames: [String],
+        downloadLinks: [(fileName: String, url: String)] = [],
         timesheetCount: Int
     ) -> String {
-        let list = attachmentNames.map { "<li>\($0)</li>" }.joined()
+        let list: String
+        if downloadLinks.isEmpty {
+            list = attachmentNames.map { "<li>\($0)</li>" }.joined()
+        } else {
+            list = downloadLinks.map { "<li><a href=\"\($0.url)\">\($0.fileName)</a></li>" }.joined()
+        }
+        let attachNote = downloadLinks.isEmpty
+            ? "\(timesheetCount) signed-off timesheet PDF\(timesheetCount == 1 ? "" : "s") for payment run <strong>\(paymentRunStamp)</strong> (\(weekTitle)) from <strong>\(organizationName)</strong> \(timesheetCount == 1 ? "is" : "are") attached for your records."
+            : "\(timesheetCount) signed-off timesheet PDF\(timesheetCount == 1 ? "" : "s") for payment run <strong>\(paymentRunStamp)</strong> (\(weekTitle)) from <strong>\(organizationName)</strong> \(timesheetCount == 1 ? "is" : "are") attached, with backup download links below."
         return """
         <html><body style="font-family:Arial,sans-serif;max-width:720px;margin:0 auto;padding:20px;">
         <h2 style="color:#0D67ED;">Signed timesheets for filing</h2>
         <p>Hello \(recipientName),</p>
-        <p>\(timesheetCount) signed-off timesheet PDF\(timesheetCount == 1 ? "" : "s") for payment run <strong>\(paymentRunStamp)</strong> (\(weekTitle)) from <strong>\(organizationName)</strong> \(timesheetCount == 1 ? "is" : "are") attached for your records.</p>
+        <p>\(attachNote)</p>
         <p>Each file is named: <em>User Name timesheet for payment run date \(paymentRunStamp)</em>.</p>
         <ul>\(list)</ul>
         <p style="color:#666;font-size:13px;">These timesheets were counter-signed and exported from Operative Timesheets → Signed off.</p>

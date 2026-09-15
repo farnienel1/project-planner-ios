@@ -716,7 +716,7 @@ enum WarningsComputation {
         booking: WarningsComputationSnapshot.OperativeBookingSnapshot,
         project: WarningsComputationSnapshot.ProjectSnapshot?
     ) -> Warning.ClashTimelineEntry {
-        let iv = booking.clashInterval ?? (0, 8 * 60)
+        let iv = booking.clashInterval ?? (8 * 60, 17 * 60)
         let hStr = formatHours(booking.paidHours)
         return Warning.ClashTimelineEntry(
             bookingId: booking.id,
@@ -736,7 +736,7 @@ enum WarningsComputation {
         booking: WarningsComputationSnapshot.ManagerBookingSnapshot,
         projectsById: [UUID: WarningsComputationSnapshot.ProjectSnapshot]
     ) -> Warning.ClashTimelineEntry {
-        let iv = booking.clashInterval ?? (0, 8 * 60)
+        let iv = booking.clashInterval ?? (8 * 60, 17 * 60)
         let hStr = formatHours(booking.paidHours)
         var jobNumber: String?
         var siteName: String?

@@ -6,26 +6,28 @@
 //
 
 import SwiftUI
+import UIKit
 
 enum ProjectWorksRevampColors {
-    static let canvas = Color(red: 0.969, green: 0.973, blue: 0.980) // #F7F8FA
-    static let ink = Color(red: 0.043, green: 0.063, blue: 0.125) // #0B1020
-    static let muted = Color(red: 0.420, green: 0.451, blue: 0.490) // #6B7280
-    static let border = Color(red: 0.933, green: 0.941, blue: 0.953) // #EEF0F3
-    static let searchBorder = Color(red: 0.898, green: 0.906, blue: 0.922) // #E5E7EB
-    static let blue = Color(red: 0.094, green: 0.373, blue: 0.647) // #185FA5
-    static let blueLight = Color(red: 0.216, green: 0.541, blue: 0.867) // #378ADD
-    static let activeGreen = Color(red: 0.059, green: 0.431, blue: 0.337) // #0F6E56
-    static let upcomingAmber = Color(red: 0.522, green: 0.310, blue: 0.043) // #854F0B
-    static let jobTypePillBg = Color(red: 0.933, green: 0.929, blue: 0.996) // #EEEDFE
-    static let jobTypePillInk = Color(red: 0.235, green: 0.204, blue: 0.537) // #3C3489
-    static let requiredPillFg = Color(red: 0.639, green: 0.176, blue: 0.176) // #A32D2D
-    static let requiredPillBg = Color(red: 0.988, green: 0.922, blue: 0.922) // #FCEBEB
-    static let placeholderInk = Color(red: 0.773, green: 0.788, blue: 0.824) // #C5C9D2
-    static let pinRoseBg = Color(red: 0.984, green: 0.918, blue: 0.941) // #FBEAF0
-    static let pinRoseFg = Color(red: 0.600, green: 0.208, blue: 0.337) // #993556
-    static let endDateBg = Color(red: 0.980, green: 0.925, blue: 0.906) // #FAECE7
-    static let endDateFg = Color(red: 0.600, green: 0.235, blue: 0.114) // #993C1D
+    static let canvas = hsDyn("#F7F8FA", "#0B1017")
+    static let card = hsDyn("#FFFFFF", "#151C26")
+    static let ink = hsDyn("#0B1020", "#F2F5F9")
+    static let muted = hsDyn("#6B7280", "#9AA7B8")
+    static let border = hsDyn("#EEF0F3", "#252F3D")
+    static let searchBorder = hsDyn("#E5E7EB", "#2A3544")
+    static let blue = hsDyn("#185FA5", "#6B95FF")
+    static let blueLight = hsDyn("#378ADD", "#8BB4FF")
+    static let activeGreen = hsDyn("#0F6E56", "#2ED18D")
+    static let upcomingAmber = hsDyn("#854F0B", "#F2AE45")
+    static let jobTypePillBg = hsDyn("#EEEDFE", "#241F45")
+    static let jobTypePillInk = hsDyn("#3C3489", "#C8C0FF")
+    static let requiredPillFg = hsDyn("#A32D2D", "#FF6F63")
+    static let requiredPillBg = hsDyn("#FCEBEB", "#3A1E1B")
+    static let placeholderInk = hsDyn("#C5C9D2", "#6B7686")
+    static let pinRoseBg = hsDyn("#FBEAF0", "#3A1E28")
+    static let pinRoseFg = hsDyn("#993556", "#F0A0B8")
+    static let endDateBg = hsDyn("#FAECE7", "#3A2418")
+    static let endDateFg = hsDyn("#993C1D", "#F0B090")
 }
 
 struct WorksListStatusCounts {
@@ -88,7 +90,7 @@ struct WorksListStatsRow: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -114,7 +116,7 @@ struct WorksListSearchRow<FilterMenu: View>: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -130,7 +132,7 @@ enum PlannerUIInitials {
         guard !trimmed.isEmpty else { return "?" }
         let parts = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
         if parts.count >= 2 {
-            let letters = parts.prefix(2).compactMap { $0.first }.map { String($0).uppercased() }
+            let letters = parts.prefix(maxLen).compactMap { $0.first }.map { String($0).uppercased() }
             return letters.joined()
         }
         let s = parts.first ?? trimmed
@@ -153,7 +155,7 @@ struct WorksRevampFilterChip: View {
                 .padding(.vertical, 5)
                 .background(
                     Capsule()
-                        .fill(isSelected ? ProjectWorksRevampColors.blue : Color.white)
+                        .fill(isSelected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.card)
                 )
                 .overlay(
                     Capsule()
@@ -177,7 +179,7 @@ extension View {
     /// White card with 14pt radius and hairline border (quick actions / list rows in mocks).
     func appChromeCardContainer(cornerRadius: CGFloat = 14) -> some View {
         self
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.card)
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

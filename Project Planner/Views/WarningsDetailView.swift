@@ -8,14 +8,14 @@
 import SwiftUI
 
 private enum WarningsUI {
-    static let screenBg = Color(red: 0.949, green: 0.949, blue: 0.969) // #F2F2F7
-    static let doneBlue = Color(red: 0.231, green: 0.373, blue: 0.639) // #3B5FA3
-    static let textPrimary = Color(red: 0.110, green: 0.110, blue: 0.118)
-    static let textBody = Color(red: 0.216, green: 0.255, blue: 0.318)
-    static let textMuted = Color(red: 0.612, green: 0.639, blue: 0.686)
-    static let blue = Color(red: 0.145, green: 0.388, blue: 0.922)
-    static let blueFrom = Color(red: 0.114, green: 0.306, blue: 0.847)
-    static let red = Color(red: 0.863, green: 0.149, blue: 0.149)
+    static let screenBg = hsDyn("#F2F2F7", "#0B1017")
+    static let doneBlue = hsDyn("#3B5FA3", "#6B95FF")
+    static let textPrimary = hsDyn("#1C1C1E", "#F2F5F9")
+    static let textBody = hsDyn("#374151", "#D6DEE9")
+    static let textMuted = hsDyn("#9CA3AF", "#9AA7B8")
+    static let blue = hsDyn("#2563EB", "#6B95FF")
+    static let blueFrom = hsDyn("#1D4ED8", "#4A78F5")
+    static let red = hsDyn("#DC2626", "#FF6F63")
     static let avatarPalette: [Color] = [
         Color(red: 0.173, green: 0.357, blue: 0.749),
         Color(red: 0.294, green: 0.478, blue: 0.361),

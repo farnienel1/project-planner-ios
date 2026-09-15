@@ -193,16 +193,15 @@ struct ContentView: View {
                 let tab = isSmallWorks ? 2 : 1
                 showMoreMenuSheet = false
                 showingHolidaySheet = false
+                WorkCatalogueDeepLink.set(projectId: projectId, isSmallWorks: isSmallWorks)
                 if selectedTab != tab {
                     previousTab = selectedTab
                     selectedTab = tab
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    NotificationCenter.default.post(
-                        name: .pushWorkCatalogueDetail,
-                        object: nil,
-                        userInfo: ["projectId": projectId, "isSmallWorks": isSmallWorks]
-                    )
+                let payload: [String: Any] = ["projectId": projectId, "isSmallWorks": isSmallWorks]
+                NotificationCenter.default.post(name: .pushWorkCatalogueDetail, object: nil, userInfo: payload)
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .pushWorkCatalogueDetail, object: nil, userInfo: payload)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .qualificationExpiryScheduleRefresh)) { _ in
@@ -456,7 +455,7 @@ struct ContentView: View {
                 }
             case 2:
                 if userStore.canViewProjects() {
-                    NavigationStack { SmallWorksView() }
+                    SmallWorksView()
                 } else {
                     NavigationStack { HomeView() }
                 }

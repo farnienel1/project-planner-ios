@@ -28,8 +28,10 @@ struct OrganisationSettingsHubView: View {
     }
 
     private var orgInitials: String {
-        guard let n = org?.name, !n.isEmpty else { return "OR" }
-        return PlannerUIInitials.from(n, maxLen: 2)
+        OrganizationDocumentAbbreviation.display(
+            abbreviation: org?.documentAbbreviation,
+            organizationName: org?.name
+        )
     }
 
     private var ownerLine: (name: String, isYou: Bool) {
@@ -287,9 +289,11 @@ struct OrganisationSettingsHubView: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 13, style: .continuous)
                         .fill(Color.white.opacity(0.18))
-                        .frame(width: 50, height: 50)
+                        .frame(width: 54, height: 50)
                     Text(orgInitials)
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: orgInitials.count >= 3 ? 12 : 15, weight: .medium))
+                        .minimumScaleFactor(0.7)
+                        .lineLimit(1)
                         .foregroundStyle(.white)
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -438,7 +442,7 @@ struct OrganisationSettingsHubView: View {
             content()
         }
         .padding(.horizontal, 14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)

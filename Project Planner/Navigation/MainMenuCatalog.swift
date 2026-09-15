@@ -23,6 +23,30 @@ extension Notification.Name {
     static let pushWorkCatalogueDetail = Notification.Name("pushWorkCatalogueDetail")
 }
 
+/// Holds a catalogue job to open immediately when Projects / Small Works appears,
+/// so the empty list is not shown first.
+enum WorkCatalogueDeepLink {
+    static var pendingProjectId: UUID?
+    static var pendingIsSmallWorks = false
+
+    static func set(projectId: UUID, isSmallWorks: Bool) {
+        pendingProjectId = projectId
+        pendingIsSmallWorks = isSmallWorks
+    }
+
+    static func peek(isSmallWorks: Bool) -> Bool {
+        pendingIsSmallWorks == isSmallWorks && pendingProjectId != nil
+    }
+
+    static func take(isSmallWorks: Bool) -> UUID? {
+        guard pendingIsSmallWorks == isSmallWorks else { return nil }
+        let id = pendingProjectId
+        pendingProjectId = nil
+        pendingIsSmallWorks = false
+        return id
+    }
+}
+
 /// Home surfaces opened from either Main Menu or More (HomeView owns the sheets).
 enum MainMenuSurfaceRoute: String, CaseIterable {
     case clients
