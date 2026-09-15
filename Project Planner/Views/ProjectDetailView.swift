@@ -67,11 +67,7 @@ struct ProjectDetailView: View {
 
     /// Admins and managers with project/small-works management access can configure View visibility and see all tasks on the job.
     private var canConfigureProjectVisibility: Bool {
-        guard let u = userStore.currentUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if userStore.hasAdminAccess() { return true }
-        guard u.permissions.manager else { return false }
-        return project.jobType == .smallWorks ? u.permissions.smallWorks : u.permissions.projects
+        userStore.canManageWorkCatalogue(project.jobType == .smallWorks ? .smallWorks : .projects)
     }
 
     private var canViewAllTasksOnThisJob: Bool { canConfigureProjectVisibility }
@@ -104,6 +100,7 @@ struct ProjectDetailView: View {
         case tasks = "My Tasks"
         case materials = "Materials"
         case healthSafety = "H&S"
+        case deadlines = "Deadlines"
         case siteAudit = "Site Audit"
         case location = "Location"
         case activeUsers = "Active users"
@@ -116,6 +113,7 @@ struct ProjectDetailView: View {
             case .tasks: return "checklist"
             case .materials: return "shippingbox"
             case .healthSafety: return "cross.case.fill"
+            case .deadlines: return "calendar.badge.clock"
             case .siteAudit: return "clipboard.fill"
             case .location: return "mappin.and.ellipse"
             case .activeUsers: return "person.3.fill"
@@ -510,15 +508,15 @@ struct ProjectDetailView: View {
         let availableTiles: [DetailTile] = {
             if userStore.isOperativeMode() {
                 if userStore.canViewMaterials() {
-                    return userStore.canViewSiteAudit() ? [.tasks, .materials, .healthSafety, .siteAudit, .location] : [.tasks, .materials, .healthSafety, .location]
+                    return userStore.canViewSiteAudit() ? [.tasks, .materials, .healthSafety, .deadlines, .siteAudit, .location] : [.tasks, .materials, .healthSafety, .deadlines, .location]
                 }
-                return userStore.canViewSiteAudit() ? [.tasks, .healthSafety, .siteAudit, .location] : [.tasks, .healthSafety, .location]
+                return userStore.canViewSiteAudit() ? [.tasks, .healthSafety, .deadlines, .siteAudit, .location] : [.tasks, .healthSafety, .deadlines, .location]
             }
             var tiles: [DetailTile] = [.scheduling]
             if canConfigureProjectVisibility {
                 tiles.append(.visibility)
             }
-            tiles.append(contentsOf: [.tasks, .materials, .healthSafety, .siteAudit, .location])
+            tiles.append(contentsOf: [.tasks, .materials, .healthSafety, .deadlines, .siteAudit, .location])
             if canViewActiveOperatives {
                 tiles.append(.activeUsers)
             }
@@ -623,6 +621,7 @@ struct ProjectDetailView: View {
         case .tasks: return Color(red: 0.882, green: 0.961, blue: 0.933)
         case .materials: return Color(red: 0.98, green: 0.933, blue: 0.855)
         case .healthSafety: return Color(red: 0.89, green: 0.98, blue: 0.95)
+        case .deadlines: return Color(red: 0.90, green: 0.95, blue: 0.98)
         case .siteAudit: return Color(red: 0.98, green: 0.925, blue: 0.906)
         case .location: return Color(red: 0.984, green: 0.918, blue: 0.941)
         case .activeUsers: return Color(red: 0.902, green: 0.945, blue: 0.984)
@@ -636,6 +635,7 @@ struct ProjectDetailView: View {
         case .tasks: return ProjectWorksRevampColors.activeGreen
         case .materials: return ProjectWorksRevampColors.upcomingAmber
         case .healthSafety: return Color(red: 0.07, green: 0.62, blue: 0.47)
+        case .deadlines: return ProjectWorksRevampColors.blue
         case .siteAudit: return Color(red: 0.6, green: 0.235, blue: 0.114)
         case .location: return Color(red: 0.6, green: 0.208, blue: 0.337)
         case .activeUsers: return ProjectWorksRevampColors.blue
@@ -656,6 +656,7 @@ struct ProjectDetailView: View {
                 .environmentObject(projectStore)
                 .environmentObject(bookingStore)
                 .environmentObject(operativeStore)
+                .environmentObject(taskStore)
         case .materials:
             // Materials contains its own `List` and expandable layout; nesting it inside `ScrollView` gives the
             // list an unbounded height and often collapses the rows to zero (looks like “nothing saved”).
@@ -667,6 +668,16 @@ struct ProjectDetailView: View {
         case .healthSafety:
             ProjectHealthSafetyView(project: project)
                 .environmentObject(userStore)
+        case .deadlines:
+            ProjectDeadlinesView(project: project)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(taskStore)
+                .environmentObject(notificationService)
+                .environmentObject(projectStore)
         case .activeUsers:
             ProjectActiveOperativesView(project: project)
                 .environmentObject(bookingStore)
@@ -2499,11 +2510,7 @@ struct ProjectDetailView: View {
     }
     
     private var canEditCurrentWorkItem: Bool {
-        guard let u = userStore.currentUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if u.isSuperAdmin || u.permissions.adminAccess { return true }
-        guard u.permissions.manager else { return false }
-        return project.jobType == .smallWorks ? u.permissions.smallWorks : u.permissions.projects
+        userStore.canManageWorkCatalogue(project.jobType == .smallWorks ? .smallWorks : .projects)
     }
 }
 
@@ -2701,6 +2708,7 @@ private struct ProjectTaskRow: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var bookingStore: BookingStore
     
     @State private var showingTaskDetail = false
     @State private var showingEditTask = false
@@ -2793,6 +2801,7 @@ private struct ProjectTaskRow: View {
                 .environmentObject(projectStore)
                 .environmentObject(firebaseBackend)
                 .environmentObject(notificationService)
+                .environmentObject(bookingStore)
         }
         .sheet(isPresented: $showingEditTask) {
             EditProjectTaskView(
@@ -3389,6 +3398,9 @@ private struct AddProjectTaskView: View {
     @State private var showingFilePicker = false
     @State private var showingImagePicker = false
     @State private var showingCameraPicker = false
+    @State private var showingSiteAuditPicker = false
+    @State private var siteAudits: [SiteAudit] = []
+    @State private var selectedSiteAuditId: UUID?
     @State private var uploadedImageURLs: [String] = []
     @State private var errorMessage: String?
     @State private var showingError = false
@@ -3443,6 +3455,9 @@ private struct AddProjectTaskView: View {
                         if selectedFileName != nil {
                             selectedFileCard
                         }
+                        if selectedSiteAuditId != nil {
+                            selectedSiteAuditCard
+                        }
                         if isUploadingImages {
                             VStack(alignment: .leading, spacing: 6) {
                                 ProgressView(value: uploadProgress)
@@ -3493,6 +3508,17 @@ private struct AddProjectTaskView: View {
             }
             .sheet(isPresented: $showingCameraPicker) {
                 TaskCameraImagePicker(images: $selectedImages)
+            }
+            .sheet(isPresented: $showingSiteAuditPicker) {
+                DLSiteAuditAttachSheet(
+                    audits: siteAudits.map { WorkAccess.siteAuditRef($0) },
+                    selectedId: $selectedSiteAuditId
+                )
+            }
+            .task {
+                if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                    siteAudits = (try? await firebaseBackend.loadSiteAudits(organizationId: orgId, projectId: project.id)) ?? []
+                }
             }
             .sheet(item: $peoplePickRoute) { route in
                 TaskPeoplePickerSheet(
@@ -3987,6 +4013,14 @@ private struct AddProjectTaskView: View {
             ) {
                 showingFilePicker = true
             }
+            attachmentShortcutButton(
+                title: "Site Audit",
+                systemImage: "clipboard.fill",
+                iconBg: Color(red: 0.98, green: 0.925, blue: 0.906),
+                iconFg: Color(red: 0.6, green: 0.235, blue: 0.114)
+            ) {
+                showingSiteAuditPicker = true
+            }
         }
     }
 
@@ -4063,6 +4097,37 @@ private struct AddProjectTaskView: View {
                     Button("Remove") {
                         selectedFile = nil
                         selectedFileName = nil
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(NewTaskScreenPalette.requiredFg)
+                }
+                .padding(14)
+                .background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
+            }
+        }
+    }
+
+    private var selectedSiteAuditCard: some View {
+        Group {
+            if let selectedSiteAuditId,
+               let audit = siteAudits.first(where: { $0.id == selectedSiteAuditId }) {
+                let ref = WorkAccess.siteAuditRef(audit)
+                HStack {
+                    Image(systemName: "clipboard.fill")
+                        .foregroundStyle(Color(red: 0.6, green: 0.235, blue: 0.114))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(ref.title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(NewTaskScreenPalette.ink)
+                        Text(ref.typeLabel)
+                            .font(.system(size: 11))
+                            .foregroundStyle(NewTaskScreenPalette.muted)
+                    }
+                    Spacer()
+                    Button("Remove") {
+                        self.selectedSiteAuditId = nil
                     }
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(NewTaskScreenPalette.requiredFg)
@@ -4193,6 +4258,8 @@ private struct AddProjectTaskView: View {
                     attachedFileURL: nil,
                     attachedFileName: selectedFileName,
                     attachedImageURLs: [],
+                    attachedSiteAuditId: selectedSiteAuditId,
+                    attachedSiteAuditTitle: siteAudits.first(where: { $0.id == selectedSiteAuditId }).map { WorkAccess.siteAuditRef($0).title },
                     items: items,
                     completedItemIds: []
                 )
@@ -5163,7 +5230,12 @@ private struct TaskCameraImagePicker: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
-        picker.sourceType = .camera
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            picker.sourceType = .camera
+            picker.cameraCaptureMode = .photo
+        } else {
+            picker.sourceType = .photoLibrary
+        }
         picker.delegate = context.coordinator
         picker.allowsEditing = false
         return picker
@@ -5183,24 +5255,14 @@ private struct TaskCameraImagePicker: UIViewControllerRepresentable {
         }
 
         func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            picker.dismiss(animated: true)
             if let img = info[.originalImage] as? UIImage {
-                DispatchQueue.main.async {
-                    self.parent.images.append(img)
-                    self.parent.dismiss()
-                }
-            } else {
-                DispatchQueue.main.async {
-                    self.parent.dismiss()
-                }
+                parent.images.append(img)
             }
+            parent.dismiss()
         }
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            picker.dismiss(animated: true)
-            DispatchQueue.main.async {
-                self.parent.dismiss()
-            }
+            parent.dismiss()
         }
     }
 }
@@ -5441,9 +5503,13 @@ struct CompletedTaskDetailView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var bookingStore: BookingStore
 
     @State private var showingCarryOut = false
     @State private var showingEditTask = false
+    @State private var attachmentPreview: HSDocumentPreviewItem?
+    @State private var openAttachedAudit: SiteAudit?
+    @State private var jobSiteAudits: [SiteAudit] = []
 
     private var displayTask: ProjectTask {
         taskStore.tasks.first(where: { $0.id == task.id }) ?? task
@@ -5454,7 +5520,12 @@ struct CompletedTaskDetailView: View {
     }
 
     private var canEditTaskHere: Bool {
-        canEditTask && projectStore.projects.first(where: { $0.id == displayTask.projectId }) != nil
+        canEditTask && resolvedJob != nil
+    }
+
+    private var resolvedJob: Project? {
+        projectStore.projects.first(where: { $0.id == displayTask.projectId })
+            ?? projectStore.smallWorks.first(where: { $0.id == displayTask.projectId })
     }
 
     private var canCarryOut: Bool {
@@ -5597,7 +5668,7 @@ struct CompletedTaskDetailView: View {
                 .environmentObject(projectStore)
             }
             .sheet(isPresented: $showingEditTask) {
-                if let proj = projectStore.projects.first(where: { $0.id == displayTask.projectId }) {
+                if let proj = resolvedJob {
                     EditProjectTaskView(
                         task: displayTask,
                         project: proj,
@@ -5608,6 +5679,20 @@ struct CompletedTaskDetailView: View {
                     .environmentObject(userStore)
                     .environmentObject(firebaseBackend)
                 }
+            }
+            .sheet(item: $attachmentPreview) { item in
+                InAppRemoteDocumentViewer(source: item.source, title: item.title, noun: item.noun)
+            }
+            .sheet(item: $openAttachedAudit) { audit in
+                SiteAuditDetailView(audit: audit, project: resolvedJob)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(userStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(operativeStore)
+            }
+            .task(id: displayTask.attachedSiteAuditId) {
+                await loadAttachedSiteAudit()
             }
         }
     }
@@ -5938,8 +6023,8 @@ struct CompletedTaskDetailView: View {
 
     private var attachmentsSection: some View {
         Group {
-            let n = (displayTask.attachedFileURL != nil ? 1 : 0) + displayTask.attachedImageURLs.count
-            if n > 0 {
+                    let n = (displayTask.attachedFileURL != nil ? 1 : 0) + displayTask.attachedImageURLs.count + (displayTask.attachedSiteAuditId != nil ? 1 : 0)
+                    if n > 0 {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 4) {
                         Text("ATTACHMENTS")
@@ -5953,10 +6038,62 @@ struct CompletedTaskDetailView: View {
                     .padding(.leading, 4)
                     VStack(spacing: 0) {
                         if let fileURL = displayTask.attachedFileURL {
-                            attachmentRow(icon: "doc.fill", iconBg: CompleteTaskUXPalette.requiredBg, iconFg: CompleteTaskUXPalette.requiredFg, title: displayTask.attachedFileName ?? "File", subtitle: "Tap to open", url: fileURL, showDivider: !displayTask.attachedImageURLs.isEmpty)
+                            attachmentRow(
+                                icon: "doc.fill",
+                                iconBg: CompleteTaskUXPalette.requiredBg,
+                                iconFg: CompleteTaskUXPalette.requiredFg,
+                                title: displayTask.attachedFileName ?? "File",
+                                subtitle: "Tap to open",
+                                url: fileURL,
+                                noun: "file",
+                                showDivider: !displayTask.attachedImageURLs.isEmpty || displayTask.attachedSiteAuditId != nil
+                            )
                         }
                         ForEach(Array(displayTask.attachedImageURLs.enumerated()), id: \.offset) { idx, url in
-                            attachmentRow(icon: "photo", iconBg: Color(red: 225 / 255, green: 245 / 255, blue: 238 / 255), iconFg: CompleteTaskUXPalette.green, title: "Image \(idx + 1)", subtitle: "Tap to open", url: url, showDivider: idx < displayTask.attachedImageURLs.count - 1)
+                            attachmentRow(
+                                icon: "photo",
+                                iconBg: Color(red: 225 / 255, green: 245 / 255, blue: 238 / 255),
+                                iconFg: CompleteTaskUXPalette.green,
+                                title: "Image \(idx + 1)",
+                                subtitle: "Tap to open",
+                                url: url,
+                                noun: "photo",
+                                showDivider: idx < displayTask.attachedImageURLs.count - 1 || displayTask.attachedSiteAuditId != nil
+                            )
+                        }
+                        if let title = displayTask.attachedSiteAuditTitle ?? (displayTask.attachedSiteAuditId != nil ? "Site audit" : nil) {
+                            Button {
+                                if let audit = jobSiteAudits.first(where: { $0.id == displayTask.attachedSiteAuditId }) {
+                                    openAttachedAudit = audit
+                                } else {
+                                    Task { await loadAttachedSiteAudit(openIfFound: true) }
+                                }
+                            } label: {
+                                HStack(spacing: 12) {
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(Color(red: 0.98, green: 0.925, blue: 0.906))
+                                        .frame(width: 32, height: 32)
+                                        .overlay(
+                                            Image(systemName: "clipboard.fill")
+                                                .font(.system(size: 14))
+                                                .foregroundStyle(Color(red: 0.6, green: 0.235, blue: 0.114))
+                                        )
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(title)
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundStyle(CompleteTaskUXPalette.ink)
+                                        Text("Site audit · Tap to open")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(CompleteTaskUXPalette.muted)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(CompleteTaskUXPalette.blue)
+                                }
+                                .padding(.vertical, 10)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.horizontal, 14)
@@ -5968,10 +6105,12 @@ struct CompletedTaskDetailView: View {
         }
     }
 
-    private func attachmentRow(icon: String, iconBg: Color, iconFg: Color, title: String, subtitle: String, url: String, showDivider: Bool) -> some View {
+    private func attachmentRow(icon: String, iconBg: Color, iconFg: Color, title: String, subtitle: String, url: String, noun: String, showDivider: Bool) -> some View {
         VStack(spacing: 0) {
             Button {
-                if let u = URL(string: url) { UIApplication.shared.open(u) }
+                if let u = URL(string: url) {
+                    attachmentPreview = HSDocumentPreviewItem(title: title, remoteURL: u, noun: noun)
+                }
             } label: {
                 HStack(spacing: 12) {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -5987,7 +6126,7 @@ struct CompletedTaskDetailView: View {
                             .foregroundStyle(CompleteTaskUXPalette.muted)
                     }
                     Spacer()
-                    Image(systemName: "arrow.down.circle")
+                    Image(systemName: "eye.fill")
                         .font(.system(size: 16))
                         .foregroundStyle(CompleteTaskUXPalette.blue)
                 }
@@ -5995,6 +6134,24 @@ struct CompletedTaskDetailView: View {
             }
             .buttonStyle(.plain)
             if showDivider { Divider().overlay(CompleteTaskUXPalette.border) }
+        }
+    }
+
+    private func loadAttachedSiteAudit(openIfFound: Bool = false) async {
+        guard let auditId = displayTask.attachedSiteAuditId,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let loaded: [SiteAudit]
+        do {
+            loaded = try await firebaseBackend.loadSiteAudits(organizationId: orgId, projectId: displayTask.projectId)
+        } catch {
+            loaded = (try? await firebaseBackend.loadSiteAudits(organizationId: orgId)) ?? []
+        }
+        let pending = SiteAuditOfflineStore.shared.pending.map(\.audit)
+        jobSiteAudits = loaded + pending.filter { audit in
+            !loaded.contains(where: { $0.id == audit.id })
+        }
+        if openIfFound, let audit = jobSiteAudits.first(where: { $0.id == auditId }) {
+            openAttachedAudit = audit
         }
     }
 

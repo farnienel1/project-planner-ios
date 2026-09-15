@@ -171,6 +171,7 @@ struct NotificationRowView: View {
         case .warningRemoved: return "xmark.octagon"
         case .taskCompleted: return "checkmark.circle"
         case .taskCreated: return "list.bullet.rectangle"
+        case .deadlineAssigned: return "calendar.badge.clock"
         case .holidayRequestSubmitted: return "sun.max"
         case .holidayRequestApproved: return "sun.max.fill"
         case .holidayRequestDeclined: return "xmark.circle.fill"
@@ -192,6 +193,7 @@ struct NotificationRowView: View {
         case .warningRemoved: return .orange
         case .taskCompleted: return .green
         case .taskCreated: return .blue
+        case .deadlineAssigned: return .orange
         case .holidayRequestSubmitted: return .orange
         case .holidayRequestApproved: return .green
         case .holidayRequestDeclined: return .red

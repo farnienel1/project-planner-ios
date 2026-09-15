@@ -230,7 +230,7 @@ struct ScheduleSubcontractorView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(contact.name)
                                         .foregroundStyle(.primary)
-                                    Text(contact.position.rawValue)
+                                    Text(contact.displayTrade)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }

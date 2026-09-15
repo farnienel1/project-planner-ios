@@ -15,7 +15,6 @@ struct MaterialCatalogueRootView: View {
     @StateObject private var store = MaterialCatalogStore()
 
     @State private var searchText = ""
-    @State private var selectedCategory: String?
     @State private var showingAdd = false
     @State private var showingBulkImport = false
     @State private var selectedItem: MaterialCatalogItem?
@@ -35,16 +34,8 @@ struct MaterialCatalogueRootView: View {
         return names.sorted()
     }
 
-    private var categoryCounts: [String: Int] {
-        Dictionary(grouping: store.items) { normalizedCategory($0.category) }
-            .mapValues(\.count)
-    }
-
     private var filteredItems: [MaterialCatalogItem] {
         var list = store.items
-        if let cat = selectedCategory {
-            list = list.filter { normalizedCategory($0.category) == cat }
-        }
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !q.isEmpty {
             list = list.filter { item in
@@ -75,8 +66,6 @@ struct MaterialCatalogueRootView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     heroCard
                     searchField
-                    categoryChips
-                    categoryTiles
                     if store.isLoading {
                         ProgressView()
                             .frame(maxWidth: .infinity)
@@ -283,66 +272,6 @@ struct MaterialCatalogueRootView: View {
         .overlay(RoundedRectangle(cornerRadius: 11).stroke(MaterialsOrderingTheme.border, lineWidth: 0.5))
     }
 
-    private var categoryChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                chip(title: "All · \(store.items.count)", isOn: selectedCategory == nil) {
-                    selectedCategory = nil
-                }
-                ForEach(categories, id: \.self) { cat in
-                    let count = categoryCounts[cat] ?? 0
-                    chip(title: "\(cat) · \(count)", isOn: selectedCategory == cat) {
-                        selectedCategory = cat
-                    }
-                }
-            }
-        }
-    }
-
-    private var categoryTiles: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(categories, id: \.self) { cat in
-                    let count = categoryCounts[cat] ?? 0
-                    Button {
-                        selectedCategory = cat
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(cat)
-                                .font(.system(size: 11, weight: .semibold))
-                            Text("\(count) item\(count == 1 ? "" : "s")")
-                                .font(.system(size: 9))
-                                .foregroundStyle(MaterialsOrderingTheme.muted)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(MaterialsOrderingTheme.cardBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10)
-                                .stroke(selectedCategory == cat ? MaterialsOrderingTheme.primary : MaterialsOrderingTheme.border, lineWidth: selectedCategory == cat ? 1.4 : 0.5)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    private func chip(title: String, isOn: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(isOn ? Color.white : MaterialsOrderingTheme.muted)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 5)
-                .background(isOn ? MaterialsOrderingTheme.primary : MaterialsOrderingTheme.cardBackground)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(MaterialsOrderingTheme.border, lineWidth: isOn ? 0 : 0.5))
-        }
-        .buttonStyle(.plain)
-    }
-
     private func catalogueRow(_ item: MaterialCatalogItem) -> some View {
         HStack(alignment: .top, spacing: 10) {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -415,7 +344,7 @@ struct MaterialCatalogueRootView: View {
                 .foregroundStyle(MaterialsOrderingTheme.disabled)
             Text("No catalogue items yet")
                 .font(.system(size: 14, weight: .medium))
-            Text("Add materials manually or import a CSV template.")
+            Text("Add materials manually or update the catalogue from a CSV.")
                 .font(.system(size: 12))
                 .foregroundStyle(MaterialsOrderingTheme.muted)
                 .multilineTextAlignment(.center)
@@ -801,86 +730,153 @@ struct MaterialCatalogueBulkImportView: View {
     @EnvironmentObject var store: MaterialCatalogStore
 
     @State private var showingFilePicker = false
+    @State private var pendingImportMode: MaterialCatalogueCSVImportMode = .updateExisting
+    @State private var showReplaceConfirm = false
     @State private var importError: String?
-    @State private var parsedRows: [MaterialCatalogCSVRow] = []
-    @State private var duplicateReview: [MaterialCatalogDuplicateCandidate] = []
-    @State private var showingDuplicateReview = false
     @State private var isImporting = false
-    @State private var templateShareURL: URL?
-    @State private var showTemplateShare = false
+    @State private var importResult: MaterialCatalogueCSVImportResult?
+    @State private var shareURL: URL?
+    @State private var showShareSheet = false
     @State private var showCSVDownloadWarning = false
+    @State private var pendingDownload: CatalogueDownloadKind = .currentCatalogue
+
+    private enum CatalogueDownloadKind {
+        case currentCatalogue
+        case blankTemplate
+    }
+
+    private var isBusy: Bool { isImporting || store.importProgress != nil }
+
+    private var displayedProgress: MaterialCatalogueImportProgress? {
+        if importResult != nil { return nil }
+        if let progress = store.importProgress { return progress }
+        if isImporting {
+            return MaterialCatalogueImportProgress(completed: 0, total: 1, phase: "Preparing catalogue…")
+        }
+        return nil
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 18) {
                     infoBanner
-                    Text("STEP 1 · DOWNLOAD TEMPLATE")
+
+                    Text("STEP 1 · DOWNLOAD")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(MaterialsOrderingTheme.muted)
+
                     Button {
+                        pendingDownload = .currentCatalogue
                         showCSVDownloadWarning = true
                     } label: {
-                        Label("Download CSV template", systemImage: "arrow.down.circle")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(MaterialsOrderingTheme.primary)
-
-                    Text("STEP 2 · UPLOAD YOUR FILE")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(MaterialsOrderingTheme.muted)
-                    Button { showingFilePicker = true } label: {
-                        VStack(spacing: 8) {
-                            Image(systemName: "arrow.up.doc")
-                                .font(.system(size: 28))
-                                .foregroundStyle(MaterialsOrderingTheme.primary)
-                            Text("Drop CSV or tap to browse")
-                                .font(.system(size: 13, weight: .medium))
-                            Text("Max 5MB · 5,000 items")
-                                .font(.system(size: 10))
-                                .foregroundStyle(MaterialsOrderingTheme.muted)
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.down.circle.fill")
+                                    .font(.system(size: 18))
+                                Text("Download Material Catalogue")
+                                    .font(.system(size: 14, weight: .semibold))
+                            }
+                            Text("(download your current material catalogue to update, remove and add new materials)")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.white.opacity(0.9))
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 28)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                        .background(MaterialsOrderingTheme.primaryGradient)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isBusy)
+
+                    Button {
+                        pendingDownload = .blankTemplate
+                        showCSVDownloadWarning = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "doc.badge.plus")
+                                .font(.system(size: 16))
+                                .foregroundStyle(MaterialsOrderingTheme.primary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Download blank template")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(MaterialsOrderingTheme.ink)
+                                Text("Headers only — use this to start a brand new list")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(MaterialsOrderingTheme.muted)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(14)
                         .background(MaterialsOrderingTheme.cardBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(style: StrokeStyle(lineWidth: 2, dash: [6]))
-                                .foregroundStyle(MaterialsOrderingTheme.border)
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(MaterialsOrderingTheme.border, lineWidth: 1)
                         )
                     }
                     .buttonStyle(.plain)
+                    .disabled(isBusy)
 
-                    Text("Fill the template on a laptop, then upload here or share the file from your phone.")
+                    Text("STEP 2 · UPLOAD UPDATED CATALOGUE")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                        .padding(.top, 4)
+
+                    csvDropZone(
+                        title: "Use this to upload your updated catalogue",
+                        subtitle: "Upload your full edited catalogue. New rows are added, matching rows are updated, and rows missing from the sheet are removed.",
+                        icon: "arrow.up.doc.fill",
+                        accent: MaterialsOrderingTheme.primary,
+                        dashedColor: MaterialsOrderingTheme.primary.opacity(0.45)
+                    ) {
+                        pendingImportMode = .updateExisting
+                        showingFilePicker = true
+                    }
+
+                    Text("STEP 3 · REPLACE ENTIRE CATALOGUE")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                        .padding(.top, 4)
+
+                    csvDropZone(
+                        title: "Use this to upload a brand new catalogue",
+                        subtitle: "Erases every current catalogue item, then imports this file as new materials.",
+                        icon: "arrow.triangle.2.circlepath",
+                        accent: MaterialsOrderingTheme.warn,
+                        dashedColor: MaterialsOrderingTheme.warn.opacity(0.55)
+                    ) {
+                        showReplaceConfirm = true
+                    }
+
+                    Text("Edit on a laptop if you can, then save as .csv and upload here. Leave Catalogue ID blank for brand new rows.")
                         .font(.system(size: 11))
                         .foregroundStyle(MaterialsOrderingTheme.muted)
                 }
                 .padding(16)
             }
-            .navigationTitle("Bulk import")
+            .background(MaterialsOrderingTheme.pageBackground.ignoresSafeArea())
+            .navigationTitle("Catalogue CSV")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .disabled(isBusy)
                 }
             }
-            .fileImporter(isPresented: $showingFilePicker, allowedContentTypes: [.commaSeparatedText, .plainText], allowsMultipleSelection: false) { result in
+            .interactiveDismissDisabled(isBusy)
+            .fileImporter(
+                isPresented: $showingFilePicker,
+                allowedContentTypes: [.commaSeparatedText, .plainText],
+                allowsMultipleSelection: false
+            ) { result in
                 handleFileImport(result)
             }
-            .sheet(isPresented: $showingDuplicateReview) {
-                MaterialCatalogueDuplicateReviewView(
-                    candidates: $duplicateReview,
-                    rows: parsedRows,
-                    onComplete: { dismiss() }
-                )
-                .environmentObject(userStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(store)
-            }
-            .sheet(isPresented: $showTemplateShare) {
-                if let templateShareURL {
-                    MaterialTemplateShareSheet(activityItems: [templateShareURL])
+            .sheet(isPresented: $showShareSheet) {
+                if let shareURL {
+                    MaterialTemplateShareSheet(activityItems: [shareURL])
                 }
             }
             .alert("Import error", isPresented: Binding(
@@ -893,14 +889,18 @@ struct MaterialCatalogueBulkImportView: View {
             }
             .alert("⚠️ CSV Warning", isPresented: $showCSVDownloadWarning) {
                 Button("Cancel", role: .cancel) {}
-                Button("Download CSV") {
-                    if templateShareURL == nil {
-                        templateShareURL = try? MaterialCatalogCSV.writeTemplateToTemporaryFile()
-                    }
-                    showTemplateShare = templateShareURL != nil
-                }
+                Button("Download CSV") { prepareDownload() }
             } message: {
                 Text("When re-importing the file for a batch upload, make sure you save the file as csv and not .xls (excel) or .numbers (for mac). The batch upload function can only read .csv files. The template you download will be .csv by default.")
+            }
+            .overlay {
+                if showReplaceConfirm {
+                    replaceConfirmOverlay
+                } else if let result = importResult {
+                    importSummaryOverlay(result)
+                } else if let progress = displayedProgress {
+                    importProgressOverlay(progress)
+                }
             }
         }
     }
@@ -909,15 +909,192 @@ struct MaterialCatalogueBulkImportView: View {
         HStack(alignment: .top, spacing: 9) {
             Image(systemName: "info.circle.fill")
                 .foregroundStyle(MaterialsOrderingTheme.primary)
-            Text("Add many materials at once. Columns: Name, Category, Manufacturer/Brand, Product Code, Default Type (Length, Drum, Box, Pallet or Number), Size, Length, Length Unit (M or MM). Duplicate checks use material name.")
-                .font(.system(size: 11))
-                .foregroundStyle(MaterialsOrderingTheme.primary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Download the full catalogue, edit it, then upload that same file. Catalogue ID keeps each row linked so jobs stay attached. Rows you delete from the sheet are removed from the app. New rows can leave Catalogue ID blank.")
+                    .font(.system(size: 11, weight: .medium))
+                Text("Matching uses Catalogue ID first, then name + product code. Duplicate rows in the file are skipped automatically.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(MaterialsOrderingTheme.primary.opacity(0.85))
+            }
+            .foregroundStyle(MaterialsOrderingTheme.primary)
         }
-        .padding(11)
+        .padding(12)
         .background(MaterialsOrderingTheme.primaryTint)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .onAppear {
-            templateShareURL = try? MaterialCatalogCSV.writeTemplateToTemporaryFile()
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func csvDropZone(
+        title: String,
+        subtitle: String,
+        icon: String,
+        accent: Color,
+        dashedColor: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 26))
+                    .foregroundStyle(accent)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(MaterialsOrderingTheme.ink)
+                    .multilineTextAlignment(.center)
+                Text("Drop CSV or tap to browse")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(accent)
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(MaterialsOrderingTheme.muted)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Max 5MB · 5,000 items")
+                    .font(.system(size: 10))
+                    .foregroundStyle(MaterialsOrderingTheme.muted)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 22)
+            .background(MaterialsOrderingTheme.cardBackground)
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(style: StrokeStyle(lineWidth: 1.8, dash: [7]))
+                    .foregroundStyle(dashedColor)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isBusy)
+    }
+
+    private var replaceConfirmOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.38)
+                .ignoresSafeArea()
+                .onTapGesture { showReplaceConfirm = false }
+            MaterialCatalogueReplaceConfirm(
+                onContinue: {
+                    showReplaceConfirm = false
+                    pendingImportMode = .replaceAll
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        showingFilePicker = true
+                    }
+                },
+                onCancel: { showReplaceConfirm = false }
+            )
+            .padding(22)
+        }
+    }
+
+    private func importProgressOverlay(_ progress: MaterialCatalogueImportProgress) -> some View {
+        ZStack {
+            Color.black.opacity(0.38).ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    Image(systemName: "shippingbox.fill")
+                        .foregroundStyle(MaterialsOrderingTheme.primary)
+                    Text(progress.phase)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(MaterialsOrderingTheme.ink)
+                }
+                ProgressView(value: progress.fraction)
+                    .tint(MaterialsOrderingTheme.primary)
+                HStack {
+                    Text("\(progress.completed) of \(progress.total)")
+                    Spacer()
+                    Text("\(Int((progress.fraction * 100).rounded()))%")
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(MaterialsOrderingTheme.muted)
+                Text("Keep this screen open until the upload finishes.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(MaterialsOrderingTheme.muted)
+            }
+            .padding(20)
+            .frame(maxWidth: 360)
+            .background(MaterialsOrderingTheme.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(MaterialsOrderingTheme.border, lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.12), radius: 18, y: 8)
+            .padding(22)
+        }
+    }
+
+    private func importSummaryOverlay(_ result: MaterialCatalogueCSVImportResult) -> some View {
+        ZStack {
+            Color.black.opacity(0.38)
+                .ignoresSafeArea()
+                .onTapGesture { dismiss() }
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(MaterialsOrderingTheme.success)
+                    Text(result.totalTouched == 0 ? "No changes needed" : "Catalogue updated")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(MaterialsOrderingTheme.ink)
+                }
+                VStack(spacing: 8) {
+                    summaryRow(label: "Added", value: result.added, tint: MaterialsOrderingTheme.success)
+                    summaryRow(label: "Updated", value: result.updated, tint: MaterialsOrderingTheme.primary)
+                    summaryRow(label: "Removed", value: result.removed, tint: MaterialsOrderingTheme.danger)
+                    summaryRow(label: "Duplicates skipped", value: result.skippedDuplicates, tint: MaterialsOrderingTheme.warn)
+                }
+                Button {
+                    dismiss()
+                } label: {
+                    Text("Done")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(MaterialsOrderingTheme.primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(20)
+            .frame(maxWidth: 360)
+            .background(MaterialsOrderingTheme.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(MaterialsOrderingTheme.border, lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.12), radius: 18, y: 8)
+            .padding(22)
+        }
+    }
+
+    private func summaryRow(label: String, value: Int, tint: Color) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundStyle(MaterialsOrderingTheme.muted)
+            Spacer()
+            Text("\(value)")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(tint)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(MaterialsOrderingTheme.pageBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func prepareDownload() {
+        do {
+            switch pendingDownload {
+            case .currentCatalogue:
+                shareURL = try MaterialCatalogCSV.writeCatalogueToTemporaryFile(items: store.items)
+            case .blankTemplate:
+                shareURL = try MaterialCatalogCSV.writeTemplateToTemporaryFile()
+            }
+            showShareSheet = shareURL != nil
+        } catch {
+            importError = error.localizedDescription
         }
     }
 
@@ -935,33 +1112,80 @@ struct MaterialCatalogueBulkImportView: View {
             do {
                 let data = try Data(contentsOf: url)
                 let rows = try MaterialCatalogCSV.parse(data: data)
-                parsedRows = rows
-                duplicateReview = MaterialCatalogDuplicateDetection.buildBatchDuplicateReview(
-                    incomingRows: rows,
-                    existingCatalogue: store.items
-                )
-                if duplicateReview.isEmpty {
-                    Task { await importAllRows(rows, skipKeys: []) }
-                } else {
-                    showingDuplicateReview = true
-                }
+                Task { await importRows(rows, mode: pendingImportMode) }
             } catch {
                 importError = error.localizedDescription
             }
         }
     }
 
-    private func importAllRows(_ rows: [MaterialCatalogCSVRow], skipKeys: Set<String>) async {
+    private func importRows(_ rows: [MaterialCatalogCSVRow], mode: MaterialCatalogueCSVImportMode) async {
         isImporting = true
         defer { isImporting = false }
         let uid = firebaseBackend.currentUser?.uid ?? Auth.auth().currentUser?.uid ?? ""
         let name = userStore.currentUser?.fullName ?? "Admin"
         do {
-            _ = try await store.importRows(rows, createdByUserId: uid, createdByName: name, skipDuplicateKeys: skipKeys)
-            dismiss()
+            importResult = try await store.importCSV(
+                rows,
+                mode: mode,
+                createdByUserId: uid,
+                createdByName: name
+            )
         } catch {
             importError = error.localizedDescription
         }
+    }
+}
+
+private struct MaterialCatalogueReplaceConfirm: View {
+    let onContinue: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.title3)
+                    .foregroundStyle(MaterialsOrderingTheme.warn)
+                Text("Replace entire catalogue?")
+                    .font(.headline)
+                    .foregroundStyle(MaterialsOrderingTheme.ink)
+            }
+            Text("Are you sure you want to upload a new catalogue? If you do this, then all current catalogue items will be erased. Please download your current template and save this before using this option.")
+                .font(.subheadline)
+                .foregroundStyle(MaterialsOrderingTheme.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 10) {
+                Button(action: onContinue) {
+                    Text("Continue")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(MaterialsOrderingTheme.success)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                Button(action: onCancel) {
+                    Text("Cancel")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(MaterialsOrderingTheme.danger)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(18)
+        .background(MaterialsOrderingTheme.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(MaterialsOrderingTheme.border, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.12), radius: 18, y: 8)
     }
 }
 
@@ -973,125 +1197,4 @@ private struct MaterialTemplateShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
-
-struct MaterialCatalogueDuplicateReviewView: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject var userStore: UserStore
-    @EnvironmentObject var firebaseBackend: FirebaseBackend
-    @EnvironmentObject var store: MaterialCatalogStore
-
-    @Binding var candidates: [MaterialCatalogDuplicateCandidate]
-    let rows: [MaterialCatalogCSVRow]
-    let onComplete: () -> Void
-
-    @State private var isSaving = false
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Text("These rows look like duplicates by material name. Use Keep to import or Remove to skip each row.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(candidates.indices, id: \.self) { index in
-                    let candidate = candidates[index]
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(candidate.incomingName)
-                                .font(.system(size: 13, weight: .medium))
-                            Text("Code: \(candidate.incomingCode.isEmpty ? "—" : candidate.incomingCode)")
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(MaterialsOrderingTheme.muted)
-                            Text("Matches: \(candidate.existingName)")
-                                .font(.system(size: 11))
-                                .foregroundStyle(MaterialsOrderingTheme.warn)
-                        }
-                        Spacer()
-                        HStack(spacing: 10) {
-                            Button {
-                                var updated = candidates[index]
-                                updated.include = false
-                                candidates[index] = updated
-                            } label: {
-                                Text("Remove")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 7)
-                                    .background(MaterialsOrderingTheme.danger)
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            Button {
-                                var updated = candidates[index]
-                                updated.include = true
-                                candidates[index] = updated
-                            } label: {
-                                Text("Keep")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 7)
-                                    .background(MaterialsOrderingTheme.success)
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-            .navigationTitle("Duplicates")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Continue") { Task { await finishImport() } }
-                        .disabled(isSaving)
-                }
-            }
-        }
-    }
-
-    private func finishImport() async {
-        isSaving = true
-        defer { isSaving = false }
-        let skipKeys = Set(
-            candidates
-                .filter { !$0.include }
-                .compactMap { c -> String? in
-                    guard let idx = c.batchRowIndex, idx < rows.count else { return nil }
-                    let row = rows[idx]
-                    return store.duplicateKey(name: row.name, code: row.productCode)
-                }
-        )
-        let forceKeys = Set(
-            candidates
-                .filter { $0.include }
-                .compactMap { c -> String? in
-                    guard let idx = c.batchRowIndex, idx < rows.count else { return nil }
-                    let row = rows[idx]
-                    return store.duplicateKey(name: row.name, code: row.productCode)
-                }
-        )
-        let uid = firebaseBackend.currentUser?.uid ?? Auth.auth().currentUser?.uid ?? ""
-        let name = userStore.currentUser?.fullName ?? "Admin"
-        do {
-            _ = try await store.importRows(
-                rows,
-                createdByUserId: uid,
-                createdByName: name,
-                skipDuplicateKeys: skipKeys,
-                forceImportKeys: forceKeys
-            )
-            dismiss()
-            onComplete()
-        } catch {
-            // Parent could show error — for now dismiss
-            dismiss()
-        }
-    }
 }

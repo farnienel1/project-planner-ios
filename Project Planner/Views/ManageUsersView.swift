@@ -1074,6 +1074,7 @@ private struct EditUserDialogModifier: ViewModifier {
     let canEditPermissionsMatrix: Bool
     let operativeStore: OperativeStore
     let firebaseBackend: FirebaseBackend
+    let userStore: UserStore
     @Binding var showingProfilePhotoSourcePicker: Bool
     @Binding var profilePhotoPickerSource: UIImagePickerController.SourceType
     @Binding var showingProfileImagePicker: Bool
@@ -1145,16 +1146,7 @@ private struct EditUserDialogModifier: ViewModifier {
                 Text("When the day rate is changed, the weekly report and invoicing (invoicing will be available in a future update) use the new rate from the working day you choose. If you want the new rate to apply from tomorrow, choose Tomorrow.")
             }
             .sheet(isPresented: $showingQualificationsEditor, onDismiss: { operativeForQualificationsEditor = nil }) {
-                if let operative = operativeForQualificationsEditor ?? linkedOperative {
-                    OperativeQualificationsEditorView(
-                        operative: operative,
-                        title: "Qualifications",
-                        canEditAssignments: canEditPermissionsMatrix
-                    )
-                    .environmentObject(operativeStore)
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(notificationService)
-                }
+                qualificationsEditorSheet
             }
             .confirmationDialog("Profile photo", isPresented: $showingProfilePhotoSourcePicker, titleVisibility: .visible) {
                 if UIImagePickerController.isSourceTypeAvailable(.camera) {
@@ -1184,6 +1176,21 @@ private struct EditUserDialogModifier: ViewModifier {
                     Text(profilePhotoUploadMessage)
                 }
             }
+    }
+
+    @ViewBuilder
+    private var qualificationsEditorSheet: some View {
+        if let operative = operativeForQualificationsEditor ?? linkedOperative {
+            OperativeQualificationsEditorView(
+                operative: operative,
+                title: "Qualifications",
+                canEditAssignments: canEditPermissionsMatrix
+            )
+            .environmentObject(operativeStore)
+            .environmentObject(firebaseBackend)
+            .environmentObject(notificationService)
+            .environmentObject(userStore)
+        }
     }
 
     private var saveErrorPresented: Binding<Bool> {
@@ -1323,6 +1330,7 @@ struct EditUserView: View {
     @State private var operativeTransitionSiteAudit = true
     @State private var isApplyingUserType = false
     @State private var userTypeChangeMessage: String?
+    @State private var showingPromoteToAdminConfirmation = false
     @State private var showingDeactivateConfirmation = false
     @State private var annualLeaveDaysText: String
     @State private var annualLeaveStartMonth: Int
@@ -1565,6 +1573,11 @@ struct EditUserView: View {
         return "person.fill"
     }
 
+    private var isPromotingToAdministrator: Bool {
+        let currentKind = UserRoleTransitionPolicy.kind(for: permissions)
+        return changeUserTypeDraft == .administrator && (currentKind == .manager || currentKind == .operative)
+    }
+
     private var changeUserTypeIsNoOp: Bool {
         let currentKind = UserRoleTransitionPolicy.kind(for: permissions)
         if changeUserTypeDraft != currentKind { return false }
@@ -1788,6 +1801,7 @@ struct EditUserView: View {
             canEditPermissionsMatrix: canEditPermissionsMatrix,
             operativeStore: operativeStore,
             firebaseBackend: firebaseBackend,
+            userStore: userStore,
             showingProfilePhotoSourcePicker: $showingProfilePhotoSourcePicker,
             profilePhotoPickerSource: $profilePhotoPickerSource,
             showingProfileImagePicker: $showingProfileImagePicker,
@@ -1976,7 +1990,7 @@ struct EditUserView: View {
                                 iconBackground: ManageUserProfilePalette.chipTealBg,
                                 iconForeground: ManageUserProfilePalette.chipTealFg,
                                 title: "Weekly Report",
-                                description: "Can open and pull weekly reports.",
+                                description: "Can open Weekly Report from Home. If off, that tile is hidden.",
                                 isOn: $managerTransitionWeeklyReports
                             )
                             ManageUserCardDivider()
@@ -1985,7 +1999,7 @@ struct EditUserView: View {
                                 iconBackground: ManageUserProfilePalette.chipTealBg,
                                 iconForeground: ManageUserProfilePalette.chipTealFg,
                                 title: "Daily Overview",
-                                description: "Can open daily overview from the home screen and menus.",
+                                description: "Can open Daily Overview from Home. If off, that tile is hidden.",
                                 isOn: $managerTransitionDailyOverview
                             )
                             ManageUserCardDivider()
@@ -1994,7 +2008,7 @@ struct EditUserView: View {
                                 iconBackground: ManageUserProfilePalette.chipTealBg,
                                 iconForeground: ManageUserProfilePalette.chipTealFg,
                                 title: "Sub Contractors",
-                                description: "Can add and manage sub contractors. If unselected they can still book sub contractors in, but not manage their records.",
+                                description: "Can add and manage sub contractor records. If off, Sub Contractors is hidden on Home and menus. They can still book existing subcontractors on jobs.",
                                 isOn: $managerTransitionSubContractors
                             )
                             ManageUserCardDivider()
@@ -2003,7 +2017,7 @@ struct EditUserView: View {
                                 iconBackground: ManageUserProfilePalette.chipPinkBg,
                                 iconForeground: ManageUserProfilePalette.chipPinkFg,
                                 title: "Manage Qualifications",
-                                description: "When on, this manager can edit Organisation Qualifications. When off, Qualifications in the app shows only My Qualifications.",
+                                description: "When on, this manager can add and edit organisation qualification templates. When off, Qualifications shows only My Qualifications, and they can still assign templates others have already added.",
                                 isOn: $managerTransitionQualifications
                             )
                             ManageUserCardDivider()
@@ -2012,7 +2026,7 @@ struct EditUserView: View {
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
                                 title: "Projects",
-                                description: "Can create and manage projects. If unselected, this manager can still schedule operatives and sub contractors.",
+                                description: "Can create, edit, and add projects. If off, they still see projects they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit project details.",
                                 isOn: $managerTransitionProjects
                             )
                             ManageUserCardDivider()
@@ -2021,7 +2035,7 @@ struct EditUserView: View {
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
                                 title: "Small Works",
-                                description: "Can create and manage small works. If unselected, this manager can still schedule operatives and sub contractors.",
+                                description: "Can create, edit, and add small works. If off, they still see small works they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit small works details.",
                                 isOn: $managerTransitionSmallWorks
                             )
                         }
@@ -2101,7 +2115,11 @@ struct EditUserView: View {
                     }
 
                     Button {
-                        Task { await applyChangeUserType() }
+                        if isPromotingToAdministrator {
+                            showingPromoteToAdminConfirmation = true
+                        } else {
+                            Task { await applyChangeUserType() }
+                        }
                     } label: {
                         if isApplyingUserType {
                             ProgressView()
@@ -2126,9 +2144,78 @@ struct EditUserView: View {
                     Button("Close") {
                         showingChangeUserType = false
                         userTypeChangeMessage = nil
+                        showingPromoteToAdminConfirmation = false
                     }
                 }
             }
+        }
+        .overlay {
+            if showingPromoteToAdminConfirmation {
+                promoteToAdminConfirmationOverlay
+            }
+        }
+    }
+
+    private var promoteToAdminConfirmationOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    guard !isApplyingUserType else { return }
+                    showingPromoteToAdminConfirmation = false
+                }
+
+            VStack(spacing: 16) {
+                Image(systemName: "person.badge.key.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(ManageUserProfilePalette.chipPurpleFg)
+                    .frame(width: 56, height: 56)
+                    .background(ManageUserProfilePalette.chipPurpleBg)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                Text("Make this user an administrator?")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                    .multilineTextAlignment(.center)
+
+                Text("\(user.fullName) will get full administrator access, including user management and organisation settings. Only another administrator can change this later.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .multilineTextAlignment(.center)
+
+                VStack(spacing: 10) {
+                    Button {
+                        showingPromoteToAdminConfirmation = false
+                        Task { await applyChangeUserType() }
+                    } label: {
+                        Text("Yes, make administrator")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(ManageUserProfilePalette.primaryBlue)
+                    .disabled(isApplyingUserType)
+
+                    Button {
+                        showingPromoteToAdminConfirmation = false
+                    } label: {
+                        Text("Cancel")
+                            .font(.system(size: 15, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .disabled(isApplyingUserType)
+                }
+            }
+            .padding(22)
+            .frame(maxWidth: 340)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .shadow(color: Color.black.opacity(0.16), radius: 24, y: 10)
+            .padding(.horizontal, 28)
         }
     }
 
@@ -2623,9 +2710,7 @@ struct EditUserView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     Spacer()
-                    Text(entry.dayRate > 0
-                         ? "\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))"
-                         : "Cleared")
+                    Text("\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(ManageUserProfilePalette.textPrimary)
                 }
@@ -2687,8 +2772,8 @@ struct EditUserView: View {
 
     /// Single edit field shows day or hourly — dirty must compare against whichever is currently displayed.
     private func displayedPayrollRate(for user: AppUser) -> Double? {
-        if let day = user.dayRate, day > 0 { return day }
-        if let hourly = user.hourlyRate, hourly > 0 { return hourly }
+        if let day = user.dayRate { return day }
+        if let hourly = user.hourlyRate { return hourly }
         return nil
     }
 
@@ -2827,6 +2912,7 @@ struct EditUserView: View {
                             changeUserTypeDraft = UserRoleTransitionPolicy.kind(for: permissions)
                             applyDraftsForChangeUserTypeSelection()
                             userTypeChangeMessage = nil
+                            showingPromoteToAdminConfirmation = false
                             showingChangeUserType = true
                         }
                     )
@@ -3041,6 +3127,8 @@ struct EditUserView: View {
                         permissions.manager = true
                         permissions.projects = true
                         permissions.smallWorks = true
+                        permissions.weeklyReports = true
+                        permissions.dailyOverview = true
                     }
                 }
 
@@ -3052,7 +3140,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                 iconForeground: ManageUserProfilePalette.chipBlueFg,
                 title: "Projects",
-                description: "Can create and manage projects. If unselected, this manager can still schedule operatives and sub contractors.",
+                description: "Can create, edit, and add projects. If off, they still see projects they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit project details.",
                 isOn: $permissions.projects,
                 isDisabled: false
             )
@@ -3064,7 +3152,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                 iconForeground: ManageUserProfilePalette.chipBlueFg,
                 title: "Small Works",
-                description: "Can create and manage small works. If unselected, this manager can still schedule operatives and sub contractors.",
+                description: "Can create, edit, and add small works. If off, they still see small works they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit small works details.",
                 isOn: $permissions.smallWorks,
                 isDisabled: false
             )
@@ -3076,7 +3164,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipTealBg,
                 iconForeground: ManageUserProfilePalette.chipTealFg,
                 title: "Weekly Report",
-                description: "Can open and pull weekly reports.",
+                description: "Can open Weekly Report from Home. If off, that tile is hidden.",
                 isOn: $permissions.weeklyReports,
                 isDisabled: false
             )
@@ -3088,7 +3176,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipTealBg,
                 iconForeground: ManageUserProfilePalette.chipTealFg,
                 title: "Daily Overview",
-                description: "Can open daily overview from the home screen and menus.",
+                description: "Can open Daily Overview from Home. If off, that tile is hidden.",
                 isOn: $permissions.dailyOverview,
                 isDisabled: false
             )
@@ -3100,7 +3188,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipTealBg,
                 iconForeground: ManageUserProfilePalette.chipTealFg,
                 title: "Sub Contractors",
-                description: "Can add and manage sub contractors. If unselected they can still book sub contractors in, but not manage their records.",
+                description: "Can add and manage sub contractor records. If off, Sub Contractors is hidden on Home and menus. They can still book existing subcontractors on jobs.",
                 isOn: $permissions.subContractors,
                 isDisabled: false
             )
@@ -3149,7 +3237,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipPinkBg,
                 iconForeground: ManageUserProfilePalette.chipPinkFg,
                 title: "Manage Qualifications",
-                description: "When on, this manager can edit Organisation Qualifications. When off, Qualifications in the app shows only My Qualifications.",
+                description: "When on, this manager can add and edit organisation qualification templates. When off, Qualifications shows only My Qualifications, and they can still assign templates others have already added.",
                 isOn: $permissions.qualifications,
                 isDisabled: false
             )
@@ -3484,8 +3572,8 @@ struct EditUserView: View {
     }
 
     private static func formatPayrollRateText(dayRate: Double?, hourlyRate: Double?) -> String {
-        if let dayRate, dayRate > 0 { return String(format: "%.2f", dayRate) }
-        if let hourlyRate, hourlyRate > 0 { return String(format: "%.2f", hourlyRate) }
+        if let dayRate { return String(format: "%.2f", dayRate) }
+        if let hourlyRate { return String(format: "%.2f", hourlyRate) }
         return ""
     }
 

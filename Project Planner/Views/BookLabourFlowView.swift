@@ -64,9 +64,11 @@ struct BookLabourFlowView: View {
     @State private var errorBanner: String?
     @State private var isSaving = false
     @State private var projectListSearchText = ""
-    @State private var bookLabourOperativeClockEdit: BookLabourOperativeClockEdit?
     @State private var pendingOperativeOverlap: PendingOperativeBookLabourOverlap?
     @State private var operativeDraftByProjectId: [UUID: OperativeRectifyDraft] = [:]
+    @State private var isMultiSelectMode = false
+    @State private var selectedPersonIds: Set<String> = []
+    @State private var bookingParty: [BookLabourCandidate] = []
 
     private let calendar = Calendar.current
 
@@ -80,6 +82,7 @@ struct BookLabourFlowView: View {
         var startMinutes: Int
         var endMinutes: Int
         var breakRemoved: Bool
+        var timeSlot: TimeSlot = .customHours
     }
 
     private var day: Date { calendar.startOfDay(for: bookDate) }
@@ -104,11 +107,29 @@ struct BookLabourFlowView: View {
     }
 
     private var liveProjects: [Project] {
-        projectStore.projects.filter { $0.isLive && $0.jobType != .smallWorks }
+        WorkAccess.visibleWorks(
+            from: projectStore.projects,
+            catalogue: .projects,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            taskStore: nil,
+            deadlineAssignedProjectIds: []
+        ).filter(\.isLive)
     }
 
     private var liveSmallWorks: [Project] {
-        projectStore.projects.filter { $0.isLive && $0.jobType == .smallWorks }
+        WorkAccess.visibleWorks(
+            from: projectStore.projects,
+            catalogue: .smallWorks,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            taskStore: nil,
+            deadlineAssignedProjectIds: []
+        ).filter(\.isLive)
     }
 
     enum ManagerSlotReturn: Hashable {
@@ -129,6 +150,14 @@ struct BookLabourFlowView: View {
             returnRoute: ManagerSlotReturn
         )
         case pickSlotOperative(BookLabourCandidate, project: Project)
+        case pickCustomManager(
+            BookLabourCandidate,
+            locationType: ManagerLocationType,
+            locationId: UUID?,
+            customLocationName: String?,
+            returnRoute: ManagerSlotReturn
+        )
+        case pickCustomOperative(BookLabourCandidate, project: Project)
     }
 
     private enum BookToTab: Hashable {
@@ -144,21 +173,30 @@ struct BookLabourFlowView: View {
         return false
     }
 
+    private var isCustomHoursPhase: Bool {
+        switch phase {
+        case .pickCustomManager, .pickCustomOperative: return true
+        default: return false
+        }
+    }
+
     private var bookFlowNavigationStack: some View {
         NavigationStack {
             phaseContent
                 .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
-                .navigationTitle("Book labour")
+                .navigationTitle(isCustomHoursPhase ? "Custom hours" : "Book labour")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbarBackground(ProjectWorksRevampColors.canvas, for: .navigationBar)
                 .toolbarBackground(.visible, for: .navigationBar)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(isAtRootPhase ? "Close" : "Back") {
-                            if isAtRootPhase {
-                                dismiss()
-                            } else {
-                                goBack()
+                    if !isCustomHoursPhase {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button(isAtRootPhase ? "Close" : "Back") {
+                                if isAtRootPhase {
+                                    dismiss()
+                                } else {
+                                    goBack()
+                                }
                             }
                         }
                     }
@@ -171,22 +209,23 @@ struct BookLabourFlowView: View {
                 } message: {
                     Text(errorBanner ?? "")
                 }
-                .sheet(item: $bookLabourOperativeClockEdit) { ctx in
-                    BookLabourOperativeHoursSheet(
-                        policy: payrollTimePolicy,
-                        onSave: { start, end, breakRemoved in
-                            bookLabourOperativeClockEdit = nil
-                            saveOperativeBooking(
-                                operative: ctx.operative,
-                                project: ctx.project,
-                                slot: .customHours,
-                                workStart: start,
-                                workEnd: end,
-                                breakRemoved: breakRemoved
+                .overlay {
+                    if let pending = pendingOperativeOverlap {
+                        ZStack {
+                            Color.black.opacity(0.28).ignoresSafeArea()
+                            ScheduleOverlapWarningPanel(
+                                message: pending.message,
+                                detailLines: pending.detailLines,
+                                onCancel: { pendingOperativeOverlap = nil },
+                                onConfirm: {
+                                    let run = pending.onConfirm
+                                    pendingOperativeOverlap = nil
+                                    run()
+                                }
                             )
-                        },
-                        onCancel: { bookLabourOperativeClockEdit = nil }
-                    )
+                            .padding(18)
+                        }
+                    }
                 }
         }
     }
@@ -202,10 +241,25 @@ struct BookLabourFlowView: View {
             pickOtherLocationView(person: person)
         case .pickProject(let person, let smallWorks):
             pickProjectListView(person: person, smallWorks: smallWorks)
-        case .pickSlotManager(let person, let locType, let locId, let customName, _):
-            pickSlotManagerView(person: person, locationType: locType, locationId: locId, customLocationName: customName)
+        case .pickSlotManager(let person, let locType, let locId, let customName, let back):
+            pickSlotManagerView(
+                person: person,
+                locationType: locType,
+                locationId: locId,
+                customLocationName: customName,
+                returnRoute: back
+            )
         case .pickSlotOperative(let person, let project):
             pickSlotOperativeView(person: person, project: project)
+        case .pickCustomManager(let person, let locType, let locId, let customName, _):
+            pickCustomManagerHoursView(
+                person: person,
+                locationType: locType,
+                locationId: locId,
+                customLocationName: customName
+            )
+        case .pickCustomOperative(let person, let project):
+            pickCustomOperativeHoursView(person: person, project: project)
         }
     }
 
@@ -229,6 +283,16 @@ struct BookLabourFlowView: View {
             }
         case .pickSlotOperative(let p, let project):
             phase = .pickProject(p, smallWorks: project.jobType == .smallWorks)
+        case .pickCustomManager(let p, let locType, let locId, let customName, let back):
+            phase = .pickSlotManager(
+                p,
+                locationType: locType,
+                locationId: locId,
+                customLocationName: customName,
+                returnRoute: back
+            )
+        case .pickCustomOperative(let p, let project):
+            phase = .pickSlotOperative(p, project: project)
         }
     }
 
@@ -264,20 +328,53 @@ struct BookLabourFlowView: View {
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                             Spacer(minLength: 0)
+                            Button {
+                                isMultiSelectMode.toggle()
+                                if !isMultiSelectMode {
+                                    selectedPersonIds.removeAll()
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: isMultiSelectMode ? "checkmark.circle.fill" : "checkmark.circle")
+                                        .font(.system(size: 13, weight: .semibold))
+                                    Text(isMultiSelectMode ? "Multi-select on" : "Multi-select")
+                                        .font(.system(size: 11, weight: .semibold))
+                                }
+                                .foregroundStyle(isMultiSelectMode ? Color.white : ProjectWorksRevampColors.requiredPillFg)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(isMultiSelectMode ? ProjectWorksRevampColors.blue : Color.white.opacity(0.7))
+                                .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(isMultiSelectMode ? "Turn off multi-select" : "Multi-select")
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                         .background(ProjectWorksRevampColors.requiredPillBg)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                        bookLabourSectionLabel("Select a person")
+                        bookLabourSectionLabel(isMultiSelectMode ? "Select people" : "Select a person")
 
                         VStack(spacing: 0) {
                             ForEach(Array(candidates.enumerated()), id: \.element.id) { idx, person in
                                 Button {
-                                    phase = .pickDestination(person)
+                                    if isMultiSelectMode {
+                                        if selectedPersonIds.contains(person.id) {
+                                            selectedPersonIds.remove(person.id)
+                                        } else {
+                                            selectedPersonIds.insert(person.id)
+                                        }
+                                    } else {
+                                        beginBooking(people: [person])
+                                    }
                                 } label: {
                                     HStack(spacing: 12) {
+                                        if isMultiSelectMode {
+                                            Image(systemName: selectedPersonIds.contains(person.id) ? "checkmark.circle.fill" : "circle")
+                                                .font(.system(size: 20, weight: .medium))
+                                                .foregroundStyle(selectedPersonIds.contains(person.id) ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.placeholderInk)
+                                        }
                                         bookLabourAvatar(initials: PlannerUIInitials.from(person.displayName), isOperative: person.user.permissions.operativeMode)
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text(person.displayName)
@@ -286,11 +383,15 @@ struct BookLabourFlowView: View {
                                             BookLabourRoleChipRow(person: person)
                                         }
                                         Spacer(minLength: 0)
-                                        Image(systemName: "chevron.right")
-                                            .font(.system(size: 14, weight: .medium))
-                                            .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
+                                        if !isMultiSelectMode {
+                                            Image(systemName: "chevron.right")
+                                                .font(.system(size: 14, weight: .medium))
+                                                .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
+                                        }
                                     }
                                     .padding(.vertical, 12)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                                 if idx < candidates.count - 1 {
@@ -306,7 +407,9 @@ struct BookLabourFlowView: View {
                                 .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
                         )
 
-                        Text("Tap a person to choose where to book them.")
+                        Text(isMultiSelectMode
+                             ? "Tick everyone to book, then Continue."
+                             : "Tap anywhere on a row to choose where to book them.")
                             .font(.system(size: 10, weight: .regular))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                             .padding(.horizontal, 4)
@@ -314,17 +417,52 @@ struct BookLabourFlowView: View {
                     .padding(18)
                 }
                 .scrollIndicators(.hidden)
+                .safeAreaInset(edge: .bottom) {
+                    if isMultiSelectMode {
+                        Button {
+                            let people = candidates.filter { selectedPersonIds.contains($0.id) }
+                            beginBooking(people: people)
+                        } label: {
+                            Text(selectedPersonIds.isEmpty
+                                 ? "Continue"
+                                 : "Continue · \(selectedPersonIds.count)")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(selectedPersonIds.isEmpty ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.blue)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(selectedPersonIds.isEmpty)
+                        .padding(.horizontal, 18)
+                        .padding(.top, 8)
+                        .padding(.bottom, 10)
+                        .background(ProjectWorksRevampColors.canvas)
+                    }
+                }
             }
         }
+    }
+
+    private func beginBooking(people: [BookLabourCandidate]) {
+        guard let first = people.first else { return }
+        bookingParty = people
+        phase = .pickDestination(first)
+    }
+
+    private func activeParty(fallback: BookLabourCandidate) -> [BookLabourCandidate] {
+        bookingParty.isEmpty ? [fallback] : bookingParty
     }
 
     // MARK: - Step 2: Destination type
 
     private func pickDestinationView(person: BookLabourCandidate) -> some View {
-        let otherEnabled = person.canBookOtherLocations && !scheduleOptions.enabledScheduleLocationPicks().isEmpty
+        let people = activeParty(fallback: person)
+        let otherEnabled = people.allSatisfy(\.canBookOtherLocations) && !scheduleOptions.enabledScheduleLocationPicks().isEmpty
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                bookLabourPersonSummaryCard(person: person)
+                bookLabourPersonSummaryCard(people: people)
                 bookLabourSectionLabel("Book to")
                 bookLabourBookToSelector(
                     otherEnabled: otherEnabled,
@@ -342,8 +480,13 @@ struct BookLabourFlowView: View {
                         phase = .pickProject(person, smallWorks: true)
                     }
                 )
-                if person.canBookOtherLocations && scheduleOptions.enabledScheduleLocationPicks().isEmpty {
+                if people.contains(where: \.canBookOtherLocations) && scheduleOptions.enabledScheduleLocationPicks().isEmpty {
                     Text("Enable at least one location under App & account → General → My schedule to use Other.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .padding(.horizontal, 4)
+                } else if !otherEnabled, people.contains(where: { !$0.canBookOtherLocations }) {
+                    Text("Other is only available when every selected person can be booked to office / WFH locations.")
                         .font(.system(size: 11))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
                         .padding(.horizontal, 4)
@@ -368,7 +511,7 @@ struct BookLabourFlowView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        bookLabourPersonSummaryCard(person: person)
+                        bookLabourPersonSummaryCard(people: activeParty(fallback: person))
                         bookLabourSectionLabel("Book to")
                         bookLabourBookToSelector(
                             otherEnabled: true,
@@ -438,7 +581,8 @@ struct BookLabourFlowView: View {
                     .contains(q)
             }
         }()
-        let otherEnabled = person.canBookOtherLocations && !scheduleOptions.enabledScheduleLocationPicks().isEmpty
+        let otherEnabled = activeParty(fallback: person).allSatisfy(\.canBookOtherLocations)
+            && !scheduleOptions.enabledScheduleLocationPicks().isEmpty
         return Group {
             if rawList.isEmpty {
                 ContentUnavailableView(
@@ -449,7 +593,7 @@ struct BookLabourFlowView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        bookLabourPersonSummaryCard(person: person)
+                        bookLabourPersonSummaryCard(people: activeParty(fallback: person))
                         bookLabourSectionLabel("Book to")
                         bookLabourBookToSelector(
                             otherEnabled: otherEnabled,
@@ -485,11 +629,16 @@ struct BookLabourFlowView: View {
                             } else {
                                 ForEach(Array(list.enumerated()), id: \.element.id) { idx, project in
                                     Button {
-                                        if person.usesOperativeProjectBookings {
-                                            guard person.linkedOperative != nil else {
-                                                errorBanner = "No operative profile is linked to this user."
-                                                return
-                                            }
+                                        let party = activeParty(fallback: person)
+                                        if party.contains(where: { $0.usesOperativeProjectBookings && $0.linkedOperative == nil }) {
+                                            errorBanner = party.count == 1
+                                                ? "No operative profile is linked to this user."
+                                                : "No operative profile is linked to one of the selected users."
+                                            return
+                                        }
+                                        // Single operative keeps the daily-overview clock UI.
+                                        // Multiple people use the same Full Day / AM / PM / Custom buttons for everyone.
+                                        if party.count == 1, person.usesOperativeProjectBookings {
                                             phase = .pickSlotOperative(person, project: project)
                                         } else {
                                             phase = .pickSlotManager(
@@ -531,7 +680,8 @@ struct BookLabourFlowView: View {
         person: BookLabourCandidate,
         locationType: ManagerLocationType,
         locationId: UUID?,
-        customLocationName: String?
+        customLocationName: String?,
+        returnRoute: ManagerSlotReturn
     ) -> some View {
         let locationLabel: String = {
             if locationType == .office || locationType == .workingFromHome || locationType == .siteSurvey {
@@ -549,7 +699,7 @@ struct BookLabourFlowView: View {
 
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                bookLabourPersonSummaryCard(person: person)
+                bookLabourPersonSummaryCard(people: activeParty(fallback: person))
                 Text(locationLabel)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
@@ -560,8 +710,8 @@ struct BookLabourFlowView: View {
                 HStack(spacing: 10) {
                     ForEach([ManagerTimeSlot.fullDay, .morning, .afternoon], id: \.self) { slot in
                         Button {
-                            saveManagerBooking(
-                                person: person,
+                            savePartyBookings(
+                                fallbackPerson: person,
                                 slot: slot,
                                 locationType: locationType,
                                 locationId: locationId,
@@ -580,13 +730,124 @@ struct BookLabourFlowView: View {
                                         .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
                                 )
                         }
+                        .buttonStyle(.plain)
                         .disabled(isSaving)
                     }
                 }
+                Button {
+                    phase = .pickCustomManager(
+                        person,
+                        locationType: locationType,
+                        locationId: locationId,
+                        customLocationName: customLocationName,
+                        returnRoute: returnRoute
+                    )
+                } label: {
+                    Text("Custom")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color(red: 0.902, green: 0.945, blue: 0.984))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(isSaving)
             }
             .padding(18)
         }
         .scrollIndicators(.hidden)
+    }
+
+    private func partyHeaderName(fallback: BookLabourCandidate) -> String {
+        let people = activeParty(fallback: fallback)
+        if people.count <= 1 { return fallback.displayName }
+        if people.count <= 3 { return people.map(\.displayName).joined(separator: ", ") }
+        return "\(people.count) people"
+    }
+
+    private func pickCustomManagerHoursView(
+        person: BookLabourCandidate,
+        locationType: ManagerLocationType,
+        locationId: UUID?,
+        customLocationName: String?
+    ) -> some View {
+        let header = partyHeaderName(fallback: person)
+        return OperativeCustomHoursSheet(
+            policy: dayPayrollPolicy,
+            referenceDay: day,
+            title: "Custom hours",
+            subtitle: bookFlowDayLine,
+            headerName: header,
+            headerInitials: PlannerUIInitials.from(header),
+            allowsOtMultiplierOverride: false,
+            embedsNavigation: false,
+            initialChoice: OperativeDayBookingChoice(
+                timeSlot: .customHours,
+                workStartTime: dayPayrollPolicy.standardDayStart,
+                workEndTime: dayPayrollPolicy.standardDayEnd,
+                isBreakRemoved: false
+            ),
+            onSave: { start, end, breakRemoved, _ in
+                savePartyBookings(
+                    fallbackPerson: person,
+                    slot: .customHours,
+                    locationType: locationType,
+                    locationId: locationId,
+                    customLocationName: customLocationName,
+                    workStart: start,
+                    workEnd: end,
+                    breakRemoved: breakRemoved
+                )
+            },
+            onCancel: { goBack() }
+        )
+    }
+
+    @ViewBuilder
+    private func pickCustomOperativeHoursView(person: BookLabourCandidate, project: Project) -> some View {
+        Group {
+            if let op = person.linkedOperative {
+                let draft = operativeDraft(for: project.id, operativeId: op.id)
+                let header = partyHeaderName(fallback: person)
+                OperativeCustomHoursSheet(
+                    policy: dayPayrollPolicy,
+                    referenceDay: day,
+                    title: "Custom hours",
+                    subtitle: bookFlowDayLine,
+                    headerName: header,
+                    headerInitials: PlannerUIInitials.from(header),
+                    allowsOtMultiplierOverride: true,
+                    embedsNavigation: false,
+                    initialChoice: OperativeDayBookingChoice(
+                        timeSlot: .customHours,
+                        workStartTime: timeText(from: draft.startMinutes),
+                        workEndTime: timeText(from: draft.endMinutes),
+                        isBreakRemoved: draft.breakRemoved
+                    ),
+                    onSave: { start, end, breakRemoved, otMult in
+                        saveOperativeBooking(
+                            operative: op,
+                            project: project,
+                            slot: .customHours,
+                            workStart: start,
+                            workEnd: end,
+                            breakRemoved: breakRemoved,
+                            otMultiplierOverride: otMult
+                        )
+                    },
+                    onCancel: { goBack() }
+                )
+            } else {
+                Text("No operative profile for this user.")
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .padding()
+            }
+        }
     }
 
     @ViewBuilder
@@ -595,13 +856,13 @@ struct BookLabourFlowView: View {
             let draft = operativeDraft(for: project.id, operativeId: op.id)
             let existingIntervals = existingIntervalsForOperative(op.id)
             let existingPaidHours = existingPaidHoursForOperative(op.id)
-            let newPaidHours = paidHours(startMinutes: draft.startMinutes, endMinutes: draft.endMinutes, breakRemoved: draft.breakRemoved)
+            let newPaidHours = paidHours(for: draft)
             let combinedPaidHours = existingPaidHours + newPaidHours
             let remainingHours = max(0, max(payrollTimePolicy.standardPaidHours, 0) - combinedPaidHours)
             ZStack(alignment: .top) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        bookLabourPersonSummaryCard(person: person)
+                        bookLabourPersonSummaryCard(people: activeParty(fallback: person))
                         HStack(spacing: 8) {
                             Text(project.jobNumber)
                                 .font(.system(size: 15, weight: .semibold))
@@ -626,20 +887,41 @@ struct BookLabourFlowView: View {
                         bookLabourSectionLabel("Quick options")
                         HStack(spacing: 10) {
                             Button {
-                                applyQuickTimeSlot(.fullDay, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
+                                var transaction = Transaction()
+                                transaction.disablesAnimations = true
+                                withTransaction(transaction) {
+                                    applyQuickTimeSlot(.fullDay, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
+                                }
                             } label: {
                                 quickDraftButtonLabel("FULL DAY")
                             }
+                            .buttonStyle(.plain)
                             Button {
-                                applyQuickTimeSlot(.morning, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
+                                var transaction = Transaction()
+                                transaction.disablesAnimations = true
+                                withTransaction(transaction) {
+                                    applyQuickTimeSlot(.morning, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
+                                }
                             } label: {
                                 quickDraftButtonLabel("AM")
                             }
+                            .buttonStyle(.plain)
                             Button {
-                                applyQuickTimeSlot(.afternoon, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
+                                var transaction = Transaction()
+                                transaction.disablesAnimations = true
+                                withTransaction(transaction) {
+                                    applyQuickTimeSlot(.afternoon, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
+                                }
                             } label: {
                                 quickDraftButtonLabel("PM")
                             }
+                            .buttonStyle(.plain)
+                            Button {
+                                phase = .pickCustomOperative(person, project: project)
+                            } label: {
+                                quickDraftButtonLabel("CUSTOM")
+                            }
+                            .buttonStyle(.plain)
                         }
 
                         HStack(spacing: 8) {
@@ -650,7 +932,12 @@ struct BookLabourFlowView: View {
                             ) { value in
                                 setOperativeDraft(
                                     for: project.id,
-                                    draft: .init(startMinutes: value, endMinutes: draft.endMinutes, breakRemoved: draft.breakRemoved)
+                                    draft: .init(
+                                        startMinutes: value,
+                                        endMinutes: draft.endMinutes,
+                                        breakRemoved: draft.breakRemoved,
+                                        timeSlot: .customHours
+                                    )
                                 )
                             }
                             draftTimePicker(
@@ -660,7 +947,12 @@ struct BookLabourFlowView: View {
                             ) { value in
                                 setOperativeDraft(
                                     for: project.id,
-                                    draft: .init(startMinutes: draft.startMinutes, endMinutes: value, breakRemoved: draft.breakRemoved)
+                                    draft: .init(
+                                        startMinutes: draft.startMinutes,
+                                        endMinutes: value,
+                                        breakRemoved: draft.breakRemoved,
+                                        timeSlot: .customHours
+                                    )
                                 )
                             }
                         }
@@ -670,7 +962,12 @@ struct BookLabourFlowView: View {
                             set: { value in
                                 setOperativeDraft(
                                     for: project.id,
-                                    draft: .init(startMinutes: draft.startMinutes, endMinutes: draft.endMinutes, breakRemoved: value)
+                                    draft: .init(
+                                        startMinutes: draft.startMinutes,
+                                        endMinutes: draft.endMinutes,
+                                        breakRemoved: value,
+                                        timeSlot: draft.timeSlot
+                                    )
                                 )
                             }
                         ))
@@ -704,12 +1001,13 @@ struct BookLabourFlowView: View {
                         )
 
                         Button {
+                            let persistTimes = draft.timeSlot == .customHours
                             saveOperativeBooking(
                                 operative: op,
                                 project: project,
-                                slot: .customHours,
-                                workStart: timeText(from: draft.startMinutes),
-                                workEnd: timeText(from: draft.endMinutes),
+                                slot: draft.timeSlot,
+                                workStart: persistTimes ? timeText(from: draft.startMinutes) : nil,
+                                workEnd: persistTimes ? timeText(from: draft.endMinutes) : nil,
                                 breakRemoved: draft.breakRemoved
                             )
                         } label: {
@@ -724,7 +1022,7 @@ struct BookLabourFlowView: View {
                         .disabled(isSaving || draft.endMinutes <= draft.startMinutes)
 
                         Button {
-                            bookLabourOperativeClockEdit = BookLabourOperativeClockEdit(operative: op, project: project)
+                            phase = .pickCustomOperative(person, project: project)
                         } label: {
                             Text("Advanced editor")
                                 .font(.system(size: 12, weight: .medium))
@@ -742,19 +1040,6 @@ struct BookLabourFlowView: View {
                     .padding(18)
                 }
                 .scrollIndicators(.hidden)
-
-                if let pending = pendingOperativeOverlap {
-                    ScheduleOverlapWarningPanel(
-                        message: pending.message,
-                        detailLines: pending.detailLines,
-                        onCancel: { pendingOperativeOverlap = nil },
-                        onConfirm: {
-                            let run = pending.onConfirm
-                            pendingOperativeOverlap = nil
-                            run()
-                        }
-                    )
-                }
             }
         } else {
             Text("No operative profile for this user.")
@@ -810,10 +1095,18 @@ struct BookLabourFlowView: View {
             .reduce(0.0) { $0 + $1.paidBookedHours(policy: dayPayrollPolicy) }
     }
 
-    private func paidHours(startMinutes: Int, endMinutes: Int, breakRemoved: Bool) -> Double {
-        guard endMinutes > startMinutes else { return 0 }
-        var wall = Double(endMinutes - startMinutes) / 60.0
-        if !breakRemoved {
+    private func paidHours(for draft: OperativeRectifyDraft) -> Double {
+        switch draft.timeSlot {
+        case .morning, .afternoon:
+            return max(payrollTimePolicy.standardPaidHours, 0) / 2
+        case .fullDay:
+            return max(payrollTimePolicy.standardPaidHours, 0)
+        default:
+            break
+        }
+        guard draft.endMinutes > draft.startMinutes else { return 0 }
+        var wall = Double(draft.endMinutes - draft.startMinutes) / 60.0
+        if !draft.breakRemoved {
             wall = max(0, wall - payrollTimePolicy.standardUnpaidBreakHours)
         }
         return wall
@@ -830,13 +1123,13 @@ struct BookLabourFlowView: View {
         let next: OperativeRectifyDraft
         switch slot {
         case .fullDay:
-            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved)
+            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved, timeSlot: .fullDay)
         case .morning:
-            next = .init(startMinutes: ds, endMinutes: mid, breakRemoved: breakRemoved)
+            next = .init(startMinutes: ds, endMinutes: mid, breakRemoved: breakRemoved, timeSlot: .morning)
         case .afternoon:
-            next = .init(startMinutes: mid, endMinutes: de, breakRemoved: breakRemoved)
+            next = .init(startMinutes: mid, endMinutes: de, breakRemoved: breakRemoved, timeSlot: .afternoon)
         default:
-            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved)
+            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved, timeSlot: .customHours)
         }
         setOperativeDraft(for: projectId, draft: next)
     }
@@ -934,16 +1227,38 @@ struct BookLabourFlowView: View {
             .clipShape(Circle())
     }
 
-    private func bookLabourPersonSummaryCard(person: BookLabourCandidate) -> some View {
-        HStack(spacing: 12) {
-            bookLabourAvatar(initials: PlannerUIInitials.from(person.displayName), isOperative: person.user.permissions.operativeMode)
+    private func bookLabourPersonSummaryCard(people: [BookLabourCandidate]) -> some View {
+        let first = people.first
+        let title: String
+        let subtitle: String
+        if people.isEmpty {
+            title = "No one selected"
+            subtitle = bookFlowDayLine
+        } else if people.count == 1 {
+            title = people[0].displayName
+            subtitle = bookFlowDayLine
+        } else if people.count <= 3 {
+            title = people.map(\.displayName).joined(separator: ", ")
+            subtitle = "\(people.count) people · \(bookFlowDayLine)"
+        } else {
+            title = "\(people.count) people"
+            let extra = people.count - 2
+            subtitle = people.prefix(2).map(\.displayName).joined(separator: ", ") + " +\(extra) · \(bookFlowDayLine)"
+        }
+        return HStack(spacing: 12) {
+            bookLabourAvatar(
+                initials: PlannerUIInitials.from(first?.displayName ?? "P"),
+                isOperative: first?.user.permissions.operativeMode ?? false
+            )
             VStack(alignment: .leading, spacing: 2) {
-                Text(person.displayName)
+                Text(title)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
-                Text(bookFlowDayLine)
+                    .lineLimit(2)
+                Text(subtitle)
                     .font(.system(size: 11))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .lineLimit(2)
             }
             Spacer(minLength: 0)
         }
@@ -1098,37 +1413,212 @@ struct BookLabourFlowView: View {
 
     // MARK: - Save
 
-    private func saveManagerBooking(
-        person: BookLabourCandidate,
+    private func managerSlotToTimeSlot(_ slot: ManagerTimeSlot) -> TimeSlot {
+        switch slot {
+        case .fullDay: return .fullDay
+        case .morning: return .morning
+        case .afternoon: return .afternoon
+        case .customHours: return .customHours
+        }
+    }
+
+    private func projectForManagerLocation(locationType: ManagerLocationType, locationId: UUID?) -> Project? {
+        guard locationType == .project || locationType == .smallWork, let id = locationId else { return nil }
+        return projectStore.projects.first(where: { $0.id == id })
+            ?? projectStore.smallWorks.first(where: { $0.id == id })
+    }
+
+    private func personUsesOperativeProjectPath(_ person: BookLabourCandidate, locationType: ManagerLocationType, project: Project?) -> Bool {
+        person.usesOperativeProjectBookings && project != nil && (locationType == .project || locationType == .smallWork)
+    }
+
+    private func duplicateOperativeBooking(
+        operativeId: UUID,
+        projectId: UUID,
+        slot: TimeSlot,
+        workStart: String?,
+        workEnd: String?,
+        breakRemoved: Bool,
+        otMultiplierOverride: Double?
+    ) -> Bool {
+        bookingStore.bookings.contains {
+            $0.operativeId == operativeId &&
+                calendar.isDate($0.date, inSameDayAs: day) &&
+                $0.projectId == projectId &&
+                $0.timeSlot == slot &&
+                $0.workStartTime == workStart &&
+                $0.workEndTime == workEnd &&
+                $0.isBreakRemoved == breakRemoved &&
+                $0.otMultiplierOverride == otMultiplierOverride &&
+                $0.status != .cancelled
+        }
+    }
+
+    /// Books every selected person to the same location and slot (multi-select or single).
+    private func savePartyBookings(
+        fallbackPerson: BookLabourCandidate,
         slot: ManagerTimeSlot,
         locationType: ManagerLocationType,
         locationId: UUID?,
-        customLocationName: String?
+        customLocationName: String?,
+        workStart: String? = nil,
+        workEnd: String? = nil,
+        breakRemoved: Bool = false,
+        otMultiplierOverride: Double? = nil,
+        allowOperativeOverlap: Bool = false
     ) {
-        let uid = person.user.id
-        if duplicateManagerBooking(userId: uid, slot: slot, locationType: locationType, locationId: locationId, custom: customLocationName) {
-            errorBanner = "That slot is already booked for this person."
+        let people = activeParty(fallback: fallbackPerson)
+        guard !people.isEmpty else { return }
+        let resolvedProject = projectForManagerLocation(locationType: locationType, locationId: locationId)
+        let operativeSlot = managerSlotToTimeSlot(slot)
+
+        var managerClashNames: [String] = []
+        for person in people {
+            if personUsesOperativeProjectPath(person, locationType: locationType, project: resolvedProject) { continue }
+            if duplicateManagerBooking(
+                userId: person.user.id,
+                slot: slot,
+                locationType: locationType,
+                locationId: locationId,
+                custom: customLocationName
+            ) { continue }
+            if managerWouldClash(
+                userId: person.user.id,
+                date: day,
+                newSlot: slot,
+                workStart: workStart,
+                workEnd: workEnd
+            ) {
+                managerClashNames.append(person.displayName)
+            }
+        }
+        if !managerClashNames.isEmpty {
+            errorBanner = managerClashNames.count == 1
+                ? "This booking overlaps another in time on that day."
+                : "Overlapping bookings for: \(managerClashNames.joined(separator: ", "))."
             return
         }
-        if managerWouldClash(userId: uid, date: day, newSlot: slot) {
-            errorBanner = "This booking overlaps another in time on that day."
+
+        if !allowOperativeOverlap {
+            var clashLines: [String] = []
+            for person in people {
+                guard personUsesOperativeProjectPath(person, locationType: locationType, project: resolvedProject),
+                      let project = resolvedProject,
+                      let op = person.linkedOperative else { continue }
+                if let lines = operativeClashDetailLines(
+                    operativeId: op.id,
+                    projectId: project.id,
+                    slot: operativeSlot,
+                    workStart: workStart,
+                    workEnd: workEnd,
+                    breakRemoved: breakRemoved
+                ) {
+                    clashLines.append(contentsOf: lines.map { "\(person.displayName) · \($0)" })
+                }
+            }
+            if !clashLines.isEmpty {
+                pendingOperativeOverlap = PendingOperativeBookLabourOverlap(
+                    message: people.count > 1
+                        ? "One or more bookings overlap another in time on \(bookFlowDayLine)."
+                        : "This booking overlaps another in time on \(bookFlowDayLine).",
+                    detailLines: clashLines,
+                    onConfirm: {
+                        savePartyBookings(
+                            fallbackPerson: fallbackPerson,
+                            slot: slot,
+                            locationType: locationType,
+                            locationId: locationId,
+                            customLocationName: customLocationName,
+                            workStart: workStart,
+                            workEnd: workEnd,
+                            breakRemoved: breakRemoved,
+                            otMultiplierOverride: otMultiplierOverride,
+                            allowOperativeOverlap: true
+                        )
+                    }
+                )
+                return
+            }
+        }
+
+        if people.contains(where: { personUsesOperativeProjectPath($0, locationType: locationType, project: resolvedProject) }),
+           firebaseBackend.currentUser?.uid == nil {
+            errorBanner = "Not signed in."
             return
         }
-        let booking = ManagerSiteBooking(
-            userId: uid,
-            date: day,
-            timeSlot: slot,
-            locationType: locationType,
-            locationId: locationId,
-            customLocationName: customLocationName
-        )
+
         isSaving = true
         Task {
-            await managerScheduleStore.saveBooking(booking)
+            var firstError: String?
+            let bookedBy = firebaseBackend.currentUser?.uid
+            let bookedByName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
+            for person in people {
+                if personUsesOperativeProjectPath(person, locationType: locationType, project: resolvedProject) {
+                    guard let op = person.linkedOperative, let project = resolvedProject, let bookedBy else {
+                        if firstError == nil {
+                            firstError = "No operative profile is linked to \(person.displayName)."
+                        }
+                        continue
+                    }
+                    if duplicateOperativeBooking(
+                        operativeId: op.id,
+                        projectId: project.id,
+                        slot: operativeSlot,
+                        workStart: workStart,
+                        workEnd: workEnd,
+                        breakRemoved: breakRemoved,
+                        otMultiplierOverride: otMultiplierOverride
+                    ) {
+                        continue
+                    }
+                    await bookingStore.bookOperative(
+                        op,
+                        on: day,
+                        timeSlot: operativeSlot,
+                        for: project,
+                        bookedBy: bookedBy,
+                        workStartTime: workStart,
+                        workEndTime: workEnd,
+                        isBreakRemoved: breakRemoved,
+                        otMultiplierOverride: otMultiplierOverride
+                    )
+                    await notificationService.notifyBookedUsers(
+                        projectName: project.siteName,
+                        bookedBy: bookedByName,
+                        recipients: [.init(operativeId: op.id, dates: [day])]
+                    )
+                } else {
+                    if duplicateManagerBooking(
+                        userId: person.user.id,
+                        slot: slot,
+                        locationType: locationType,
+                        locationId: locationId,
+                        custom: customLocationName
+                    ) {
+                        continue
+                    }
+                    let booking = ManagerSiteBooking(
+                        userId: person.user.id,
+                        date: day,
+                        timeSlot: slot,
+                        locationType: locationType,
+                        locationId: locationId,
+                        customLocationName: customLocationName,
+                        workStartTime: workStart,
+                        workEndTime: workEnd,
+                        isBreakRemoved: breakRemoved
+                    )
+                    await managerScheduleStore.saveBooking(booking)
+                }
+            }
             ScheduleChangeNotifier.postBookingStoreDidChange()
             await MainActor.run {
                 isSaving = false
-                dismiss()
+                if let firstError {
+                    errorBanner = firstError
+                } else {
+                    dismiss()
+                }
             }
         }
     }
@@ -1140,6 +1630,7 @@ struct BookLabourFlowView: View {
         workStart: String? = nil,
         workEnd: String? = nil,
         breakRemoved: Bool = false,
+        otMultiplierOverride: Double? = nil,
         allowOverlap: Bool = false
     ) {
         guard let bookedBy = firebaseBackend.currentUser?.uid else {
@@ -1154,6 +1645,7 @@ struct BookLabourFlowView: View {
                 $0.workStartTime == workStart &&
                 $0.workEndTime == workEnd &&
                 $0.isBreakRemoved == breakRemoved &&
+                $0.otMultiplierOverride == otMultiplierOverride &&
                 $0.status != .cancelled
         }) {
             errorBanner = "That booking already exists."
@@ -1179,6 +1671,7 @@ struct BookLabourFlowView: View {
                         workStart: workStart,
                         workEnd: workEnd,
                         breakRemoved: breakRemoved,
+                        otMultiplierOverride: otMultiplierOverride,
                         allowOverlap: true
                     )
                 }
@@ -1195,7 +1688,8 @@ struct BookLabourFlowView: View {
                 bookedBy: bookedBy,
                 workStartTime: workStart,
                 workEndTime: workEnd,
-                isBreakRemoved: breakRemoved
+                isBreakRemoved: breakRemoved,
+                otMultiplierOverride: otMultiplierOverride
             )
             await notificationService.notifyBookedUsers(
                 projectName: project.siteName,
@@ -1261,7 +1755,13 @@ struct BookLabourFlowView: View {
         }
     }
 
-    private func managerWouldClash(userId: String, date: Date, newSlot: ManagerTimeSlot) -> Bool {
+    private func managerWouldClash(
+        userId: String,
+        date: Date,
+        newSlot: ManagerTimeSlot,
+        workStart: String? = nil,
+        workEnd: String? = nil
+    ) -> Bool {
         let existing = managerScheduleStore.bookings(for: userId, on: date)
         if existing.isEmpty { return false }
         let policy = payrollTimePolicy
@@ -1270,7 +1770,9 @@ struct BookLabourFlowView: View {
             date: date,
             timeSlot: newSlot,
             locationType: .office,
-            locationId: nil
+            locationId: nil,
+            workStartTime: workStart,
+            workEndTime: workEnd
         )
         return existing.contains { ManagerScheduleInterval.bookingsOverlap(probe, $0, policy: policy) }
     }
@@ -1377,12 +1879,6 @@ struct BookLabourFlowView: View {
         }
         return bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
     }
-}
-
-private struct BookLabourOperativeClockEdit: Identifiable {
-    let id = UUID()
-    let operative: Operative
-    let project: Project
 }
 
 private struct BookLabourOperativeHoursSheet: View {

@@ -15,21 +15,21 @@ struct ProjectsView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var taskStore: ProjectTaskStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     /// Default to Active so the list opens on current jobs; use All / Completed chips for older work.
     @State private var selectedStatus: ProjectStatus? = .active
     @State private var navigationPath = NavigationPath()
     @State private var searchText = ""
     @State private var showingCreateProject = false
+    @State private var deadlineAssignedProjectIds: Set<UUID> = []
 
     private var listCounts: WorksListStatusCounts {
         WorksListStatusCounts.from(projectsBeforeStatusFilter)
     }
 
     private var canCreateProjects: Bool {
-        guard let u = userStore.currentUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if u.isSuperAdmin || u.permissions.adminAccess { return true }
-        return u.permissions.manager && u.permissions.projects
+        userStore.canManageWorkCatalogue(.projects)
     }
 
     var body: some View {
@@ -49,7 +49,7 @@ struct ProjectsView: View {
                             .foregroundStyle(ProjectWorksRevampColors.ink)
                             .font(.system(size: 17, weight: .semibold))
                             .frame(width: 36, height: 36)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.card)
                             .clipShape(Circle())
                             .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                     }
@@ -93,11 +93,23 @@ struct ProjectsView: View {
                     selectedStatus = .active
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .pushWorkCatalogueDetail)) { notification in
+                let isSmallWorks = notification.userInfo?["isSmallWorks"] as? Bool ?? false
+                guard !isSmallWorks,
+                      let id = notification.userInfo?["projectId"] as? UUID,
+                      let project = projectStore.projects.first(where: { $0.id == id }) else { return }
+                selectedStatus = nil
+                navigationPath = NavigationPath()
+                navigationPath.append(project)
+            }
             .onAppear {
                 // Ensure Active is selected (Inactive filter removed from UI)
                 if selectedStatus == .inactive || selectedStatus == nil {
                     selectedStatus = .active
                 }
+            }
+            .task {
+                await refreshDeadlineAssignedProjectIds()
             }
             .sheet(isPresented: $showingCreateProject) {
                 CreateProjectView()
@@ -251,50 +263,29 @@ struct ProjectsView: View {
         .padding()
     }
     
-    /// Regular projects (not small works), with operative visibility applied but without status chip filter.
+    /// Regular projects (not small works), with role visibility applied but without status chip filter.
     private var projectsBeforeStatusFilter: [Project] {
-        var projects = projectStore.projects.filter { $0.jobType != .smallWorks }
-        
-        if userStore.isOperativeMode() {
-            guard let operative = resolvedCurrentOperative,
-                  let currentUserId = userStore.currentUser?.id else {
-                return []
-            }
-            let assignedProjectIds = Set(bookingStore.bookings
-                .filter {
-                    $0.operativeId == operative.id &&
-                    ($0.status == .confirmed || $0.status == .tentative)
-                }
-                .map { $0.projectId })
-            projects = projects.filter {
-                assignedProjectIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId)
-            }
-        } else if let currentUser = userStore.currentUser,
-                  !userStore.hasAdminAccess(),
-                  currentUser.permissions.manager {
-            projects = projects.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
-        }
-        
-        return projects
+        WorkAccess.visibleWorks(
+            from: projectStore.projects,
+            catalogue: .projects,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            taskStore: taskStore,
+            deadlineAssignedProjectIds: deadlineAssignedProjectIds
+        )
     }
 
-    private var resolvedCurrentOperative: Operative? {
-        let normalizedEmail = userStore.currentUser?.email
-            .lowercased()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let normalizedEmail, !normalizedEmail.isEmpty,
-           let byEmail = operativeStore.allOperatives.first(where: {
-               $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
-           }) {
-            return byEmail
+    private func refreshDeadlineAssignedProjectIds() async {
+        guard userStore.isOperativeMode(),
+              let userId = userStore.currentUser?.id,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId else {
+            await MainActor.run { deadlineAssignedProjectIds = [] }
+            return
         }
-        let first = userStore.currentUser?.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let last = userStore.currentUser?.surname.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !first.isEmpty || !last.isEmpty else { return nil }
-        return operativeStore.allOperatives.first(where: {
-            $0.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == first &&
-            $0.lastName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == last
-        })
+        let ids = await firebaseBackend.loadDeadlineAssignedProjectIds(userId: userId, organizationId: orgId)
+        await MainActor.run { deadlineAssignedProjectIds = ids }
     }
     
     private var isEmptyDueToStatusFilterOnly: Bool {
@@ -343,7 +334,7 @@ struct ProjectDetailRowView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -380,7 +371,7 @@ struct ProjectDetailRowView: View {
             listProgressSection
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)

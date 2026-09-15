@@ -18,56 +18,50 @@ struct OrganisationCurrencyView: View {
     }
 
     var body: some View {
-        Form {
-            Section("Organisation currency") {
-                Picker("Currency", selection: $currencyCode) {
-                    ForEach(OrganizationCurrencyCatalog.all) { option in
-                        Text("\(option.symbol) \(option.code) — \(option.title)")
-                            .tag(option.code)
-                    }
-                }
-                Text("Used for rates, reports, and invoicing defaults. Country and address are set in Company details.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Preview") {
-                LabeledContent("Symbol", value: resolvedCurrency.symbol)
-                LabeledContent("Code", value: resolvedCurrency.code)
-                LabeledContent("Example", value: "\(resolvedCurrency.symbol)1,250.00")
-            }
-
-            if let errorMessage {
-                Section {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            }
-
-            Section {
-                Button {
-                    Task { await save() }
-                } label: {
-                    HStack {
-                        Spacer()
-                        if isSaving {
-                            ProgressView()
-                                .tint(.white)
-                        } else {
-                            Text("Save currency")
-                                .fontWeight(.semibold)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsHubChrome.sectionTitle("Organisation currency")
+                SettingsHubChrome.card {
+                    Picker("Currency", selection: $currencyCode) {
+                        ForEach(OrganizationCurrencyCatalog.all) { option in
+                            Text("\(option.symbol) \(option.code) — \(option.title)")
+                                .tag(option.code)
                         }
-                        Spacer()
                     }
+                    .pickerStyle(.menu)
+                    .font(.system(size: 13, weight: .medium))
+                    .padding(.vertical, 12)
+                    .tint(ProjectWorksRevampColors.blue)
                 }
-                .listRowBackground(Color.blue)
-                .foregroundStyle(.white)
-                .disabled(isSaving)
+                SettingsHubChrome.footer("Used for rates, reports, and invoicing defaults. Country and address are set in Company details.")
+
+                SettingsHubChrome.sectionTitle("Preview")
+                SettingsHubChrome.card {
+                    previewRow("Symbol", resolvedCurrency.symbol)
+                    SettingsHubChrome.divider()
+                    previewRow("Code", resolvedCurrency.code)
+                    SettingsHubChrome.divider()
+                    previewRow("Example", "\(resolvedCurrency.symbol)1,250.00")
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 12))
+                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                        .padding(.horizontal, 4)
+                        .padding(.bottom, 8)
+                }
+
+                SettingsHubChrome.saveButton("Save currency", isSaving: isSaving) {
+                    Task { await save() }
+                }
             }
+            .padding(16)
         }
+        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
         .navigationTitle("Currency")
         .navigationBarTitleDisplayMode(.inline)
+        .appChromeNavigationBarSurface()
         .onAppear {
             let org = firebaseBackend.currentOrganization
             let saved = org?.settings.currencyCode
@@ -75,6 +69,19 @@ struct OrganisationCurrencyView: View {
                 ? saved!
                 : OrganizationCurrencyCatalog.defaultCode(forCountryCode: org?.countryCode ?? "GB")
         }
+    }
+
+    private func previewRow(_ title: String, _ value: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
+            Spacer()
+            Text(value)
+                .font(.system(size: 13))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+        }
+        .padding(.vertical, 12)
     }
 
     private func save() async {

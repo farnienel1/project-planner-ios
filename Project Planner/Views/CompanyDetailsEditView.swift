@@ -12,6 +12,8 @@ struct CompanyDetailsEditView: View {
     @Environment(\.dismiss) private var dismiss
     
     @State private var organizationName = ""
+    @State private var documentAbbreviation = ""
+    @State private var showAbbreviationLimitToast = false
     @State private var hasOfficeAddress = true
     @State private var officeAddressLine1 = ""
     @State private var officeCity = ""
@@ -26,100 +28,151 @@ struct CompanyDetailsEditView: View {
     
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField("Organisation name", text: $organizationName)
-                } header: {
-                    Text("Company name")
-                }
-                
-                Section {
-                    Toggle("Organisation has an office address", isOn: $hasOfficeAddress)
-                    
-                    Picker("Country", selection: $countryCode) {
-                        ForEach(CountryCapitalDirectory.supported, id: \.code) { country in
-                            Text(country.name).tag(country.code)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    SettingsHubChrome.sectionTitle("Company name")
+                    SettingsHubChrome.card {
+                        TextField("Organisation name", text: $organizationName)
+                            .font(.system(size: 13, weight: .medium))
+                            .padding(.vertical, 12)
+                    }
+
+                    SettingsHubChrome.sectionTitle("Abbreviation for site audits and toolbox talks")
+                    SettingsHubChrome.card {
+                        TextField("e.g. RM", text: $documentAbbreviation)
+                            .font(.system(size: 13, weight: .medium))
+                            .textInputAutocapitalization(.characters)
+                            .disableAutocorrection(true)
+                            .padding(.vertical, 12)
+                            .onChange(of: documentAbbreviation) { _, newValue in
+                                handleAbbreviationTyping(newValue)
+                            }
+                    }
+                    SettingsHubChrome.footer("Shown on site audit and toolbox talk headers. Maximum 3 characters.")
+
+                    SettingsHubChrome.sectionTitle("Office & country")
+                    SettingsHubChrome.card {
+                        Toggle("Organisation has an office address", isOn: $hasOfficeAddress)
+                            .font(.system(size: 13, weight: .medium))
+                            .tint(ProjectWorksRevampColors.blue)
+                            .padding(.vertical, 11)
+                        SettingsHubChrome.divider()
+                        Picker("Country", selection: $countryCode) {
+                            ForEach(CountryCapitalDirectory.supported, id: \.code) { country in
+                                Text(country.name).tag(country.code)
+                            }
+                        }
+                        .font(.system(size: 13, weight: .medium))
+                        .tint(ProjectWorksRevampColors.blue)
+                        .padding(.vertical, 11)
+                        if hasOfficeAddress {
+                            SettingsHubChrome.divider()
+                            TextField("Office address line 1", text: $officeAddressLine1)
+                                .font(.system(size: 13, weight: .medium))
+                                .padding(.vertical, 11)
+                            SettingsHubChrome.divider()
+                            TextField("City / town", text: $officeCity)
+                                .font(.system(size: 13, weight: .medium))
+                                .padding(.vertical, 11)
+                            SettingsHubChrome.divider()
+                            TextField("Postcode (optional)", text: $officePostcode)
+                                .font(.system(size: 13, weight: .medium))
+                                .padding(.vertical, 11)
+                        } else {
+                            SettingsHubChrome.divider()
+                            Text("Map default: \(CountryCapitalDirectory.fallbackDescription(for: countryCode))")
+                                .font(.system(size: 12))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .padding(.vertical, 11)
                         }
                     }
-                    
-                    if hasOfficeAddress {
-                        TextField("Office address line 1", text: $officeAddressLine1)
-                        TextField("City / town", text: $officeCity)
-                        TextField("Postcode (optional)", text: $officePostcode)
-                    } else {
-                        Text("Map default: \(CountryCapitalDirectory.fallbackDescription(for: countryCode))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("Office & country")
-                } footer: {
-                    Text("Country is always required. Bank holidays for annual leave are set separately under Organisation → Annual leave. If there is no office address, the site map centres on the capital (London for the UK).")
-                }
+                    SettingsHubChrome.footer("Country is always required. Bank holidays for annual leave are set separately under Organisation → Annual leave. If there is no office address, the site map centres on the capital (London for the UK).")
 
-                Section {
-                    HStack(spacing: 12) {
-                        Group {
-                            if let selectedLogoImage {
-                                Image(uiImage: selectedLogoImage)
-                                    .resizable()
-                                    .scaledToFit()
-                            } else if let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
-                                      let url = URL(string: logoURL) {
-                                AsyncImage(url: url) { image in
-                                    image.resizable().scaledToFit()
-                                } placeholder: {
-                                    ProgressView()
+                    SettingsHubChrome.sectionTitle("Company logo")
+                    SettingsHubChrome.card {
+                        HStack(spacing: 12) {
+                            Group {
+                                if let selectedLogoImage {
+                                    Image(uiImage: selectedLogoImage)
+                                        .resizable()
+                                        .scaledToFit()
+                                } else if let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
+                                          let url = URL(string: logoURL) {
+                                    AsyncImage(url: url) { image in
+                                        image.resizable().scaledToFit()
+                                    } placeholder: {
+                                        ProgressView()
+                                    }
+                                } else {
+                                    Image(systemName: "photo")
+                                        .font(.title2)
+                                        .foregroundStyle(ProjectWorksRevampColors.muted)
                                 }
-                            } else {
-                                Image(systemName: "photo")
-                                    .font(.title2)
-                                    .foregroundStyle(.secondary)
                             }
-                        }
-                        .frame(width: 72, height: 72)
-                        .background(Color(.systemGray6))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .frame(width: 72, height: 72)
+                            .background(ProjectWorksRevampColors.canvas)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
 
-                        VStack(alignment: .leading, spacing: 8) {
-                            PhotosPicker(selection: $selectedLogoItem, matching: .images) {
-                                Text("Upload logo (JPEG)")
-                            }
-                            .buttonStyle(.borderedProminent)
-
-                            Button("Remove logo", role: .destructive) {
-                                selectedLogoImage = nil
-                                selectedLogoItem = nil
-                                Task {
-                                    try? await firebaseBackend.updateOrganizationCompanyLogoURL(nil)
+                            VStack(alignment: .leading, spacing: 8) {
+                                PhotosPicker(selection: $selectedLogoItem, matching: .images) {
+                                    Text("Upload logo (JPEG)")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .background(ProjectWorksRevampColors.blue)
+                                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                 }
+                                Button("Remove logo", role: .destructive) {
+                                    selectedLogoImage = nil
+                                    selectedLogoItem = nil
+                                    Task {
+                                        try? await firebaseBackend.updateOrganizationCompanyLogoURL(nil)
+                                    }
+                                }
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                             }
-                            .buttonStyle(.bordered)
                         }
+                        .padding(.vertical, 12)
                     }
-                } header: {
-                    Text("Company logo")
-                } footer: {
-                    Text("Shown on Home and Site Audit report header.")
-                }
-                
-                if let errorMessage {
-                    Section {
+                    SettingsHubChrome.footer("Shown on Home and Site Audit report header.")
+
+                    if let errorMessage {
                         Text(errorMessage)
-                            .foregroundStyle(.red)
-                            .font(.caption)
+                            .font(.system(size: 12))
+                            .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                            .padding(.horizontal, 4)
+                            .padding(.bottom, 8)
+                    }
+                    if let successMessage {
+                        Text(successMessage)
+                            .font(.system(size: 12))
+                            .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                            .padding(.horizontal, 4)
+                            .padding(.bottom, 8)
                     }
                 }
-                if let successMessage {
-                    Section {
-                        Text(successMessage)
-                            .foregroundStyle(.green)
-                            .font(.caption)
-                    }
+                .padding(16)
+            }
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .overlay(alignment: .top) {
+                if showAbbreviationLimitToast {
+                    Text("Only 3 characters for the abbreviation")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(ProjectWorksRevampColors.ink.opacity(0.92))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .padding(.top, 12)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
+            .animation(.easeInOut(duration: 0.18), value: showAbbreviationLimitToast)
             .navigationTitle("Company details")
             .navigationBarTitleDisplayMode(.inline)
+            .appChromeNavigationBarSurface()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -166,6 +219,8 @@ struct CompanyDetailsEditView: View {
     private func applyOrganizationToForm() {
         guard let org = firebaseBackend.currentOrganization else { return }
         organizationName = org.name
+        documentAbbreviation = org.documentAbbreviation
+            ?? OrganizationDocumentAbbreviation.display(abbreviation: nil, organizationName: org.name)
         countryCode = org.countryCode.uppercased()
         if let line1 = org.officeAddressLine1, !line1.isEmpty,
            let city = org.officeCity, !city.isEmpty {
@@ -217,7 +272,8 @@ struct CompanyDetailsEditView: View {
                 officePostcode: hasOfficeAddress ? officePostcode : nil,
                 countryCode: countryCode,
                 defaultLatitude: lat,
-                defaultLongitude: lon
+                defaultLongitude: lon,
+                documentAbbreviation: documentAbbreviation
             )
             if let selectedLogoImage,
                let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
@@ -236,6 +292,20 @@ struct CompanyDetailsEditView: View {
                 isSaving = false
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    private func handleAbbreviationTyping(_ newValue: String) {
+        let cleaned = OrganizationDocumentAbbreviation.normalizeForTyping(newValue)
+        if cleaned.count > OrganizationDocumentAbbreviation.maxLength {
+            documentAbbreviation = String(cleaned.prefix(OrganizationDocumentAbbreviation.maxLength))
+            showAbbreviationLimitToast = true
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_400_000_000)
+                showAbbreviationLimitToast = false
+            }
+        } else if cleaned != newValue {
+            documentAbbreviation = cleaned
         }
     }
 

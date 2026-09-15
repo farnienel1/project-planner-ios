@@ -19,8 +19,8 @@ struct ResolvedPayrollRate: Equatable {
 
     var hasRate: Bool {
         switch basis {
-        case .dayRate: return (dayRate ?? 0) > 0
-        case .hourly: return (hourlyRate ?? 0) > 0
+        case .dayRate: return dayRate != nil
+        case .hourly: return hourlyRate != nil
         }
     }
 
@@ -39,11 +39,9 @@ struct ResolvedPayrollRate: Equatable {
         switch basis {
         case .dayRate:
             let rate = dayRate ?? 0
-            guard rate > 0 else { return 0 }
             return rate * (paidHours / max(standardDayHours, 0.01)) * otMultiplier
         case .hourly:
             let rate = hourlyRate ?? 0
-            guard rate > 0 else { return 0 }
             return rate * paidHours * otMultiplier
         }
     }
@@ -62,10 +60,10 @@ struct ResolvedPayrollRate: Equatable {
     func displayRateLabel(currencySymbol: String = "£") -> String? {
         switch basis {
         case .dayRate:
-            guard let dayRate, dayRate > 0 else { return nil }
+            guard let dayRate else { return nil }
             return "\(currencySymbol)\(String(format: "%.2f", dayRate))/day"
         case .hourly:
-            guard let hourlyRate, hourlyRate > 0 else { return nil }
+            guard let hourlyRate else { return nil }
             return "\(currencySymbol)\(String(format: "%.2f", hourlyRate))/hr"
         }
     }
@@ -86,21 +84,19 @@ enum PayrollRateResolver {
 
     static func payrollBasis(user: AppUser?, operative: Operative?) -> PayrollRateBasis {
         if let user {
-            let hasDay = (user.dayRate ?? 0) > 0
-            let hasHourly = (user.hourlyRate ?? 0) > 0
-            if hasHourly && !hasDay { return .hourly }
-            if hasDay { return .dayRate }
+            if user.dayRate != nil { return .dayRate }
+            if user.hourlyRate != nil { return .hourly }
         }
         if let operative {
-            if (operative.dayRate ?? 0) > 0 { return .dayRate }
-            if (operative.hourlyRate ?? 0) > 0 { return .hourly }
+            if operative.dayRate != nil { return .dayRate }
+            if operative.hourlyRate != nil { return .hourly }
         }
         return .dayRate
     }
 
     /// Returns the history rate in effect on `day`.
     /// - `nil` means no history entry yet (fall back to live profile rates).
-    /// - `<= 0` means the rate was explicitly cleared from that effective date forward.
+    /// - `0` is a valid explicit £0 day rate.
     static func rateFromHistory(
         history: OperativeDayRateHistoryCollection,
         userId: String?,
@@ -150,32 +146,31 @@ enum PayrollRateResolver {
             on: day
         )
 
-        // Explicit clear in history must win over stale live roster rates.
-        if let historical, historical <= 0 {
-            return ResolvedPayrollRate(basis: basis, dayRate: nil, hourlyRate: nil)
+        // Explicit history, including £0, wins over live roster rates.
+        if let historical {
+            switch basis {
+            case .dayRate:
+                return ResolvedPayrollRate(basis: .dayRate, dayRate: historical, hourlyRate: nil)
+            case .hourly:
+                return ResolvedPayrollRate(basis: .hourly, dayRate: nil, hourlyRate: historical)
+            }
         }
 
         switch basis {
         case .dayRate:
-            if let historical, historical > 0 {
-                return ResolvedPayrollRate(basis: .dayRate, dayRate: historical, hourlyRate: nil)
-            }
-            if let dayRate = user?.dayRate ?? operative?.dayRate, dayRate > 0 {
+            if let dayRate = user?.dayRate ?? operative?.dayRate {
                 return ResolvedPayrollRate(basis: .dayRate, dayRate: dayRate, hourlyRate: nil)
             }
-            if let hourly = user?.hourlyRate ?? operative?.hourlyRate, hourly > 0 {
+            if let hourly = user?.hourlyRate ?? operative?.hourlyRate {
                 return ResolvedPayrollRate(basis: .hourly, dayRate: nil, hourlyRate: hourly)
             }
             return ResolvedPayrollRate(basis: .dayRate, dayRate: nil, hourlyRate: nil)
 
         case .hourly:
-            if let historical, historical > 0 {
-                return ResolvedPayrollRate(basis: .hourly, dayRate: nil, hourlyRate: historical)
-            }
-            if let hourly = user?.hourlyRate ?? operative?.hourlyRate, hourly > 0 {
+            if let hourly = user?.hourlyRate ?? operative?.hourlyRate {
                 return ResolvedPayrollRate(basis: .hourly, dayRate: nil, hourlyRate: hourly)
             }
-            if let dayRate = user?.dayRate ?? operative?.dayRate, dayRate > 0 {
+            if let dayRate = user?.dayRate ?? operative?.dayRate {
                 let hourly = dayRate / max(standardDayHours, 0.01)
                 return ResolvedPayrollRate(basis: .hourly, dayRate: nil, hourlyRate: hourly)
             }
@@ -191,8 +186,8 @@ enum PayrollRateResolver {
         standardDayHours: Double = 8
     ) -> ResolvedPayrollRate {
         if let user {
-            let hasDay = (user.dayRate ?? 0) > 0
-            let hasHourly = (user.hourlyRate ?? 0) > 0
+            let hasDay = user.dayRate != nil
+            let hasHourly = user.hourlyRate != nil
             if hasHourly && !hasDay {
                 return ResolvedPayrollRate(basis: .hourly, dayRate: nil, hourlyRate: user.hourlyRate)
             }

@@ -8,14 +8,14 @@
 import SwiftUI
 
 private enum WarningsUI {
-    static let screenBg = Color(red: 0.949, green: 0.949, blue: 0.969) // #F2F2F7
-    static let doneBlue = Color(red: 0.231, green: 0.373, blue: 0.639) // #3B5FA3
-    static let textPrimary = Color(red: 0.110, green: 0.110, blue: 0.118)
-    static let textBody = Color(red: 0.216, green: 0.255, blue: 0.318)
-    static let textMuted = Color(red: 0.612, green: 0.639, blue: 0.686)
-    static let blue = Color(red: 0.145, green: 0.388, blue: 0.922)
-    static let blueFrom = Color(red: 0.114, green: 0.306, blue: 0.847)
-    static let red = Color(red: 0.863, green: 0.149, blue: 0.149)
+    static let screenBg = hsDyn("#F2F2F7", "#0B1017")
+    static let doneBlue = hsDyn("#3B5FA3", "#6B95FF")
+    static let textPrimary = hsDyn("#1C1C1E", "#F2F5F9")
+    static let textBody = hsDyn("#374151", "#D6DEE9")
+    static let textMuted = hsDyn("#9CA3AF", "#9AA7B8")
+    static let blue = hsDyn("#2563EB", "#6B95FF")
+    static let blueFrom = hsDyn("#1D4ED8", "#4A78F5")
+    static let red = hsDyn("#DC2626", "#FF6F63")
     static let avatarPalette: [Color] = [
         Color(red: 0.173, green: 0.357, blue: 0.749),
         Color(red: 0.294, green: 0.478, blue: 0.361),
@@ -30,7 +30,7 @@ private enum WarningsUI {
         return avatarPalette[abs(hash) % avatarPalette.count]
     }
 
-    static func parseUnbookedPerson(_ raw: String) -> (name: String, badge: String?) {
+    nonisolated static func parseUnbookedPerson(_ raw: String) -> (name: String, badge: String?) {
         if let range = raw.range(of: " (missing ") {
             let name = String(raw[..<range.lowerBound])
             var hours = String(raw[range.upperBound...])
@@ -98,9 +98,9 @@ struct WarningsDetailView: View {
                 WarningsRefreshHelper.isWarningsSheetVisible = true
                 print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED count=\(warningsService.activeWarnings.count) completed=\(warningsService.hasCompletedLiveDetection)")
             }
-            .onDisappear {
-                WarningsRefreshHelper.isWarningsSheetVisible = false
-            }
+            // Do not clear the visible flag here. Opening Book labour as a cover can fire
+            // onDisappear while Warnings is still presented, which used to restart a scan
+            // and make slot buttons feel stuck. Home clears the flag when the sheet closes.
             // fullScreenCover avoids nested-sheet bug that dismissed Warnings back to Home.
             .fullScreenCover(isPresented: $showingWarningsSettings) {
                 NavigationStack {
@@ -242,7 +242,7 @@ struct WarningsDetailView: View {
                     .foregroundStyle(ProjectWorksRevampColors.activeGreen)
                 Text("No active warnings")
                     .font(.title3.weight(.semibold))
-                Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
+                Text("High: operative, manager, and admin booking clashes plus unbooked labour. Tick a clash to note it on the weekly report. Low: material orders not placed by 16:00.")
                     .font(.subheadline)
                     .foregroundStyle(WarningsUI.textMuted)
                     .multilineTextAlignment(.center)
@@ -318,16 +318,15 @@ struct WarningsDetailView: View {
         case .operativeBookingClash:
             OperativeClashWarningCard(
                 warning: warning,
-                onRemoveA: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingAId) },
-                onRemoveB: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingBId) },
+                onRemove: { removeClashEntry(warning, entry: $0) },
+                onApprove: { warningsService.approveWarning(warning) },
                 onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
             )
         case .managerLocationClash:
             ManagerClashWarningCard(
                 warning: warning,
-                onRemoveA: { removeManagerBooking(warning, entry: warning.managerClash?.entryA) },
-                onRemoveB: { removeManagerBooking(warning, entry: warning.managerClash?.entryB) },
+                onRemove: { removeClashEntry(warning, entry: $0) },
                 onApprove: { warningsService.approveWarning(warning) },
                 onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
@@ -630,6 +629,14 @@ struct WarningsDetailView: View {
         }
     }
 
+    private func removeClashEntry(_ warning: Warning, entry: Warning.ClashTimelineEntry) {
+        if entry.managerBookingId != nil {
+            removeManagerBooking(warning, entry: entry)
+        } else {
+            removeOperativeBooking(warning, bookingId: entry.bookingId)
+        }
+    }
+
     private func removeOperativeBooking(_ warning: Warning, bookingId: UUID?) {
         guard let id = bookingId,
               let booking = bookingStore.bookings.first(where: { $0.id == id }) else { return }
@@ -819,12 +826,13 @@ private struct WarningDismissConfirmationSheet: View {
 }
 
 /// Sheet/item identity for a calendar day without making `Date` globally Identifiable.
-private struct IdentifiableDay: Identifiable, Hashable {
+/// Init is `nonisolated` so `.map(IdentifiableDay.init)` is valid under default MainActor isolation.
+private struct IdentifiableDay: Identifiable, Hashable, Sendable {
     let date: Date
-    var id: TimeInterval { Calendar.current.startOfDay(for: date).timeIntervalSince1970 }
+    var id: TimeInterval { date.timeIntervalSince1970 }
 
-    init(_ date: Date) {
-        self.date = Calendar.current.startOfDay(for: date)
+    nonisolated init(_ date: Date) {
+        self.date = date
     }
 }
 

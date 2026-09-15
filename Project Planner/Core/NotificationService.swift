@@ -455,7 +455,7 @@ class NotificationService: ObservableObject {
         let typeLabel: String = {
             switch warning.type {
             case .operativeBookingClash: return "Operative booking clash"
-            case .managerLocationClash: return "Manager / admin location clash"
+            case .managerLocationClash: return warning.clashPersonKind?.bookingClashTitle ?? "Manager booking clash"
             case .unbookedLabour: return "Unbooked labour"
             case .materialsCutoff: return "Materials cut-off"
             case .qualificationExpiry: return "Qualification expiry"
@@ -556,6 +556,32 @@ class NotificationService: ObservableObject {
                     await saveNotification(notification)
                 }
             }
+        }
+    }
+
+    func notifyDeadlineAssigned(
+        deadlineId: UUID,
+        title: String,
+        projectName: String,
+        assignedUserIds: [String],
+        createdBy: String
+    ) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        for rawId in assignedUserIds {
+            let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(rawId)
+            let dedupeId = syntheticNotificationId(from: "deadlineAssigned|\(deadlineId.uuidString)|\(canonicalUserId)")
+            let notification = AppNotification(
+                id: dedupeId,
+                organizationId: organizationId,
+                type: .deadlineAssigned,
+                title: "Deadline assigned",
+                message: "\(createdBy) assigned you a deadline on \(projectName): \(title)",
+                userId: canonicalUserId,
+                relatedId: deadlineId,
+                requiresPermission: nil
+            )
+            await saveNotification(notification)
         }
     }
 

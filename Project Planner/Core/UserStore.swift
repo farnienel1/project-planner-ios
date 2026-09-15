@@ -724,6 +724,8 @@ class UserStore: ObservableObject {
         return true
     }
     
+    /// Directory / menu / home tile for adding and editing sub contractor records.
+    /// Booking live subcontractors onto a job is separate and stays available to managers.
     func canManageSubcontractors() -> Bool {
         if isOperativeMode() { return false }
         if isHomeProfileLoading { return true }
@@ -731,7 +733,34 @@ class UserStore: ObservableObject {
         if currentUser.isSuperAdmin || currentUser.permissions.adminAccess || currentUser.role == .admin {
             return true
         }
-        return currentUser.permissions.manager
+        return currentUser.permissions.manager && currentUser.permissions.subContractors
+    }
+
+    /// Create / edit / add projects or small works. Lists stay available when this is off.
+    func canManageWorkCatalogue(_ catalogue: WorkAccess.JobCatalogue) -> Bool {
+        if isOperativeMode() { return false }
+        guard let u = displayUser else { return false }
+        if u.isSuperAdmin || u.permissions.adminAccess || u.role == .admin { return true }
+        guard u.permissions.manager else { return false }
+        switch catalogue {
+        case .projects: return u.permissions.projects
+        case .smallWorks: return u.permissions.smallWorks
+        case .all: return u.permissions.projects && u.permissions.smallWorks
+        }
+    }
+
+    func canViewWeeklyReports() -> Bool {
+        if isOperativeMode() { return false }
+        if isHomeProfileLoading { return true }
+        guard let u = displayUser else { return false }
+        return u.permissions.weeklyReports
+    }
+
+    func canViewDailyOverview() -> Bool {
+        if isOperativeMode() { return false }
+        if isHomeProfileLoading { return true }
+        guard let u = displayUser else { return false }
+        return u.permissions.dailyOverview
     }
     
     /// Super admins, admins, and managers may set whether a site audit is visible to operative-mode users.
@@ -1786,7 +1815,7 @@ class UserStore: ObservableObject {
                             )
                         }
                         let effective = dayRateEffectiveAt ?? Date()
-                        // dayRate nil / <= 0 records a clear sentinel so history stops applying old rates.
+                        // Persist the new rate into history, including an explicit £0.
                         try? await firebaseBackend.recordOperativeDayRateChange(
                             organizationId: orgId,
                             userId: updatedUser.id,
@@ -1964,7 +1993,7 @@ class UserStore: ObservableObject {
                 let effective = effectiveAt ?? Date()
                 let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
                 let merged = collection.mergedEntries(userId: updatedUser.id, operativeId: nil)
-                if let previousDayRate, previousDayRate > 0, merged.isEmpty {
+                if let previousDayRate, merged.isEmpty {
                     try? await firebaseBackend.recordOperativeDayRateChange(
                         organizationId: orgId,
                         userId: updatedUser.id,
@@ -1983,12 +2012,11 @@ class UserStore: ObservableObject {
             }
             clearOperativeProfileOverride(for: updatedUser.id)
             // Mirror clear/set into cloud fallback so profile cards cannot resurrect a blanked rate.
-            // 0 = explicit clear sentinel for applyCloudOperativeProfileOverrides.
             try? await firebaseBackend.saveOperativeProfileMetadataFallback(
                 organizationId: updatedUser.organizationId,
                 userId: updatedUser.id,
                 assignedManagerUserId: updatedUser.assignedManagerUserId,
-                dayRate: dayRate ?? 0
+                dayRate: dayRate
             )
             organizationUsers[index] = updatedUser
             if let operativeStore {
@@ -2010,8 +2038,8 @@ class UserStore: ObservableObject {
                   $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
               }) else { return }
         var op = operativeStore.operatives[idx]
-        let targetDay = (user.dayRate ?? 0) > 0 ? user.dayRate : nil
-        let targetHourly = (user.hourlyRate ?? 0) > 0 ? user.hourlyRate : nil
+        let targetDay = user.dayRate
+        let targetHourly = user.hourlyRate
         guard op.dayRate != targetDay || op.hourlyRate != targetHourly else { return }
         op.dayRate = targetDay
         op.hourlyRate = targetHourly
@@ -2161,7 +2189,7 @@ class UserStore: ObservableObject {
                 op.isActive = true
                 changed = true
             }
-            if let dr = user.dayRate, dr > 0 {
+            if let dr = user.dayRate {
                 if op.dayRate != dr {
                     op.dayRate = dr
                     changed = true
@@ -2236,15 +2264,10 @@ class UserStore: ObservableObject {
                !managerId.isEmpty {
                 updated.assignedManagerUserId = managerId
             }
-            // Fallback dayRate: >0 restores a rate; <=0 is an explicit clear sentinel.
+            // 0 is a valid £0 day rate (nil means the field was never stored).
             if let rate = override.dayRate {
-                if rate > 0 {
-                    updated.dayRate = rate
-                    updated.hourlyRate = nil
-                } else {
-                    updated.dayRate = nil
-                    updated.hourlyRate = nil
-                }
+                updated.dayRate = rate
+                updated.hourlyRate = nil
             }
             return updated
         }
@@ -2262,15 +2285,10 @@ class UserStore: ObservableObject {
                !managerId.isEmpty {
                 updated.assignedManagerUserId = managerId
             }
-            // Positive fallback restores a rate; 0 clears so blank settings stay blank.
+            // Positive fallback restores a rate; 0 is a valid £0 day rate; missing field leaves the user doc as-is.
             if let rate = override.dayRate {
-                if rate > 0 {
-                    updated.dayRate = rate
-                    updated.hourlyRate = nil
-                } else {
-                    updated.dayRate = nil
-                    updated.hourlyRate = nil
-                }
+                updated.dayRate = rate
+                updated.hourlyRate = nil
             }
             return updated
         }

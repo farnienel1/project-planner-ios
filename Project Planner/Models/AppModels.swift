@@ -10,10 +10,18 @@ import SwiftUI
 
 // MARK: - App Configuration Models
 
-enum ThemePreference: String, CaseIterable, Codable, Sendable {
+enum ThemePreference: String, CaseIterable, Codable, Hashable, Sendable {
     case light = "light"
     case dark = "dark"
     case system = "system"
+
+    var displayName: String {
+        switch self {
+        case .light: return "Light"
+        case .dark: return "Dark"
+        case .system: return "Match system"
+        }
+    }
     
     var colorScheme: ColorScheme? {
         switch self {
@@ -144,13 +152,13 @@ struct UserPermissions: Codable, Hashable {
     var skills: Bool
     var qualifications: Bool // Manage organisation qualification templates (admins always; managers when enabled)
     var materials: Bool    // Operative materials visibility/access inside project detail
-    var projects: Bool     // Can create and manage projects
-    var smallWorks: Bool   // Can create and manage small works
+    var projects: Bool     // Create / edit / add projects. Off still allows assigned or booked jobs.
+    var smallWorks: Bool   // Create / edit / add small works. Off still allows assigned or booked jobs.
     var operativeMode: Bool // Operative mode - limited view of app
     var annualLeaveSelfBook: Bool // Managers can self-book annual leave without approval
-    var weeklyReports: Bool // Managers can access weekly reports
-    var dailyOverview: Bool // Managers can access Daily Overview
-    var subContractors: Bool // Managers can add/manage sub contractors
+    var weeklyReports: Bool // Weekly Report home tile
+    var dailyOverview: Bool // Daily Overview home tile
+    var subContractors: Bool // Sub Contractors directory on Home/menus. Booking on jobs is separate.
     var siteAudit: Bool // Operative can access site audits
     /// Managers: view quote/order history in Wholesalers and on project materials.
     var wholesalersOrderHistory: Bool
@@ -554,6 +562,8 @@ struct Organization: Identifiable, Codable, Hashable {
     var defaultLatitude: Double?
     var defaultLongitude: Double?
     var companyLogoURL: String?
+    /// 1–3 character abbreviation shown on site audits, toolbox talks, and org badges.
+    var documentAbbreviation: String?
     var createdAt: Date
     var updatedAt: Date
     /// Firebase Auth UID of the organization creator. Only this user may be super admin.
@@ -577,6 +587,7 @@ struct Organization: Identifiable, Codable, Hashable {
         defaultLatitude: Double? = nil,
         defaultLongitude: Double? = nil,
         companyLogoURL: String? = nil,
+        documentAbbreviation: String? = nil,
         creatorUserId: String? = nil,
         payrollTimePolicyPrior: OrgPayrollTimePolicy? = nil,
         payrollTimePolicyEffectiveFrom: Date? = nil,
@@ -597,6 +608,7 @@ struct Organization: Identifiable, Codable, Hashable {
         self.defaultLatitude = defaultLatitude
         self.defaultLongitude = defaultLongitude
         self.companyLogoURL = companyLogoURL
+        self.documentAbbreviation = OrganizationDocumentAbbreviation.normalized(documentAbbreviation)
         self.createdAt = Date()
         self.updatedAt = Date()
         self.creatorUserId = creatorUserId
@@ -607,7 +619,7 @@ struct Organization: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, firestoreDocumentId, name, settings, officeAddressLine1, officeCity, officePostcode
-        case countryCode, defaultLatitude, defaultLongitude, companyLogoURL, createdAt, updatedAt, creatorUserId
+        case countryCode, defaultLatitude, defaultLongitude, companyLogoURL, documentAbbreviation, createdAt, updatedAt, creatorUserId
         case payrollTimePolicyPrior, payrollTimePolicyEffectiveFrom, payrollTimePolicyScheduled
     }
 
@@ -623,6 +635,7 @@ struct Organization: Identifiable, Codable, Hashable {
         defaultLatitude = try c.decodeIfPresent(Double.self, forKey: .defaultLatitude)
         defaultLongitude = try c.decodeIfPresent(Double.self, forKey: .defaultLongitude)
         companyLogoURL = try c.decodeIfPresent(String.self, forKey: .companyLogoURL)
+        documentAbbreviation = OrganizationDocumentAbbreviation.normalized(try c.decodeIfPresent(String.self, forKey: .documentAbbreviation))
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         creatorUserId = try c.decodeIfPresent(String.self, forKey: .creatorUserId)
@@ -645,12 +658,46 @@ struct Organization: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(defaultLatitude, forKey: .defaultLatitude)
         try c.encodeIfPresent(defaultLongitude, forKey: .defaultLongitude)
         try c.encodeIfPresent(companyLogoURL, forKey: .companyLogoURL)
+        try c.encodeIfPresent(documentAbbreviation, forKey: .documentAbbreviation)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encodeIfPresent(creatorUserId, forKey: .creatorUserId)
         try c.encodeIfPresent(payrollTimePolicyPrior, forKey: .payrollTimePolicyPrior)
         try c.encodeIfPresent(payrollTimePolicyEffectiveFrom, forKey: .payrollTimePolicyEffectiveFrom)
         try c.encodeIfPresent(payrollTimePolicyScheduled, forKey: .payrollTimePolicyScheduled)
+    }
+}
+
+/// 1–3 character company mark for site audits, toolbox talks, and organisation badges.
+enum OrganizationDocumentAbbreviation {
+    static let maxLength = 3
+
+    nonisolated static func normalizeForTyping(_ raw: String) -> String {
+        String(raw.uppercased().filter { $0.isLetter || $0.isNumber })
+    }
+
+    nonisolated static func normalized(_ raw: String?) -> String? {
+        let cleaned = normalizeForTyping(raw ?? "")
+        guard !cleaned.isEmpty else { return nil }
+        return String(cleaned.prefix(maxLength))
+    }
+
+    nonisolated static func display(abbreviation: String?, organizationName: String?) -> String {
+        if let n = normalized(abbreviation) { return n }
+        let name = organizationName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !name.isEmpty else { return "PP" }
+        let parts = name.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        if parts.count >= 2 {
+            let letters = parts.prefix(maxLength).compactMap { $0.first }.map { String($0).uppercased() }
+            return letters.joined()
+        }
+        return String((parts.first ?? name).prefix(maxLength)).uppercased()
+    }
+
+    @MainActor static var currentDisplay = "PP"
+
+    @MainActor static func update(from org: Organization?) {
+        currentDisplay = display(abbreviation: org?.documentAbbreviation, organizationName: org?.name)
     }
 }
 

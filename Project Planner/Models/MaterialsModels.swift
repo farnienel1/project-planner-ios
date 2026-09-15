@@ -269,7 +269,7 @@ enum MaterialLengthSpecification {
         return "\(trimmedValue) \(unit.emailSuffix)"
     }
 
-    static func parseUnit(from raw: String?) -> MaterialLengthUnit? {
+    nonisolated static func parseUnit(from raw: String?) -> MaterialLengthUnit? {
         switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
         case "M", "METRE", "METRES", "METER", "METERS": return .metres
         case "MM", "MILLIMETRE", "MILLIMETRES", "MILLIMETER", "MILLIMETERS": return .millimetres

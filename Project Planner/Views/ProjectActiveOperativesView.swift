@@ -178,7 +178,7 @@ struct ProjectActiveOperativesView: View {
                 .foregroundStyle(ProjectWorksRevampColors.blue)
             Text(project.siteName)
                 .font(.headline)
-            Text("\(summaries.count) person\(summaries.count == 1 ? "" : "s") booked on this job")
+            Text("\(summaries.count) user\(summaries.count == 1 ? "" : "s") previously booked on this job")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }

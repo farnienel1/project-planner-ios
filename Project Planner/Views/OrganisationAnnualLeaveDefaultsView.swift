@@ -18,69 +18,57 @@ struct OrganisationAnnualLeaveDefaultsView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        Form {
-            Section("Bank holiday region") {
-                Picker("Region", selection: $bankHolidayRegionId) {
-                    ForEach(BankHolidayRegionDirectory.groupedRegions(), id: \.group) { group in
-                        Section(group.group) {
-                            ForEach(group.regions) { region in
-                                Text(region.title).tag(region.id)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsHubChrome.sectionTitle("Bank holiday region")
+                SettingsHubChrome.card {
+                    Picker("Region", selection: $bankHolidayRegionId) {
+                        ForEach(BankHolidayRegionDirectory.pickerRegions(), id: \.group) { group in
+                            Section(group.group) {
+                                ForEach(group.regions) { region in
+                                    Text(region.title).tag(region.id)
+                                }
                             }
                         }
                     }
+                    .pickerStyle(.menu)
+                    .font(.system(size: 13, weight: .medium))
+                    .padding(.vertical, 12)
+                    .tint(ProjectWorksRevampColors.blue)
                 }
-                Text("Bank holidays on annual leave calendars use this region only — not the company country in Company details. Choose England & Wales, Scotland, Northern Ireland, or another supported region. Data is cached offline.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+                SettingsHubChrome.footer("Bank holidays on annual leave calendars use this region only — not the company country in Company details. Choose England & Wales, Scotland, Northern Ireland, or another supported region. Data is cached offline.")
 
-            Section("Default annual leave for new users") {
-                AnnualLeaveEntitlementEditor(
-                    daysText: $daysText,
-                    startMonth: $startMonth,
-                    endMonth: $endMonth,
-                    carriesOver: $carriesOver,
-                    isEnabled: !isSaving
-                )
-            }
+                SettingsHubChrome.sectionTitle("Default annual leave for new users")
+                SettingsHubChrome.card {
+                    AnnualLeaveEntitlementEditor(
+                        daysText: $daysText,
+                        startMonth: $startMonth,
+                        endMonth: $endMonth,
+                        carriesOver: $carriesOver,
+                        isEnabled: !isSaving
+                    )
+                    .padding(.vertical, 12)
+                }
+                SettingsHubChrome.footer("These settings apply only when adding new manager/operative users. Existing users keep their current annual leave values unless an admin/manager edits their profile.")
 
-            Section {
-                Text("These settings apply only when adding new manager/operative users. Existing users keep their current annual leave values unless an admin/manager edits their profile.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let errorMessage {
-                Section {
+                if let errorMessage {
                     Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                        .font(.system(size: 12))
+                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                        .padding(.horizontal, 4)
+                        .padding(.bottom, 8)
                 }
-            }
 
-            Section {
-                Button {
+                SettingsHubChrome.saveButton("Save settings", isSaving: isSaving) {
                     Task { await save() }
-                } label: {
-                    HStack {
-                        Spacer()
-                        if isSaving {
-                            ProgressView()
-                                .tint(.white)
-                        } else {
-                            Text("Save settings")
-                                .fontWeight(.semibold)
-                        }
-                        Spacer()
-                    }
                 }
-                .listRowBackground(Color.blue)
-                .foregroundStyle(.white)
-                .disabled(isSaving)
             }
+            .padding(16)
         }
+        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
         .navigationTitle("Annual leave")
         .navigationBarTitleDisplayMode(.inline)
+        .appChromeNavigationBarSurface()
         .onAppear {
             let defaults = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
             daysText = defaults.daysPerYear.truncatingRemainder(dividingBy: 1) == 0
@@ -89,8 +77,12 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             startMonth = defaults.startMonth
             endMonth = defaults.endMonth
             carriesOver = defaults.carriesOver
-            bankHolidayRegionId = firebaseBackend.currentOrganization?.settings.bankHolidayRegionId
-                ?? BankHolidayRegionDirectory.defaultRegion(forCountryCode: firebaseBackend.currentOrganization?.countryCode ?? "GB").id
+            bankHolidayRegionId = BankHolidayRegionDirectory.pickerSelection(
+                forStoredRegionId: firebaseBackend.currentOrganization?.settings.bankHolidayRegionId
+                    ?? BankHolidayRegionDirectory.defaultRegion(
+                        forCountryCode: firebaseBackend.currentOrganization?.countryCode ?? "GB"
+                    ).id
+            )
         }
     }
 
@@ -113,12 +105,16 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             carriesOver: carriesOver
         )
         do {
-            try await firebaseBackend.updateOrganizationAnnualLeaveDefaults(defaults)
-            try await firebaseBackend.updateOrganizationBankHolidayRegion(bankHolidayRegionId)
+            try await firebaseBackend.updateOrganizationAnnualLeaveSettings(
+                defaults: defaults,
+                bankHolidayRegionId: bankHolidayRegionId
+            )
             let region = BankHolidayRegionDirectory.region(id: bankHolidayRegionId) ?? BankHolidayRegionDirectory.defaultRegion(forCountryCode: "GB")
-            BankHolidayService.shared.invalidateCache(for: region.id)
-            await BankHolidayService.shared.ensureLoaded(region: region, forceRefresh: true)
             dismiss()
+            Task {
+                BankHolidayService.shared.invalidateCache(for: region.id)
+                await BankHolidayService.shared.ensureLoaded(region: region, forceRefresh: true)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

@@ -7,46 +7,77 @@ import SwiftUI
 
 struct OfflineStatusBanner: View {
     @EnvironmentObject private var smartCache: SmartCacheService
+    @State private var showingQueue = false
 
     var body: some View {
         if smartCache.showOfflineBanner {
             bannerContent
                 .transition(.move(edge: .top).combined(with: .opacity))
+                .sheet(isPresented: $showingQueue) {
+                    OfflineSyncQueueSheet()
+                        .environmentObject(smartCache)
+                }
         }
     }
 
     @ViewBuilder
     private var bannerContent: some View {
         if smartCache.isSyncing {
-            statusRow(
-                icon: "arrow.triangle.2.circlepath",
-                tint: .blue,
-                message: syncingMessage
-            )
+            Button {
+                showingQueue = true
+            } label: {
+                statusRow(
+                    icon: "arrow.triangle.2.circlepath",
+                    tint: .blue,
+                    message: syncingMessage,
+                    showsChevron: true
+                )
+            }
+            .buttonStyle(.plain)
         } else if !smartCache.isOnline {
-            statusRow(
-                icon: "wifi.slash",
-                tint: .orange,
-                message: "You are working offline. Any changes or bookings made will only appear for other users when your signal is restored."
-            )
+            Button {
+                showingQueue = true
+            } label: {
+                statusRow(
+                    icon: "wifi.slash",
+                    tint: .orange,
+                    message: offlineMessage,
+                    showsChevron: true
+                )
+            }
+            .buttonStyle(.plain)
         } else if smartCache.pendingSyncCount > 0 {
-            statusRow(
-                icon: "icloud.and.arrow.up",
-                tint: .orange,
-                message: "\(smartCache.pendingSyncCount) change\(smartCache.pendingSyncCount == 1 ? "" : "s") waiting to sync. They will appear for other users once syncing completes."
-            )
+            Button {
+                showingQueue = true
+            } label: {
+                statusRow(
+                    icon: "icloud.and.arrow.up",
+                    tint: .orange,
+                    message: "\(smartCache.pendingSyncCount) change\(smartCache.pendingSyncCount == 1 ? "" : "s") waiting to sync. Tap to see the queue.",
+                    showsChevron: true
+                )
+            }
+            .buttonStyle(.plain)
         } else if smartCache.failedSyncCount > 0 {
             Button {
-                Task { await smartCache.retryFailedSync() }
+                showingQueue = true
             } label: {
                 statusRow(
                     icon: "exclamationmark.triangle.fill",
                     tint: .red,
-                    message: "\(smartCache.failedSyncCount) change\(smartCache.failedSyncCount == 1 ? "" : "s") could not sync. Tap to retry."
+                    message: "\(smartCache.failedSyncCount) change\(smartCache.failedSyncCount == 1 ? "" : "s") could not sync. Tap to review and retry.",
+                    showsChevron: true
                 )
             }
             .buttonStyle(.plain)
         }
+    }
+
+    private var offlineMessage: String {
+        if smartCache.pendingSyncCount > 0 {
+            return "You are working offline. \(smartCache.pendingSyncCount) change\(smartCache.pendingSyncCount == 1 ? "" : "s") will sync when signal returns. Tap to see the queue."
+        }
+        return "You are working offline. Bookings, deadlines, and material changes stay on this device and sync when signal returns. Tap to see the queue."
     }
 
     private var syncingMessage: String {
@@ -56,7 +87,7 @@ struct OfflineStatusBanner: View {
         return "Syncing your offline changes…"
     }
 
-    private func statusRow(icon: String, tint: Color, message: String) -> some View {
+    private func statusRow(icon: String, tint: Color, message: String, showsChevron: Bool) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
                 .font(.subheadline.weight(.semibold))
@@ -67,6 +98,12 @@ struct OfflineStatusBanner: View {
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -74,5 +111,61 @@ struct OfflineStatusBanner: View {
         .overlay(alignment: .bottom) {
             Divider()
         }
+    }
+}
+
+struct OfflineSyncQueueSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var smartCache: SmartCacheService
+    @ObservedObject private var outbox = OfflineOutboxStore.shared
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack {
+                        Text(smartCache.isOnline ? "Online" : "Offline")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        if smartCache.isSyncing {
+                            ProgressView()
+                        }
+                    }
+                    if outbox.entries.isEmpty {
+                        Text("Nothing waiting to sync.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if !outbox.entries.isEmpty {
+                    Section("Waiting to sync") {
+                        ForEach(outbox.entries) { entry in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(entry.displayTitle)
+                                    .font(.subheadline.weight(.semibold))
+                                Text(entry.displayDetail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Changes to sync")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Retry now") {
+                        Task { await smartCache.refreshConnectionAndSync() }
+                    }
+                    .disabled(smartCache.isSyncing)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }

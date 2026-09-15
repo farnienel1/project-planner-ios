@@ -4,6 +4,7 @@ import Combine
 import UIKit
 import PDFKit
 import UniformTypeIdentifiers
+import FirebaseAuth
 
 private enum HSManagerTab: String, CaseIterable, Identifiable {
     case hub = "Hub"
@@ -127,15 +128,22 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         let normalizedTrade = trade.trimmingCharacters(in: .whitespacesAndNewlines)
         let isGeneral = normalizedTrade.caseInsensitiveCompare("General") == .orderedSame
         var uploadedURL: String?
-        if let localFileURL,
+        let persisted = localFileURL.flatMap { HSImportedFile.persist($0) }
+        let fileURL = persisted?.url ?? localFileURL
+        let fileName = persisted?.name ?? originalFileName ?? localFileURL?.lastPathComponent
+        if let fileURL,
            let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) {
             uploadedURL = try? await firebaseBackend.uploadHealthSafetyFile(
-                localFileURL,
+                fileURL,
                 organizationId: orgId,
                 projectId: project.id,
                 category: "toolboxTalks",
-                fileName: originalFileName ?? localFileURL.lastPathComponent
+                fileName: fileName ?? fileURL.lastPathComponent
             )
+        }
+        if localFileURL != nil && uploadedURL == nil {
+            errorMessage = "Couldn’t upload the toolbox talk file. Check your connection and try again."
+            return
         }
         let talk = HSToolboxTalk(
             id: "TBT-UP-\(UUID().uuidString.prefix(8))",
@@ -199,7 +207,9 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         }
         await persist(firebaseBackend: firebaseBackend, userStore: userStore)
         guard let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) else { return pendingUserIds.count }
-        let talkTitle = data.talks.first(where: { $0.id == issue.talkId })?.title ?? "Toolbox Talk"
+        let talkTitle = data.talks.first(where: { $0.id == issue.talkId })?.title
+            ?? data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId })?.title
+            ?? "H&S sign-off"
         for userId in pendingUserIds {
             let notification = AppNotification(
                 organizationId: orgId,
@@ -298,35 +308,97 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         attachedDocTitles: [String],
         localFileURL: URL?,
         originalFileName: String?,
+        recipientUserIds: [String],
         firebaseBackend: FirebaseBackend,
         userStore: UserStore
     ) async {
         var uploadedURL: String?
-        if let localFileURL,
+        let persisted = localFileURL.flatMap { HSImportedFile.persist($0) }
+        let fileURL = persisted?.url ?? localFileURL
+        let fileName = persisted?.name ?? originalFileName ?? localFileURL?.lastPathComponent
+        if let fileURL,
            let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) {
             uploadedURL = try? await firebaseBackend.uploadHealthSafetyFile(
-                localFileURL,
+                fileURL,
                 organizationId: orgId,
                 projectId: project.id,
                 category: "rams",
-                fileName: originalFileName ?? localFileURL.lastPathComponent
+                fileName: fileName ?? fileURL.lastPathComponent
             )
         }
-        data.ramsDocuments.insert(
-            HSRamsDocument(
-                id: UUID().uuidString,
-                title: title,
-                trade: trade,
-                version: 1,
-                status: "live",
-                uploadedAt: Date(),
-                fileURL: uploadedURL,
-                fileName: originalFileName,
-                reviewDate: reviewDate,
-                attachedDocTitles: attachedDocTitles
-            ),
-            at: 0
+        if localFileURL != nil && uploadedURL == nil {
+            errorMessage = "Couldn’t upload the RAMS file. Check your connection and try again."
+            return
+        }
+        let doc = HSRamsDocument(
+            id: UUID().uuidString,
+            title: title,
+            trade: trade,
+            version: 1,
+            status: "live",
+            uploadedAt: Date(),
+            fileURL: uploadedURL,
+            fileName: originalFileName,
+            reviewDate: reviewDate,
+            attachedDocTitles: attachedDocTitles
         )
+        data.ramsDocuments.insert(doc, at: 0)
+        await issueRams(
+            document: doc,
+            recipients: recipientUserIds,
+            issuedByUserId: userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "",
+            firebaseBackend: firebaseBackend,
+            userStore: userStore
+        )
+    }
+
+    func issueRams(
+        document: HSRamsDocument,
+        recipients: [String],
+        issuedByUserId: String,
+        firebaseBackend: FirebaseBackend,
+        userStore: UserStore
+    ) async {
+        let uniqueRecipients = Array(Set(recipients.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
+        if let existing = data.issues.first(where: { $0.ramsDocumentId == document.id }) {
+            await addRecipients(
+                issueId: existing.id,
+                recipientIds: uniqueRecipients,
+                firebaseBackend: firebaseBackend,
+                userStore: userStore
+            )
+            return
+        }
+        let issueId = UUID().uuidString
+        let issue = HSToolboxIssue(
+            id: issueId,
+            projectId: project.id,
+            talkId: "",
+            weekCommencing: Date(),
+            issuedByUserId: issuedByUserId,
+            issuedAt: Date(),
+            publishAt: nil,
+            recipientUserIds: uniqueRecipients,
+            status: .awaiting,
+            ramsDocumentId: document.id
+        )
+        data.issues.insert(issue, at: 0)
+        for userId in uniqueRecipients {
+            data.signatures.insert(
+                HSToolboxSignature(
+                    id: UUID().uuidString,
+                    issueId: issueId,
+                    userId: userId,
+                    status: .pending,
+                    readConfirmed: false,
+                    signatureImageBase64: nil,
+                    signedAt: nil,
+                    reminderSentAt: nil
+                ),
+                at: 0
+            )
+        }
+        recalculateIssueStatuses()
         await persist(firebaseBackend: firebaseBackend, userStore: userStore)
     }
 
@@ -341,15 +413,22 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         userStore: UserStore
     ) async {
         var uploadedURL: String?
-        if let localFileURL,
+        let persisted = localFileURL.flatMap { HSImportedFile.persist($0) }
+        let fileURL = persisted?.url ?? localFileURL
+        let fileName = persisted?.name ?? originalFileName ?? localFileURL?.lastPathComponent
+        if let fileURL,
            let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) {
             uploadedURL = try? await firebaseBackend.uploadHealthSafetyFile(
-                localFileURL,
+                fileURL,
                 organizationId: orgId,
                 projectId: project.id,
                 category: "otherDocuments",
-                fileName: originalFileName ?? localFileURL.lastPathComponent
+                fileName: fileName ?? fileURL.lastPathComponent
             )
+        }
+        if localFileURL != nil && uploadedURL == nil {
+            errorMessage = "Couldn’t upload the H&S document. Check your connection and try again."
+            return
         }
         data.otherDocuments.insert(
             HSOtherDocument(
@@ -369,6 +448,20 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
 
     func signatures(for issueId: String) -> [HSToolboxSignature] {
         data.signatures.filter { $0.issueId == issueId }
+    }
+
+    func trackingSignOffTotals(now: Date = Date()) -> (signed: Int, total: Int) {
+        let allSigs = visibleIssues(now: now).flatMap { signatures(for: $0.id) }
+        let signed = allSigs.filter { $0.status == .signed }.count
+        return (signed, allSigs.count)
+    }
+
+    func issueDisplayTitle(_ issue: HSToolboxIssue) -> String {
+        if let ramsId = issue.ramsDocumentId,
+           let rams = data.ramsDocuments.first(where: { $0.id == ramsId }) {
+            return rams.title
+        }
+        return data.talks.first(where: { $0.id == issue.talkId })?.title ?? "Sign-off"
     }
 
     private func recalculateIssueStatuses() {
@@ -457,9 +550,11 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         }
 
         let externalPaths = [
+            Bundle.main.path(forResource: "TOOLBOX-TALK-LIBRARY", ofType: "md"),
+            "/workspace/Project Planner/Resources/TOOLBOX-TALK-LIBRARY.md",
             "/Users/farnienel/Downloads/TBT and Dash/TOOLBOX-TALK-LIBRARY.md",
             "/Users/farnienel/Downloads/Toolbox t/TOOLBOX-TALK-LIBRARY.md"
-        ]
+        ].compactMap { $0 }
         for path in externalPaths {
             let parsed = parseExternalLibrary(from: path)
             if !parsed.isEmpty {
@@ -528,6 +623,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
 
 struct ProjectHealthSafetyView: View {
     let project: Project
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var bookingStore: BookingStore
@@ -556,6 +652,11 @@ struct ProjectHealthSafetyView: View {
     @State private var reminderSuccessMessage: String?
     @State private var showAllAssignedInHub = false
     @State private var showAllAssignedInTracking = false
+    @State private var documentPreview: HSDocumentPreviewItem?
+    @State private var selectedRamsDocument: HSRamsDocument?
+    @State private var selectedRamsToSend: HSRamsDocument?
+    @State private var selectedOtherDocument: HSOtherDocument?
+    @State private var selectedCustomSignedIssue: HSToolboxIssue?
 
     init(project: Project) {
         self.project = project
@@ -581,6 +682,7 @@ struct ProjectHealthSafetyView: View {
             let matchesSearch: Bool = talkSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || talk.title.localizedCaseInsensitiveContains(talkSearchText)
                 || talk.purpose.localizedCaseInsensitiveContains(talkSearchText)
+                || talk.id.localizedCaseInsensitiveContains(talkSearchText)
             guard matchesSearch else { return false }
             switch selectedTradeFilter {
             case "All":
@@ -618,6 +720,10 @@ struct ProjectHealthSafetyView: View {
         ]
         var grouped: [String: [HSToolboxTalk]] = [:]
         for talk in filteredLibraryTalks {
+            if talk.source == .uploaded {
+                grouped["My uploads", default: []].append(talk)
+                continue
+            }
             if talk.isGeneral {
                 grouped["General", default: []].append(talk)
             } else if !talk.trades.isEmpty {
@@ -629,7 +735,7 @@ struct ProjectHealthSafetyView: View {
                 grouped["Other", default: []].append(talk)
             }
         }
-        let ordered = preferredOrder + grouped.keys.filter { !preferredOrder.contains($0) }.sorted()
+        let ordered = preferredOrder + grouped.keys.filter { !preferredOrder.contains($0) && $0 != "My uploads" }.sorted() + ["My uploads"]
         return ordered.compactMap { name in
             let talks = grouped[name] ?? []
             return talks.isEmpty ? nil : (name, talks)
@@ -662,21 +768,51 @@ struct ProjectHealthSafetyView: View {
         return ids
     }
 
+    private var contextKind: String {
+        project.jobType == .smallWorks ? "Small Work" : "Project"
+    }
+
+    private var pendingSignatureCount: Int {
+        vm.data.signatures.filter { $0.status == .pending }.count
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                headerCard
-                if isOperative {
-                    operativeContent
-                } else {
-                    managerContent
-                }
+        VStack(spacing: 0) {
+            HSNavBar(
+                title: "Health & Safety",
+                subtitle: "\(project.jobNumber) · \(project.siteName)",
+                onBack: { dismiss() }
+            )
+
+            if isOperative {
+                HSSegmented(items: operativeSegments, selection: $operativeTab)
+                    .padding(.bottom, 6)
+            } else {
+                HSSegmented(items: managerSegments, selection: $managerTab)
+                    .padding(.bottom, 6)
             }
-            .padding(16)
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HSContextHero(
+                        title: project.siteName,
+                        reference: project.jobNumber,
+                        kind: contextKind
+                    )
+                    .padding(.top, 6)
+
+                    if isOperative {
+                        operativeContent
+                    } else {
+                        managerContent
+                    }
+                }
+                .hsGutter()
+                .padding(.bottom, 28)
+            }
         }
-        .background(HS.bg.ignoresSafeArea())
-        .navigationTitle("Health & Safety")
-        .navigationBarTitleDisplayMode(.inline)
+        .hsScreen()
+        .toolbar(.hidden, for: .navigationBar)
         .overlay {
             if vm.isLoading {
                 ProgressView("Loading H&S...")
@@ -704,7 +840,7 @@ struct ProjectHealthSafetyView: View {
         }
         .sheet(isPresented: $showingIssueSheet) {
             HSIssueTalkSheet(
-                talks: filteredLibraryTalks,
+                talks: vm.data.talks,
                 preselectedTalkId: selectedTalkForIssue?.id,
                 liveRecipientUserIds: liveRecipientUserIds
             ) { selectedTalk, weekCommencing, recipients in
@@ -725,6 +861,7 @@ struct ProjectHealthSafetyView: View {
             HSTrackIssueView(
                 issue: issue,
                 talk: vm.data.talks.first(where: { $0.id == issue.talkId }),
+                displayTitle: vm.issueDisplayTitle(issue),
                 signatures: vm.signatures(for: issue.id)
             ) {
                 Task {
@@ -734,7 +871,10 @@ struct ProjectHealthSafetyView: View {
                     }
                 }
             } onViewSignedTalk: {
-                Task { await generateSignedIssuePDF(issue: issue) }
+                let issueCopy = issue
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    openSignedTalkFromTracking(issueCopy)
+                }
             } onRemoveIssue: {
                 Task { await vm.removeIssue(issueId: issue.id, firebaseBackend: firebaseBackend, userStore: userStore) }
                 selectedIssueToTrack = nil
@@ -745,7 +885,8 @@ struct ProjectHealthSafetyView: View {
         }
         .sheet(item: $selectedIssueToAddRecipients) { issue in
             HSAddRecipientsSheet(
-                issue: issue,
+                heading: "Send to further operatives",
+                intro: "Select additional recipients for this toolbox talk. Existing recipients are excluded.",
                 currentRecipientUserIds: Set(issue.recipientUserIds),
                 liveRecipientUserIds: liveRecipientUserIds
             ) { selectedUserIds in
@@ -761,7 +902,11 @@ struct ProjectHealthSafetyView: View {
             .environmentObject(userStore)
         }
         .sheet(item: $selectedIssueToSign) { issue in
-            HSSignTalkView(issue: issue, talk: vm.data.talks.first(where: { $0.id == issue.talkId })) { base64Signature in
+            HSSignTalkView(
+                issue: issue,
+                talk: vm.data.talks.first(where: { $0.id == issue.talkId }),
+                rams: vm.data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId })
+            ) { base64Signature in
                 Task {
                     await vm.signTalk(
                         issueId: issue.id,
@@ -778,6 +923,7 @@ struct ProjectHealthSafetyView: View {
             HSSignedTalkView(
                 issue: issue,
                 talk: vm.data.talks.first(where: { $0.id == issue.talkId }),
+                rams: vm.data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId }),
                 signature: vm.signatures(for: issue.id).first(where: { $0.userId == (userStore.currentUser?.id ?? "") })
             )
         }
@@ -795,6 +941,47 @@ struct ProjectHealthSafetyView: View {
         }
         .sheet(item: $signedShareItem) { item in
             HSDocumentShareSheet(activityItems: [item.url])
+        }
+        .sheet(item: $documentPreview) { item in
+            InAppRemoteDocumentViewer(source: item.source, title: item.title, noun: item.noun)
+        }
+        .sheet(item: $selectedRamsDocument) { doc in
+            HSRamsDocumentDetailView(document: doc) {
+                selectedRamsDocument = nil
+                selectedRamsToSend = doc
+            }
+        }
+        .sheet(item: $selectedRamsToSend) { doc in
+            HSAddRecipientsSheet(
+                heading: "Send RAMS for signatures",
+                intro: "Choose everyone who must sign this RAMS. Tracking uses signed signatures out of everyone it was sent to.",
+                currentRecipientUserIds: Set(vm.data.issues.first(where: { $0.ramsDocumentId == doc.id })?.recipientUserIds ?? []),
+                liveRecipientUserIds: liveRecipientUserIds
+            ) { selectedUserIds in
+                Task {
+                    await vm.issueRams(
+                        document: doc,
+                        recipients: selectedUserIds,
+                        issuedByUserId: userStore.currentUser?.id ?? "unknown",
+                        firebaseBackend: firebaseBackend,
+                        userStore: userStore
+                    )
+                }
+            }
+            .environmentObject(userStore)
+        }
+        .sheet(item: $selectedOtherDocument) { doc in
+            HSOtherDocumentDetailView(document: doc)
+        }
+        .sheet(item: $selectedCustomSignedIssue) { issue in
+            if let talk = vm.data.talks.first(where: { $0.id == issue.talkId }) {
+                HSCustomSignedTalkView(
+                    talk: talk,
+                    issue: issue,
+                    signatures: vm.signatures(for: issue.id),
+                    users: userStore.organizationUsers
+                )
+            }
         }
         .sheet(isPresented: $showingScheduledTalks) {
             HSScheduledTalksView(
@@ -840,6 +1027,7 @@ struct ProjectHealthSafetyView: View {
                         attachedDocTitles: attachedDocTitles,
                         localFileURL: localFileURL,
                         originalFileName: originalFileName,
+                        recipientUserIds: Array(liveRecipientUserIds),
                         firebaseBackend: firebaseBackend,
                         userStore: userStore
                     )
@@ -864,9 +1052,78 @@ struct ProjectHealthSafetyView: View {
         }
     }
 
+    private var managerSegments: [HSSegmented<HSManagerTab>.Item] {
+        [
+            .init(id: .hub, title: "Hub", icon: "square.grid.2x2.fill"),
+            .init(id: .library, title: "Library", icon: "books.vertical.fill"),
+            .init(id: .tracking, title: "Tracking", icon: "checkmark.seal.fill", count: pendingSignatureCount),
+            .init(id: .rams, title: "RAMS", icon: "doc.richtext.fill", count: vm.data.ramsDocuments.count),
+            .init(id: .other, title: "Other", icon: "folder.fill", count: vm.data.otherDocuments.count)
+        ]
+    }
+
+    private var operativeSegments: [HSSegmented<HSOperativeTab>.Item] {
+        let myId = userStore.currentUser?.id ?? ""
+        let pendingMine = vm.data.signatures.filter { $0.userId == myId && $0.status == .pending }.count
+        return [
+            .init(id: .toolbox, title: "Toolbox", icon: "checkmark.seal.fill", count: pendingMine),
+            .init(id: .rams, title: "RAMS", icon: "doc.richtext.fill", count: vm.data.ramsDocuments.count),
+            .init(id: .other, title: "Other", icon: "folder.fill", count: vm.data.otherDocuments.count)
+        ]
+    }
+
+    private func openSignedTalkFromTracking(_ issue: HSToolboxIssue) {
+        if let talk = vm.data.talks.first(where: { $0.id == issue.talkId }), talk.isCustomUpload {
+            selectedCustomSignedIssue = issue
+        } else {
+            Task { await generateSignedIssuePDF(issue: issue) }
+        }
+    }
+
     private func downloadTalkFromLibrary(_ talk: HSToolboxTalk) {
+        if talk.isCustomUpload, let remote = talk.storedFileURL {
+            presentDocumentPreview(HSDocumentPreviewItem(title: talk.title, remoteURL: remote, noun: "toolbox talk"))
+            return
+        }
         guard let generated = HSTalkPDFBuilder.makePDF(for: talk) else { return }
         presentTalkShareSheet(with: generated)
+    }
+
+    private func downloadBlankTalkTemplate() {
+        let blank = HSToolboxTalk(
+            id: "TBT-BLANK",
+            title: "Toolbox Talk — blank template",
+            category: .general,
+            isGeneral: true,
+            trades: [],
+            purpose: "Write the purpose of this talk here.",
+            keyPoints: [
+                "Key control point 1",
+                "Key control point 2",
+                "Key control point 3"
+            ],
+            source: .library,
+            ownerOrganizationId: nil,
+            status: .draft,
+            version: 1,
+            updatedAt: Date(),
+            fileURL: nil
+        )
+        guard let generated = HSTalkPDFBuilder.makePDF(for: blank) else { return }
+        presentTalkShareSheet(with: generated)
+    }
+
+    private func presentDocumentPreview(_ item: HSDocumentPreviewItem) {
+        dismissActiveSheetsThen {
+            documentPreview = item
+        }
+    }
+
+    private func isIssueOverdue(_ issue: HSToolboxIssue) -> Bool {
+        guard issue.status != .completed else { return false }
+        let weekStart = Calendar.current.startOfDay(for: issue.weekCommencing)
+        let weekEnd = Calendar.current.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart
+        return weekEnd < Date()
     }
 
     private func myAssignedIssueEntries() -> [(issue: HSToolboxIssue, signature: HSToolboxSignature)] {
@@ -911,13 +1168,21 @@ struct ProjectHealthSafetyView: View {
             selectedTalkForPreview != nil ||
             selectedIssueToTrack != nil ||
             selectedIssueToSign != nil ||
-            selectedIssueToView != nil
+            selectedIssueToView != nil ||
+            selectedRamsDocument != nil ||
+            selectedOtherDocument != nil ||
+            selectedCustomSignedIssue != nil ||
+            documentPreview != nil
 
         if hasPresentedSheet {
             selectedTalkForPreview = nil
             selectedIssueToTrack = nil
             selectedIssueToSign = nil
             selectedIssueToView = nil
+            selectedRamsDocument = nil
+            selectedOtherDocument = nil
+            selectedCustomSignedIssue = nil
+            documentPreview = nil
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
                 action()
             }
@@ -926,38 +1191,8 @@ struct ProjectHealthSafetyView: View {
         action()
     }
 
-    private var headerCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(project.siteName)
-                .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(.white)
-            Text(project.jobType == .smallWorks ? "\(project.jobNumber) · Small Works" : "\(project.jobNumber) · Project")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.85))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(
-            LinearGradient(
-                colors: [Color(hex: "#3f86ff"), Color(hex: "#2563eb"), Color(hex: "#1e54cf")],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .foregroundStyle(.white)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .shadow(color: HS.blue2.opacity(0.34), radius: 18, x: 0, y: 10)
-    }
-
     private var managerContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Picker("", selection: $managerTab) {
-                ForEach(HSManagerTab.allCases) { tab in
-                    Text(tab.rawValue).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-
+        VStack(alignment: .leading, spacing: 0) {
             switch managerTab {
             case .hub:
                 managerHub
@@ -974,196 +1209,199 @@ struct ProjectHealthSafetyView: View {
     }
 
     private var managerHub: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            let mine = myAssignedIssueEntries()
-            if !mine.isEmpty {
-                let visibleMine = showAllAssignedInHub ? mine : Array(mine.prefix(2))
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("My Toolbox Talks")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(HS.slate2)
-                            .textCase(.uppercase)
-                        Spacer()
-                        let pendingMine = mine.filter { $0.signature.status != .signed }.count
-                        if pendingMine > 0 {
-                            Text("\(pendingMine)")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(HS.amber)
-                                .clipShape(Capsule())
-                        }
-                        if mine.count > 2 {
-                            Button {
-                                showAllAssignedInHub.toggle()
-                            } label: {
-                                Image(systemName: showAllAssignedInHub ? "chevron.up" : "chevron.down")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(HS.slate2)
-                                    .frame(width: 28, height: 28)
-                                    .background(HS.card)
-                                    .clipShape(Circle())
-                            }
-                            .buttonStyle(.plain)
-                        }
+        VStack(alignment: .leading, spacing: 0) {
+            if !isOperative {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "checkmark.shield.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Manager access")
+                            .font(HSFont.cardTitle)
+                            .foregroundStyle(.white)
+                            .hsNoClip(1)
+                        Text("Add, edit, issue & track all H&S records")
+                            .font(HSFont.meta)
+                            .foregroundStyle(.white.opacity(0.88))
+                            .hsNoClip(2)
                     }
-                    VStack(spacing: 8) {
-                        ForEach(visibleMine, id: \.issue.id) { entry in
-                            let talkTitle = vm.data.talks.first(where: { $0.id == entry.issue.talkId })?.title ?? "Toolbox talk"
-                            let isPending = entry.signature.status != .signed
-                            HStack(spacing: 10) {
-                                Image(systemName: isPending ? "doc.text.fill" : "checkmark.circle.fill")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(isPending ? HS.amber : HS.green)
-                                    .frame(width: 34, height: 34)
-                                    .background((isPending ? HS.amberBg : HS.greenBg))
-                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(talkTitle)
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .lineLimit(2)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .layoutPriority(1)
-                                    Text("W/C \(entry.issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Button(isPending ? "Sign Now" : "View Signature") {
-                                    if isPending { selectedIssueToSign = entry.issue } else { selectedIssueToView = entry.issue }
-                                }
-                                .buttonStyle(FilledButtonStyle(tone: isPending ? .teal : .blue, fixedWidth: 188))
-                                .layoutPriority(2)
-                            }
-                            .hsCard(padding: 12)
-                        }
+                    Spacer(minLength: 0)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(HS.heroBlue)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .shadow(color: HS.blue.opacity(0.28), radius: 16, y: 8)
+                .padding(.top, 16)
+            }
+
+            let mine = myAssignedIssueEntries()
+            HSSectionHeader(
+                title: "My toolbox talks",
+                trailing: mine.count > 3 ? "See all" : nil,
+                trailingAction: {
+                    showAllAssignedInHub = true
+                    managerTab = .tracking
+                }
+            )
+
+            if mine.isEmpty {
+                HSEmptyState(
+                    icon: "checkmark.seal",
+                    title: "Nothing to sign",
+                    message: "Toolbox talks issued to you will appear here for sign-off.",
+                    actionTitle: isOperative ? nil : "Issue a talk",
+                    action: isOperative ? nil : {
+                        managerTab = .library
+                        showingIssueSheet = true
+                    }
+                )
+            } else {
+                let visibleMine = showAllAssignedInHub ? mine : Array(mine.prefix(3))
+                VStack(spacing: HSMetric.rowGap) {
+                    ForEach(visibleMine, id: \.issue.id) { entry in
+                        assignedTalkCard(entry)
                     }
                 }
             }
 
-            Text("This project")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(HS.slate2)
-                .textCase(.uppercase)
-            HStack(spacing: 10) {
-                hsMetricCard(title: "Talks issued", value: "\(vm.visibleIssues().count)")
-                hsMetricCard(title: "Awaiting signatures", value: "\(vm.data.signatures.filter { $0.status == .pending }.count)")
-                hsMetricCard(title: "RAMS docs", value: "\(vm.data.ramsDocuments.count)")
+            HSSectionHeader(title: "This \(contextKind.lowercased())")
+
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: HSMetric.rowGap), GridItem(.flexible(), spacing: HSMetric.rowGap)],
+                spacing: HSMetric.rowGap
+            ) {
+                HSStatTile(value: "\(vm.visibleIssues().count)", label: "Talks issued", accent: HS.ink, icon: "paperplane.fill") {
+                    managerTab = .tracking
+                }
+                HSStatTile(value: "\(pendingSignatureCount)", label: "Awaiting signatures", accent: HS.amber, icon: "clock.fill") {
+                    managerTab = .tracking
+                }
+                HSStatTile(value: "\(vm.data.ramsDocuments.count)", label: "RAMS documents", accent: HS.blue, icon: "doc.richtext.fill") {
+                    managerTab = .rams
+                }
+                HSStatTile(value: "\(vm.scheduledIssues().count)", label: "Scheduled talks", accent: HS.violet, icon: "calendar") {
+                    showingScheduledTalks = true
+                }
             }
 
-            Text("Quick actions")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(HS.slate2)
-                .textCase(.uppercase)
-            VStack(spacing: 8) {
-                hsActionCard(title: "Issue a Toolbox Talk", subtitle: "Pick a talk and send to operatives", icon: "paperplane.fill") {
+            HSSectionHeader(title: "Quick actions")
+
+            VStack(spacing: HSMetric.rowGap) {
+                HSActionRow(icon: "paperplane.fill", tint: HS.teal, title: "Issue a toolbox talk", subtitle: "Pick a talk and send it to operatives for sign-off") {
                     managerTab = .library
                     showingIssueSheet = true
                 }
-                hsActionCard(title: "Upload a Toolbox Talk", subtitle: "Add your own talk to the library", icon: "square.and.arrow.up.fill") {
+                HSActionRow(icon: "arrow.up.doc.fill", tint: HS.violet, title: "Upload a toolbox talk", subtitle: "Add your own talk to the library") {
                     showingUploadTalkSheet = true
                 }
-                hsActionCard(title: "Upload RAMS", subtitle: "Add risk assessment and method statement", icon: "doc.text.fill") {
+                HSActionRow(icon: "doc.richtext.fill", tint: HS.blue, title: "Upload RAMS", subtitle: "Add a risk assessment and method statement") {
                     showingAddRams = true
                 }
-                hsActionCard(title: "Add H&S document", subtitle: "Safe isolation, COSHH, permits and more", icon: "plus.circle.fill") {
+                HSActionRow(icon: "folder.fill", tint: HS.navy, title: "Add H&S document", subtitle: "Safe isolation, COSHH, permits and more") {
                     showingAddOtherDoc = true
                 }
-                hsActionCard(title: "Scheduled Toolbox Talks", subtitle: "Manage future talks and recipients", icon: "calendar.badge.clock") {
+                HSActionRow(
+                    icon: "calendar.badge.clock",
+                    tint: HS.violet,
+                    title: "Scheduled toolbox talks",
+                    subtitle: "Manage future talks and recipients",
+                    badge: vm.scheduledIssues().isEmpty ? nil : "\(vm.scheduledIssues().count)"
+                ) {
                     showingScheduledTalks = true
                 }
             }
         }
     }
 
+    @ViewBuilder
+    private func assignedTalkCard(_ entry: (issue: HSToolboxIssue, signature: HSToolboxSignature)) -> some View {
+        let talk = vm.data.talks.first(where: { $0.id == entry.issue.talkId })
+        let signatures = vm.signatures(for: entry.issue.id)
+        let signedCount = signatures.filter { $0.status == .signed }.count
+        let isPending = entry.signature.status != .signed
+        let overdue = isPending && isIssueOverdue(entry.issue)
+        HSTalkCard(
+            title: vm.issueDisplayTitle(entry.issue),
+            reference: talk?.id ?? entry.issue.ramsDocumentId,
+            trade: talk?.tradeLabel ?? vm.data.ramsDocuments.first(where: { $0.id == entry.issue.ramsDocumentId })?.trade,
+            weekCommencing: entry.issue.ramsDocumentId == nil
+                ? "W/C \(entry.issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))"
+                : "Sent \(entry.issue.issuedAt.formatted(date: .abbreviated, time: .omitted))",
+            status: isPending ? (overdue ? .overdue : .awaiting) : .signed,
+            signedProgress: (signedCount, signatures.count),
+            primaryTitle: isPending ? "Sign now" : "View signed",
+            primaryTone: isPending ? .green : .blue,
+            primaryAction: {
+                if isPending { selectedIssueToSign = entry.issue } else { selectedIssueToView = entry.issue }
+            },
+            secondaryTitle: "Details",
+            secondaryAction: { selectedIssueToTrack = entry.issue },
+            onOpen: {
+                if isPending { selectedIssueToSign = entry.issue } else { selectedIssueToView = entry.issue }
+            }
+        )
+    }
+
     private var managerLibrary: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search toolbox talks", text: $talkSearchText)
-                    .textInputAutocapitalization(.never)
-            }
-            .hsCard(padding: 10)
+        VStack(alignment: .leading, spacing: 0) {
+            HSSearchField(placeholder: "Search \(max(vm.data.talks.count, 100))+ talks…", text: $talkSearchText)
+                .padding(.top, 16)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(tradeFilters, id: \.self) { filter in
-                        Button(filter) { selectedTradeFilter = filter }
-                            .font(.system(size: 12, weight: .medium))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(selectedTradeFilter == filter ? HS.teal : HS.card)
-                            .foregroundStyle(selectedTradeFilter == filter ? .white : HS.slate)
-                            .clipShape(Capsule())
-                    }
-                }
-            }
+            HSChipRow(
+                chips: tradeFilters.map { HSChipRow<String>.Chip(id: $0, title: $0) },
+                selection: $selectedTradeFilter
+            )
+            .padding(.top, 10)
 
-            HStack {
+            HStack(spacing: 10) {
                 Button {
+                    HSHaptic.tap()
+                    downloadBlankTalkTemplate()
+                } label: {
+                    Label("Download blank template", systemImage: "arrow.down")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HSGhostButton(tint: HS.blue))
+
+                Button {
+                    HSHaptic.tap()
                     showingUploadTalkSheet = true
                 } label: {
-                    Label("Upload custom talk", systemImage: "square.and.arrow.up")
+                    Label("Upload your own", systemImage: "arrow.up.doc.fill")
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(GhostButtonStyle())
-
-                Spacer()
+                .buttonStyle(HSGhostButton(tint: HS.violet))
             }
+            .padding(.top, 12)
 
-            VStack(spacing: 10) {
+            if groupedLibraryTalks.isEmpty {
+                HSEmptyState(
+                    icon: "books.vertical",
+                    title: "No talks found",
+                    message: "Try another search or trade filter, or upload your own talk.",
+                    actionTitle: "Upload a talk",
+                    action: { showingUploadTalkSheet = true }
+                )
+                .padding(.top, 16)
+            } else {
                 ForEach(groupedLibraryTalks, id: \.title) { group in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(group.title)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(HS.slate2)
-                            .textCase(.uppercase)
+                    HSSectionHeader(title: groupHeaderTitle(group.title))
+                    VStack(spacing: HSMetric.rowGap) {
                         ForEach(group.talks, id: \.id) { talk in
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text(talk.title)
-                                        .font(.system(size: 14, weight: .semibold))
-                                    Spacer()
-                                    HSStatusBadge(text: talk.source == .uploaded ? "Uploaded" : "Library", tone: talk.source == .uploaded ? .info : .ok)
+                            HSLibraryRow(
+                                title: talk.title,
+                                reference: talk.id,
+                                purpose: talk.purpose,
+                                trade: talk.tradeLabel,
+                                approved: talk.status == .approved,
+                                isCustom: talk.isCustomUpload,
+                                onOpen: { selectedTalkForPreview = talk },
+                                onIssue: {
+                                    selectedTalkForIssue = talk
+                                    showingIssueSheet = true
                                 }
-                                Text(talk.purpose)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                                Text(talk.isGeneral ? "General" : talk.trades.joined(separator: ", "))
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(HS.blue)
-
-                                HStack(spacing: 8) {
-                                    Button {
-                                        selectedTalkForPreview = talk
-                                    } label: {
-                                        Text("View Toolbox Talk")
-                                            .font(.system(size: 12, weight: .semibold))
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 6)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .foregroundStyle(HS.blue)
-
-                                    Button {
-                                        selectedTalkForIssue = talk
-                                        showingIssueSheet = true
-                                    } label: {
-                                        Text("Issue Toolbox Talk")
-                                            .font(.system(size: 12, weight: .semibold))
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 6)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .foregroundStyle(HS.teal)
-                                }
-                            }
-                            .hsCard(padding: 12)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedTalkForPreview = talk
-                            }
+                            )
                         }
                     }
                 }
@@ -1171,160 +1409,198 @@ struct ProjectHealthSafetyView: View {
         }
     }
 
+    private func groupHeaderTitle(_ title: String) -> String {
+        title
+    }
+
     private var managerTracking: some View {
-        VStack(spacing: 8) {
-            let myEntries = myAssignedIssueEntries()
-            if !myEntries.isEmpty {
-                let visibleMyEntries = showAllAssignedInTracking ? myEntries : Array(myEntries.prefix(2))
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Assigned to me")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(HS.slate2)
-                            .textCase(.uppercase)
-                        Spacer()
-                        if myEntries.count > 2 {
-                            Button {
-                                showAllAssignedInTracking.toggle()
-                            } label: {
-                                Image(systemName: showAllAssignedInTracking ? "chevron.up" : "chevron.down")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(HS.slate2)
-                                    .frame(width: 28, height: 28)
-                                    .background(HS.card)
-                                    .clipShape(Circle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    ForEach(visibleMyEntries, id: \.issue.id) { entry in
-                        let talk = vm.data.talks.first(where: { $0.id == entry.issue.talkId })
-                        let isPending = entry.signature.status != .signed
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(talk?.title ?? "Toolbox talk")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .lineLimit(2)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .layoutPriority(1)
-                                Text("Date \(entry.issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button(isPending ? "Sign Now" : "View Signature") {
-                                if isPending { selectedIssueToSign = entry.issue } else { selectedIssueToView = entry.issue }
-                            }
-                            .buttonStyle(FilledButtonStyle(tone: isPending ? .teal : .blue, fixedWidth: 188))
-                            .layoutPriority(2)
-                        }
-                        .hsCard(padding: 12)
+        VStack(alignment: .leading, spacing: 0) {
+            let visible = vm.visibleIssues()
+            let totals = vm.trackingSignOffTotals()
+            HSSignOffHero(signed: totals.signed, total: totals.total, talkTitle: "All sent RAMS & talks")
+                .padding(.top, 16)
+
+            let mine = myAssignedIssueEntries()
+            if !mine.isEmpty {
+                HSSectionHeader(
+                    title: "Assigned to me",
+                    trailing: mine.count > 3 ? (showAllAssignedInTracking ? "Show less" : "See all") : nil,
+                    trailingAction: { showAllAssignedInTracking.toggle() }
+                )
+                let visibleMine = showAllAssignedInTracking ? mine : Array(mine.prefix(3))
+                VStack(spacing: HSMetric.rowGap) {
+                    ForEach(visibleMine, id: \.issue.id) { entry in
+                        assignedTalkCard(entry)
                     }
                 }
-                .hsCard()
             }
-            ForEach(vm.visibleIssues(), id: \.id) { issue in
-                let signatures = vm.signatures(for: issue.id)
-                let signedCount = signatures.filter { $0.status == .signed }.count
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text(vm.data.talks.first(where: { $0.id == issue.talkId })?.title ?? "Toolbox talk")
-                            .font(.system(size: 14, weight: .semibold))
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .layoutPriority(1)
-                        Spacer()
-                        Text("\(signedCount)/\(max(signatures.count, 1))")
-                            .font(.system(size: 12, weight: .medium))
+
+            HSSectionHeader(title: "Issued talks")
+            if visible.isEmpty {
+                HSEmptyState(
+                    icon: "paperplane",
+                    title: "Nothing sent yet",
+                    message: "Send RAMS or issue a toolbox talk so signatures can be tracked. The percentage is signed signatures out of everyone those documents were sent to.",
+                    actionTitle: "Issue a talk",
+                    action: {
+                        managerTab = .library
+                        showingIssueSheet = true
                     }
-                    ProgressView(value: Double(signedCount), total: Double(max(signatures.count, 1)))
-                        .tint(issue.status == .completed ? .green : .orange)
-                    HStack {
-                        Text("W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Open") { selectedIssueToTrack = issue }
-                            .font(.system(size: 12, weight: .semibold))
+                )
+            } else {
+                VStack(spacing: HSMetric.rowGap) {
+                    ForEach(visible, id: \.id) { issue in
+                        let talk = vm.data.talks.first(where: { $0.id == issue.talkId })
+                        let signatures = vm.signatures(for: issue.id)
+                        let signedCount = signatures.filter { $0.status == .signed }.count
+                        let overdue = isIssueOverdue(issue)
+                        HSTalkCard(
+                            title: vm.issueDisplayTitle(issue),
+                            reference: talk?.id ?? issue.ramsDocumentId,
+                            trade: talk?.tradeLabel ?? vm.data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId })?.trade,
+                            weekCommencing: issue.ramsDocumentId == nil
+                                ? "W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))"
+                                : "Sent \(issue.issuedAt.formatted(date: .abbreviated, time: .omitted))",
+                            status: issue.status == .completed ? .signed : (overdue ? .overdue : .awaiting),
+                            signedProgress: (signedCount, signatures.count),
+                            primaryTitle: "Open",
+                            primaryTone: .teal,
+                            primaryAction: { selectedIssueToTrack = issue },
+                            onOpen: { selectedIssueToTrack = issue }
+                        )
                     }
                 }
-                .padding(12)
-                .hsCard(padding: 12)
             }
         }
     }
 
     private var managerRams: some View {
-        VStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
+            HSSectionHeader(title: "RAMS")
             if !isOperative {
                 Button {
+                    HSHaptic.tap()
                     showingAddRams = true
                 } label: {
                     Label("Upload RAMS", systemImage: "plus")
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(FilledButtonStyle(tone: .blue))
+                .buttonStyle(HSFilledButton(tone: .blue))
+                .padding(.bottom, 12)
             }
-
-            ForEach(vm.data.ramsDocuments, id: \.id) { doc in
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(doc.title).font(.system(size: 13, weight: .semibold))
-                        Text("\(doc.trade) · v\(doc.version)").font(.system(size: 11)).foregroundStyle(.secondary)
+            if vm.data.ramsDocuments.isEmpty {
+                HSEmptyState(
+                    icon: "doc.richtext",
+                    title: "No RAMS yet",
+                    message: "Upload a risk assessment and method statement so the team can preview and share it.",
+                    actionTitle: isOperative ? nil : "Upload RAMS",
+                    action: isOperative ? nil : { showingAddRams = true }
+                )
+            } else {
+                VStack(spacing: HSMetric.rowGap) {
+                    ForEach(vm.data.ramsDocuments, id: \.id) { doc in
+                        Button {
+                            HSHaptic.tap()
+                            selectedRamsDocument = doc
+                        } label: {
+                            HStack(alignment: .top, spacing: 12) {
+                                HSIconTile(systemName: "doc.richtext.fill", tint: HS.blue, size: 42)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(doc.title)
+                                        .font(HSFont.cardTitle)
+                                        .foregroundStyle(HS.ink)
+                                        .hsNoClip(2)
+                                    Text("\(doc.trade) · v\(doc.version)")
+                                        .font(HSFont.meta)
+                                        .foregroundStyle(HS.slate)
+                                        .hsNoClip(1)
+                                }
+                                Spacer(minLength: 6)
+                                HSBadge(text: doc.status.capitalized, tone: .ok)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(HS.slate2)
+                            }
+                        }
+                        .buttonStyle(HSPressStyle())
+                        .hsTappableCard(padding: 14)
                     }
-                    Spacer()
-                    Text(doc.status.capitalized).font(.system(size: 11, weight: .medium)).foregroundStyle(.green)
                 }
-                .hsCard(padding: 12)
             }
         }
     }
 
     private var managerOtherDocs: some View {
-        VStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
+            HSSectionHeader(title: "Other H&S documents")
             if !isOperative {
                 Button {
+                    HSHaptic.tap()
                     showingAddOtherDoc = true
                 } label: {
                     Label("Add trade / site doc", systemImage: "plus")
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(FilledButtonStyle(tone: .blue))
+                .buttonStyle(HSFilledButton(tone: .blue))
+                .padding(.bottom, 12)
             }
-
-            ForEach(vm.data.otherDocuments, id: \.id) { doc in
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(doc.title).font(.system(size: 13, weight: .semibold))
-                        Text((doc.trade ?? "General") + " · " + doc.category.capitalized)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+            if vm.data.otherDocuments.isEmpty {
+                HSEmptyState(
+                    icon: "folder",
+                    title: "No documents yet",
+                    message: "Add Safe Isolation, COSHH, permits and other trade-specific files here.",
+                    actionTitle: isOperative ? nil : "Add document",
+                    action: isOperative ? nil : { showingAddOtherDoc = true }
+                )
+            } else {
+                VStack(spacing: HSMetric.rowGap) {
+                    ForEach(vm.data.otherDocuments, id: \.id) { doc in
+                        Button {
+                            HSHaptic.tap()
+                            selectedOtherDocument = doc
+                        } label: {
+                            HStack(alignment: .top, spacing: 12) {
+                                HSIconTile(systemName: "folder.fill", tint: HS.navy, size: 42)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(doc.title)
+                                        .font(HSFont.cardTitle)
+                                        .foregroundStyle(HS.ink)
+                                        .hsNoClip(2)
+                                    Text((doc.trade ?? "General") + " · " + doc.category.replacingOccurrences(of: "_", with: " ").capitalized)
+                                        .font(HSFont.meta)
+                                        .foregroundStyle(HS.slate)
+                                        .hsNoClip(1)
+                                }
+                                Spacer(minLength: 6)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(HS.slate2)
+                            }
+                        }
+                        .buttonStyle(HSPressStyle())
+                        .hsTappableCard(padding: 14)
                     }
-                    Spacer()
                 }
-                .hsCard(padding: 12)
             }
         }
     }
 
     private var operativeContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             let myId = userStore.currentUser?.id ?? ""
             let pendingCount = vm.data.signatures.filter { $0.userId == myId && $0.status == .pending }.count
             if pendingCount > 0 {
-                Text("\(pendingCount) toolbox talks to sign")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.orange)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(HS.amberBg)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-
-            Picker("", selection: $operativeTab) {
-                ForEach(HSOperativeTab.allCases) { tab in
-                    Text(tab.rawValue).tag(tab)
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(HS.amber)
+                    Text("\(pendingCount) toolbox talk\(pendingCount == 1 ? "" : "s") to sign")
+                        .font(HSFont.cardTitle)
+                        .foregroundStyle(HS.ink)
+                        .hsNoClip(2)
                 }
+                .hsCard()
+                .padding(.top, 12)
             }
-            .pickerStyle(.segmented)
 
             switch operativeTab {
             case .toolbox:
@@ -1338,23 +1614,18 @@ struct ProjectHealthSafetyView: View {
     }
 
     private var operativeToolboxList: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             if !availableOperativeWeeks.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(availableOperativeWeeks, id: \.self) { week in
-                            Button(week.formatted(date: .abbreviated, time: .omitted)) {
-                                operativeWeekFilter = week
-                            }
-                            .font(.system(size: 11, weight: .medium))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(operativeWeekFilter == week ? HS.teal : HS.card)
-                            .foregroundStyle(operativeWeekFilter == week ? .white : HS.slate)
-                            .clipShape(Capsule())
-                        }
-                    }
-                }
+                HSChipRow(
+                    chips: availableOperativeWeeks.map { week in
+                        HSChipRow<Date>.Chip(id: week, title: week.formatted(date: .abbreviated, time: .omitted))
+                    },
+                    selection: Binding(
+                        get: { operativeWeekFilter ?? availableOperativeWeeks.first ?? Date() },
+                        set: { operativeWeekFilter = $0 }
+                    )
+                )
+                .padding(.top, 12)
             }
 
             let myId = userStore.currentUser?.id ?? ""
@@ -1366,49 +1637,41 @@ struct ProjectHealthSafetyView: View {
                 return issueWeek == week
             }
 
-            ForEach(filteredIssues, id: \.id) { issue in
-                let mySignature = vm.signatures(for: issue.id).first(where: { $0.userId == myId })
-                let isPending = mySignature?.status != .signed
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(vm.data.talks.first(where: { $0.id == issue.talkId })?.title ?? "Toolbox talk")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    Button(isPending ? "Open to sign" : "Signed") {
-                        if isPending {
-                            selectedIssueToSign = issue
-                        } else {
-                            selectedIssueToView = issue
-                        }
+            HSSectionHeader(title: "Your talks")
+            if filteredIssues.isEmpty {
+                HSEmptyState(
+                    icon: "checkmark.seal",
+                    title: "No talks this week",
+                    message: "When a toolbox talk is issued to you, it will show here to preview, download and sign."
+                )
+            } else {
+                VStack(spacing: HSMetric.rowGap) {
+                    ForEach(filteredIssues, id: \.id) { issue in
+                        let talk = vm.data.talks.first(where: { $0.id == issue.talkId })
+                        let mySignature = vm.signatures(for: issue.id).first(where: { $0.userId == myId })
+                        let isPending = mySignature?.status != .signed
+                        let overdue = isPending && isIssueOverdue(issue)
+                        HSTalkCard(
+                            title: vm.issueDisplayTitle(issue),
+                            reference: talk?.id ?? issue.ramsDocumentId,
+                            trade: talk?.tradeLabel ?? vm.data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId })?.trade,
+                            weekCommencing: issue.ramsDocumentId == nil
+                                ? "W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))"
+                                : "Sent \(issue.issuedAt.formatted(date: .abbreviated, time: .omitted))",
+                            status: isPending ? (overdue ? .overdue : .awaiting) : .signed,
+                            primaryTitle: isPending ? "Open to sign" : "View signed",
+                            primaryTone: isPending ? .green : .blue,
+                            primaryAction: {
+                                if isPending { selectedIssueToSign = issue } else { selectedIssueToView = issue }
+                            },
+                            onOpen: {
+                                if isPending { selectedIssueToSign = issue } else { selectedIssueToView = issue }
+                            }
+                        )
                     }
-                    .buttonStyle(FilledButtonStyle(tone: isPending ? .teal : .blue))
                 }
-                .hsCard(padding: 12)
             }
         }
-    }
-
-    private func hsMetricCard(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value).font(.system(size: 20, weight: .bold))
-            Text(title).font(.system(size: 11)).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .hsCard(padding: 14)
-    }
-
-    private func hsActionCard(title: String, subtitle: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 6) {
-                Image(systemName: icon).font(.system(size: 18, weight: .medium)).foregroundStyle(.blue)
-                Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.primary)
-                Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .hsCard(padding: 14)
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -1603,7 +1866,7 @@ private struct HSIssueTalkSheet: View {
                                     .foregroundStyle(HS.slate2)
                             }
                             .padding(12)
-                            .background(.white)
+                            .background(HS.card)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
                         .buttonStyle(.plain)
@@ -1612,7 +1875,7 @@ private struct HSIssueTalkSheet: View {
                                 .labelsHidden()
                                 .datePickerStyle(.graphical)
                                 .padding(8)
-                                .background(.white)
+                                .background(HS.card)
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
                     }
@@ -1712,16 +1975,16 @@ private struct HSIssueTalkSheet: View {
 
                     Button {
                         guard let selectedTalkId, let talk = talks.first(where: { $0.id == selectedTalkId }) else { return }
+                        HSHaptic.success()
                         onIssue(talk, issueDate, Array(selectedRecipientIds))
                         dismiss()
                     } label: {
-                        Text("Issue to \(selectedRecipientIds.count) recipient\(selectedRecipientIds.count == 1 ? "" : "s")")
+                        Text("Issue to \(selectedRecipientIds.count) operative\(selectedRecipientIds.count == 1 ? "" : "s")")
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
                     }
-                    .buttonStyle(FilledButtonStyle(tone: .teal))
+                    .buttonStyle(HSFilledButton(tone: .teal))
                     .disabled(selectedTalkId == nil || selectedRecipientIds.isEmpty)
-                    .opacity((selectedTalkId == nil || selectedRecipientIds.isEmpty) ? 0.5 : 1)
+                    .opacity((selectedTalkId == nil || selectedRecipientIds.isEmpty) ? 0.45 : 1)
                 }
                 .padding(16)
             }
@@ -1755,70 +2018,100 @@ private struct HSToolboxTalkDetailView: View {
     let onIssue: () -> Void
     let onDownload: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var remotePreview: HSDocumentPreviewItem?
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: HSMetric.rowGap) {
                     VStack(alignment: .leading, spacing: 8) {
-                        HSStatusBadge(text: "\(talk.source == .uploaded ? "Uploaded" : "Library") · \(talk.id)", tone: talk.source == .uploaded ? .info : .ok)
+                        HSBadge(
+                            text: talk.isCustomUpload ? "Your upload · \(talk.id)" : "Library · \(talk.id)",
+                            tone: talk.isCustomUpload ? .scheduled : .ok
+                        )
                         Text(talk.title)
-                            .font(.system(size: 22, weight: .bold))
+                            .font(HSFont.heroTitle)
                             .foregroundStyle(HS.ink)
-                        Text(talk.isGeneral ? "General" : talk.trades.joined(separator: ", "))
-                            .font(.system(size: 12, weight: .medium))
+                            .hsNoClip(3)
+                        Text(talk.tradeLabel)
+                            .font(HSFont.meta)
                             .foregroundStyle(HS.blue)
                     }
                     .hsCard()
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Purpose")
-                            .font(.system(size: 12, weight: .semibold))
+                        Text(talk.isCustomUpload ? "About this talk" : "Purpose")
+                            .font(HSFont.sectionLabel)
+                            .tracking(0.9)
                             .foregroundStyle(HS.slate2)
-                            .textCase(.uppercase)
                         Text(talk.purpose)
-                            .font(.system(size: 14))
+                            .font(HSFont.body)
                             .foregroundStyle(HS.ink)
+                            .hsNoClip(8)
                     }
                     .hsCard()
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Key points")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(HS.slate2)
-                            .textCase(.uppercase)
-                        ForEach(Array(talk.keyPoints.enumerated()), id: \.offset) { _, point in
-                            Text("• \(point)")
-                                .font(.system(size: 13))
-                                .foregroundStyle(HS.ink)
+                    if !talk.isCustomUpload, !talk.keyPoints.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Key points")
+                                .font(HSFont.sectionLabel)
+                                .tracking(0.9)
+                                .foregroundStyle(HS.slate2)
+                            ForEach(Array(talk.keyPoints.enumerated()), id: \.offset) { index, point in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Text("\(index + 1).")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(HS.teal)
+                                    Text(point)
+                                        .font(HSFont.body)
+                                        .foregroundStyle(HS.ink)
+                                        .hsNoClip(4)
+                                }
+                            }
                         }
+                        .hsCard()
                     }
-                    .hsCard()
 
-                    HStack(spacing: 10) {
+                    if talk.isCustomUpload {
+                        Text("The file you uploaded is the talk that will be issued, previewed, downloaded and signed against.")
+                            .font(HSFont.meta)
+                            .foregroundStyle(HS.slate)
+                            .hsNoClip(3)
+                    }
+
+                    VStack(spacing: 10) {
                         Button(action: onIssue) {
                             Label("Issue", systemImage: "paperplane.fill")
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
                         }
-                        .buttonStyle(FilledButtonStyle(tone: .teal))
+                        .buttonStyle(HSFilledButton(tone: .teal))
 
-                        Button(action: onDownload) {
-                            Label("Download", systemImage: "arrow.down.circle.fill")
+                        Button {
+                            HSHaptic.tap()
+                            if talk.isCustomUpload, let remote = talk.storedFileURL {
+                                remotePreview = HSDocumentPreviewItem(title: talk.title, remoteURL: remote, noun: "toolbox talk")
+                            } else {
+                                onDownload()
+                            }
+                        } label: {
+                            Label(talk.isCustomUpload ? "Preview / download original file" : "Download", systemImage: "arrow.down.circle.fill")
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
                         }
-                        .buttonStyle(GhostButtonStyle())
+                        .buttonStyle(HSGhostButton(tint: HS.blue))
                     }
                 }
                 .padding(16)
             }
-            .background(HS.bg.ignoresSafeArea())
+            .hsScreen()
             .navigationTitle("Toolbox Talk")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
+            }
+            .sheet(item: $remotePreview) { item in
+                InAppRemoteDocumentViewer(source: item.source, title: item.title, noun: item.noun)
             }
         }
     }
@@ -2006,7 +2299,8 @@ private struct HSScheduledTalkDetailView: View {
 }
 
 private struct HSAddRecipientsSheet: View {
-    let issue: HSToolboxIssue
+    var heading: String = "Send to further operatives"
+    var intro: String = "Select additional recipients for this toolbox talk. Existing recipients are excluded."
     let currentRecipientUserIds: Set<String>
     let liveRecipientUserIds: Set<String>
     let onSave: ([String]) -> Void
@@ -2044,9 +2338,9 @@ private struct HSAddRecipientsSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Send to further operatives")
+                    Text(heading)
                         .font(.system(size: 22, weight: .bold))
-                    Text("Select additional recipients for this toolbox talk. Existing recipients are excluded.")
+                    Text(intro)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
 
@@ -2152,6 +2446,7 @@ private struct HSDocumentShareSheet: UIViewControllerRepresentable {
 private struct HSTrackIssueView: View {
     let issue: HSToolboxIssue
     let talk: HSToolboxTalk?
+    var displayTitle: String? = nil
     let signatures: [HSToolboxSignature]
     let onSendReminder: () -> Void
     let onViewSignedTalk: () -> Void
@@ -2160,59 +2455,89 @@ private struct HSTrackIssueView: View {
     @EnvironmentObject var userStore: UserStore
     @Environment(\.dismiss) private var dismiss
 
+    private var signed: [HSToolboxSignature] { signatures.filter { $0.status == .signed } }
+    private var pending: [HSToolboxSignature] { signatures.filter { $0.status != .signed } }
+
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    Text(talk?.title ?? "Toolbox talk")
-                    let signedCount = signatures.filter { $0.status == .signed }.count
-                    ProgressView(value: Double(signedCount), total: Double(max(signatures.count, 1)))
-                    Text("\(signedCount) of \(max(signatures.count, 1)) signed")
-                }
-                let signed = signatures.filter { $0.status == .signed }
-                let pending = signatures.filter { $0.status != .signed }
-                Section("Signed") {
-                    ForEach(signed, id: \.id) { signature in
-                        let name = userStore.organizationUsers.first(where: { $0.id == signature.userId })?.fullName ?? signature.userId
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(name)
-                                if let signedAt = signature.signedAt {
-                                    Text(signedAt.formatted(date: .abbreviated, time: .shortened))
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                            Text("Signed")
-                                .foregroundStyle(.green)
-                        }
-                    }
-                }
-                if !pending.isEmpty {
-                    Section("Awaiting") {
-                        ForEach(pending, id: \.id) { signature in
-                            let name = userStore.organizationUsers.first(where: { $0.id == signature.userId })?.fullName ?? signature.userId
-                            HStack {
-                                Text(name)
-                                Spacer()
-                                Text("Pending")
-                                    .foregroundStyle(.orange)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    HSSignOffHero(
+                        signed: signed.count,
+                        total: signatures.count,
+                        talkTitle: displayTitle ?? talk?.title ?? "RAMS"
+                    )
+                    .padding(.top, 8)
+
+                    HSSectionHeader(title: "Signed", trailing: signed.isEmpty ? nil : "\(signed.count)")
+                    if signed.isEmpty {
+                        Text("No signatures yet.")
+                            .font(HSFont.meta)
+                            .foregroundStyle(HS.slate)
+                            .hsCard()
+                    } else {
+                        HSRowGroup {
+                            ForEach(Array(signed.enumerated()), id: \.element.id) { index, signature in
+                                let user = userStore.organizationUsers.first(where: { $0.id == signature.userId })
+                                HSOperativeRow(
+                                    name: user?.fullName.isEmpty == false ? (user?.fullName ?? signature.userId) : (user?.email ?? signature.userId),
+                                    trade: user?.displayTradeType ?? "",
+                                    detail: signature.signedAt.map { "Signed \($0.formatted(date: .abbreviated, time: .shortened))" },
+                                    state: .signed
+                                )
+                                if index < signed.count - 1 { HSDivider() }
                             }
                         }
                     }
-                }
-                Section("Actions") {
-                    Button("View Signed Toolbox Talk") {
-                        dismissThenPerform(onViewSignedTalk)
+
+                    if !pending.isEmpty {
+                        HSSectionHeader(title: "Awaiting", trailing: "\(pending.count)")
+                        HSRowGroup {
+                            ForEach(Array(pending.enumerated()), id: \.element.id) { index, signature in
+                                let user = userStore.organizationUsers.first(where: { $0.id == signature.userId })
+                                HSOperativeRow(
+                                    name: user?.fullName.isEmpty == false ? (user?.fullName ?? signature.userId) : (user?.email ?? signature.userId),
+                                    trade: user?.displayTradeType ?? "",
+                                    state: .pending
+                                )
+                                if index < pending.count - 1 { HSDivider() }
+                            }
+                        }
                     }
-                    Button("Send to further operatives") {
-                        dismissThenPerform(onSendToFurtherOperatives)
+
+                    HSSectionHeader(title: "Actions")
+                    VStack(spacing: HSMetric.rowGap) {
+                        HSActionRow(
+                            icon: talk?.isCustomUpload == true ? "signature" : "doc.richtext.fill",
+                            tint: HS.blue,
+                            title: "View signed toolbox talk",
+                            subtitle: talk?.isCustomUpload == true
+                                ? "Open the custom talk signature sheet"
+                                : "Preview or download the signed talk PDF",
+                            action: { dismissThenPerform(onViewSignedTalk) }
+                        )
+                        HSActionRow(
+                            icon: "person.badge.plus",
+                            tint: HS.teal,
+                            title: "Send to further operatives",
+                            subtitle: "Add more people to this issue",
+                            action: { dismissThenPerform(onSendToFurtherOperatives) }
+                        )
+                        HSActionRow(
+                            icon: "bell.fill",
+                            tint: HS.amber,
+                            title: "Remind pending",
+                            subtitle: "Notify people who have not signed yet",
+                            action: onSendReminder
+                        )
                     }
-                    Button("Remind pending", action: onSendReminder)
                 }
+                .padding(.horizontal, HSMetric.screenPad)
+                .padding(.bottom, 24)
             }
+            .hsScreen()
             .navigationTitle("Sign-off tracking")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
@@ -2238,76 +2563,166 @@ private struct HSTrackIssueView: View {
 private struct HSSignTalkView: View {
     let issue: HSToolboxIssue
     let talk: HSToolboxTalk?
+    var rams: HSRamsDocument? = nil
     let onSubmit: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var readConfirmed = false
     @State private var signatureImageData: Data?
-    @State private var showPreviewShare = false
-    @State private var previewURL: URL?
+    @State private var documentPreview: HSDocumentPreviewItem?
+    @State private var shareURL: IdentifiableURL?
+
+    private var canSubmit: Bool { readConfirmed && signatureImageData != nil }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(talk?.title ?? "Toolbox talk")
-                        .font(.system(size: 20, weight: .bold))
-                    Text("Date \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                    if let purpose = talk?.purpose, !purpose.isEmpty {
-                        Text(purpose)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: HSMetric.rowGap) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(talk?.title ?? rams?.title ?? "Sign-off")
+                            .font(HSFont.heroTitle)
+                            .foregroundStyle(HS.ink)
+                            .hsNoClip(3)
+                        Text(rams == nil
+                             ? "W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))"
+                             : "Sent \(issue.issuedAt.formatted(date: .abbreviated, time: .omitted))")
+                            .font(HSFont.meta)
+                            .foregroundStyle(HS.slate)
+                        if talk?.isCustomUpload == true {
+                            HSBadge(text: "Custom uploaded talk", tone: .scheduled)
+                        }
                     }
-                    if let points = talk?.keyPoints, !points.isEmpty {
+                    .hsCard()
+
+                    if let purpose = talk?.purpose, !purpose.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Key control points")
-                                .font(.system(size: 12, weight: .semibold))
+                            Text(talk?.isCustomUpload == true ? "About this talk" : "Purpose")
+                                .font(HSFont.sectionLabel)
+                                .tracking(0.9)
                                 .foregroundStyle(HS.slate2)
-                                .textCase(.uppercase)
-                            ForEach(Array(points.enumerated()), id: \.offset) { _, point in
-                                Text("• \(point)")
-                                    .font(.system(size: 13))
+                            Text(purpose)
+                                .font(HSFont.body)
+                                .foregroundStyle(HS.ink)
+                                .hsNoClip(8)
+                        }
+                        .hsCard()
+                    }
+
+                    if talk?.isCustomUpload != true, let points = talk?.keyPoints, !points.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Key control points")
+                                .font(HSFont.sectionLabel)
+                                .tracking(0.9)
+                                .foregroundStyle(HS.slate2)
+                            ForEach(Array(points.enumerated()), id: \.offset) { index, point in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Text("\(index + 1).")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(HS.teal)
+                                    Text(point)
+                                        .font(HSFont.body)
+                                        .foregroundStyle(HS.ink)
+                                        .hsNoClip(4)
+                                }
                             }
                         }
                         .hsCard()
                     }
+
                     Button {
-                        let generated = talk.flatMap { HSTalkPDFBuilder.makePDF(for: $0) }
-                        if let generated {
-                            previewURL = generated
-                            showPreviewShare = true
-                        }
+                        HSHaptic.tap()
+                        previewTalk()
                     } label: {
-                        Label("Preview / download talk", systemImage: "arrow.down.circle.fill")
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
+                        Label(
+                            talk?.isCustomUpload == true ? "Preview / download original file" : (rams == nil ? "Preview / download talk" : "Preview RAMS"),
+                            systemImage: "eye.fill"
+                        )
+                        .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(GhostButtonStyle())
-                    Toggle("I have read and understood this toolbox talk", isOn: $readConfirmed)
+                    .buttonStyle(HSGhostButton(tint: HS.blue))
+
+                    Button {
+                        HSHaptic.select()
+                        readConfirmed.toggle()
+                    } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: readConfirmed ? "checkmark.square.fill" : "square")
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundStyle(readConfirmed ? HS.teal : HS.slate2)
+                            Text(rams == nil ? "I have read and understood this toolbox talk" : "I have read and understood this RAMS")
+                                .font(HSFont.body)
+                                .foregroundStyle(HS.ink)
+                                .hsNoClip(3)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(14)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(readConfirmed ? HS.teal : HS.line, lineWidth: readConfirmed ? 2 : 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .hsCard(padding: 0)
+
                     HSSignaturePad(imageData: $signatureImageData)
+
+                    if !canSubmit {
+                        Text(submitHint)
+                            .font(HSFont.meta)
+                            .foregroundStyle(HS.slate2)
+                            .hsNoClip(2)
+                    }
+
+                    Button {
+                        guard let signatureImageData else { return }
+                        HSHaptic.success()
+                        onSubmit(signatureImageData.base64EncodedString())
+                        dismiss()
+                    } label: {
+                        Label("Submit signature", systemImage: "checkmark.seal.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(HSFilledButton(tone: .teal))
+                    .disabled(!canSubmit)
+                    .opacity(canSubmit ? 1 : 0.45)
                 }
                 .padding(16)
             }
+            .hsScreen()
             .navigationTitle("Sign Toolbox Talk")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Submit") {
-                        guard let signatureImageData else { return }
-                        onSubmit(signatureImageData.base64EncodedString())
-                        dismiss()
-                    }
-                    .disabled(!readConfirmed || signatureImageData == nil)
-                }
             }
-            .sheet(isPresented: $showPreviewShare) {
-                if let previewURL {
-                    HSDocumentShareSheet(activityItems: [previewURL])
-                }
+            .sheet(item: $documentPreview) { item in
+                InAppRemoteDocumentViewer(source: item.source, title: item.title, noun: item.noun)
             }
+            .sheet(item: $shareURL) { item in
+                HSDocumentActivityView(activityItems: [item.url])
+            }
+        }
+    }
+
+    private var submitHint: String {
+        if !readConfirmed && signatureImageData == nil {
+            return "Confirm you have read the talk and add your signature to submit."
+        }
+        if !readConfirmed { return "Tick the declaration before submitting." }
+        return "Add your signature before submitting."
+    }
+
+    private func previewTalk() {
+        if let rams, let remote = rams.storedFileURL {
+            documentPreview = HSDocumentPreviewItem(title: rams.title, remoteURL: remote, noun: "RAMS")
+            return
+        }
+        if let talk, talk.isCustomUpload, let remote = talk.storedFileURL {
+            documentPreview = HSDocumentPreviewItem(title: talk.title, remoteURL: remote, noun: "toolbox talk")
+            return
+        }
+        if let talk, let generated = HSTalkPDFBuilder.makePDF(for: talk) {
+            documentPreview = HSDocumentPreviewItem(title: talk.title, localURL: generated, noun: "toolbox talk")
         }
     }
 }
@@ -2315,6 +2730,7 @@ private struct HSSignTalkView: View {
 private struct HSSignedTalkView: View {
     let issue: HSToolboxIssue
     let talk: HSToolboxTalk?
+    var rams: HSRamsDocument? = nil
     let signature: HSToolboxSignature?
     @EnvironmentObject var userStore: UserStore
 
@@ -2322,7 +2738,7 @@ private struct HSSignedTalkView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(talk?.title ?? "Toolbox talk")
+                    Text(talk?.title ?? rams?.title ?? "Sign-off")
                         .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(HS.ink)
                     Text("W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
@@ -2342,7 +2758,7 @@ private struct HSSignedTalkView: View {
                             .scaledToFit()
                             .frame(maxWidth: .infinity)
                             .frame(height: 170)
-                            .background(Color(hex: "#fbfcfd"))
+                            .background(HS.bgDeep)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2373,54 +2789,67 @@ private struct HSUploadTalkSheet: View {
     @State private var title = ""
     @State private var trade = "General"
     @State private var purpose = ""
-    @State private var keyPointsRaw = ""
     @State private var showFileImporter = false
     @State private var selectedFileURL: URL?
     @State private var selectedFileName: String?
     private let trades = ["General"] + StaffTradeType.pickerCases.map(\.rawValue)
+
+    private var canSave: Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && selectedFileURL != nil
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Upload Toolbox Talk")
-                        .font(.system(size: 26, weight: .bold))
-                    Text("Add your own talk to the library. It can then be issued and signed like standard templates.")
-                        .font(.system(size: 13))
+                        .font(HSFont.heroTitle)
+                        .foregroundStyle(HS.ink)
+                        .hsNoClip(2)
+                    Text("The PDF you upload is the talk that gets issued, previewed, downloaded and signed against.")
+                        .font(HSFont.body)
                         .foregroundStyle(HS.slate)
+                        .hsNoClip(4)
 
                     HSUploadDropZone(
                         title: selectedFileName ?? "Upload talk (PDF)",
-                        subtitle: selectedFileName == nil ? "or fill in the fields below" : "Ready to save",
+                        subtitle: selectedFileName == nil ? "PDF required — this is the file people will sign against" : "Ready to save",
                         isFilled: selectedFileName != nil
                     ) { showFileImporter = true }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Or write the talk")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(HS.slate2)
-                            .textCase(.uppercase)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Please fill this in when uploading your TBT.")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(HS.ink)
+                            .hsNoClip(3)
                         HSFormField(label: "Talk title", text: $title, placeholder: "e.g. Site-specific working rules")
                         HSFormMenuField(label: "Trade", value: trade) {
                             ForEach(trades, id: \.self) { t in
                                 Button(t) { trade = t }
                             }
                         }
-                        HSFormField(label: "Purpose", text: $purpose, placeholder: "One line — why this matters")
-                        HSFormMultilineField(label: "Key control points", text: $keyPointsRaw, placeholder: "One point per line…")
+                        HSFormMultilineField(label: "Small description about the talk", text: $purpose, placeholder: "What this talk is about")
                     }
                     .hsCard()
 
+                    if !canSave {
+                        Text("Add the PDF, talk title, trade and a short description to enable Save.")
+                            .font(HSFont.meta)
+                            .foregroundStyle(HS.slate2)
+                            .hsNoClip(3)
+                    }
+
                     Button {
-                        let points = keyPointsRaw
-                            .split(separator: "\n")
-                            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-                            .filter { !$0.isEmpty }
+                        guard canSave else { return }
+                        HSHaptic.success()
                         onSave(
                             title.trimmingCharacters(in: .whitespacesAndNewlines),
                             trade.trimmingCharacters(in: .whitespacesAndNewlines),
                             purpose.trimmingCharacters(in: .whitespacesAndNewlines),
-                            points,
+                            [],
                             selectedFileURL,
                             selectedFileName
                         )
@@ -2428,14 +2857,14 @@ private struct HSUploadTalkSheet: View {
                     } label: {
                         Label("Save to library", systemImage: "checkmark")
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
                     }
-                    .buttonStyle(FilledButtonStyle(tone: .teal))
-                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .buttonStyle(HSFilledButton(tone: .teal))
+                    .disabled(!canSave)
+                    .opacity(canSave ? 1 : 0.45)
                 }
                 .padding(16)
             }
-            .background(HS.bg.ignoresSafeArea())
+            .hsScreen()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -2448,8 +2877,13 @@ private struct HSUploadTalkSheet: View {
                 allowsMultipleSelection: false
             ) { result in
                 if case .success(let urls) = result, let url = urls.first {
-                    selectedFileURL = url
-                    selectedFileName = url.lastPathComponent
+                    if let persisted = HSImportedFile.persist(url) {
+                        selectedFileURL = persisted.url
+                        selectedFileName = persisted.name
+                    } else {
+                        selectedFileURL = url
+                        selectedFileName = url.lastPathComponent
+                    }
                 }
             }
         }
@@ -2465,19 +2899,20 @@ private struct HSRamsUploadSheet: View {
     @State private var selectedFileURL: URL?
     @State private var selectedFileName: String?
     @State private var showFileImporter = false
-    @State private var attachedDocTitles: Set<String> = ["Safe Isolation"]
     private let trades = [""] + ["General"] + StaffTradeType.pickerCases.map(\.rawValue)
-    private let availableAttachables = ["Safe Isolation", "COSHH", "Permit to Work"]
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Upload RAMS")
-                        .font(.system(size: 26, weight: .bold))
+                        .font(HSFont.heroTitle)
+                        .foregroundStyle(HS.ink)
+                        .hsNoClip(2)
                     Text("Upload a Risk Assessment & Method Statement. Operatives can view it and managers can share with clients.")
-                        .font(.system(size: 13))
+                        .font(HSFont.body)
                         .foregroundStyle(HS.slate)
+                        .hsNoClip(4)
 
                     HSUploadDropZone(
                         title: selectedFileName ?? "Upload RAMS document",
@@ -2487,9 +2922,9 @@ private struct HSRamsUploadSheet: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Details")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(HSFont.sectionLabel)
+                            .tracking(0.9)
                             .foregroundStyle(HS.slate2)
-                            .textCase(.uppercase)
                         HSFormField(label: "Document title", text: $docTitle, placeholder: "e.g. CAT A Fit-Out — Master RAMS")
                         HSFormMenuField(label: "Trade / area", value: trade.isEmpty ? "Select trade (optional)" : trade) {
                             ForEach(trades, id: \.self) { t in
@@ -2502,34 +2937,14 @@ private struct HSRamsUploadSheet: View {
                     }
                     .hsCard()
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Attach trade-specific docs")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(HS.slate2)
-                            .textCase(.uppercase)
-                        HStack(spacing: 8) {
-                            ForEach(availableAttachables, id: \.self) { item in
-                                Button(item) {
-                                    if attachedDocTitles.contains(item) { attachedDocTitles.remove(item) } else { attachedDocTitles.insert(item) }
-                                }
-                                .font(.system(size: 12, weight: .semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(attachedDocTitles.contains(item) ? HS.blue : HS.card)
-                                .foregroundStyle(attachedDocTitles.contains(item) ? .white : HS.slate)
-                                .clipShape(Capsule())
-                            }
-                        }
-                    }
-                    .hsCard()
-
                     Button {
                         let cleanTrade = trade.trimmingCharacters(in: .whitespacesAndNewlines)
+                        HSHaptic.success()
                         onSave(
                             docTitle.trimmingCharacters(in: .whitespacesAndNewlines),
                             cleanTrade.isEmpty ? nil : cleanTrade,
                             reviewDate,
-                            attachedDocTitles.sorted(),
+                            [],
                             selectedFileURL,
                             selectedFileName
                         )
@@ -2537,14 +2952,14 @@ private struct HSRamsUploadSheet: View {
                     } label: {
                         Label("Publish RAMS", systemImage: "checkmark")
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
                     }
-                    .buttonStyle(FilledButtonStyle(tone: .blue))
+                    .buttonStyle(HSFilledButton(tone: .blue))
                     .disabled(docTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .opacity(docTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
                 }
                 .padding(16)
             }
-            .background(HS.bg.ignoresSafeArea())
+            .hsScreen()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .fileImporter(
                 isPresented: $showFileImporter,
@@ -2552,8 +2967,13 @@ private struct HSRamsUploadSheet: View {
                 allowsMultipleSelection: false
             ) { result in
                 if case .success(let urls) = result, let url = urls.first {
-                    selectedFileURL = url
-                    selectedFileName = url.lastPathComponent
+                    if let persisted = HSImportedFile.persist(url) {
+                        selectedFileURL = persisted.url
+                        selectedFileName = persisted.name
+                    } else {
+                        selectedFileURL = url
+                        selectedFileName = url.lastPathComponent
+                    }
                 }
             }
         }
@@ -2576,10 +2996,13 @@ private struct HSOtherDocumentUploadSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Add H&S Document")
-                        .font(.system(size: 26, weight: .bold))
+                        .font(HSFont.heroTitle)
+                        .foregroundStyle(HS.ink)
+                        .hsNoClip(2)
                     Text("Add a Safe Isolation procedure, COSHH sheet, permit, or site-wide H&S document.")
-                        .font(.system(size: 13))
+                        .font(HSFont.body)
                         .foregroundStyle(HS.slate)
+                        .hsNoClip(4)
 
                     HSUploadDropZone(
                         title: selectedFileName ?? "Upload document",
@@ -2601,6 +3024,7 @@ private struct HSOtherDocumentUploadSheet: View {
                     Button {
                         let cleanTrade = trade.trimmingCharacters(in: .whitespacesAndNewlines)
                         let cleanCategory = category.trimmingCharacters(in: .whitespacesAndNewlines)
+                        HSHaptic.success()
                         onSave(
                             docTitle.trimmingCharacters(in: .whitespacesAndNewlines),
                             cleanTrade.isEmpty ? nil : cleanTrade,
@@ -2613,14 +3037,14 @@ private struct HSOtherDocumentUploadSheet: View {
                     } label: {
                         Label("Save document", systemImage: "checkmark")
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
                     }
-                    .buttonStyle(FilledButtonStyle(tone: .blue))
+                    .buttonStyle(HSFilledButton(tone: .blue))
                     .disabled(docTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .opacity(docTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
                 }
                 .padding(16)
             }
-            .background(HS.bg.ignoresSafeArea())
+            .hsScreen()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .fileImporter(
                 isPresented: $showFileImporter,
@@ -2628,8 +3052,13 @@ private struct HSOtherDocumentUploadSheet: View {
                 allowsMultipleSelection: false
             ) { result in
                 if case .success(let urls) = result, let url = urls.first {
-                    selectedFileURL = url
-                    selectedFileName = url.lastPathComponent
+                    if let persisted = HSImportedFile.persist(url) {
+                        selectedFileURL = persisted.url
+                        selectedFileName = persisted.name
+                    } else {
+                        selectedFileURL = url
+                        selectedFileName = url.lastPathComponent
+                    }
                 }
             }
         }
@@ -2660,7 +3089,7 @@ private struct HSUploadDropZone: View {
             }
             .frame(maxWidth: .infinity)
             .padding(22)
-            .background(.white)
+            .background(HS.card)
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(style: StrokeStyle(lineWidth: 2, dash: [6]))
@@ -2752,6 +3181,7 @@ private enum HSTalkPDFBuilder {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
         let pageRect = CGRect(x: 0, y: 0, width: 595, height: 842)
         let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
+        let orgBadge = OrganizationDocumentAbbreviation.currentDisplay
 
         let navy = UIColor(red: 0.055, green: 0.122, blue: 0.2, alpha: 1)
         let cyan = UIColor(red: 0.169, green: 0.733, blue: 0.937, alpha: 1)
@@ -2783,6 +3213,7 @@ private enum HSTalkPDFBuilder {
                 UIRectFill(bandRect)
                 amber.setFill()
                 UIRectFill(CGRect(x: 0, y: 92, width: pageRect.width, height: 4))
+                drawOrganizationDocumentBadgePDF(text: orgBadge, in: CGRect(x: pageRect.width - 70, y: 26, width: 50, height: 36))
 
                 ("PROJECT " as NSString).draw(at: CGPoint(x: 26, y: 28), withAttributes: [
                     .font: UIFont.systemFont(ofSize: 13, weight: .bold),
@@ -3005,29 +3436,52 @@ private struct HSSignaturePad: View {
     @State private var canvas = PKCanvasView()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Signature")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                Text("SIGNATURE")
+                    .font(HSFont.sectionLabel)
+                    .tracking(0.9)
+                    .foregroundStyle(HS.slate2)
                 Spacer()
                 Button("Clear") {
                     canvas.drawing = PKDrawing()
                     imageData = nil
                 }
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(imageData == nil ? HS.slate2.opacity(0.5) : HS.red)
+                .disabled(imageData == nil)
             }
-            HSCanvasRepresentable(canvas: $canvas) { exportSignaturePNG() }
-                .frame(height: 150)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(style: StrokeStyle(lineWidth: 1.4, dash: [5]))
-                        .foregroundStyle(Color(red: 0.8, green: 0.84, blue: 0.88))
-                )
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(HS.bgDeep.opacity(0.6))
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+                    .foregroundStyle(imageData == nil ? HS.slate2.opacity(0.45) : HS.teal.opacity(0.5))
+                HSCanvasRepresentable(canvas: $canvas) { exportSignaturePNG() }
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                if imageData == nil {
+                    VStack(spacing: 6) {
+                        Image(systemName: "signature")
+                            .font(.system(size: 22))
+                            .foregroundStyle(HS.slate2.opacity(0.7))
+                        Text("Sign with your finger")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(HS.slate2)
+                    }
+                    .allowsHitTesting(false)
+                }
+                VStack {
+                    Spacer()
+                    Rectangle().fill(HS.slate2.opacity(0.25))
+                        .frame(height: 1)
+                        .padding(.horizontal, 22)
+                        .padding(.bottom, 22)
+                }
+                .allowsHitTesting(false)
+            }
+            .frame(height: 170)
         }
-        .padding(12)
-        .background(.white)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .hsCard()
     }
 
     private func exportSignaturePNG() {
@@ -3048,7 +3502,7 @@ private struct HSCanvasRepresentable: UIViewRepresentable {
         canvas.drawingPolicy = .anyInput
         canvas.tool = PKInkingTool(.pen, color: UIColor(red: 0.086, green: 0.125, blue: 0.18, alpha: 1), width: 3)
         canvas.delegate = context.coordinator
-        canvas.backgroundColor = UIColor(red: 0.98, green: 0.985, blue: 0.992, alpha: 1)
+        canvas.backgroundColor = .clear
         return canvas
     }
 

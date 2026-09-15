@@ -42,7 +42,6 @@ struct DailyOverviewView: View {
     @State private var showingPastBookings = false
     @State private var showingBookLabour = false
     @State private var bookingEditTarget: DailyOverviewEditTarget?
-    @State private var selectedProjectToOpen: Project?
     @State private var scheduleRefreshTick = UUID()
     /// When `displayDate` is nil, the user can change the day from the strip (today’s overview sheet).
     @State private var selectedCalendarDay: Date = Calendar.current.startOfDay(for: Date())
@@ -450,7 +449,7 @@ struct DailyOverviewView: View {
             .foregroundStyle(ProjectWorksRevampColors.ink)
             .frame(maxWidth: .infinity)
             .padding(14)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.card)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -494,7 +493,7 @@ struct DailyOverviewView: View {
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 8)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -783,7 +782,7 @@ struct DailyOverviewView: View {
                             }
                             .padding(.horizontal, 9)
                             .padding(.vertical, 4)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.card)
                             .clipShape(Capsule())
                         }
                     }
@@ -821,7 +820,7 @@ struct DailyOverviewView: View {
                 }
             }
             .padding(14)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.card)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -883,7 +882,7 @@ struct DailyOverviewView: View {
                     }
                 }
                 .padding(14)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.card)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -997,7 +996,7 @@ struct DailyOverviewView: View {
             .environmentObject(subcontractorStore)
 
             Button {
-                selectedProjectToOpen = project
+                openCataloguePage(for: project)
             } label: {
                 HStack(spacing: 5) {
                     Text(project.jobType == .smallWorks ? "Open small works" : "Open project")
@@ -1019,7 +1018,7 @@ struct DailyOverviewView: View {
             .buttonStyle(.plain)
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1081,7 +1080,7 @@ struct DailyOverviewView: View {
             }
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1208,19 +1207,20 @@ struct DailyOverviewView: View {
         .sheet(item: $bookingEditTarget) { target in
             dailyOverviewEditSheet(for: target)
         }
-        .sheet(item: $selectedProjectToOpen) { project in
-            ProjectDetailView(project: project)
-                .environmentObject(bookingStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(operativeStore)
-                .environmentObject(projectStore)
-                .environmentObject(userStore)
-                .environmentObject(holidayStore)
-                .environmentObject(subcontractorStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(notificationService)
-                .environmentObject(appSettings)
-                .environmentObject(taskStore)
+    }
+
+    private func openCataloguePage(for project: Project) {
+        let isSmallWorks = project.jobType == .smallWorks
+        dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            NotificationCenter.default.post(
+                name: .openWorkCatalogueDetail,
+                object: nil,
+                userInfo: [
+                    "projectId": project.id,
+                    "isSmallWorks": isSmallWorks
+                ]
+            )
         }
     }
     

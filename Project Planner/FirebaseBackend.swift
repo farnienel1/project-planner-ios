@@ -50,12 +50,34 @@ func normalizedOrganizationId(_ organizationId: String) -> String {
 
 private func isOfflineNetworkError(_ error: Error) -> Bool {
     let nsError = error as NSError
-    if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorNotConnectedToInternet {
-        return true
+    if nsError.domain == NSURLErrorDomain {
+        switch nsError.code {
+        case NSURLErrorNotConnectedToInternet,
+             NSURLErrorNetworkConnectionLost,
+             NSURLErrorTimedOut,
+             NSURLErrorCannotConnectToHost,
+             NSURLErrorCannotFindHost,
+             NSURLErrorDNSLookupFailed,
+             NSURLErrorInternationalRoamingOff,
+             NSURLErrorDataNotAllowed,
+             NSURLErrorCallIsActive:
+            return true
+        default:
+            break
+        }
+    }
+    if nsError.domain == "FIRFirestoreErrorDomain" {
+        // 4 deadline exceeded, 8 resource exhausted, 13 internal, 14 unavailable
+        if [4, 8, 13, 14].contains(nsError.code) { return true }
     }
     if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
-        return underlying.domain == NSURLErrorDomain && underlying.code == NSURLErrorNotConnectedToInternet
+        if isOfflineNetworkError(underlying) { return true }
     }
+    let message = nsError.localizedDescription.lowercased()
+    if message.contains("local cache") { return true }
+    if message.contains("failed to get document from server") { return true }
+    if message.contains("failed to get documents from server") { return true }
+    if message.contains("the internet connection appears to be offline") { return true }
     return false
 }
 
@@ -67,7 +89,9 @@ class FirebaseBackend: ObservableObject {
     @Published var currentUser: FirebaseAuth.User?
     @Published var isLoading = false
     @Published var errorMessage: String?
-    @Published var currentOrganization: Organization?
+    @Published var currentOrganization: Organization? {
+        didSet { OrganizationDocumentAbbreviation.update(from: currentOrganization) }
+    }
     @Published var userRole: UserRole = .basic
     /// Set after the root shell has kicked off the first org-wide store load (prevents duplicate parallel reloads on launch).
     @Published var hasBootstrappedOrgDataLoad = false
@@ -125,13 +149,19 @@ class FirebaseBackend: ObservableObject {
             )
         }
         do {
-            _ = try await db.collection("organizations").document(trimmedOrgId).getDocument(source: .server)
+            _ = try await getDocumentWithServerTimeoutAndCacheFallback(
+                db.collection("organizations").document(trimmedOrgId)
+            )
         } catch {
             let nsError = error as NSError
             if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 {
                 // Some deployments deny org root read while allowing subcollection access.
                 // Do not block projects/smallWorks/clients/operatives reads in that case.
                 print("🔥🔥🔥 DEBUG: ⚠️ Org root read denied for \(trimmedOrgId), continuing with subcollection reads")
+                return trimmedOrgId
+            }
+            if isOfflineNetworkError(error) {
+                print("🔥🔥🔥 DEBUG: ⚠️ Org root offline/cache miss for \(trimmedOrgId), continuing with subcollection reads")
                 return trimmedOrgId
             }
             throw error
@@ -222,6 +252,7 @@ class FirebaseBackend: ObservableObject {
             defaultLatitude: orgData["defaultLatitude"] as? Double,
             defaultLongitude: orgData["defaultLongitude"] as? Double,
             companyLogoURL: orgData["companyLogoURL"] as? String,
+            documentAbbreviation: OrganizationDocumentAbbreviation.normalized(orgData["documentAbbreviation"] as? String),
             creatorUserId: orgData["creatorUserId"] as? String
         )
         currentOrganization = organization
@@ -1157,6 +1188,7 @@ class FirebaseBackend: ObservableObject {
                 defaultLatitude: defaultLatitude,
                 defaultLongitude: defaultLongitude,
                 companyLogoURL: data["companyLogoURL"] as? String,
+                documentAbbreviation: OrganizationDocumentAbbreviation.normalized(data["documentAbbreviation"] as? String),
                 creatorUserId: creatorUserId
             )
             Self.applyPayrollPolicyFields(from: data, to: &organization)
@@ -2081,14 +2113,11 @@ class FirebaseBackend: ObservableObject {
         do {
             snapshot = try await tasksRef.getDocuments(source: .server)
         } catch {
-            if isFirestorePermissionDenied(error) {
-                print("🔥🔥🔥 DEBUG: [TASK LOAD] Server denied tasks read for \(orgId) - trying cache fallback")
+            print("🔥🔥🔥 DEBUG: [TASK LOAD] Server tasks read failed for \(orgId) - trying cache/default: \(error.localizedDescription)")
+            do {
                 snapshot = try await tasksRef.getDocuments(source: .cache)
-            } else if isOfflineNetworkError(error) {
-                print("🔥🔥🔥 DEBUG: [TASK LOAD] Offline while loading tasks for \(orgId) - trying cache fallback")
-                snapshot = try await tasksRef.getDocuments(source: .cache)
-            } else {
-                throw error
+            } catch {
+                snapshot = try await tasksRef.getDocuments()
             }
         }
         print("🔥🔥🔥 DEBUG: Found \(snapshot.documents.count) task documents in Firebase")
@@ -2148,6 +2177,8 @@ class FirebaseBackend: ObservableObject {
             let attachedFileURL = data["attachedFileURL"] as? String
             let attachedFileName = data["attachedFileName"] as? String
             let attachedImageURLs = data["attachedImageURLs"] as? [String] ?? []
+            let attachedSiteAuditId = (data["attachedSiteAuditId"] as? String).flatMap(UUID.init(uuidString:))
+            let attachedSiteAuditTitle = data["attachedSiteAuditTitle"] as? String
             
             // Load items (multi-item tasks)
             var items: [ProjectTaskItem] = []
@@ -2180,6 +2211,8 @@ class FirebaseBackend: ObservableObject {
                 attachedFileURL: attachedFileURL,
                 attachedFileName: attachedFileName,
                 attachedImageURLs: attachedImageURLs,
+                attachedSiteAuditId: attachedSiteAuditId,
+                attachedSiteAuditTitle: attachedSiteAuditTitle,
                 completedBy: completedBy,
                 completedAt: completedAt,
                 completionImages: completionImages,
@@ -2250,6 +2283,18 @@ class FirebaseBackend: ObservableObject {
         // Add attached images
         if !task.attachedImageURLs.isEmpty {
             data["attachedImageURLs"] = task.attachedImageURLs
+        }
+        if let fileURL = task.attachedFileURL, !fileURL.isEmpty {
+            data["attachedFileURL"] = fileURL
+        }
+        if let fileName = task.attachedFileName, !fileName.isEmpty {
+            data["attachedFileName"] = fileName
+        }
+        if let auditId = task.attachedSiteAuditId {
+            data["attachedSiteAuditId"] = auditId.uuidString
+        }
+        if let auditTitle = task.attachedSiteAuditTitle, !auditTitle.isEmpty {
+            data["attachedSiteAuditTitle"] = auditTitle
         }
         
         // Add items and completedItemIds (multi-item tasks)
@@ -2517,6 +2562,29 @@ class FirebaseBackend: ObservableObject {
         
         let downloadURL = try await storageRef.downloadURL()
         return downloadURL.absoluteString
+    }
+
+    func uploadTimesheetExportPDF(_ data: Data, fileName: String, organizationId: String) async throws -> String {
+        let sanitized = fileName
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: "\\", with: "-")
+        let stamp = Int(Date().timeIntervalSince1970)
+        let path = "organizations/\(organizationId)/timesheetExports/\(stamp)_\(sanitized)"
+        let storageRef = storage.reference().child(path)
+        let metadata = StorageMetadata()
+        metadata.contentType = "application/pdf"
+        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+            storageRef.putData(data, metadata: metadata) { metadata, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let metadata {
+                    continuation.resume(returning: metadata)
+                } else {
+                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+                }
+            }
+        }
+        return try await storageRef.downloadURL().absoluteString
     }
 
     func updateOrganizationCompanyLogoURL(_ logoURL: String?) async throws {
@@ -3694,6 +3762,49 @@ class FirebaseBackend: ObservableObject {
         storeOrganizationLocally(org)
     }
 
+    /// Admin: save annual-leave defaults and bank-holiday region in one write so settings dismiss immediately.
+    func updateOrganizationAnnualLeaveSettings(
+        defaults: OrganizationAnnualLeaveDefaults,
+        bankHolidayRegionId: String
+    ) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
+            )
+        }
+        let trimmed = bankHolidayRegionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Select an annual leave / bank holiday region."]
+            )
+        }
+        let payload: [String: Any] = [
+            "daysPerYear": defaults.daysPerYear,
+            "startMonth": defaults.startMonth,
+            "endMonth": defaults.endMonth,
+            "carriesOver": defaults.carriesOver,
+        ]
+        try await db.collection("organizations").document(orgId).setData(
+            [
+                "annualLeaveDefaults": payload,
+                "bankHolidayRegionId": trimmed,
+                "settings.bankHolidayRegionId": trimmed,
+                "updatedAt": Timestamp(date: Date()),
+            ],
+            merge: true
+        )
+        guard var org = currentOrganization else { return }
+        org.settings.annualLeaveDefaults = defaults
+        org.settings.bankHolidayRegionId = trimmed
+        org.updatedAt = Date()
+        currentOrganization = org
+        storeOrganizationLocally(org)
+    }
+
     /// Admin: organisation currency for rates, reports, and invoicing.
     func updateOrganizationCurrencyCode(_ code: String) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
@@ -3807,7 +3918,8 @@ class FirebaseBackend: ObservableObject {
         officePostcode: String?,
         countryCode: String,
         defaultLatitude: Double?,
-        defaultLongitude: Double?
+        defaultLongitude: Double?,
+        documentAbbreviation: String?
     ) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(
@@ -3849,11 +3961,18 @@ class FirebaseBackend: ObservableObject {
             payload["defaultLatitude"] = defaultLatitude
             payload["defaultLongitude"] = defaultLongitude
         }
+        let abbreviation = OrganizationDocumentAbbreviation.normalized(documentAbbreviation)
+        if let abbreviation {
+            payload["documentAbbreviation"] = abbreviation
+        } else {
+            payload["documentAbbreviation"] = FieldValue.delete()
+        }
         try await db.collection("organizations").document(orgId).updateData(payload)
         
         guard var org = currentOrganization else { return }
         org.name = trimmedName
         org.countryCode = countryCode.uppercased()
+        org.documentAbbreviation = abbreviation
         if hasOfficeAddress {
             let line1 = officeAddressLine1?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let city = officeCity?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -3943,17 +4062,11 @@ class FirebaseBackend: ObservableObject {
         if user.permissions.operativeMode || user.permissions.manager {
             let dr = user.dayRate
             let hr = user.hourlyRate
-            let hasDay = (dr ?? 0) > 0
-            let hasHourly = (hr ?? 0) > 0
-            if hasDay && hasHourly {
-                // Should not happen in UI; prefer day rate on save.
-                userData["dayRate"] = dr!
+            if let dr {
+                userData["dayRate"] = dr
                 userData["hourlyRate"] = FieldValue.delete()
-            } else if hasDay {
-                userData["dayRate"] = dr!
-                userData["hourlyRate"] = FieldValue.delete()
-            } else if hasHourly {
-                userData["hourlyRate"] = hr!
+            } else if let hr {
+                userData["hourlyRate"] = hr
                 userData["dayRate"] = FieldValue.delete()
             }
             // When neither rate is set, omit both fields so merge preserves existing saved rates.
@@ -7211,6 +7324,7 @@ extension FirebaseBackend {
                 "email": contact.email,
                 "contactNumber": contact.contactNumber,
                 "position": contact.position.rawValue,
+                "tradeType": contact.displayTrade,
                 "createdAt": Timestamp(date: contact.createdAt)
             ] as [String : Any]
         }
@@ -7230,6 +7344,46 @@ extension FirebaseBackend {
             .collection("subcontractors")
             .document(subcontractor.id.uuidString)
             .setData(data)
+
+        let extraTrades = subcontractor.contacts.map(\.displayTrade) + [subcontractor.subcontractorType]
+        try? await mergeOrganizationTradeTypes(extraTrades, organizationId: organizationId)
+    }
+
+    func loadOrganizationTradeTypes(organizationId: String) async -> [String] {
+        let orgId = organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !orgId.isEmpty else { return [] }
+        do {
+            let snap = try await db.collection("organizations").document(orgId)
+                .collection("settings")
+                .document("tradeTypeInventory")
+                .getDocument()
+            return (snap.data()?["trades"] as? [String] ?? [])
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        } catch {
+            return []
+        }
+    }
+
+    func mergeOrganizationTradeTypes(_ trades: [String], organizationId: String) async throws {
+        let orgId = try await ensureReadableOrganization(organizationId)
+        let incoming = trades
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !incoming.isEmpty else { return }
+        let ref = db.collection("organizations").document(orgId)
+            .collection("settings")
+            .document("tradeTypeInventory")
+        let existing = await loadOrganizationTradeTypes(organizationId: orgId)
+        var seen = Set(existing.map { $0.lowercased() })
+        var merged = existing
+        for trade in incoming where seen.insert(trade.lowercased()).inserted {
+            merged.append(trade)
+        }
+        try await ref.setData([
+            "trades": merged,
+            "updatedAt": Timestamp(date: Date())
+        ], merge: true)
     }
     
     func loadSubcontractors(organizationId: String) async throws -> [Subcontractor] {
@@ -7257,14 +7411,16 @@ extension FirebaseBackend {
                       let cemail = row["email"] as? String,
                       let number = row["contactNumber"] as? String,
                       let positionRaw = row["position"] as? String,
-                      let position = SubcontractorContactPosition(rawValue: positionRaw),
                       let cCreatedAt = (row["createdAt"] as? Timestamp)?.dateValue() else { return nil }
+                let position = SubcontractorContactPosition(rawValue: positionRaw) ?? .installer
+                let storedTrade = (row["tradeType"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 return SubcontractorContact(
                     id: cid,
                     name: cname,
                     email: cemail,
                     contactNumber: number,
                     position: position,
+                    tradeType: storedTrade.isEmpty ? positionRaw : storedTrade,
                     createdAt: cCreatedAt
                 )
             }
@@ -7391,29 +7547,7 @@ extension FirebaseBackend {
     }
 
     func saveMaterialCatalogueItem(_ item: MaterialCatalogItem, organizationId: String) async throws {
-        guard currentUser != nil else {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 401,
-                userInfo: [NSLocalizedDescriptionKey: "You must be signed in to update the material catalogue."]
-            )
-        }
-        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
-            ?? normalizedOrganizationId(organizationId)
-        guard !resolved.isEmpty else {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 400,
-                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
-            )
-        }
-        let orgId = try await ensureReadableOrganization(resolved)
-        do {
-            try await ensureUserDocumentLinked(organizationId: orgId)
-        } catch {
-            print("🔥🔥🔥 DEBUG: [saveMaterialCatalogueItem] ensureUserDocumentLinked: \(error.localizedDescription)")
-        }
-        await repairCurrentUserOrganizationAccess(organizationId: orgId)
+        let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
         try await db.collection("organizations").document(orgId)
             .collection("materialCatalogue")
             .document(item.id.uuidString)
@@ -7421,6 +7555,73 @@ extension FirebaseBackend {
     }
 
     func deleteMaterialCatalogueItem(_ itemId: UUID, organizationId: String) async throws {
+        let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
+        try await db.collection("organizations").document(orgId)
+            .collection("materialCatalogue")
+            .document(itemId.uuidString)
+            .delete()
+    }
+
+    /// Batched catalogue writes. `onProgress` reports how many items in this call have been committed.
+    func saveMaterialCatalogueItems(
+        _ items: [MaterialCatalogItem],
+        organizationId: String,
+        onProgress: ((Int) -> Void)? = nil
+    ) async throws {
+        guard !items.isEmpty else { return }
+        let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
+        let collection = db.collection("organizations").document(orgId).collection("materialCatalogue")
+        var index = 0
+        var completed = 0
+        while index < items.count {
+            let batch = db.batch()
+            let end = min(index + Self.materialCatalogueBatchSize, items.count)
+            for item in items[index..<end] {
+                batch.setData(
+                    materialCatalogueFirestorePayload(item),
+                    forDocument: collection.document(item.id.uuidString)
+                )
+            }
+            try await batch.commit()
+            completed = end
+            index = end
+            let progressValue = completed
+            await MainActor.run {
+                onProgress?(progressValue)
+            }
+        }
+    }
+
+    /// Batched catalogue deletes. `onProgress` reports how many IDs in this call have been committed.
+    func deleteMaterialCatalogueItems(
+        _ itemIds: [UUID],
+        organizationId: String,
+        onProgress: ((Int) -> Void)? = nil
+    ) async throws {
+        guard !itemIds.isEmpty else { return }
+        let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
+        let collection = db.collection("organizations").document(orgId).collection("materialCatalogue")
+        var index = 0
+        var completed = 0
+        while index < itemIds.count {
+            let batch = db.batch()
+            let end = min(index + Self.materialCatalogueBatchSize, itemIds.count)
+            for itemId in itemIds[index..<end] {
+                batch.deleteDocument(collection.document(itemId.uuidString))
+            }
+            try await batch.commit()
+            completed = end
+            index = end
+            let progressValue = completed
+            await MainActor.run {
+                onProgress?(progressValue)
+            }
+        }
+    }
+
+    private static let materialCatalogueBatchSize = 100
+
+    private func resolvedOrganizationIdForMaterialCatalogueWrite(_ organizationId: String) async throws -> String {
         guard currentUser != nil else {
             throw NSError(
                 domain: "FirebaseBackend",
@@ -7441,13 +7642,10 @@ extension FirebaseBackend {
         do {
             try await ensureUserDocumentLinked(organizationId: orgId)
         } catch {
-            print("🔥🔥🔥 DEBUG: [deleteMaterialCatalogueItem] ensureUserDocumentLinked: \(error.localizedDescription)")
+            print("🔥🔥🔥 DEBUG: [materialCatalogue write] ensureUserDocumentLinked: \(error.localizedDescription)")
         }
         await repairCurrentUserOrganizationAccess(organizationId: orgId)
-        try await db.collection("organizations").document(orgId)
-            .collection("materialCatalogue")
-            .document(itemId.uuidString)
-            .delete()
+        return orgId
     }
 
     func updateMaterialWorkflowStatuses(
@@ -7851,7 +8049,8 @@ extension FirebaseBackend {
             "issuedAt": Timestamp(date: issue.issuedAt),
             "publishAt": issue.publishAt.map(Timestamp.init(date:)) as Any,
             "recipientUserIds": issue.recipientUserIds,
-            "status": issue.status.rawValue
+            "status": issue.status.rawValue,
+            "ramsDocumentId": issue.ramsDocumentId ?? ""
         ]
     }
 
@@ -7925,6 +8124,7 @@ extension FirebaseBackend {
         guard let id = map["id"] as? String, !id.isEmpty else { return nil }
         let projectId = ((map["projectId"] as? String).flatMap(UUID.init(uuidString:))) ?? fallbackProjectId
         let statusRaw = (map["status"] as? String) ?? HSToolboxIssueStatus.awaiting.rawValue
+        let ramsId = (map["ramsDocumentId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return HSToolboxIssue(
             id: id,
             projectId: projectId,
@@ -7934,7 +8134,8 @@ extension FirebaseBackend {
             issuedAt: (map["issuedAt"] as? Timestamp)?.dateValue() ?? Date(),
             publishAt: (map["publishAt"] as? Timestamp)?.dateValue(),
             recipientUserIds: map["recipientUserIds"] as? [String] ?? [],
-            status: HSToolboxIssueStatus(rawValue: statusRaw) ?? .awaiting
+            status: HSToolboxIssueStatus(rawValue: statusRaw) ?? .awaiting,
+            ramsDocumentId: (ramsId?.isEmpty == false) ? ramsId : nil
         )
     }
 
@@ -8067,6 +8268,327 @@ extension FirebaseBackend {
         ]
         let ref = hsStateDocumentRef(organizationId: orgId, project: project)
         try await ref.setData(payload, merge: true)
+    }
+
+    // MARK: - Deadlines (Project / Small Works)
+
+    private func deadlinesStateDocumentRef(organizationId: String, project: Project) -> DocumentReference {
+        deadlinesStateDocumentRef(organizationId: organizationId, projectId: project.id, isSmallWorks: project.jobType == .smallWorks)
+    }
+
+    private func deadlinesStateDocumentRef(organizationId: String, projectId: UUID, isSmallWorks: Bool) -> DocumentReference {
+        let collection = isSmallWorks ? "smallWorks" : "projects"
+        let docId = "deadlines_\(collection)_\(projectId.uuidString)"
+        return db.collection("organizations")
+            .document(organizationId)
+            .collection("settings")
+            .document(docId)
+    }
+
+    private func deadlineAssignmentsDocumentRef(organizationId: String) -> DocumentReference {
+        db.collection("organizations")
+            .document(organizationId)
+            .collection("settings")
+            .document("deadlineAssignments")
+    }
+
+    private func deadlineChangeMap(_ change: DLChange) -> [String: Any] {
+        var map: [String: Any] = [
+            "id": change.id.uuidString,
+            "at": Timestamp(date: change.at),
+            "author": change.author
+        ]
+        switch change.kind {
+        case .created(let due):
+            map["type"] = "created"
+            map["due"] = Timestamp(date: due)
+        case .rescheduled(let from, let to, let reason):
+            map["type"] = "rescheduled"
+            map["from"] = Timestamp(date: from)
+            map["to"] = Timestamp(date: to)
+            map["reason"] = reason
+        case .progress(let pct):
+            map["type"] = "progress"
+            map["progress"] = pct
+        case .status(let status):
+            map["type"] = "status"
+            map["status"] = status.rawValue
+        case .note(let text):
+            map["type"] = "note"
+            map["note"] = text
+        case .completed(let on):
+            map["type"] = "completed"
+            map["completedOn"] = Timestamp(date: on)
+        case .assigned(let who):
+            map["type"] = "assigned"
+            map["assignedTo"] = who
+        case .fileAttached(let name):
+            map["type"] = "fileAttached"
+            map["name"] = name
+        case .siteAuditAttached(let name):
+            map["type"] = "siteAuditAttached"
+            map["name"] = name
+        }
+        return map
+    }
+
+    private func parseDeadlineChange(_ map: [String: Any]) -> DLChange? {
+        let id = (map["id"] as? String).flatMap(UUID.init(uuidString:)) ?? UUID()
+        let at = (map["at"] as? Timestamp)?.dateValue() ?? Date()
+        let author = (map["author"] as? String) ?? ""
+        let type = (map["type"] as? String) ?? "note"
+        let kind: DLChange.Kind
+        switch type {
+        case "created":
+            kind = .created(due: (map["due"] as? Timestamp)?.dateValue() ?? Date())
+        case "rescheduled":
+            kind = .rescheduled(
+                from: (map["from"] as? Timestamp)?.dateValue() ?? Date(),
+                to: (map["to"] as? Timestamp)?.dateValue() ?? Date(),
+                reason: (map["reason"] as? String) ?? ""
+            )
+        case "progress":
+            kind = .progress(to: map["progress"] as? Int ?? 0)
+        case "status":
+            kind = .status(to: DLStatus(rawValue: (map["status"] as? String) ?? "") ?? .notStarted)
+        case "note":
+            kind = .note((map["note"] as? String) ?? "")
+        case "completed":
+            kind = .completed(on: (map["completedOn"] as? Timestamp)?.dateValue() ?? Date())
+        case "assigned":
+            kind = .assigned(to: (map["assignedTo"] as? String) ?? "")
+        case "fileAttached":
+            kind = .fileAttached(name: (map["name"] as? String) ?? "File")
+        case "siteAuditAttached":
+            kind = .siteAuditAttached(name: (map["name"] as? String) ?? "Site audit")
+        default:
+            kind = .note(type)
+        }
+        return DLChange(id: id, at: at, author: author, kind: kind)
+    }
+
+    private func deadlineMap(_ item: DLDeadline) -> [String: Any] {
+        [
+            "id": item.id.uuidString,
+            "title": item.title,
+            "location": item.location ?? "",
+            "trade": item.trade ?? "",
+            "detail": item.detail ?? "",
+            "start": item.start.map(Timestamp.init(date:)) as Any,
+            "due": Timestamp(date: item.due),
+            "completedAt": item.completedAt.map(Timestamp.init(date:)) as Any,
+            "assignees": item.assignees,
+            "assigneeUserIds": item.assigneeUserIds,
+            "company": item.company ?? "",
+            "status": item.status.rawValue,
+            "progress": item.progress,
+            "isCritical": item.isCritical,
+            "dependsOn": item.dependsOn.map(\.uuidString),
+            "blockedReason": item.blockedReason ?? "",
+            "reminderDaysBefore": item.reminderDaysBefore as Any,
+            "originalDue": item.originalDue.map(Timestamp.init(date:)) as Any,
+            "history": item.history.map(deadlineChangeMap),
+            "contextKind": item.contextKind,
+            "projectId": item.projectId?.uuidString ?? "",
+            "createdByUserId": item.createdByUserId,
+            "fileURL": item.fileURL ?? "",
+            "fileName": item.fileName ?? "",
+            "siteAuditId": item.siteAuditId?.uuidString ?? "",
+            "siteAuditTitle": item.siteAuditTitle ?? ""
+        ]
+    }
+
+    private func parseDeadline(_ map: [String: Any], fallbackProjectId: UUID) -> DLDeadline? {
+        guard let idString = map["id"] as? String, let id = UUID(uuidString: idString) else { return nil }
+        let status = DLStatus(rawValue: (map["status"] as? String) ?? "") ?? .notStarted
+        let due = (map["due"] as? Timestamp)?.dateValue() ?? Date()
+        let location = (map["location"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trade = (map["trade"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let detail = (map["detail"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let company = (map["company"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let blocked = (map["blockedReason"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileURL = (map["fileURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileName = (map["fileName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let siteTitle = (map["siteAuditTitle"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let projectId = (map["projectId"] as? String).flatMap(UUID.init(uuidString:)) ?? fallbackProjectId
+        let siteAuditId = (map["siteAuditId"] as? String).flatMap(UUID.init(uuidString:))
+        let reminder: Int?
+        if let n = map["reminderDaysBefore"] as? Int {
+            reminder = n
+        } else if let n = map["reminderDaysBefore"] as? NSNumber {
+            reminder = n.intValue
+        } else {
+            reminder = nil
+        }
+        let historyRaw = map["history"] as? [[String: Any]] ?? []
+        let item = DLDeadline(
+            id: id,
+            title: (map["title"] as? String) ?? "Untitled deadline",
+            location: location?.isEmpty == false ? location : nil,
+            trade: trade?.isEmpty == false ? trade : nil,
+            detail: detail?.isEmpty == false ? detail : nil,
+            start: (map["start"] as? Timestamp)?.dateValue(),
+            due: due,
+            completedAt: (map["completedAt"] as? Timestamp)?.dateValue(),
+            assignees: map["assignees"] as? [String] ?? [],
+            assigneeUserIds: map["assigneeUserIds"] as? [String] ?? [],
+            company: company?.isEmpty == false ? company : nil,
+            status: status,
+            progress: map["progress"] as? Double ?? 0,
+            isCritical: map["isCritical"] as? Bool ?? false,
+            dependsOn: (map["dependsOn"] as? [String] ?? []).compactMap(UUID.init(uuidString:)),
+            blockedReason: blocked?.isEmpty == false ? blocked : nil,
+            reminderDaysBefore: reminder,
+            originalDue: (map["originalDue"] as? Timestamp)?.dateValue(),
+            history: historyRaw.compactMap(parseDeadlineChange),
+            contextKind: (map["contextKind"] as? String) ?? "Project",
+            projectId: projectId,
+            createdByUserId: (map["createdByUserId"] as? String) ?? "",
+            fileURL: fileURL?.isEmpty == false ? fileURL : nil,
+            fileName: fileName?.isEmpty == false ? fileName : nil,
+            siteAuditId: siteAuditId,
+            siteAuditTitle: siteTitle?.isEmpty == false ? siteTitle : nil
+        )
+        return item
+    }
+
+    func loadDeadlines(project: Project, organizationId: String) async throws -> [DLDeadline] {
+        try await loadDeadlinesState(project: project, organizationId: organizationId).items
+    }
+
+    func loadDeadlinesState(project: Project, organizationId: String) async throws -> (items: [DLDeadline], updatedAt: Date?) {
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else { return ([], nil) }
+        let orgId = try await ensureReadableOrganization(resolved)
+        let ref = deadlinesStateDocumentRef(organizationId: orgId, project: project)
+        let doc: DocumentSnapshot
+        do {
+            doc = try await ref.getDocument(source: .server)
+        } catch {
+            if isFirestorePermissionDenied(error) || isOfflineNetworkError(error) {
+                doc = try await ref.getDocument(source: .cache)
+            } else {
+                throw error
+            }
+        }
+        guard let data = doc.data() else { return ([], nil) }
+        let raw = data["items"] as? [[String: Any]] ?? []
+        let items = raw.compactMap { parseDeadline($0, fallbackProjectId: project.id) }
+            .sorted { $0.due < $1.due }
+        let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue()
+        return (items, updatedAt)
+    }
+
+    @discardableResult
+    func saveDeadlines(
+        _ items: [DLDeadline],
+        project: Project,
+        organizationId: String,
+        baseUpdatedAt: Date? = nil
+    ) async throws -> [DLDeadline] {
+        try await saveDeadlines(
+            items,
+            projectId: project.id,
+            isSmallWorks: project.jobType == .smallWorks,
+            organizationId: organizationId,
+            baseUpdatedAt: baseUpdatedAt
+        )
+    }
+
+    @discardableResult
+    func saveDeadlines(
+        _ items: [DLDeadline],
+        projectId: UUID,
+        isSmallWorks: Bool,
+        organizationId: String,
+        baseUpdatedAt: Date? = nil
+    ) async throws -> [DLDeadline] {
+        guard currentUser != nil else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "You must be signed in to save deadlines."]
+            )
+        }
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings -> Force Reload Data, then retry."]
+            )
+        }
+        let orgId = try await ensureReadableOrganization(resolved)
+        do {
+            try await ensureUserDocumentLinked(organizationId: orgId)
+        } catch {
+            print("🔥🔥🔥 DEBUG: [saveDeadlines] ensureUserDocumentLinked: \(error.localizedDescription)")
+        }
+        await repairCurrentUserOrganizationAccess(organizationId: orgId)
+        try await validateDataIntegrity(organizationId: orgId)
+
+        let ref = deadlinesStateDocumentRef(organizationId: orgId, projectId: projectId, isSmallWorks: isSmallWorks)
+        var itemsToWrite = items
+        if let baseUpdatedAt {
+            do {
+                let remoteDoc = try await ref.getDocument(source: .server)
+                if let data = remoteDoc.data(),
+                   let remoteUpdatedAt = (data["updatedAt"] as? Timestamp)?.dateValue(),
+                   remoteUpdatedAt > baseUpdatedAt.addingTimeInterval(0.4) {
+                    let raw = data["items"] as? [[String: Any]] ?? []
+                    let remoteItems = raw.compactMap { parseDeadline($0, fallbackProjectId: projectId) }
+                    itemsToWrite = mergeDeadlinesFirstWriterWins(remote: remoteItems, local: items)
+                    print("🔥🔥🔥 DEBUG: [saveDeadlines] First writer already synced — merging local creates only")
+                }
+            } catch {
+                if !isOfflineNetworkError(error) && !isFirestorePermissionDenied(error) {
+                    print("🔥🔥🔥 DEBUG: [saveDeadlines] FWW remote read failed: \(error.localizedDescription)")
+                }
+            }
+        }
+
+        let payload: [String: Any] = [
+            "items": itemsToWrite.map(deadlineMap),
+            "updatedAt": Timestamp(date: Date()),
+            "projectId": projectId.uuidString
+        ]
+        try await ref.setData(payload, merge: true)
+
+        let assigneeIds = Array(Set(itemsToWrite.flatMap(\.assigneeUserIds))).sorted()
+        try await deadlineAssignmentsDocumentRef(organizationId: orgId).setData([
+            "projects.\(projectId.uuidString)": assigneeIds,
+            "updatedAt": Timestamp(date: Date())
+        ], merge: true)
+        return itemsToWrite
+    }
+
+    private func mergeDeadlinesFirstWriterWins(remote: [DLDeadline], local: [DLDeadline]) -> [DLDeadline] {
+        var byId = Dictionary(uniqueKeysWithValues: remote.map { ($0.id, $0) })
+        for item in local where byId[item.id] == nil {
+            byId[item.id] = item
+        }
+        return byId.values.sorted { $0.due < $1.due }
+    }
+
+    func loadDeadlineAssignedProjectIds(userId: String, organizationId: String) async -> Set<UUID> {
+        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        guard !resolved.isEmpty else { return [] }
+        do {
+            let orgId = try await ensureReadableOrganization(resolved)
+            let snap = try await deadlineAssignmentsDocumentRef(organizationId: orgId).getDocument()
+            guard let projects = snap.data()?["projects"] as? [String: [String]] else { return [] }
+            return Set(projects.compactMap { key, ids in
+                ids.contains(trimmed) ? UUID(uuidString: key) : nil
+            })
+        } catch {
+            print("🔥🔥🔥 DEBUG: [loadDeadlineAssignedProjectIds] \(error.localizedDescription)")
+            return []
+        }
     }
 }
 

@@ -15,6 +15,8 @@ struct SmallWorksView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var taskStore: ProjectTaskStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     /// Default to Active so the list opens on current jobs; use All / Completed chips for older work.
     @State private var selectedStatus: ProjectStatus? = .active
     @State private var selectedProject: Project? = nil
@@ -22,16 +24,16 @@ struct SmallWorksView: View {
     @State private var navigationPath = NavigationPath()
     @State private var searchText = ""
     @State private var showingCreateSmallWorks = false
+    @State private var deadlineAssignedProjectIds: Set<UUID> = []
+    @State private var didApplyDefaultStatus = false
+    @State private var suppressEmptyCatalogueFlash = WorkCatalogueDeepLink.peek(isSmallWorks: true)
 
     private var listCounts: WorksListStatusCounts {
         WorksListStatusCounts.from(smallWorksBeforeStatusFilter)
     }
 
     private var canCreateSmallWorks: Bool {
-        guard let u = userStore.currentUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if u.isSuperAdmin || u.permissions.adminAccess { return true }
-        return u.permissions.manager && u.permissions.smallWorks
+        userStore.canManageWorkCatalogue(.smallWorks)
     }
     
     private var smallWorksProjects: [Project] {
@@ -55,7 +57,7 @@ struct SmallWorksView: View {
                             .foregroundStyle(ProjectWorksRevampColors.ink)
                             .font(.system(size: 17, weight: .semibold))
                             .frame(width: 36, height: 36)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.card)
                             .clipShape(Circle())
                             .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                     }
@@ -81,7 +83,7 @@ struct SmallWorksView: View {
                 if let userInfo = notification.userInfo,
                    let tab = userInfo["tab"] as? Int,
                    tab == 2 {
-                    // Reset navigation to root
+                    if WorkCatalogueDeepLink.peek(isSmallWorks: true) { return }
                     navigationPath.removeLast(navigationPath.count)
                 }
             }
@@ -89,15 +91,42 @@ struct SmallWorksView: View {
                 if let userInfo = notification.userInfo,
                    let tab = userInfo["tab"] as? Int,
                    tab == 2 {
-                    // Reset navigation when Small Works tab is selected
+                    if WorkCatalogueDeepLink.peek(isSmallWorks: true) { return }
                     navigationPath.removeLast(navigationPath.count)
                     selectedStatus = .active
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .pushWorkCatalogueDetail)) { notification in
+                let isSmallWorks = notification.userInfo?["isSmallWorks"] as? Bool ?? false
+                guard isSmallWorks,
+                      let id = notification.userInfo?["projectId"] as? UUID ?? WorkCatalogueDeepLink.take(isSmallWorks: true) else { return }
+                openCatalogueProject(id: id)
+            }
             .onAppear {
-                if selectedStatus == .inactive || selectedStatus == nil {
-                    selectedStatus = .active
+                if let id = WorkCatalogueDeepLink.take(isSmallWorks: true) {
+                    openCatalogueProject(id: id)
+                    return
                 }
+                guard navigationPath.isEmpty else { return }
+                if !didApplyDefaultStatus {
+                    if selectedStatus == .inactive || selectedStatus == nil {
+                        selectedStatus = .active
+                    }
+                    didApplyDefaultStatus = true
+                }
+            }
+            .navigationDestination(for: Project.self) { project in
+                ProjectDetailView(project: project)
+                    .environmentObject(bookingStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(projectStore)
+                    .background(
+                        Color.clear
+                            .preference(key: HideBottomMenuKey.self, value: true)
+                    )
+            }
+            .task {
+                await refreshDeadlineAssignedProjectIds()
             }
             .sheet(isPresented: $showingEditProject) {
                 if let project = selectedProject {
@@ -123,7 +152,10 @@ struct SmallWorksView: View {
 
     private var smallWorksRootContent: some View {
         Group {
-            if projectStore.isLoading {
+            if suppressEmptyCatalogueFlash || WorkCatalogueDeepLink.peek(isSmallWorks: true) {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if projectStore.isLoading {
                 ProgressView("Loading small works...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if smallWorksBeforeStatusFilter.isEmpty {
@@ -168,21 +200,24 @@ struct SmallWorksView: View {
                     .padding(.horizontal, 18)
                     .padding(.top, 8)
                 }
-                .navigationDestination(for: Project.self) { project in
-                    ProjectDetailView(project: project)
-                        .environmentObject(bookingStore)
-                        .environmentObject(operativeStore)
-                        .environmentObject(projectStore)
-                        .background(
-                            Color.clear
-                                .preference(key: HideBottomMenuKey.self, value: true)
-                        )
-                }
                 .refreshable {
                     projectStore.loadData()
                 }
             }
         }
+    }
+
+    private func openCatalogueProject(id: UUID) {
+        guard let project = projectStore.projects.first(where: { $0.id == id })
+                ?? projectStore.smallWorks.first(where: { $0.id == id }) else {
+            suppressEmptyCatalogueFlash = false
+            return
+        }
+        selectedStatus = nil
+        didApplyDefaultStatus = true
+        suppressEmptyCatalogueFlash = false
+        navigationPath = NavigationPath()
+        navigationPath.append(project)
     }
 
     private var filterChipsRow: some View {
@@ -262,50 +297,29 @@ struct SmallWorksView: View {
         .padding()
     }
     
-    /// Small works with operative visibility applied but without status chip filter.
+    /// Small works with role visibility applied but without status chip filter.
     private var smallWorksBeforeStatusFilter: [Project] {
-        var works = smallWorksProjects
-        
-        if userStore.isOperativeMode() {
-            guard let operative = resolvedCurrentOperative,
-                  let currentUserId = userStore.currentUser?.id else {
-                return []
-            }
-            let assignedProjectIds = Set(bookingStore.bookings
-                .filter {
-                    $0.operativeId == operative.id &&
-                    ($0.status == .confirmed || $0.status == .tentative)
-                }
-                .map { $0.projectId })
-            works = works.filter {
-                assignedProjectIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId)
-            }
-        } else if let currentUser = userStore.currentUser,
-                  !userStore.hasAdminAccess(),
-                  currentUser.permissions.manager {
-            works = works.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
-        }
-        
-        return works
+        WorkAccess.visibleWorks(
+            from: smallWorksProjects,
+            catalogue: .smallWorks,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            taskStore: taskStore,
+            deadlineAssignedProjectIds: deadlineAssignedProjectIds
+        )
     }
 
-    private var resolvedCurrentOperative: Operative? {
-        let normalizedEmail = userStore.currentUser?.email
-            .lowercased()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let normalizedEmail, !normalizedEmail.isEmpty,
-           let byEmail = operativeStore.allOperatives.first(where: {
-               $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
-           }) {
-            return byEmail
+    private func refreshDeadlineAssignedProjectIds() async {
+        guard userStore.isOperativeMode(),
+              let userId = userStore.currentUser?.id,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId else {
+            await MainActor.run { deadlineAssignedProjectIds = [] }
+            return
         }
-        let first = userStore.currentUser?.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let last = userStore.currentUser?.surname.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !first.isEmpty || !last.isEmpty else { return nil }
-        return operativeStore.allOperatives.first(where: {
-            $0.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == first &&
-            $0.lastName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == last
-        })
+        let ids = await firebaseBackend.loadDeadlineAssignedProjectIds(userId: userId, organizationId: orgId)
+        await MainActor.run { deadlineAssignedProjectIds = ids }
     }
     
     private var isEmptyDueToStatusFilterOnly: Bool {
@@ -355,7 +369,7 @@ struct SmallWorksDetailRowView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -389,7 +403,7 @@ struct SmallWorksDetailRowView: View {
             listProgressSection
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.card)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)

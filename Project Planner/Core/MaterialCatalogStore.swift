@@ -7,11 +7,39 @@ import Foundation
 import Combine
 import FirebaseAuth
 
+enum MaterialCatalogueCSVImportMode: Equatable {
+    /// Add new rows, update matching rows, and remove catalogue items missing from the sheet.
+    case updateExisting
+    /// Erase the current catalogue, then import every row as a new item (new Catalogue IDs).
+    case replaceAll
+}
+
+struct MaterialCatalogueImportProgress: Equatable {
+    var completed: Int
+    var total: Int
+    var phase: String
+
+    var fraction: Double {
+        guard total > 0 else { return 0 }
+        return min(1, Double(completed) / Double(total))
+    }
+}
+
+struct MaterialCatalogueCSVImportResult: Equatable {
+    var added: Int
+    var updated: Int
+    var removed: Int
+    var skippedDuplicates: Int
+
+    var totalTouched: Int { added + updated + removed }
+}
+
 @MainActor
 final class MaterialCatalogStore: ObservableObject {
     @Published private(set) var items: [MaterialCatalogItem] = []
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
+    @Published private(set) var importProgress: MaterialCatalogueImportProgress?
 
     private weak var firebaseBackend: FirebaseBackend?
 
@@ -64,40 +92,76 @@ final class MaterialCatalogStore: ObservableObject {
         items.removeAll { $0.id == itemId }
     }
 
-    func importRows(
+    func importCSV(
         _ rows: [MaterialCatalogCSVRow],
+        mode: MaterialCatalogueCSVImportMode,
         createdByUserId: String,
-        createdByName: String,
-        skipDuplicateKeys: Set<String>,
-        forceImportKeys: Set<String> = []
-    ) async throws -> Int {
-        var imported = 0
-        for row in rows {
-            let key = duplicateKey(name: row.name, code: row.productCode)
-            if skipDuplicateKeys.contains(key) { continue }
-            if !forceImportKeys.contains(key),
-               items.contains(where: {
-                   MaterialCatalogDuplicateDetection.normalizeName($0.name)
-                    == MaterialCatalogDuplicateDetection.normalizeName(row.name)
-               }) {
-                continue
-            }
-            let item = MaterialCatalogItem(
-                name: row.name,
-                brand: row.brand,
-                productCode: row.productCode,
-                defaultUnit: row.defaultUnit,
-                size: row.size,
-                length: row.length,
-                lengthUnit: row.lengthUnit,
-                category: normalizedCategory(row.category),
-                createdByUserId: createdByUserId,
-                createdByName: createdByName
+        createdByName: String
+    ) async throws -> MaterialCatalogueCSVImportResult {
+        guard let firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            throw NSError(
+                domain: "MaterialCatalogStore",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
             )
-            try await save(item)
-            imported += 1
         }
-        return imported
+
+        importProgress = MaterialCatalogueImportProgress(completed: 0, total: 1, phase: "Preparing catalogue…")
+        defer { importProgress = nil }
+
+        let plan = makeImportPlan(
+            rows: rows,
+            existing: items,
+            mode: mode,
+            createdByUserId: createdByUserId,
+            createdByName: createdByName
+        )
+        let writeTotal = plan.itemsToSave.count + plan.idsToDelete.count
+        let result = MaterialCatalogueCSVImportResult(
+            added: plan.added,
+            updated: plan.updated,
+            removed: plan.idsToDelete.count,
+            skippedDuplicates: plan.skippedDuplicates
+        )
+
+        if writeTotal == 0 {
+            importProgress = MaterialCatalogueImportProgress(completed: 1, total: 1, phase: "Catalogue is already up to date")
+            return result
+        }
+
+        let reportProgress: (Int, String) -> Void = { [weak self] completed, phase in
+            self?.importProgress = MaterialCatalogueImportProgress(
+                completed: completed,
+                total: writeTotal,
+                phase: phase
+            )
+        }
+
+        switch mode {
+        case .updateExisting:
+            reportProgress(0, "Saving materials…")
+            try await firebaseBackend.saveMaterialCatalogueItems(plan.itemsToSave, organizationId: organizationId) { saved in
+                reportProgress(saved, "Saving materials…")
+            }
+            reportProgress(plan.itemsToSave.count, "Removing materials…")
+            try await firebaseBackend.deleteMaterialCatalogueItems(plan.idsToDelete, organizationId: organizationId) { deleted in
+                reportProgress(plan.itemsToSave.count + deleted, "Removing materials…")
+            }
+        case .replaceAll:
+            reportProgress(0, "Removing current catalogue…")
+            try await firebaseBackend.deleteMaterialCatalogueItems(plan.idsToDelete, organizationId: organizationId) { deleted in
+                reportProgress(deleted, "Removing current catalogue…")
+            }
+            reportProgress(plan.idsToDelete.count, "Uploading materials…")
+            try await firebaseBackend.saveMaterialCatalogueItems(plan.itemsToSave, organizationId: organizationId) { saved in
+                reportProgress(plan.idsToDelete.count + saved, "Uploading materials…")
+            }
+        }
+
+        applyPlanLocally(plan)
+        importProgress = MaterialCatalogueImportProgress(completed: writeTotal, total: writeTotal, phase: "Finished")
+        return result
     }
 
     func search(query: String, limit: Int = 12) -> [MaterialCatalogItem] {
@@ -114,7 +178,7 @@ final class MaterialCatalogStore: ObservableObject {
     }
 
     func duplicateKey(name: String, code: String?) -> String {
-        "\(MaterialCatalogDuplicateDetection.normalizeName(name))|\(MaterialCatalogDuplicateDetection.normalizeCode(code))"
+        MaterialCatalogDuplicateDetection.identityKey(name: name, productCode: code)
     }
 
     var brandCount: Int {
@@ -123,6 +187,179 @@ final class MaterialCatalogStore: ObservableObject {
 
     var categoryCount: Int {
         Set(items.compactMap { $0.category?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }).count
+    }
+
+    private struct ImportPlan {
+        var itemsToSave: [MaterialCatalogItem]
+        var idsToDelete: [UUID]
+        var added: Int
+        var updated: Int
+        var skippedDuplicates: Int
+    }
+
+    private func makeImportPlan(
+        rows: [MaterialCatalogCSVRow],
+        existing: [MaterialCatalogItem],
+        mode: MaterialCatalogueCSVImportMode,
+        createdByUserId: String,
+        createdByName: String
+    ) -> ImportPlan {
+        var seenFileIds = Set<UUID>()
+        var seenFileIdentities = Set<String>()
+        var uniqueRows: [MaterialCatalogCSVRow] = []
+        var skippedDuplicates = 0
+
+        for row in rows {
+            if mode == .updateExisting, let catalogueId = row.catalogueId {
+                if seenFileIds.contains(catalogueId) {
+                    skippedDuplicates += 1
+                    continue
+                }
+                seenFileIds.insert(catalogueId)
+            }
+            let identity = duplicateKey(name: row.name, code: row.productCode)
+            if seenFileIdentities.contains(identity) {
+                skippedDuplicates += 1
+                continue
+            }
+            seenFileIdentities.insert(identity)
+            uniqueRows.append(row)
+        }
+
+        switch mode {
+        case .replaceAll:
+            let now = Date()
+            let itemsToSave = uniqueRows.map { row in
+                item(
+                    from: row,
+                    id: UUID(),
+                    createdAt: now,
+                    createdByUserId: createdByUserId,
+                    createdByName: createdByName
+                )
+            }
+            return ImportPlan(
+                itemsToSave: itemsToSave,
+                idsToDelete: existing.map(\.id),
+                added: itemsToSave.count,
+                updated: 0,
+                skippedDuplicates: skippedDuplicates
+            )
+
+        case .updateExisting:
+            var existingById = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+            var existingByIdentity: [String: MaterialCatalogItem] = [:]
+            for item in existing {
+                let key = duplicateKey(name: item.name, code: item.productCode)
+                if existingByIdentity[key] == nil {
+                    existingByIdentity[key] = item
+                }
+            }
+
+            var itemsToSave: [MaterialCatalogItem] = []
+            var added = 0
+            var updated = 0
+            var keptIds = Set<UUID>()
+
+            for row in uniqueRows {
+                let identity = duplicateKey(name: row.name, code: row.productCode)
+                let match: MaterialCatalogItem?
+                if let catalogueId = row.catalogueId, let existingItem = existingById[catalogueId] {
+                    match = existingItem
+                } else if let existingItem = existingByIdentity[identity] {
+                    match = existingItem
+                } else {
+                    match = nil
+                }
+
+                if let match {
+                    existingById.removeValue(forKey: match.id)
+                    existingByIdentity.removeValue(forKey: duplicateKey(name: match.name, code: match.productCode))
+                    let updatedItem = item(
+                        from: row,
+                        id: match.id,
+                        createdAt: match.createdAt,
+                        createdByUserId: match.createdByUserId,
+                        createdByName: match.createdByName
+                    )
+                    keptIds.insert(match.id)
+                    if hasCatalogueFieldChanges(updatedItem, match) {
+                        itemsToSave.append(updatedItem)
+                        updated += 1
+                    }
+                } else {
+                    let newId = row.catalogueId ?? UUID()
+                    let newItem = item(
+                        from: row,
+                        id: newId,
+                        createdAt: Date(),
+                        createdByUserId: createdByUserId,
+                        createdByName: createdByName
+                    )
+                    itemsToSave.append(newItem)
+                    keptIds.insert(newItem.id)
+                    added += 1
+                }
+            }
+
+            let idsToDelete = existing.map(\.id).filter { !keptIds.contains($0) }
+            return ImportPlan(
+                itemsToSave: itemsToSave,
+                idsToDelete: idsToDelete,
+                added: added,
+                updated: updated,
+                skippedDuplicates: skippedDuplicates
+            )
+        }
+    }
+
+    private func applyPlanLocally(_ plan: ImportPlan) {
+        var map = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
+        for id in plan.idsToDelete {
+            map.removeValue(forKey: id)
+        }
+        for item in plan.itemsToSave {
+            map[item.id] = normalizeCategory(item)
+        }
+        items = map.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func item(
+        from row: MaterialCatalogCSVRow,
+        id: UUID,
+        createdAt: Date,
+        createdByUserId: String,
+        createdByName: String
+    ) -> MaterialCatalogItem {
+        MaterialCatalogItem(
+            id: id,
+            name: row.name,
+            brand: row.brand,
+            productCode: row.productCode,
+            defaultUnit: row.defaultUnit,
+            size: row.size,
+            length: row.length,
+            lengthUnit: row.lengthUnit,
+            category: normalizedCategory(row.category),
+            createdAt: createdAt,
+            createdByUserId: createdByUserId,
+            createdByName: createdByName
+        )
+    }
+
+    private func hasCatalogueFieldChanges(_ lhs: MaterialCatalogItem, _ rhs: MaterialCatalogItem) -> Bool {
+        lhs.name != rhs.name
+            || lhs.brand != rhs.brand
+            || normalizedOptional(lhs.productCode) != normalizedOptional(rhs.productCode)
+            || lhs.defaultUnit != rhs.defaultUnit
+            || normalizedOptional(lhs.size) != normalizedOptional(rhs.size)
+            || normalizedOptional(lhs.length) != normalizedOptional(rhs.length)
+            || lhs.lengthUnit != rhs.lengthUnit
+            || normalizedCategory(lhs.category) != normalizedCategory(rhs.category)
+    }
+
+    private func normalizedOptional(_ value: String?) -> String {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     private func normalizedCategory(_ value: String?) -> String {

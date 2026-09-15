@@ -737,7 +737,7 @@ struct AddUserView: View {
                             invitePermissionDivider
                             PermissionToggle(
                                 title: "Weekly Report",
-                                description: "Can open and pull weekly reports.",
+                                description: "Can open Weekly Report from Home. If off, that tile is hidden.",
                                 isOn: $permissions.weeklyReports,
                                 isDisabled: false,
                                 style: .plainInset
@@ -745,7 +745,7 @@ struct AddUserView: View {
                             invitePermissionDivider
                             PermissionToggle(
                                 title: "Daily Overview",
-                                description: "Can open daily overview from the home screen and menus.",
+                                description: "Can open Daily Overview from Home. If off, that tile is hidden.",
                                 isOn: $permissions.dailyOverview,
                                 isDisabled: false,
                                 style: .plainInset
@@ -753,7 +753,7 @@ struct AddUserView: View {
                             invitePermissionDivider
                             PermissionToggle(
                                 title: "Sub Contractors",
-                                description: "Can add and manage sub contractors. If unselected they can still book sub contractors in, but not manage their records.",
+                                description: "Can add and manage sub contractor records. If off, Sub Contractors is hidden on Home and menus. They can still book existing subcontractors on jobs.",
                                 isOn: $permissions.subContractors,
                                 isDisabled: false,
                                 style: .plainInset
@@ -761,7 +761,7 @@ struct AddUserView: View {
                             invitePermissionDivider
                             PermissionToggle(
                                 title: "Manage Qualifications",
-                                description: "When on, this manager can edit Organisation Qualifications. When off, they only see My Qualifications.",
+                                description: "When on, this manager can add and edit organisation qualification templates. When off, they only see My Qualifications, and they can still assign templates others have already added.",
                                 isOn: $permissions.qualifications,
                                 isDisabled: false,
                                 style: .plainInset
@@ -769,7 +769,7 @@ struct AddUserView: View {
                             invitePermissionDivider
                             PermissionToggle(
                                 title: "Projects",
-                                description: "Can create and manage projects. If unselected, this manager can still schedule operatives and sub contractors.",
+                                description: "Can create, edit, and add projects. If off, they still see projects they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit project details.",
                                 isOn: $permissions.projects,
                                 isDisabled: false,
                                 style: .plainInset
@@ -777,7 +777,7 @@ struct AddUserView: View {
                             invitePermissionDivider
                             PermissionToggle(
                                 title: "Small Works",
-                                description: "Can create and manage small works. If unselected, this manager can still schedule operatives and sub contractors.",
+                                description: "Can create, edit, and add small works. If off, they still see small works they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit small works details.",
                                 isOn: $permissions.smallWorks,
                                 isDisabled: false,
                                 style: .plainInset
@@ -1027,6 +1027,8 @@ struct AddUserView: View {
                 smallWorks: true,
                 operativeMode: false,
                 annualLeaveSelfBook: false,
+                weeklyReports: true,
+                dailyOverview: true,
                 wholesalersOrderHistory: true
             )
         case .manager:

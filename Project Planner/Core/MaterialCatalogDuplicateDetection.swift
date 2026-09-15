@@ -53,6 +53,10 @@ enum MaterialCatalogDuplicateDetection {
         normalizeName(raw ?? "")
     }
 
+    static func identityKey(name: String, productCode: String?) -> String {
+        "\(normalizeName(name))|\(normalizeCode(productCode))"
+    }
+
     /// Duplicate when normalised material name and product code both match (manufacturer/brand is ignored).
     static func isDuplicate(
         name: String,

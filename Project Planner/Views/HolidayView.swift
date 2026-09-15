@@ -8,20 +8,6 @@
 import SwiftUI
 import FirebaseAuth
 
-private enum HolidayChrome {
-    static let canvas = Color(red: 0.97, green: 0.973, blue: 0.98)
-    static let ink = Color(red: 0.043, green: 0.063, blue: 0.125)
-    static let muted = Color(red: 0.42, green: 0.447, blue: 0.502)
-    static let border = Color(red: 0.933, green: 0.941, blue: 0.953)
-    static let accent = Color(red: 0.094, green: 0.373, blue: 0.647)
-    static let taken = Color(red: 0.133, green: 0.545, blue: 0.318)
-    static let pending = Color(red: 0.89, green: 0.22, blue: 0.22)
-    /// Pending request count in summary hero (distinct from calendar request red).
-    static let pendingMetric = Color(red: 0.98, green: 0.62, blue: 0.09)
-    /// Approved half-day on the booking calendar (distinct from pending request orange).
-    static let halfDayBooked = Color(red: 0.95, green: 0.52, blue: 0.12)
-}
-
 struct HolidayView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var holidayStore: HolidayStore
@@ -32,7 +18,7 @@ struct HolidayView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
 
     var showRequests: Bool = false
-    /// When `true`, the back chevron calls `dismiss()` (sheet from home / notifications). When `false`, posts `goBackToPreviousTab` (bottom-bar Holiday tab).
+    /// When `true`, Done dismisses the sheet. When `false`, Done returns to the home screen.
     var presentedAsSheet: Bool = false
 
     private var isOperativeMode: Bool { userStore.isOperativeMode() }
@@ -169,185 +155,183 @@ struct HolidayView: View {
         return .none
     }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button(action: {
-                    if presentedAsSheet {
-                        dismiss()
-                    } else {
-                        NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
-                    }
-                }) {
-                    Image(systemName: "chevron.left")
-                        .foregroundStyle(HolidayChrome.accent)
-                        .font(.system(size: 17, weight: .semibold))
-                }
-                Spacer()
-                Text("Annual leave")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(HolidayChrome.ink)
-                Spacer()
-                Color.clear.frame(width: 20, height: 20)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(Color(.systemBackground))
+    private func goBackFromAnnualLeave() {
+        if presentedAsSheet {
+            dismiss()
+        } else {
+            NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+        }
+    }
 
-            Group {
-                if !isAnnualLeaveAvailable {
-                    annualLeaveDisabledPlaceholder
-                } else if holidayStore.isLoading && holidayStore.bookings.isEmpty {
-                    VStack(spacing: 12) {
-                        ProgressView("Loading…")
-                        if let msg = holidayStore.errorMessage, !msg.isEmpty {
+    @ViewBuilder
+    private var holidayRootContent: some View {
+        if !isAnnualLeaveAvailable {
+            annualLeaveDisabledPlaceholder
+        } else if holidayStore.isLoading && holidayStore.bookings.isEmpty {
+            VStack(spacing: 12) {
+                ProgressView("Loading…")
+                if let msg = holidayStore.errorMessage, !msg.isEmpty {
+                    Text(msg)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+                Button("Retry") {
+                    Task { await holidayStore.loadData() }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    if let msg = holidayStore.errorMessage, !msg.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Some holiday data could not be synced.")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
                             Text(msg)
                                 .font(.footnote)
                                 .foregroundColor(.secondary)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal)
-                        }
-                        Button("Retry") {
-                            Task { await holidayStore.loadData() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    NavigationStack {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 20) {
-                                if let msg = holidayStore.errorMessage, !msg.isEmpty {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        Text("Some holiday data could not be synced.")
-                                            .font(.subheadline)
-                                            .fontWeight(.semibold)
-                                        Text(msg)
-                                            .font(.footnote)
-                                            .foregroundColor(.secondary)
-                                        Button("Retry") {
-                                            Task { await holidayStore.loadData() }
-                                        }
-                                        .buttonStyle(.bordered)
-                                    }
-                                    .padding(12)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color(.secondarySystemBackground))
-                                    .cornerRadius(10)
-                                }
-
-                                if userStore.canAccessOperativeAnnualLeaveDirectory() {
-                                    NavigationLink {
-                                        OperativeAnnualLeaveHubView()
-                                            .environmentObject(userStore)
-                                            .environmentObject(operativeStore)
-                                            .environmentObject(holidayStore)
-                                            .environmentObject(firebaseBackend)
-                                            .environmentObject(notificationService)
-                                    } label: {
-                                        HStack(spacing: 10) {
-                                            Image(systemName: "person.3.fill")
-                                                .font(.body.weight(.semibold))
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text("View and manage user annual leave")
-                                                    .font(.subheadline.weight(.semibold))
-                                                Text("Book leave and approve requests for your team")
-                                                    .font(.caption)
-                                                    .foregroundStyle(HolidayChrome.muted)
-                                            }
-                                            Spacer(minLength: 0)
-                                            Image(systemName: "chevron.right")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(HolidayChrome.muted)
-                                        }
-                                        .foregroundStyle(HolidayChrome.ink)
-                                        .padding(.horizontal, 14)
-                                        .padding(.vertical, 12)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                .fill(Color.white)
-                                                .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
-                                        )
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                .stroke(HolidayChrome.border, lineWidth: 1)
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-
-                                if isRequestMode || canApproveRequests {
-                                Picker("Section", selection: $activeSection) {
-                                    Text(isRequestMode ? "Request" : "Book").tag(HolidaySection.calendar)
-                                    Text("My Annual Leave").tag(HolidaySection.myHoliday)
-                                    Text("Pending").tag(HolidaySection.requests)
-                                }
-                                .pickerStyle(.segmented)
-                                .tint(HolidayChrome.accent)
+                            Button("Retry") {
+                                Task { await holidayStore.loadData() }
                             }
+                            .buttonStyle(.bordered)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.secondarySystemBackground))
+                        .cornerRadius(10)
+                    }
 
-                            switch activeSection {
-                            case .calendar:
-                                if let summary = annualLeaveSummary {
-                                    leaveUsageHero(summary: summary)
+                    if userStore.canAccessOperativeAnnualLeaveDirectory() {
+                        NavigationLink {
+                            OperativeAnnualLeaveHubView()
+                                .environmentObject(userStore)
+                                .environmentObject(operativeStore)
+                                .environmentObject(holidayStore)
+                                .environmentObject(firebaseBackend)
+                                .environmentObject(notificationService)
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "person.3.fill")
+                                    .font(.body.weight(.semibold))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("View and manage user annual leave")
+                                        .font(.subheadline.weight(.semibold))
+                                    Text("Book leave and approve requests for your team")
+                                        .font(.caption)
+                                        .foregroundStyle(HolidayChrome.muted)
                                 }
-                                if canShowSelfServeBookedAnnualLeave {
-                                    Button {
-                                        showSelfServeBookedAnnualLeaveSheet = true
-                                    } label: {
-                                        HStack(spacing: 10) {
-                                            Image(systemName: "list.bullet.rectangle.portrait.fill")
-                                                .font(.body.weight(.semibold))
-                                            Text("Booked annual leave")
-                                                .font(.subheadline.weight(.semibold))
-                                            Spacer(minLength: 0)
-                                            Image(systemName: "chevron.right")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(HolidayChrome.muted)
-                                        }
-                                        .foregroundStyle(HolidayChrome.ink)
-                                        .padding(.horizontal, 14)
-                                        .padding(.vertical, 12)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                .fill(Color.white)
-                                                .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
-                                        )
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                .stroke(HolidayChrome.border, lineWidth: 1)
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                                calendarSection
-                            case .myHoliday:
-                                myHolidaySection
-                            case .requests:
-                                holidayRequestsSection
+                                Spacer(minLength: 0)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(HolidayChrome.muted)
                             }
+                            .foregroundStyle(HolidayChrome.ink)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(Color.white)
+                                    .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(HolidayChrome.border, lineWidth: 1)
+                            )
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 16)
+                        .buttonStyle(.plain)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(HolidayChrome.canvas)
-                    .refreshable {
-                        if userStore.isOperativeMode() {
-                            operativeStore.loadData()
+
+                    if isRequestMode || canApproveRequests {
+                        Picker("Section", selection: $activeSection) {
+                            Text(isRequestMode ? "Request" : "Book").tag(HolidaySection.calendar)
+                            Text("My Annual Leave").tag(HolidaySection.myHoliday)
+                            Text("Pending").tag(HolidaySection.requests)
                         }
-                        await holidayStore.loadData()
-                        await notificationService.loadNotifications()
-                        await reloadBankHolidays(forceRefresh: true)
+                        .pickerStyle(.segmented)
+                        .tint(HolidayChrome.accent)
                     }
+
+                    switch activeSection {
+                    case .calendar:
+                        if let summary = annualLeaveSummary {
+                            AnnualLeaveUsageHeroView(summary: summary)
+                        }
+                        if canShowSelfServeBookedAnnualLeave {
+                            Button {
+                                showSelfServeBookedAnnualLeaveSheet = true
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "list.bullet.rectangle.portrait.fill")
+                                        .font(.body.weight(.semibold))
+                                    Text("Booked annual leave")
+                                        .font(.subheadline.weight(.semibold))
+                                    Spacer(minLength: 0)
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(HolidayChrome.muted)
+                                }
+                                .foregroundStyle(HolidayChrome.ink)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(Color.white)
+                                        .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(HolidayChrome.border, lineWidth: 1)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        calendarSection
+                    case .myHoliday:
+                        myHolidaySection
+                    case .requests:
+                        holidayRequestsSection
                     }
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .refreshable {
+                if userStore.isOperativeMode() {
+                    operativeStore.loadData()
+                }
+                await holidayStore.loadData()
+                await notificationService.loadNotifications()
+                await reloadBankHolidays(forceRefresh: true)
+            }
         }
-        .toolbar(.hidden, for: .navigationBar)
-        .navigationBarBackButtonHidden(true)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                HolidayChrome.canvas.ignoresSafeArea()
+                holidayRootContent
+            }
+            .navigationTitle("Annual leave")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done", action: goBackFromAnnualLeave)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(HolidayChrome.accent)
+                        .accessibilityLabel("Done")
+                        .accessibilityHint("Returns to the home screen")
+                }
+            }
+            .navigationBarBackButtonHidden(true)
+            .appChromeNavigationBarSurface()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: bankHolidayRegion.id) {
             await reloadBankHolidays(forceRefresh: false)
         }
@@ -517,88 +501,6 @@ struct HolidayView: View {
                 }
             }
         }
-    }
-
-    private func leaveUsageHero(summary: AnnualLeaveUsageSummary) -> some View {
-        let usedPortion = summary.entitlementDays > 0
-            ? min(1, (summary.takenDays + summary.pendingDays) / summary.entitlementDays)
-            : 0
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("Current leave year")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(HolidayChrome.muted)
-            Text(summary.leaveYearLabel)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(HolidayChrome.ink)
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Remaining")
-                        .font(.caption2)
-                        .foregroundStyle(HolidayChrome.muted)
-                    Text(formatLeaveDays(summary.remainingDays))
-                        .font(.title2.weight(.bold))
-                        .foregroundStyle(HolidayChrome.ink)
-                }
-                Spacer(minLength: 12)
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("Allowance")
-                        .font(.caption2)
-                        .foregroundStyle(HolidayChrome.muted)
-                    Text(formatLeaveDays(summary.entitlementDays))
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(HolidayChrome.accent)
-                }
-            }
-            HStack(spacing: 0) {
-                heroMetric(title: "Taken", value: summary.takenDays, color: HolidayChrome.taken)
-                heroMetric(title: "Pending", value: summary.pendingDays, color: HolidayChrome.pendingMetric)
-            }
-            ProgressView(value: usedPortion, total: 1)
-                .tint(HolidayChrome.accent)
-            if summary.carryOverDays > 0.001 {
-                Text("Includes \(formatLeaveDays(summary.carryOverDays)) carried forward")
-                    .font(.caption2)
-                    .foregroundStyle(HolidayChrome.muted)
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.99, green: 0.94, blue: 0.90),
-                            Color(red: 0.96, green: 0.97, blue: 0.99),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(HolidayChrome.border, lineWidth: 1)
-        )
-    }
-
-    private func heroMetric(title: String, value: Double, color: Color) -> some View {
-        VStack(spacing: 4) {
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(HolidayChrome.muted)
-            Text(formatLeaveDays(value))
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(color)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func formatLeaveDays(_ d: Double) -> String {
-        if abs(d - floor(d + 0.0001)) < 0.02 {
-            return String(Int((d * 2).rounded() / 2))
-        }
-        return String(format: "%.1f", d)
     }
 
     private var calendarSection: some View {
