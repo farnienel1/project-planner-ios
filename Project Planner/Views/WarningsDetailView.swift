@@ -98,9 +98,9 @@ struct WarningsDetailView: View {
                 WarningsRefreshHelper.isWarningsSheetVisible = true
                 print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED count=\(warningsService.activeWarnings.count) completed=\(warningsService.hasCompletedLiveDetection)")
             }
-            .onDisappear {
-                WarningsRefreshHelper.isWarningsSheetVisible = false
-            }
+            // Do not clear the visible flag here. Opening Book labour as a cover can fire
+            // onDisappear while Warnings is still presented, which used to restart a scan
+            // and make slot buttons feel stuck. Home clears the flag when the sheet closes.
             // fullScreenCover avoids nested-sheet bug that dismissed Warnings back to Home.
             .fullScreenCover(isPresented: $showingWarningsSettings) {
                 NavigationStack {

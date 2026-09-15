@@ -336,6 +336,8 @@ struct OperativeCustomHoursSheet: View {
     var showsBreakdown: Bool
     var showsFooterNote: Bool
     var forceSolidBlueTimeline: Bool
+    /// When false, content is shown in the parent `NavigationStack` (avoids nested covers).
+    var embedsNavigation: Bool
     let initialChoice: OperativeDayBookingChoice?
     let onSave: (String, String, Bool, Double?) -> Void
     let onCancel: () -> Void
@@ -366,6 +368,7 @@ struct OperativeCustomHoursSheet: View {
         showsBreakdown: Bool = true,
         showsFooterNote: Bool = true,
         forceSolidBlueTimeline: Bool = false,
+        embedsNavigation: Bool = true,
         initialChoice: OperativeDayBookingChoice?,
         onSave: @escaping (String, String, Bool, Double?) -> Void,
         onCancel: @escaping () -> Void
@@ -381,6 +384,7 @@ struct OperativeCustomHoursSheet: View {
         self.showsBreakdown = showsBreakdown
         self.showsFooterNote = showsFooterNote
         self.forceSolidBlueTimeline = forceSolidBlueTimeline
+        self.embedsNavigation = embedsNavigation
         self.initialChoice = initialChoice
         self.onSave = onSave
         self.onCancel = onCancel
@@ -490,60 +494,68 @@ struct OperativeCustomHoursSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack(alignment: .top) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if timeValidationBanner != nil {
-                            Color.clear.frame(height: 44)
-                        }
-                        headerSection
-                        if !showsBreakControls {
-                            Text("This user is PAYE and is not paid hourly.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 4)
-                        }
-                        hoursCard
-                        if showsBreakControls {
-                            breakToggleCard
-                        }
-                        if showsBreakdown {
-                            breakdownCard
-                        }
-                        if showsFooterNote {
-                            footerNoteCard
-                        }
-                        if let errorMessage {
-                            Text(errorMessage)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.red)
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 16)
-                }
-                .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
-
-                if let timeValidationBanner {
-                    timeValidationBannerView(timeValidationBanner)
-                        .padding(.horizontal, 14)
-                        .padding(.top, 8)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
+        Group {
+            if embedsNavigation {
+                NavigationStack { customHoursForm }
+            } else {
+                customHoursForm
             }
-            .animation(.spring(response: 0.35, dampingFraction: 0.82), value: timeValidationBanner)
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
+        }
+    }
+
+    private var customHoursForm: some View {
+        ZStack(alignment: .top) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if timeValidationBanner != nil {
+                        Color.clear.frame(height: 44)
+                    }
+                    headerSection
+                    if !showsBreakControls {
+                        Text("This user is PAYE and is not paid hourly.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 4)
+                    }
+                    hoursCard
+                    if showsBreakControls {
+                        breakToggleCard
+                    }
+                    if showsBreakdown {
+                        breakdownCard
+                    }
+                    if showsFooterNote {
+                        footerNoteCard
+                    }
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red)
+                    }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { validateAndSave() }
-                        .fontWeight(.semibold)
-                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 16)
+            }
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+
+            if let timeValidationBanner {
+                timeValidationBannerView(timeValidationBanner)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: timeValidationBanner)
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel", action: onCancel)
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") { validateAndSave() }
+                    .fontWeight(.semibold)
             }
         }
     }
