@@ -48,6 +48,7 @@ struct HSDocumentPreviewItem: Identifiable, Hashable {
 
 struct HSRamsDocumentDetailView: View {
     let document: HSRamsDocument
+    var onSendForSignatures: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var preview: HSDocumentPreviewItem?
     @State private var shareURL: IdentifiableURL?
@@ -116,6 +117,20 @@ struct HSRamsDocumentDetailView: View {
                             }
                             .buttonStyle(HSGhostButton(tint: HS.blue))
                         }
+                    }
+
+                    if let onSendForSignatures {
+                        Button {
+                            HSHaptic.tap()
+                            dismiss()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                onSendForSignatures()
+                            }
+                        } label: {
+                            Label("Send for signatures", systemImage: "paperplane.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(HSFilledButton(tone: .teal))
                     }
                 }
                 .padding(.horizontal, HSMetric.screenPad)

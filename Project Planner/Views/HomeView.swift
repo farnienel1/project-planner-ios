@@ -107,6 +107,7 @@ struct HomeView: View {
                 .environmentObject(holidayStore)
                 .environmentObject(notificationService)
                 .environmentObject(firebaseBackend)
+                .environmentObject(bookingStore)
         }
         .sheet(isPresented: $showingNotifications) {
             NotificationsView()

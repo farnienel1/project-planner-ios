@@ -206,7 +206,9 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         }
         await persist(firebaseBackend: firebaseBackend, userStore: userStore)
         guard let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) else { return pendingUserIds.count }
-        let talkTitle = data.talks.first(where: { $0.id == issue.talkId })?.title ?? "Toolbox Talk"
+        let talkTitle = data.talks.first(where: { $0.id == issue.talkId })?.title
+            ?? data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId })?.title
+            ?? "H&S sign-off"
         for userId in pendingUserIds {
             let notification = AppNotification(
                 organizationId: orgId,
@@ -305,6 +307,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         attachedDocTitles: [String],
         localFileURL: URL?,
         originalFileName: String?,
+        recipientUserIds: [String],
         firebaseBackend: FirebaseBackend,
         userStore: UserStore
     ) async {
@@ -326,21 +329,75 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
             errorMessage = "Couldn’t upload the RAMS file. Check your connection and try again."
             return
         }
-        data.ramsDocuments.insert(
-            HSRamsDocument(
-                id: UUID().uuidString,
-                title: title,
-                trade: trade,
-                version: 1,
-                status: "live",
-                uploadedAt: Date(),
-                fileURL: uploadedURL,
-                fileName: originalFileName,
-                reviewDate: reviewDate,
-                attachedDocTitles: attachedDocTitles
-            ),
-            at: 0
+        let doc = HSRamsDocument(
+            id: UUID().uuidString,
+            title: title,
+            trade: trade,
+            version: 1,
+            status: "live",
+            uploadedAt: Date(),
+            fileURL: uploadedURL,
+            fileName: originalFileName,
+            reviewDate: reviewDate,
+            attachedDocTitles: attachedDocTitles
         )
+        data.ramsDocuments.insert(doc, at: 0)
+        await issueRams(
+            document: doc,
+            recipients: recipientUserIds,
+            issuedByUserId: userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "",
+            firebaseBackend: firebaseBackend,
+            userStore: userStore
+        )
+    }
+
+    func issueRams(
+        document: HSRamsDocument,
+        recipients: [String],
+        issuedByUserId: String,
+        firebaseBackend: FirebaseBackend,
+        userStore: UserStore
+    ) async {
+        let uniqueRecipients = Array(Set(recipients.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
+        if let existing = data.issues.first(where: { $0.ramsDocumentId == document.id }) {
+            await addRecipients(
+                issueId: existing.id,
+                recipientIds: uniqueRecipients,
+                firebaseBackend: firebaseBackend,
+                userStore: userStore
+            )
+            return
+        }
+        let issueId = UUID().uuidString
+        let issue = HSToolboxIssue(
+            id: issueId,
+            projectId: project.id,
+            talkId: "",
+            weekCommencing: Date(),
+            issuedByUserId: issuedByUserId,
+            issuedAt: Date(),
+            publishAt: nil,
+            recipientUserIds: uniqueRecipients,
+            status: .awaiting,
+            ramsDocumentId: document.id
+        )
+        data.issues.insert(issue, at: 0)
+        for userId in uniqueRecipients {
+            data.signatures.insert(
+                HSToolboxSignature(
+                    id: UUID().uuidString,
+                    issueId: issueId,
+                    userId: userId,
+                    status: .pending,
+                    readConfirmed: false,
+                    signatureImageBase64: nil,
+                    signedAt: nil,
+                    reminderSentAt: nil
+                ),
+                at: 0
+            )
+        }
+        recalculateIssueStatuses()
         await persist(firebaseBackend: firebaseBackend, userStore: userStore)
     }
 
@@ -390,6 +447,20 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
 
     func signatures(for issueId: String) -> [HSToolboxSignature] {
         data.signatures.filter { $0.issueId == issueId }
+    }
+
+    func trackingSignOffTotals(now: Date = Date()) -> (signed: Int, total: Int) {
+        let allSigs = visibleIssues(now: now).flatMap { signatures(for: $0.id) }
+        let signed = allSigs.filter { $0.status == .signed }.count
+        return (signed, allSigs.count)
+    }
+
+    func issueDisplayTitle(_ issue: HSToolboxIssue) -> String {
+        if let ramsId = issue.ramsDocumentId,
+           let rams = data.ramsDocuments.first(where: { $0.id == ramsId }) {
+            return rams.title
+        }
+        return data.talks.first(where: { $0.id == issue.talkId })?.title ?? "Sign-off"
     }
 
     private func recalculateIssueStatuses() {
@@ -582,6 +653,7 @@ struct ProjectHealthSafetyView: View {
     @State private var showAllAssignedInTracking = false
     @State private var documentPreview: HSDocumentPreviewItem?
     @State private var selectedRamsDocument: HSRamsDocument?
+    @State private var selectedRamsToSend: HSRamsDocument?
     @State private var selectedOtherDocument: HSOtherDocument?
     @State private var selectedCustomSignedIssue: HSToolboxIssue?
 
@@ -788,6 +860,7 @@ struct ProjectHealthSafetyView: View {
             HSTrackIssueView(
                 issue: issue,
                 talk: vm.data.talks.first(where: { $0.id == issue.talkId }),
+                displayTitle: vm.issueDisplayTitle(issue),
                 signatures: vm.signatures(for: issue.id)
             ) {
                 Task {
@@ -811,7 +884,8 @@ struct ProjectHealthSafetyView: View {
         }
         .sheet(item: $selectedIssueToAddRecipients) { issue in
             HSAddRecipientsSheet(
-                issue: issue,
+                heading: "Send to further operatives",
+                intro: "Select additional recipients for this toolbox talk. Existing recipients are excluded.",
                 currentRecipientUserIds: Set(issue.recipientUserIds),
                 liveRecipientUserIds: liveRecipientUserIds
             ) { selectedUserIds in
@@ -827,7 +901,11 @@ struct ProjectHealthSafetyView: View {
             .environmentObject(userStore)
         }
         .sheet(item: $selectedIssueToSign) { issue in
-            HSSignTalkView(issue: issue, talk: vm.data.talks.first(where: { $0.id == issue.talkId })) { base64Signature in
+            HSSignTalkView(
+                issue: issue,
+                talk: vm.data.talks.first(where: { $0.id == issue.talkId }),
+                rams: vm.data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId })
+            ) { base64Signature in
                 Task {
                     await vm.signTalk(
                         issueId: issue.id,
@@ -844,6 +922,7 @@ struct ProjectHealthSafetyView: View {
             HSSignedTalkView(
                 issue: issue,
                 talk: vm.data.talks.first(where: { $0.id == issue.talkId }),
+                rams: vm.data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId }),
                 signature: vm.signatures(for: issue.id).first(where: { $0.userId == (userStore.currentUser?.id ?? "") })
             )
         }
@@ -866,7 +945,29 @@ struct ProjectHealthSafetyView: View {
             InAppRemoteDocumentViewer(source: item.source, title: item.title, noun: item.noun)
         }
         .sheet(item: $selectedRamsDocument) { doc in
-            HSRamsDocumentDetailView(document: doc)
+            HSRamsDocumentDetailView(document: doc) {
+                selectedRamsDocument = nil
+                selectedRamsToSend = doc
+            }
+        }
+        .sheet(item: $selectedRamsToSend) { doc in
+            HSAddRecipientsSheet(
+                heading: "Send RAMS for signatures",
+                intro: "Choose everyone who must sign this RAMS. Tracking uses signed signatures out of everyone it was sent to.",
+                currentRecipientUserIds: Set(vm.data.issues.first(where: { $0.ramsDocumentId == doc.id })?.recipientUserIds ?? []),
+                liveRecipientUserIds: liveRecipientUserIds
+            ) { selectedUserIds in
+                Task {
+                    await vm.issueRams(
+                        document: doc,
+                        recipients: selectedUserIds,
+                        issuedByUserId: userStore.currentUser?.id ?? "unknown",
+                        firebaseBackend: firebaseBackend,
+                        userStore: userStore
+                    )
+                }
+            }
+            .environmentObject(userStore)
         }
         .sheet(item: $selectedOtherDocument) { doc in
             HSOtherDocumentDetailView(document: doc)
@@ -925,6 +1026,7 @@ struct ProjectHealthSafetyView: View {
                         attachedDocTitles: attachedDocTitles,
                         localFileURL: localFileURL,
                         originalFileName: originalFileName,
+                        recipientUserIds: Array(liveRecipientUserIds),
                         firebaseBackend: firebaseBackend,
                         userStore: userStore
                     )
@@ -1219,12 +1321,14 @@ struct ProjectHealthSafetyView: View {
         let isPending = entry.signature.status != .signed
         let overdue = isPending && isIssueOverdue(entry.issue)
         HSTalkCard(
-            title: talk?.title ?? "Toolbox talk",
-            reference: talk?.id,
-            trade: talk?.tradeLabel,
-            weekCommencing: "W/C \(entry.issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))",
+            title: vm.issueDisplayTitle(entry.issue),
+            reference: talk?.id ?? entry.issue.ramsDocumentId,
+            trade: talk?.tradeLabel ?? vm.data.ramsDocuments.first(where: { $0.id == entry.issue.ramsDocumentId })?.trade,
+            weekCommencing: entry.issue.ramsDocumentId == nil
+                ? "W/C \(entry.issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))"
+                : "Sent \(entry.issue.issuedAt.formatted(date: .abbreviated, time: .omitted))",
             status: isPending ? (overdue ? .overdue : .awaiting) : .signed,
-            signedProgress: (signedCount, max(signatures.count, 1)),
+            signedProgress: (signedCount, signatures.count),
             primaryTitle: isPending ? "Sign now" : "View signed",
             primaryTone: isPending ? .green : .blue,
             primaryAction: {
@@ -1311,9 +1415,8 @@ struct ProjectHealthSafetyView: View {
     private var managerTracking: some View {
         VStack(alignment: .leading, spacing: 0) {
             let visible = vm.visibleIssues()
-            let allSigs = visible.flatMap { vm.signatures(for: $0.id) }
-            let signedAll = allSigs.filter { $0.status == .signed }.count
-            HSSignOffHero(signed: signedAll, total: max(allSigs.count, 1), talkTitle: "All issued talks")
+            let totals = vm.trackingSignOffTotals()
+            HSSignOffHero(signed: totals.signed, total: totals.total, talkTitle: "All sent RAMS & talks")
                 .padding(.top, 16)
 
             let mine = myAssignedIssueEntries()
@@ -1335,8 +1438,8 @@ struct ProjectHealthSafetyView: View {
             if visible.isEmpty {
                 HSEmptyState(
                     icon: "paperplane",
-                    title: "No talks issued yet",
-                    message: "Issue a toolbox talk from the library to start tracking signatures.",
+                    title: "Nothing sent yet",
+                    message: "Send RAMS or issue a toolbox talk so signatures can be tracked. The percentage is signed signatures out of everyone those documents were sent to.",
                     actionTitle: "Issue a talk",
                     action: {
                         managerTab = .library
@@ -1351,12 +1454,14 @@ struct ProjectHealthSafetyView: View {
                         let signedCount = signatures.filter { $0.status == .signed }.count
                         let overdue = isIssueOverdue(issue)
                         HSTalkCard(
-                            title: talk?.title ?? "Toolbox talk",
-                            reference: talk?.id,
-                            trade: talk?.tradeLabel,
-                            weekCommencing: "W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))",
+                            title: vm.issueDisplayTitle(issue),
+                            reference: talk?.id ?? issue.ramsDocumentId,
+                            trade: talk?.tradeLabel ?? vm.data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId })?.trade,
+                            weekCommencing: issue.ramsDocumentId == nil
+                                ? "W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))"
+                                : "Sent \(issue.issuedAt.formatted(date: .abbreviated, time: .omitted))",
                             status: issue.status == .completed ? .signed : (overdue ? .overdue : .awaiting),
-                            signedProgress: (signedCount, max(signatures.count, 1)),
+                            signedProgress: (signedCount, signatures.count),
                             primaryTitle: "Open",
                             primaryTone: .teal,
                             primaryAction: { selectedIssueToTrack = issue },
@@ -1546,10 +1651,12 @@ struct ProjectHealthSafetyView: View {
                         let isPending = mySignature?.status != .signed
                         let overdue = isPending && isIssueOverdue(issue)
                         HSTalkCard(
-                            title: talk?.title ?? "Toolbox talk",
-                            reference: talk?.id,
-                            trade: talk?.tradeLabel,
-                            weekCommencing: "W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))",
+                            title: vm.issueDisplayTitle(issue),
+                            reference: talk?.id ?? issue.ramsDocumentId,
+                            trade: talk?.tradeLabel ?? vm.data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId })?.trade,
+                            weekCommencing: issue.ramsDocumentId == nil
+                                ? "W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))"
+                                : "Sent \(issue.issuedAt.formatted(date: .abbreviated, time: .omitted))",
                             status: isPending ? (overdue ? .overdue : .awaiting) : .signed,
                             primaryTitle: isPending ? "Open to sign" : "View signed",
                             primaryTone: isPending ? .green : .blue,
@@ -2191,7 +2298,8 @@ private struct HSScheduledTalkDetailView: View {
 }
 
 private struct HSAddRecipientsSheet: View {
-    let issue: HSToolboxIssue
+    var heading: String = "Send to further operatives"
+    var intro: String = "Select additional recipients for this toolbox talk. Existing recipients are excluded."
     let currentRecipientUserIds: Set<String>
     let liveRecipientUserIds: Set<String>
     let onSave: ([String]) -> Void
@@ -2229,9 +2337,9 @@ private struct HSAddRecipientsSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Send to further operatives")
+                    Text(heading)
                         .font(.system(size: 22, weight: .bold))
-                    Text("Select additional recipients for this toolbox talk. Existing recipients are excluded.")
+                    Text(intro)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
 
@@ -2337,6 +2445,7 @@ private struct HSDocumentShareSheet: UIViewControllerRepresentable {
 private struct HSTrackIssueView: View {
     let issue: HSToolboxIssue
     let talk: HSToolboxTalk?
+    var displayTitle: String? = nil
     let signatures: [HSToolboxSignature]
     let onSendReminder: () -> Void
     let onViewSignedTalk: () -> Void
@@ -2354,8 +2463,8 @@ private struct HSTrackIssueView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HSSignOffHero(
                         signed: signed.count,
-                        total: max(signatures.count, 1),
-                        talkTitle: talk?.title
+                        total: signatures.count,
+                        talkTitle: displayTitle ?? talk?.title ?? "RAMS"
                     )
                     .padding(.top, 8)
 
@@ -2453,6 +2562,7 @@ private struct HSTrackIssueView: View {
 private struct HSSignTalkView: View {
     let issue: HSToolboxIssue
     let talk: HSToolboxTalk?
+    var rams: HSRamsDocument? = nil
     let onSubmit: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var readConfirmed = false
@@ -2467,11 +2577,13 @@ private struct HSSignTalkView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: HSMetric.rowGap) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(talk?.title ?? "Toolbox talk")
+                        Text(talk?.title ?? rams?.title ?? "Sign-off")
                             .font(HSFont.heroTitle)
                             .foregroundStyle(HS.ink)
                             .hsNoClip(3)
-                        Text("W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
+                        Text(rams == nil
+                             ? "W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))"
+                             : "Sent \(issue.issuedAt.formatted(date: .abbreviated, time: .omitted))")
                             .font(HSFont.meta)
                             .foregroundStyle(HS.slate)
                         if talk?.isCustomUpload == true {
@@ -2520,7 +2632,7 @@ private struct HSSignTalkView: View {
                         previewTalk()
                     } label: {
                         Label(
-                            talk?.isCustomUpload == true ? "Preview / download original file" : "Preview / download talk",
+                            talk?.isCustomUpload == true ? "Preview / download original file" : (rams == nil ? "Preview / download talk" : "Preview RAMS"),
                             systemImage: "eye.fill"
                         )
                         .frame(maxWidth: .infinity)
@@ -2535,7 +2647,7 @@ private struct HSSignTalkView: View {
                             Image(systemName: readConfirmed ? "checkmark.square.fill" : "square")
                                 .font(.system(size: 22, weight: .semibold))
                                 .foregroundStyle(readConfirmed ? HS.teal : HS.slate2)
-                            Text("I have read and understood this toolbox talk")
+                            Text(rams == nil ? "I have read and understood this toolbox talk" : "I have read and understood this RAMS")
                                 .font(HSFont.body)
                                 .foregroundStyle(HS.ink)
                                 .hsNoClip(3)
@@ -2600,6 +2712,10 @@ private struct HSSignTalkView: View {
     }
 
     private func previewTalk() {
+        if let rams, let remote = rams.storedFileURL {
+            documentPreview = HSDocumentPreviewItem(title: rams.title, remoteURL: remote, noun: "RAMS")
+            return
+        }
         if let talk, talk.isCustomUpload, let remote = talk.storedFileURL {
             documentPreview = HSDocumentPreviewItem(title: talk.title, remoteURL: remote, noun: "toolbox talk")
             return
@@ -2613,6 +2729,7 @@ private struct HSSignTalkView: View {
 private struct HSSignedTalkView: View {
     let issue: HSToolboxIssue
     let talk: HSToolboxTalk?
+    var rams: HSRamsDocument? = nil
     let signature: HSToolboxSignature?
     @EnvironmentObject var userStore: UserStore
 
@@ -2620,7 +2737,7 @@ private struct HSSignedTalkView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(talk?.title ?? "Toolbox talk")
+                    Text(talk?.title ?? rams?.title ?? "Sign-off")
                         .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(HS.ink)
                     Text("W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")

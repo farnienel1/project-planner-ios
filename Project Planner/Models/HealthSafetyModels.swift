@@ -52,6 +52,8 @@ struct HSToolboxIssue: Identifiable, Codable, Hashable {
     var publishAt: Date?
     var recipientUserIds: [String]
     var status: HSToolboxIssueStatus
+    /// When set, this issue is a RAMS send-for-signature rather than a toolbox talk.
+    var ramsDocumentId: String? = nil
 }
 
 struct HSToolboxSignature: Identifiable, Codable, Hashable {

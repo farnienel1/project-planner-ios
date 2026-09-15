@@ -50,12 +50,34 @@ func normalizedOrganizationId(_ organizationId: String) -> String {
 
 private func isOfflineNetworkError(_ error: Error) -> Bool {
     let nsError = error as NSError
-    if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorNotConnectedToInternet {
-        return true
+    if nsError.domain == NSURLErrorDomain {
+        switch nsError.code {
+        case NSURLErrorNotConnectedToInternet,
+             NSURLErrorNetworkConnectionLost,
+             NSURLErrorTimedOut,
+             NSURLErrorCannotConnectToHost,
+             NSURLErrorCannotFindHost,
+             NSURLErrorDNSLookupFailed,
+             NSURLErrorInternationalRoamingOff,
+             NSURLErrorDataNotAllowed,
+             NSURLErrorCallIsActive:
+            return true
+        default:
+            break
+        }
+    }
+    if nsError.domain == "FIRFirestoreErrorDomain" {
+        // 4 deadline exceeded, 8 resource exhausted, 13 internal, 14 unavailable
+        if [4, 8, 13, 14].contains(nsError.code) { return true }
     }
     if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
-        return underlying.domain == NSURLErrorDomain && underlying.code == NSURLErrorNotConnectedToInternet
+        if isOfflineNetworkError(underlying) { return true }
     }
+    let message = nsError.localizedDescription.lowercased()
+    if message.contains("local cache") { return true }
+    if message.contains("failed to get document from server") { return true }
+    if message.contains("failed to get documents from server") { return true }
+    if message.contains("the internet connection appears to be offline") { return true }
     return false
 }
 
@@ -125,13 +147,19 @@ class FirebaseBackend: ObservableObject {
             )
         }
         do {
-            _ = try await db.collection("organizations").document(trimmedOrgId).getDocument(source: .server)
+            _ = try await getDocumentWithServerTimeoutAndCacheFallback(
+                db.collection("organizations").document(trimmedOrgId)
+            )
         } catch {
             let nsError = error as NSError
             if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 {
                 // Some deployments deny org root read while allowing subcollection access.
                 // Do not block projects/smallWorks/clients/operatives reads in that case.
                 print("🔥🔥🔥 DEBUG: ⚠️ Org root read denied for \(trimmedOrgId), continuing with subcollection reads")
+                return trimmedOrgId
+            }
+            if isOfflineNetworkError(error) {
+                print("🔥🔥🔥 DEBUG: ⚠️ Org root offline/cache miss for \(trimmedOrgId), continuing with subcollection reads")
                 return trimmedOrgId
             }
             throw error
@@ -2081,14 +2109,11 @@ class FirebaseBackend: ObservableObject {
         do {
             snapshot = try await tasksRef.getDocuments(source: .server)
         } catch {
-            if isFirestorePermissionDenied(error) {
-                print("🔥🔥🔥 DEBUG: [TASK LOAD] Server denied tasks read for \(orgId) - trying cache fallback")
+            print("🔥🔥🔥 DEBUG: [TASK LOAD] Server tasks read failed for \(orgId) - trying cache/default: \(error.localizedDescription)")
+            do {
                 snapshot = try await tasksRef.getDocuments(source: .cache)
-            } else if isOfflineNetworkError(error) {
-                print("🔥🔥🔥 DEBUG: [TASK LOAD] Offline while loading tasks for \(orgId) - trying cache fallback")
-                snapshot = try await tasksRef.getDocuments(source: .cache)
-            } else {
-                throw error
+            } catch {
+                snapshot = try await tasksRef.getDocuments()
             }
         }
         print("🔥🔥🔥 DEBUG: Found \(snapshot.documents.count) task documents in Firebase")
@@ -7910,7 +7935,8 @@ extension FirebaseBackend {
             "issuedAt": Timestamp(date: issue.issuedAt),
             "publishAt": issue.publishAt.map(Timestamp.init(date:)) as Any,
             "recipientUserIds": issue.recipientUserIds,
-            "status": issue.status.rawValue
+            "status": issue.status.rawValue,
+            "ramsDocumentId": issue.ramsDocumentId ?? ""
         ]
     }
 
@@ -7984,6 +8010,7 @@ extension FirebaseBackend {
         guard let id = map["id"] as? String, !id.isEmpty else { return nil }
         let projectId = ((map["projectId"] as? String).flatMap(UUID.init(uuidString:))) ?? fallbackProjectId
         let statusRaw = (map["status"] as? String) ?? HSToolboxIssueStatus.awaiting.rawValue
+        let ramsId = (map["ramsDocumentId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return HSToolboxIssue(
             id: id,
             projectId: projectId,
@@ -7993,7 +8020,8 @@ extension FirebaseBackend {
             issuedAt: (map["issuedAt"] as? Timestamp)?.dateValue() ?? Date(),
             publishAt: (map["publishAt"] as? Timestamp)?.dateValue(),
             recipientUserIds: map["recipientUserIds"] as? [String] ?? [],
-            status: HSToolboxIssueStatus(rawValue: statusRaw) ?? .awaiting
+            status: HSToolboxIssueStatus(rawValue: statusRaw) ?? .awaiting,
+            ramsDocumentId: (ramsId?.isEmpty == false) ? ramsId : nil
         )
     }
 

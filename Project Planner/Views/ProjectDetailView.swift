@@ -2708,6 +2708,7 @@ private struct ProjectTaskRow: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var bookingStore: BookingStore
     
     @State private var showingTaskDetail = false
     @State private var showingEditTask = false
@@ -2800,6 +2801,7 @@ private struct ProjectTaskRow: View {
                 .environmentObject(projectStore)
                 .environmentObject(firebaseBackend)
                 .environmentObject(notificationService)
+                .environmentObject(bookingStore)
         }
         .sheet(isPresented: $showingEditTask) {
             EditProjectTaskView(
@@ -5228,7 +5230,12 @@ private struct TaskCameraImagePicker: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
-        picker.sourceType = .camera
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            picker.sourceType = .camera
+            picker.cameraCaptureMode = .photo
+        } else {
+            picker.sourceType = .photoLibrary
+        }
         picker.delegate = context.coordinator
         picker.allowsEditing = false
         return picker
@@ -5248,24 +5255,14 @@ private struct TaskCameraImagePicker: UIViewControllerRepresentable {
         }
 
         func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            picker.dismiss(animated: true)
             if let img = info[.originalImage] as? UIImage {
-                DispatchQueue.main.async {
-                    self.parent.images.append(img)
-                    self.parent.dismiss()
-                }
-            } else {
-                DispatchQueue.main.async {
-                    self.parent.dismiss()
-                }
+                parent.images.append(img)
             }
+            parent.dismiss()
         }
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            picker.dismiss(animated: true)
-            DispatchQueue.main.async {
-                self.parent.dismiss()
-            }
+            parent.dismiss()
         }
     }
 }
@@ -5506,9 +5503,13 @@ struct CompletedTaskDetailView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var bookingStore: BookingStore
 
     @State private var showingCarryOut = false
     @State private var showingEditTask = false
+    @State private var attachmentPreview: HSDocumentPreviewItem?
+    @State private var openAttachedAudit: SiteAudit?
+    @State private var jobSiteAudits: [SiteAudit] = []
 
     private var displayTask: ProjectTask {
         taskStore.tasks.first(where: { $0.id == task.id }) ?? task
@@ -5519,7 +5520,12 @@ struct CompletedTaskDetailView: View {
     }
 
     private var canEditTaskHere: Bool {
-        canEditTask && projectStore.projects.first(where: { $0.id == displayTask.projectId }) != nil
+        canEditTask && resolvedJob != nil
+    }
+
+    private var resolvedJob: Project? {
+        projectStore.projects.first(where: { $0.id == displayTask.projectId })
+            ?? projectStore.smallWorks.first(where: { $0.id == displayTask.projectId })
     }
 
     private var canCarryOut: Bool {
@@ -5662,7 +5668,7 @@ struct CompletedTaskDetailView: View {
                 .environmentObject(projectStore)
             }
             .sheet(isPresented: $showingEditTask) {
-                if let proj = projectStore.projects.first(where: { $0.id == displayTask.projectId }) {
+                if let proj = resolvedJob {
                     EditProjectTaskView(
                         task: displayTask,
                         project: proj,
@@ -5673,6 +5679,20 @@ struct CompletedTaskDetailView: View {
                     .environmentObject(userStore)
                     .environmentObject(firebaseBackend)
                 }
+            }
+            .sheet(item: $attachmentPreview) { item in
+                InAppRemoteDocumentViewer(source: item.source, title: item.title, noun: item.noun)
+            }
+            .sheet(item: $openAttachedAudit) { audit in
+                SiteAuditDetailView(audit: audit, project: resolvedJob)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(userStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(operativeStore)
+            }
+            .task(id: displayTask.attachedSiteAuditId) {
+                await loadAttachedSiteAudit()
             }
         }
     }
@@ -6018,32 +6038,62 @@ struct CompletedTaskDetailView: View {
                     .padding(.leading, 4)
                     VStack(spacing: 0) {
                         if let fileURL = displayTask.attachedFileURL {
-                            attachmentRow(icon: "doc.fill", iconBg: CompleteTaskUXPalette.requiredBg, iconFg: CompleteTaskUXPalette.requiredFg, title: displayTask.attachedFileName ?? "File", subtitle: "Tap to open", url: fileURL, showDivider: !displayTask.attachedImageURLs.isEmpty || displayTask.attachedSiteAuditId != nil)
+                            attachmentRow(
+                                icon: "doc.fill",
+                                iconBg: CompleteTaskUXPalette.requiredBg,
+                                iconFg: CompleteTaskUXPalette.requiredFg,
+                                title: displayTask.attachedFileName ?? "File",
+                                subtitle: "Tap to open",
+                                url: fileURL,
+                                noun: "file",
+                                showDivider: !displayTask.attachedImageURLs.isEmpty || displayTask.attachedSiteAuditId != nil
+                            )
                         }
                         ForEach(Array(displayTask.attachedImageURLs.enumerated()), id: \.offset) { idx, url in
-                            attachmentRow(icon: "photo", iconBg: Color(red: 225 / 255, green: 245 / 255, blue: 238 / 255), iconFg: CompleteTaskUXPalette.green, title: "Image \(idx + 1)", subtitle: "Tap to open", url: url, showDivider: idx < displayTask.attachedImageURLs.count - 1 || displayTask.attachedSiteAuditId != nil)
+                            attachmentRow(
+                                icon: "photo",
+                                iconBg: Color(red: 225 / 255, green: 245 / 255, blue: 238 / 255),
+                                iconFg: CompleteTaskUXPalette.green,
+                                title: "Image \(idx + 1)",
+                                subtitle: "Tap to open",
+                                url: url,
+                                noun: "photo",
+                                showDivider: idx < displayTask.attachedImageURLs.count - 1 || displayTask.attachedSiteAuditId != nil
+                            )
                         }
                         if let title = displayTask.attachedSiteAuditTitle ?? (displayTask.attachedSiteAuditId != nil ? "Site audit" : nil) {
-                            HStack(spacing: 12) {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(Color(red: 0.98, green: 0.925, blue: 0.906))
-                                    .frame(width: 32, height: 32)
-                                    .overlay(
-                                        Image(systemName: "clipboard.fill")
-                                            .font(.system(size: 14))
-                                            .foregroundStyle(Color(red: 0.6, green: 0.235, blue: 0.114))
-                                    )
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(title)
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(CompleteTaskUXPalette.ink)
-                                    Text("Site audit")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(CompleteTaskUXPalette.muted)
+                            Button {
+                                if let audit = jobSiteAudits.first(where: { $0.id == displayTask.attachedSiteAuditId }) {
+                                    openAttachedAudit = audit
+                                } else {
+                                    Task { await loadAttachedSiteAudit(openIfFound: true) }
                                 }
-                                Spacer()
+                            } label: {
+                                HStack(spacing: 12) {
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(Color(red: 0.98, green: 0.925, blue: 0.906))
+                                        .frame(width: 32, height: 32)
+                                        .overlay(
+                                            Image(systemName: "clipboard.fill")
+                                                .font(.system(size: 14))
+                                                .foregroundStyle(Color(red: 0.6, green: 0.235, blue: 0.114))
+                                        )
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(title)
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundStyle(CompleteTaskUXPalette.ink)
+                                        Text("Site audit · Tap to open")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(CompleteTaskUXPalette.muted)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(CompleteTaskUXPalette.blue)
+                                }
+                                .padding(.vertical, 10)
                             }
-                            .padding(.vertical, 10)
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.horizontal, 14)
@@ -6055,10 +6105,12 @@ struct CompletedTaskDetailView: View {
         }
     }
 
-    private func attachmentRow(icon: String, iconBg: Color, iconFg: Color, title: String, subtitle: String, url: String, showDivider: Bool) -> some View {
+    private func attachmentRow(icon: String, iconBg: Color, iconFg: Color, title: String, subtitle: String, url: String, noun: String, showDivider: Bool) -> some View {
         VStack(spacing: 0) {
             Button {
-                if let u = URL(string: url) { UIApplication.shared.open(u) }
+                if let u = URL(string: url) {
+                    attachmentPreview = HSDocumentPreviewItem(title: title, remoteURL: u, noun: noun)
+                }
             } label: {
                 HStack(spacing: 12) {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -6074,7 +6126,7 @@ struct CompletedTaskDetailView: View {
                             .foregroundStyle(CompleteTaskUXPalette.muted)
                     }
                     Spacer()
-                    Image(systemName: "arrow.down.circle")
+                    Image(systemName: "eye.fill")
                         .font(.system(size: 16))
                         .foregroundStyle(CompleteTaskUXPalette.blue)
                 }
@@ -6082,6 +6134,24 @@ struct CompletedTaskDetailView: View {
             }
             .buttonStyle(.plain)
             if showDivider { Divider().overlay(CompleteTaskUXPalette.border) }
+        }
+    }
+
+    private func loadAttachedSiteAudit(openIfFound: Bool = false) async {
+        guard let auditId = displayTask.attachedSiteAuditId,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let loaded: [SiteAudit]
+        do {
+            loaded = try await firebaseBackend.loadSiteAudits(organizationId: orgId, projectId: displayTask.projectId)
+        } catch {
+            loaded = (try? await firebaseBackend.loadSiteAudits(organizationId: orgId)) ?? []
+        }
+        let pending = SiteAuditOfflineStore.shared.pending.map(\.audit)
+        jobSiteAudits = loaded + pending.filter { audit in
+            !loaded.contains(where: { $0.id == audit.id })
+        }
+        if openIfFound, let audit = jobSiteAudits.first(where: { $0.id == auditId }) {
+            openAttachedAudit = audit
         }
     }
 

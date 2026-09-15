@@ -15,7 +15,6 @@ struct MaterialCatalogueRootView: View {
     @StateObject private var store = MaterialCatalogStore()
 
     @State private var searchText = ""
-    @State private var selectedCategory: String?
     @State private var showingAdd = false
     @State private var showingBulkImport = false
     @State private var selectedItem: MaterialCatalogItem?
@@ -35,16 +34,8 @@ struct MaterialCatalogueRootView: View {
         return names.sorted()
     }
 
-    private var categoryCounts: [String: Int] {
-        Dictionary(grouping: store.items) { normalizedCategory($0.category) }
-            .mapValues(\.count)
-    }
-
     private var filteredItems: [MaterialCatalogItem] {
         var list = store.items
-        if let cat = selectedCategory {
-            list = list.filter { normalizedCategory($0.category) == cat }
-        }
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !q.isEmpty {
             list = list.filter { item in
@@ -75,8 +66,6 @@ struct MaterialCatalogueRootView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     heroCard
                     searchField
-                    categoryChips
-                    categoryTiles
                     if store.isLoading {
                         ProgressView()
                             .frame(maxWidth: .infinity)
@@ -281,66 +270,6 @@ struct MaterialCatalogueRootView: View {
         .background(MaterialsOrderingTheme.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 11).stroke(MaterialsOrderingTheme.border, lineWidth: 0.5))
-    }
-
-    private var categoryChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                chip(title: "All · \(store.items.count)", isOn: selectedCategory == nil) {
-                    selectedCategory = nil
-                }
-                ForEach(categories, id: \.self) { cat in
-                    let count = categoryCounts[cat] ?? 0
-                    chip(title: "\(cat) · \(count)", isOn: selectedCategory == cat) {
-                        selectedCategory = cat
-                    }
-                }
-            }
-        }
-    }
-
-    private var categoryTiles: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(categories, id: \.self) { cat in
-                    let count = categoryCounts[cat] ?? 0
-                    Button {
-                        selectedCategory = cat
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(cat)
-                                .font(.system(size: 11, weight: .semibold))
-                            Text("\(count) item\(count == 1 ? "" : "s")")
-                                .font(.system(size: 9))
-                                .foregroundStyle(MaterialsOrderingTheme.muted)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(MaterialsOrderingTheme.cardBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10)
-                                .stroke(selectedCategory == cat ? MaterialsOrderingTheme.primary : MaterialsOrderingTheme.border, lineWidth: selectedCategory == cat ? 1.4 : 0.5)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    private func chip(title: String, isOn: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(isOn ? Color.white : MaterialsOrderingTheme.muted)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 5)
-                .background(isOn ? MaterialsOrderingTheme.primary : MaterialsOrderingTheme.cardBackground)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(MaterialsOrderingTheme.border, lineWidth: isOn ? 0 : 0.5))
-        }
-        .buttonStyle(.plain)
     }
 
     private func catalogueRow(_ item: MaterialCatalogItem) -> some View {
