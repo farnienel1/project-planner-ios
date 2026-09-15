@@ -94,6 +94,44 @@ struct HSOtherDocument: Identifiable, Codable, Hashable {
     var issuableToClient: Bool
 }
 
+extension HSToolboxTalk {
+    var isCustomUpload: Bool { source == .uploaded }
+
+    var storedFileURL: URL? {
+        guard let fileURL, let url = URL(string: fileURL), !fileURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return url
+    }
+
+    var tradeLabel: String {
+        if isGeneral { return "General" }
+        let joined = trades
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
+        return joined.isEmpty ? "General" : joined
+    }
+}
+
+extension HSRamsDocument {
+    var storedFileURL: URL? {
+        guard let fileURL, let url = URL(string: fileURL), !fileURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return url
+    }
+}
+
+extension HSOtherDocument {
+    var storedFileURL: URL? {
+        guard let fileURL, let url = URL(string: fileURL), !fileURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return url
+    }
+}
+
 struct HSProjectSafetyData: Codable, Hashable {
     var talks: [HSToolboxTalk]
     var issues: [HSToolboxIssue]

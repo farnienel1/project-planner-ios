@@ -163,6 +163,7 @@ struct QualificationsManagementView: View {
             .environmentObject(operativeStore)
             .environmentObject(firebaseBackend)
             .environmentObject(notificationService)
+            .environmentObject(userStore)
         } else if isResolvingMyProfile {
             ProgressView("Loading your qualifications…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

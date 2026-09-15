@@ -11,6 +11,9 @@ import FirebaseAuth
 import FirebaseFirestore
 
 struct SettingsView: View {
+    /// Profile → Settings is pushed on a stack, so Back should pop. The Settings tab uses the previous-tab action instead.
+    var popsNavigationOnBack: Bool = false
+
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -91,9 +94,7 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button(action: {
-                    NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
-                }) {
+                Button(action: goBackFromSettings) {
                     Image(systemName: "chevron.left")
                         .foregroundStyle(ProjectWorksRevampColors.blue)
                         .font(.system(size: 17, weight: .semibold))
@@ -109,6 +110,14 @@ struct SettingsView: View {
             }
         } message: {
             Text("Are you sure you want to sign out?")
+        }
+    }
+
+    private func goBackFromSettings() {
+        if popsNavigationOnBack {
+            dismiss()
+        } else {
+            NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
         }
     }
 

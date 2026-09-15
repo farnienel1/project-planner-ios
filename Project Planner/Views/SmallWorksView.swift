@@ -15,6 +15,8 @@ struct SmallWorksView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var taskStore: ProjectTaskStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     /// Default to Active so the list opens on current jobs; use All / Completed chips for older work.
     @State private var selectedStatus: ProjectStatus? = .active
     @State private var selectedProject: Project? = nil
@@ -22,16 +24,14 @@ struct SmallWorksView: View {
     @State private var navigationPath = NavigationPath()
     @State private var searchText = ""
     @State private var showingCreateSmallWorks = false
+    @State private var deadlineAssignedProjectIds: Set<UUID> = []
 
     private var listCounts: WorksListStatusCounts {
         WorksListStatusCounts.from(smallWorksBeforeStatusFilter)
     }
 
     private var canCreateSmallWorks: Bool {
-        guard let u = userStore.currentUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if u.isSuperAdmin || u.permissions.adminAccess { return true }
-        return u.permissions.manager && u.permissions.smallWorks
+        userStore.canManageWorkCatalogue(.smallWorks)
     }
     
     private var smallWorksProjects: [Project] {
@@ -98,6 +98,9 @@ struct SmallWorksView: View {
                 if selectedStatus == .inactive || selectedStatus == nil {
                     selectedStatus = .active
                 }
+            }
+            .task {
+                await refreshDeadlineAssignedProjectIds()
             }
             .sheet(isPresented: $showingEditProject) {
                 if let project = selectedProject {
@@ -262,50 +265,29 @@ struct SmallWorksView: View {
         .padding()
     }
     
-    /// Small works with operative visibility applied but without status chip filter.
+    /// Small works with role visibility applied but without status chip filter.
     private var smallWorksBeforeStatusFilter: [Project] {
-        var works = smallWorksProjects
-        
-        if userStore.isOperativeMode() {
-            guard let operative = resolvedCurrentOperative,
-                  let currentUserId = userStore.currentUser?.id else {
-                return []
-            }
-            let assignedProjectIds = Set(bookingStore.bookings
-                .filter {
-                    $0.operativeId == operative.id &&
-                    ($0.status == .confirmed || $0.status == .tentative)
-                }
-                .map { $0.projectId })
-            works = works.filter {
-                assignedProjectIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId)
-            }
-        } else if let currentUser = userStore.currentUser,
-                  !userStore.hasAdminAccess(),
-                  currentUser.permissions.manager {
-            works = works.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
-        }
-        
-        return works
+        WorkAccess.visibleWorks(
+            from: smallWorksProjects,
+            catalogue: .smallWorks,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            taskStore: taskStore,
+            deadlineAssignedProjectIds: deadlineAssignedProjectIds
+        )
     }
 
-    private var resolvedCurrentOperative: Operative? {
-        let normalizedEmail = userStore.currentUser?.email
-            .lowercased()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let normalizedEmail, !normalizedEmail.isEmpty,
-           let byEmail = operativeStore.allOperatives.first(where: {
-               $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
-           }) {
-            return byEmail
+    private func refreshDeadlineAssignedProjectIds() async {
+        guard userStore.isOperativeMode(),
+              let userId = userStore.currentUser?.id,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId else {
+            await MainActor.run { deadlineAssignedProjectIds = [] }
+            return
         }
-        let first = userStore.currentUser?.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let last = userStore.currentUser?.surname.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !first.isEmpty || !last.isEmpty else { return nil }
-        return operativeStore.allOperatives.first(where: {
-            $0.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == first &&
-            $0.lastName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == last
-        })
+        let ids = await firebaseBackend.loadDeadlineAssignedProjectIds(userId: userId, organizationId: orgId)
+        await MainActor.run { deadlineAssignedProjectIds = ids }
     }
     
     private var isEmptyDueToStatusFilterOnly: Bool {

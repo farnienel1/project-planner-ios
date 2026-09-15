@@ -415,17 +415,11 @@ enum MainMenuCatalog {
     }
 
     static func canCreateProject(userStore: UserStore) -> Bool {
-        guard let user = userStore.currentUser else { return false }
-        if user.permissions.operativeMode { return false }
-        if user.isSuperAdmin || user.permissions.adminAccess { return true }
-        return user.permissions.manager && user.permissions.projects
+        userStore.canManageWorkCatalogue(.projects)
     }
 
     static func canCreateSmallWorks(userStore: UserStore) -> Bool {
-        guard let user = userStore.currentUser else { return false }
-        if user.permissions.operativeMode { return false }
-        if user.isSuperAdmin || user.permissions.adminAccess { return true }
-        return user.permissions.manager && user.permissions.smallWorks
+        userStore.canManageWorkCatalogue(.smallWorks)
     }
 
     static func canAddUserQuick(userStore: UserStore) -> Bool {

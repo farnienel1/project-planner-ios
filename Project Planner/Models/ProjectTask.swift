@@ -55,6 +55,9 @@ struct ProjectTask: Identifiable, Codable, Hashable {
     var attachedFileURL: String? // Firebase Storage URL for attached file
     var attachedFileName: String? // Original file name
     var attachedImageURLs: [String] // Firebase Storage URLs for attached images
+    /// Optional single site audit attached to this task.
+    var attachedSiteAuditId: UUID?
+    var attachedSiteAuditTitle: String?
     var completedBy: String? // User who marked task as completed
     var completedAt: Date? // When task was marked as completed
     var completionImages: [String] // Firebase Storage URLs for completion images
@@ -84,6 +87,8 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         attachedFileURL: String? = nil,
         attachedFileName: String? = nil,
         attachedImageURLs: [String] = [],
+        attachedSiteAuditId: UUID? = nil,
+        attachedSiteAuditTitle: String? = nil,
         completedBy: String? = nil,
         completedAt: Date? = nil,
         completionImages: [String] = [],
@@ -109,6 +114,8 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         self.attachedFileURL = attachedFileURL
         self.attachedFileName = attachedFileName
         self.attachedImageURLs = attachedImageURLs
+        self.attachedSiteAuditId = attachedSiteAuditId
+        self.attachedSiteAuditTitle = attachedSiteAuditTitle
         self.completedBy = completedBy
         self.completedAt = completedAt
         self.completionImages = completionImages
