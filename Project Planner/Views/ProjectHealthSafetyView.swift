@@ -4,6 +4,7 @@ import Combine
 import UIKit
 import PDFKit
 import UniformTypeIdentifiers
+import FirebaseAuth
 
 private enum HSManagerTab: String, CaseIterable, Identifiable {
     case hub = "Hub"
