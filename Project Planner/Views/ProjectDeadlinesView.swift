@@ -24,6 +24,13 @@ struct ProjectDeadlinesView: View {
     private var canManage: Bool { !userStore.isOperativeMode() }
     private var contextKind: String { project.jobType == .smallWorks ? "Small Work" : "Project" }
     private var authorName: String { userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown" }
+    private var projectNotificationName: String {
+        let site = project.siteName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let job = project.jobNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        if site.isEmpty { return job }
+        if job.isEmpty { return site }
+        return "\(site) · \(job)"
+    }
 
     var body: some View {
         Group {
@@ -70,7 +77,7 @@ struct ProjectDeadlinesView: View {
             store.bindPersistence { items in
                 await persistDeadlines(items)
             } syncNotifications: { items in
-                await DeadlineLocalNotifications.sync(items: items, currentUserId: userStore.currentUser?.id)
+                await syncDeadlineNotifications(items)
             }
             await load()
         }
@@ -135,7 +142,7 @@ struct ProjectDeadlinesView: View {
             if smartCache.isOnline {
                 siteAudits = (try? await firebaseBackend.loadSiteAudits(organizationId: orgId, projectId: project.id)) ?? siteAudits
             }
-            await DeadlineLocalNotifications.sync(items: store.items, currentUserId: userStore.currentUser?.id)
+            await syncDeadlineNotifications(store.items)
         } catch {
             if let local = OfflineDeadlineLocalStore.shared.load(projectId: project.id, organizationId: orgId) {
                 store.replaceAll(local.items)
@@ -237,7 +244,19 @@ struct ProjectDeadlinesView: View {
         let previous = store.items.first(where: { $0.id == item.id })
         store.upsert(item)
         await notifyNewAssignees(previous: previous, current: item)
-        await DeadlineLocalNotifications.sync(items: store.items, currentUserId: userStore.currentUser?.id)
+        await syncDeadlineNotifications(store.items)
+    }
+
+    private func syncDeadlineNotifications(_ items: [DLDeadline]) async {
+        await DeadlineLocalNotifications.sync(
+            items: items,
+            currentUserId: userStore.currentUser?.id,
+            projectName: projectNotificationName
+        )
+        await notificationService.syncDeadlineInboxNotifications(
+            items: items,
+            projectName: projectNotificationName
+        )
     }
 
     private func notifyNewAssignees(previous: DLDeadline?, current: DLDeadline) async {
@@ -247,7 +266,7 @@ struct ProjectDeadlinesView: View {
         await notificationService.notifyDeadlineAssigned(
             deadlineId: current.id,
             title: current.title,
-            projectName: project.siteName,
+            projectName: projectNotificationName,
             assignedUserIds: added,
             createdBy: authorName
         )

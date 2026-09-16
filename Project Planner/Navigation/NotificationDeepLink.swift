@@ -13,17 +13,31 @@ enum NotificationDeepLink {
     static let dateKey = "pp_date"
 
     static func userInfo(for notification: AppNotification) -> [String: Any] {
+        userInfo(
+            type: notification.type,
+            relatedId: notification.relatedId,
+            userId: notification.deepLinkUserId ?? notification.userId,
+            weekStart: notification.deepLinkWeekStart
+        )
+    }
+
+    static func userInfo(
+        type: AppNotification.NotificationType,
+        relatedId: UUID? = nil,
+        userId: String? = nil,
+        weekStart: Date? = nil
+    ) -> [String: Any] {
         var info: [String: Any] = [
-            typeKey: notification.type.rawValue
+            typeKey: type.rawValue
         ]
-        if let related = notification.relatedId {
-            info[relatedIdKey] = related.uuidString
+        if let relatedId {
+            info[relatedIdKey] = relatedId.uuidString
         }
-        if let userId = notification.deepLinkUserId ?? notification.userId {
+        if let userId, !userId.isEmpty {
             info[userIdKey] = userId
         }
-        if let week = notification.deepLinkWeekStart {
-            info[weekStartKey] = week.timeIntervalSince1970
+        if let weekStart {
+            info[weekStartKey] = weekStart.timeIntervalSince1970
         }
         return info
     }
@@ -86,10 +100,10 @@ enum NotificationDeepLink {
             } else {
                 openSurface(.createSmallWorks)
             }
-        case .bookingClash, .warningRemoved:
+        case .bookingClash, .warningRemoved, .qualificationExpiry, .materialOrderCutOff:
             openSurface(.warnings)
             NotificationCenter.default.post(name: NSNotification.Name("navigateToWarnings"), object: nil)
-        case .taskCompleted, .taskCreated, .deadlineAssigned:
+        case .taskCompleted, .taskCreated, .deadlineAssigned, .deadlineReminder, .deadlineDue:
             NotificationCenter.default.post(name: NSNotification.Name("openTasksDetail"), object: nil)
         case .holidayRequestSubmitted:
             NotificationCenter.default.post(

@@ -261,6 +261,32 @@ enum WorkAccess {
     }
 }
 
+enum DeadlineNotificationCopy {
+    static func headline(projectName: String, item: DLDeadline) -> String {
+        let project = projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let location = item.location?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var prefix = project
+        if !location.isEmpty {
+            prefix = prefix.isEmpty ? location : "\(prefix) · \(location)"
+        }
+        if prefix.isEmpty { return item.title }
+        return "\(prefix): \(item.title)"
+    }
+
+    static func reminderTitle() -> String { "Deadline reminder" }
+
+    /// Absolute due date — never "due today" / "tomorrow", which go stale if baked at schedule time.
+    static func reminderBody(projectName: String, item: DLDeadline) -> String {
+        "\(headline(projectName: projectName, item: item)) is due \(DLFormat.day(item.due))"
+    }
+
+    static func dueTitle() -> String { "Deadline due today" }
+
+    static func dueBody(projectName: String, item: DLDeadline) -> String {
+        headline(projectName: projectName, item: item)
+    }
+}
+
 enum DeadlineLocalNotifications {
     static let idPrefix = "deadline."
 
@@ -270,6 +296,40 @@ enum DeadlineLocalNotifications {
 
     static func dueIdentifier(deadlineId: UUID) -> String {
         "\(idPrefix)\(deadlineId.uuidString).due"
+    }
+
+    static func parsedIdentifier(_ identifier: String) -> (deadlineId: UUID, isDue: Bool)? {
+        guard identifier.hasPrefix(idPrefix) else { return nil }
+        let rest = String(identifier.dropFirst(idPrefix.count))
+        if rest.hasSuffix(".reminder") {
+            let uuid = String(rest.dropLast(".reminder".count))
+            return UUID(uuidString: uuid).map { ($0, false) }
+        }
+        if rest.hasSuffix(".due") {
+            let uuid = String(rest.dropLast(".due".count))
+            return UUID(uuidString: uuid).map { ($0, true) }
+        }
+        return nil
+    }
+
+    static func deadlineCalendar() -> Calendar {
+        var cal = Calendar.current
+        cal.timeZone = TimeZone.current
+        return cal
+    }
+
+    static func reminderFireDate(for item: DLDeadline) -> Date? {
+        let cal = deadlineCalendar()
+        guard let days = item.reminderDaysBefore,
+              let reminderDay = cal.date(byAdding: .day, value: -days, to: cal.startOfDay(for: item.due)) else {
+            return nil
+        }
+        return cal.date(bySettingHour: 8, minute: 0, second: 0, of: reminderDay)
+    }
+
+    static func dueFireDate(for item: DLDeadline) -> Date? {
+        let cal = deadlineCalendar()
+        return cal.date(bySettingHour: 8, minute: 0, second: 0, of: cal.startOfDay(for: item.due))
     }
 
     static func cancel(deadlineId: UUID) async {
@@ -284,36 +344,46 @@ enum DeadlineLocalNotifications {
     }
 
     /// Schedules reminder + due-morning local alerts for open deadlines assigned to `userId`.
-    static func sync(items: [DLDeadline], currentUserId: String?) async {
+    /// Body copy is computed for the fire date (not "now"), and always includes the project name.
+    static func sync(items: [DLDeadline], currentUserId: String?, projectName: String) async {
         let center = UNUserNotificationCenter.current()
         let pending = await center.pendingNotificationRequests()
         let stale = pending.map(\.identifier).filter { $0.hasPrefix(idPrefix) }
         center.removePendingNotificationRequests(withIdentifiers: stale)
 
         guard let currentUserId, !currentUserId.isEmpty else { return }
-        var cal = Calendar.current
-        cal.timeZone = TimeZone.current
 
         for item in items {
             guard item.status != .complete else { continue }
             guard item.assigneeUserIds.contains(currentUserId) else { continue }
-            let body = item.summaryLine()
-            if let days = item.reminderDaysBefore,
-               let reminderDay = cal.date(byAdding: .day, value: -days, to: cal.startOfDay(for: item.due)),
-               let fireAt = cal.date(bySettingHour: 8, minute: 0, second: 0, of: reminderDay) {
+            if let fireAt = reminderFireDate(for: item) {
+                let title = DeadlineNotificationCopy.reminderTitle()
+                let body = DeadlineNotificationCopy.reminderBody(projectName: projectName, item: item)
                 await LocalNotificationService.shared.scheduleQualificationExpiryOneShot(
                     identifier: reminderIdentifier(deadlineId: item.id),
-                    title: "Deadline reminder",
+                    title: title,
                     body: body,
-                    fireAt: fireAt
+                    fireAt: fireAt,
+                    userInfo: NotificationDeepLink.userInfo(
+                        type: .deadlineReminder,
+                        relatedId: item.id,
+                        userId: currentUserId
+                    )
                 )
             }
-            if let dueMorning = cal.date(bySettingHour: 8, minute: 0, second: 0, of: cal.startOfDay(for: item.due)) {
+            if let dueMorning = dueFireDate(for: item) {
+                let title = DeadlineNotificationCopy.dueTitle()
+                let body = DeadlineNotificationCopy.dueBody(projectName: projectName, item: item)
                 await LocalNotificationService.shared.scheduleQualificationExpiryOneShot(
                     identifier: dueIdentifier(deadlineId: item.id),
-                    title: "Deadline due today",
+                    title: title,
                     body: body,
-                    fireAt: dueMorning
+                    fireAt: dueMorning,
+                    userInfo: NotificationDeepLink.userInfo(
+                        type: .deadlineDue,
+                        relatedId: item.id,
+                        userId: currentUserId
+                    )
                 )
             }
         }

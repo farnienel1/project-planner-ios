@@ -67,6 +67,18 @@ class LocalNotificationService {
         case .deadlineAssigned:
             content.title = "Deadline assigned"
             content.body = details.isEmpty ? "A deadline has been assigned to you." : details
+        case .deadlineReminder:
+            content.title = "Deadline reminder"
+            content.body = details.isEmpty ? "A deadline is coming up." : details
+        case .deadlineDue:
+            content.title = "Deadline due today"
+            content.body = details.isEmpty ? "A deadline is due today." : details
+        case .qualificationExpiry:
+            content.title = "Qualification expiring"
+            content.body = details.isEmpty ? "A qualification is due to expire." : details
+        case .materialOrderCutOff:
+            content.title = "Material order cut off"
+            content.body = details.isEmpty ? "Material order cut off." : details
         case .taskCompleted:
             content.title = "Task Completed"
             content.body = details.isEmpty ? "Task 'Complete site inspection' has been completed." : details
@@ -241,12 +253,21 @@ class LocalNotificationService {
         center.removePendingNotificationRequests(withIdentifiers: ids)
     }
 
-    func scheduleQualificationExpiryOneShot(identifier: String, title: String, body: String, fireAt: Date) async {
+    func scheduleQualificationExpiryOneShot(
+        identifier: String,
+        title: String,
+        body: String,
+        fireAt: Date,
+        userInfo: [AnyHashable: Any] = [:]
+    ) async {
         guard fireAt > Date() else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
+        if !userInfo.isEmpty {
+            content.userInfo = userInfo
+        }
 
         var cal = Calendar.current
         cal.timeZone = TimeZone.current

@@ -4564,7 +4564,19 @@ class FirebaseBackend: ObservableObject {
 #endif
     }
     
-    func saveNotification(_ notification: AppNotification, organizationId: String) async throws {
+    func saveNotification(
+        _ notification: AppNotification,
+        organizationId: String,
+        preserveExistingReadState: Bool = false
+    ) async throws {
+        let ref = db.collection("organizations").document(organizationId).collection("notifications").document(notification.id.uuidString)
+        var isRead = notification.isRead
+        if preserveExistingReadState {
+            let existing = try? await ref.getDocument()
+            if existing?.exists == true, (existing?.data()?["isRead"] as? Bool) == true {
+                isRead = true
+            }
+        }
         let data: [String: Any] = [
             "organizationId": notification.organizationId,
             "type": notification.type.rawValue,
@@ -4572,14 +4584,14 @@ class FirebaseBackend: ObservableObject {
             "message": notification.message,
             "userId": notification.userId ?? NSNull(),
             "relatedId": notification.relatedId?.uuidString ?? NSNull(),
-            "isRead": notification.isRead,
+            "isRead": isRead,
             "createdAt": Timestamp(date: notification.createdAt),
             "requiresPermission": notification.requiresPermission ?? NSNull(),
             "deepLinkUserId": notification.deepLinkUserId ?? NSNull(),
             "deepLinkWeekStart": (notification.deepLinkWeekStart.map(Timestamp.init(date:)) ?? NSNull()) as Any
         ]
         
-        try await db.collection("organizations").document(organizationId).collection("notifications").document(notification.id.uuidString).setData(data)
+        try await ref.setData(data)
         print("🔥🔥🔥 DEBUG: [FIREBASE SAVE NOTIFICATION OK] org=\(organizationId) id=\(notification.id.uuidString) type=\(notification.type.rawValue) target=\(notification.userId ?? "broadcast")")
     }
     

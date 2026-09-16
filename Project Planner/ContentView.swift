@@ -348,6 +348,7 @@ struct ContentView: View {
                         bookingStore.loadData()
                         managerScheduleStore.loadData(force: true)
                     }
+                    notificationService.promoteScheduledDeadlineNotifications()
                     // Do not reload the full notifications inbox on every foreground —
                     // that alone can jetsam Simulator orgs with 100+ notification docs.
                 }
