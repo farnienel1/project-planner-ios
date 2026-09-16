@@ -16,7 +16,7 @@ class ResendEmailService: ObservableObject {
     // Using verified domain: info@projectplanner.us
     // Domain has been verified in Resend dashboard
     private let fromEmail = "info@projectplanner.us" // Your verified domain
-    private let setupPasswordBaseURL = "https://project-planner-f986c.web.app"
+    private let setupPasswordBaseURL = "https://www.projectplanner.us"
     
     func sendVerificationEmail(to email: String, verificationCode: String) async -> Bool {
         return await sendEmail(

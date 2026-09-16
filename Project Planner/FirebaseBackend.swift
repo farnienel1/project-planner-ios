@@ -4958,7 +4958,7 @@ class FirebaseBackend: ObservableObject {
             You have been invited to join the Project Planner system.
             
             To set up your account and create your password, please visit:
-            https://project-planner-f986c.web.app/setup-password.html?token=\(invitationId)
+            https://www.projectplanner.us/setup-password.html?token=\(invitationId)
             
             Once you've set up your password, you'll be able to access the Project Planner system.
             
