@@ -181,10 +181,10 @@ struct InvoicingView: View {
                     .frame(width: 40, height: 40)
                     .background(Color.orange.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                Text("Timesheets not enabled")
+                Text("Timesheets follow employment type")
                     .font(.headline)
             }
-            Text("You currently do not have access to Timesheets. This is usually due to a PAYE status, where timesheets are not required. If you require timesheets in order to get paid, then please contact your line manager who can request for this to be updated.")
+            Text("My Timesheets is for self-employed pay. PAYE accounts keep the current pay run until it is paid, then schedule hours no longer fill the next timesheet. Switch the person back to self-employed if they need timesheets again.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

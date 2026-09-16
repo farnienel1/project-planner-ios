@@ -86,6 +86,9 @@ class ManagerScheduleStore: ObservableObject {
                 managerSiteBookings = deduplicated(list)
                 OfflineManagerScheduleLocalStore.save(managerSiteBookings, organizationId: orgId)
                 lastLoadAt = Date()
+                fb.listenManagerSiteBookings(organizationId: orgId) { [weak self] remote in
+                    self?.applyRemoteManagerBookings(remote, organizationId: orgId)
+                }
                 if !duplicates.isEmpty {
                     // Defer duplicate cleanup — sequential deletes on launch freeze Simulator.
                     let orgIdForDeletes = orgId
@@ -187,6 +190,26 @@ class ManagerScheduleStore: ObservableObject {
         managerSiteBookings = deduplicated(managerSiteBookings)
         OfflineManagerScheduleLocalStore.save(managerSiteBookings, organizationId: organizationId)
         NotificationCenter.default.post(name: didChangeNotificationName, object: nil)
+    }
+
+    private func applyRemoteManagerBookings(_ remote: [ManagerSiteBooking], organizationId: String) {
+        let next = deduplicated(remote)
+        let incoming = next.sorted { $0.id.uuidString < $1.id.uuidString }
+        let current = managerSiteBookings.sorted { $0.id.uuidString < $1.id.uuidString }
+        if incoming.count == current.count {
+            let same = zip(incoming, current).allSatisfy { lhs, rhs in
+                lhs.id == rhs.id && lhs.updatedAt == rhs.updatedAt && lhs.timeSlot == rhs.timeSlot
+                    && lhs.locationType == rhs.locationType && lhs.locationId == rhs.locationId
+                    && lhs.workStartTime == rhs.workStartTime && lhs.workEndTime == rhs.workEndTime
+                    && lhs.userId == rhs.userId
+            }
+            if same { return }
+        }
+        managerSiteBookings = next
+        OfflineManagerScheduleLocalStore.save(next, organizationId: organizationId)
+        lastLoadAt = Date()
+        NotificationCenter.default.post(name: didChangeNotificationName, object: nil)
+        ScheduleChangeNotifier.postBookingStoreDidChange()
     }
 
     func bookings(for userId: String, on date: Date) -> [ManagerSiteBooking] {

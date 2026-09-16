@@ -370,42 +370,8 @@ struct SettingsNotificationsHubView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                SettingsHubChrome.sectionTitle("General app options")
-                SettingsHubChrome.card {
-                    NavigationLink {
-                        GeneralAppSettingsView()
-                            .environmentObject(appSettings)
-                    } label: {
-                        HStack(spacing: 12) {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(ProjectWorksRevampColors.blue.opacity(0.12))
-                                .frame(width: 30, height: 30)
-                                .overlay(
-                                    Image(systemName: "calendar.badge.clock")
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundStyle(ProjectWorksRevampColors.blue)
-                                )
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("General app options")
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                                Text("My schedule list on this device")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
-                        }
-                        .padding(.vertical, 11)
-                    }
-                    .buttonStyle(.plain)
-                }
-                SettingsHubChrome.footer("Controls extra rows in My Schedule (office, WFH, custom labels).")
-
+                SettingsHubChrome.sectionTitle("Notifications")
                 if canConfigureMaterialCutOff {
-                    SettingsHubChrome.sectionTitle("Notifications")
                     SettingsHubChrome.card {
                         HStack(spacing: 12) {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -436,6 +402,14 @@ struct SettingsNotificationsHubView: View {
                             .tint(ProjectWorksRevampColors.blue)
                         }
                         .padding(.vertical, 11)
+                    }
+                    SettingsHubChrome.footer("My Schedule extra locations are managed in Organisation Settings Hub → Schedule options.")
+                } else {
+                    SettingsHubChrome.card {
+                        Text("Notification options for this account are managed by your organisation.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .padding(.vertical, 12)
                     }
                 }
             }

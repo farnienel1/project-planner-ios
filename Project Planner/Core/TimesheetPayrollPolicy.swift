@@ -138,11 +138,6 @@ enum TimesheetPayrollPolicy {
             return true
         }
 
-        // PAYE (etc.) with timesheets turned on in Manage Users.
-        if user.timesheetsEnabled {
-            return true
-        }
-
         let period = payPeriodContaining(referenceDate: referenceDate, settings: settings, calendar: calendar)
         let hasSelfEmployedDays = calendarDays(from: period.start, to: period.end, calendar: calendar)
             .contains { isBillableSelfEmployedDay(user, on: $0, calendar: calendar) }
@@ -173,11 +168,6 @@ enum TimesheetPayrollPolicy {
         guard isTimesheetEligibleRole else { return false }
 
         if user.employmentType(on: referenceDate) == .selfEmployed {
-            return true
-        }
-
-        // PAYE users with timesheets enabled always appear on manager/admin rosters.
-        if user.timesheetsEnabled {
             return true
         }
 

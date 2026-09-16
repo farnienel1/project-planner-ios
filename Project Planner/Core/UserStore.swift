@@ -609,11 +609,11 @@ class UserStore: ObservableObject {
         canAccessMyTimesheets() || canAccessOperativeTimesheets() || shouldShowTimesheetsDisabledMessage()
     }
 
-    /// User has a timesheet-eligible role but timesheets are turned off (e.g. PAYE without timesheet requirement).
+    /// User has a timesheet-eligible role but is PAYE with no remaining self-employed days in the open pay run.
     func shouldShowTimesheetsDisabledMessage() -> Bool {
         guard let user = displayUser else { return false }
-        guard !user.timesheetsEnabled else { return false }
         guard user.employmentType(on: Date()) != .selfEmployed else { return false }
+        guard !canAccessMyTimesheets() else { return false }
         return isTimesheetEligibleRole(user)
     }
 
@@ -1715,6 +1715,7 @@ class UserStore: ObservableObject {
         let effectiveStart = effectiveAt.map { calendar.startOfDay(for: $0) } ?? calendar.startOfDay(for: Date())
         let transitionFrom: EmploymentType? = (employmentType != updated.employmentType) ? updated.employmentType : nil
         updated.employmentType = employmentType
+        updated.timesheetsEnabled = employmentType == .selfEmployed
         if transitionFrom != nil {
             updated.employmentTypeTransitionFrom = transitionFrom
             updated.employmentTypeEffectiveAt = effectiveStart
@@ -1742,6 +1743,7 @@ class UserStore: ObservableObject {
                 cu.employmentType = updated.employmentType
                 cu.employmentTypeTransitionFrom = updated.employmentTypeTransitionFrom
                 cu.employmentTypeEffectiveAt = updated.employmentTypeEffectiveAt
+                cu.timesheetsEnabled = updated.timesheetsEnabled
                 currentUser = cu
             }
             return true

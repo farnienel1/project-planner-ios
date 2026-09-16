@@ -743,7 +743,8 @@ class NotificationService: ObservableObject {
         scheduleLocalInAppMirrorAlert(
             title: "Annual leave update",
             message: "Please check your annual leave and request any annual leave days moving forward.",
-            dedupeIdentifier: dedupeId.uuidString
+            dedupeIdentifier: dedupeId.uuidString,
+            userInfo: NotificationDeepLink.userInfo(for: notification)
         )
     }
 
@@ -1171,7 +1172,9 @@ class NotificationService: ObservableObject {
             relatedId: relatedId,
             isRead: isRead,
             createdAt: createdAt,
-            requiresPermission: requiresPermission
+            requiresPermission: requiresPermission,
+            deepLinkUserId: data["deepLinkUserId"] as? String,
+            deepLinkWeekStart: (data["deepLinkWeekStart"] as? Timestamp)?.dateValue()
         )
     }
 
@@ -1188,7 +1191,12 @@ class NotificationService: ObservableObject {
                 let key = notificationDedupKey(for: n)
                 guard !seenLocalAlertNotificationKeys.contains(key) else { break }
                 recordLocalAlertDedupKey(key)
-                scheduleLocalInAppMirrorAlert(title: n.title, message: n.message, dedupeIdentifier: key)
+                scheduleLocalInAppMirrorAlert(
+                    title: n.title,
+                    message: n.message,
+                    dedupeIdentifier: key,
+                    userInfo: NotificationDeepLink.userInfo(for: n)
+                )
             }
             break
         }
@@ -1235,7 +1243,7 @@ class NotificationService: ObservableObject {
         }
     }
 
-    private func scheduleLocalInAppMirrorAlert(title: String, message: String, dedupeIdentifier: String) {
+    private func scheduleLocalInAppMirrorAlert(title: String, message: String, dedupeIdentifier: String, userInfo: [AnyHashable: Any] = [:]) {
         Task {
             let granted = await LocalNotificationService.shared.requestAuthorization()
             guard granted else {
@@ -1256,6 +1264,10 @@ class NotificationService: ObservableObject {
             content.title = title
             content.body = message
             content.sound = .default
+            content.userInfo = userInfo
+            // OS banners are scheduled 1 second out so they appear while the app is in the
+            // foreground (immediate triggers are delivered silently). Firestore itself is
+            // realtime; any extra delay is network / APNs, not a polling interval.
             let request = UNNotificationRequest(
                 identifier: identifier,
                 content: content,
@@ -1532,7 +1544,12 @@ class NotificationService: ObservableObject {
         let key = notificationDedupKey(for: notification)
         guard !seenLocalAlertNotificationKeys.contains(key) else { return }
         recordLocalAlertDedupKey(key)
-        scheduleLocalInAppMirrorAlert(title: notification.title, message: notification.message, dedupeIdentifier: key)
+        scheduleLocalInAppMirrorAlert(
+            title: notification.title,
+            message: notification.message,
+            dedupeIdentifier: key,
+            userInfo: NotificationDeepLink.userInfo(for: notification)
+        )
     }
 
     private func loadPersistedLocalAlertDedupKeysIfNeeded() {

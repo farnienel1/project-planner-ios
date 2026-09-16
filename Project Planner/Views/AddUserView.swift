@@ -53,7 +53,6 @@ struct AddUserView: View {
     @State private var annualLeaveStartMonth = 1
     @State private var annualLeaveEndMonth = 12
     @State private var annualLeaveCarriesOver = false
-    @State private var timesheetsEnabled = false
     @State private var vatNumber = ""
     @State private var utrNumber = ""
     @State private var isCreating = false
@@ -486,9 +485,6 @@ struct AddUserView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    .onChange(of: employmentType) { _, _ in
-                        timesheetsEnabled = AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
-                    }
                 }
                 
                 if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
@@ -530,15 +526,9 @@ struct AddUserView: View {
                 }
 
                 if mode == .admin {
-                    Toggle(isOn: $timesheetsEnabled) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Timesheets")
-                                .font(.headline)
-                            Text("Operatives default to on; managers and admins default to off.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
+                    Text("Timesheets follow employment type. Self-employed users get My Timesheets; PAYE users keep the current pay run until it is paid, then schedule no longer fills timesheets.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
             }
         }
@@ -1063,7 +1053,6 @@ struct AddUserView: View {
                 siteAudit: true
             )
         }
-        timesheetsEnabled = AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
     }
     
     private var tradeRequiredAndValid: Bool {
@@ -1161,7 +1150,7 @@ struct AddUserView: View {
                 annualLeaveYearStartMonth: passAnnualLeaveInvite ? annualLeaveStartMonth : nil,
                 annualLeaveYearEndMonth: passAnnualLeaveInvite ? annualLeaveEndMonth : nil,
                 annualLeaveCarriesOver: passAnnualLeaveInvite ? annualLeaveCarriesOver : nil,
-                timesheetsEnabled: mode == .admin ? timesheetsEnabled : AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType),
+                timesheetsEnabled: AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType),
                 vatNumber: vatNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : vatNumber.trimmingCharacters(in: .whitespacesAndNewlines),
                 utrNumber: utrNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : utrNumber.trimmingCharacters(in: .whitespacesAndNewlines)
             )

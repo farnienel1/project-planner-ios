@@ -112,6 +112,7 @@ struct HomeView: View {
         .sheet(isPresented: $showingNotifications) {
             NotificationsView()
                 .environmentObject(notificationService)
+                .environmentObject(userStore)
         }
         .sheet(isPresented: $showingCreateClient) {
             CreateClientView()
@@ -146,12 +147,14 @@ struct HomeView: View {
                 .environmentObject(operativeStore)
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
         }
         .sheet(isPresented: $showingOperativeQualifications) {
             OperativeQualificationsReadOnlyView()
                 .environmentObject(operativeStore)
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
         }
         .sheet(isPresented: $showingJobTypesManagement) {
             JobTypesManagementView()
@@ -309,8 +312,22 @@ struct HomeView: View {
             case .siteAudit: showingSiteAudit = true
             case .invoicing:
                 timesheetReviewDeepLinkUserId = note.userInfo?["targetUserId"] as? String
-                timesheetReviewDeepLinkWeekStart = note.userInfo?["weekStart"] as? Date
+                if let date = note.userInfo?["weekStart"] as? Date {
+                    timesheetReviewDeepLinkWeekStart = date
+                } else if let interval = note.userInfo?["weekStart"] as? TimeInterval {
+                    timesheetReviewDeepLinkWeekStart = Date(timeIntervalSince1970: interval)
+                } else if let number = note.userInfo?["weekStart"] as? NSNumber {
+                    timesheetReviewDeepLinkWeekStart = Date(timeIntervalSince1970: number.doubleValue)
+                } else {
+                    timesheetReviewDeepLinkWeekStart = nil
+                }
                 showingInvoicing = true
+            case .mySchedule:
+                showingMySchedule = true
+            case .dailyOverview:
+                showingDailyOverview = true
+            case .warnings:
+                showingWarningsDetail = true
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .mainMenuResetPassword)) { _ in
@@ -573,6 +590,22 @@ struct HomeView: View {
         .onReceive(NotificationCenter.default.publisher(for: .warningsNeedsHomeRefresh)) { _ in
             // REBUILD: no auto Home warm — only sync badge from shared/disk cache.
             homeWarningCount = WarningsService.shared.warningCount
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .bookingStoreDidChange)) { _ in
+            Task {
+                await WarningsRefreshHelper.refreshSharedWarnings(
+                    operativeStore: operativeStore,
+                    bookingStore: bookingStore,
+                    projectStore: projectStore,
+                    userStore: userStore,
+                    managerScheduleStore: managerScheduleStore,
+                    holidayStore: holidayStore,
+                    firebaseBackend: firebaseBackend,
+                    appSettings: appSettings,
+                    force: true,
+                    allowWhileSheetVisible: true
+                )
+            }
         }
         .onChange(of: showingWarningsDetail) { _, isOpen in
             WarningsRefreshHelper.isWarningsSheetVisible = isOpen

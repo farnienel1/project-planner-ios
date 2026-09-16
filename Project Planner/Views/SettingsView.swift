@@ -280,7 +280,7 @@ struct SettingsView: View {
                         iconBg: ProjectWorksRevampColors.pinRoseBg,
                         iconFg: ProjectWorksRevampColors.pinRoseFg,
                         title: "My notifications",
-                        subtitle: "What you get pinged about"
+                        subtitle: "Material cut-off reminder"
                     )
                 }
                 .buttonStyle(.plain)

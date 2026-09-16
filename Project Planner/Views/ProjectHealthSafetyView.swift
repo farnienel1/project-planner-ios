@@ -3213,8 +3213,6 @@ private enum HSTalkPDFBuilder {
                 UIRectFill(bandRect)
                 amber.setFill()
                 UIRectFill(CGRect(x: 0, y: 92, width: pageRect.width, height: 4))
-                drawOrganizationDocumentBadgePDF(text: orgBadge, in: CGRect(x: pageRect.width - 70, y: 26, width: 50, height: 36))
-
                 ("PROJECT " as NSString).draw(at: CGPoint(x: 26, y: 28), withAttributes: [
                     .font: UIFont.systemFont(ofSize: 13, weight: .bold),
                     .foregroundColor: UIColor.white
@@ -3223,6 +3221,7 @@ private enum HSTalkPDFBuilder {
                     .font: UIFont.systemFont(ofSize: 13, weight: .bold),
                     .foregroundColor: cyan
                 ])
+                drawOrganizationDocumentBadgePDF(text: orgBadge, in: CGRect(x: 168, y: 24, width: 50, height: 36))
                 ("TOOLBOX TALK" as NSString).draw(at: CGPoint(x: 26, y: 48), withAttributes: [
                     .font: UIFont.systemFont(ofSize: 11, weight: .medium),
                     .foregroundColor: UIColor(red: 0.62, green: 0.70, blue: 0.81, alpha: 1)

@@ -218,6 +218,31 @@ struct Warning: Identifiable, Hashable, Codable {
     struct UnbookedLabourWarningDetails: Hashable, Codable {
         var date: Date
         var names: [String]
+        var personKeys: [String]
+
+        init(date: Date, names: [String], personKeys: [String] = []) {
+            self.date = date
+            self.names = names
+            self.personKeys = personKeys
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case date, names, personKeys
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            date = try c.decode(Date.self, forKey: .date)
+            names = try c.decodeIfPresent([String].self, forKey: .names) ?? []
+            personKeys = try c.decodeIfPresent([String].self, forKey: .personKeys) ?? []
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(date, forKey: .date)
+            try c.encode(names, forKey: .names)
+            try c.encode(personKeys, forKey: .personKeys)
+        }
     }
 
     struct MaterialsCutoffWarningDetails: Hashable, Codable {

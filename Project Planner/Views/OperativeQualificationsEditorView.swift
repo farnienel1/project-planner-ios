@@ -137,7 +137,7 @@ struct OperativeQualificationsEditorView: View {
                 errorMessage = "Could not select file: \(error.localizedDescription)"
             }
         }
-        .sheet(isPresented: $showingAssignQualificationsPicker) {
+        .fullScreenCover(isPresented: $showingAssignQualificationsPicker) {
             AssignQualificationsPickerView(selectedQualifications: $selectedQualifications)
                 .environmentObject(operativeStore)
                 .environmentObject(userStore)
@@ -162,6 +162,11 @@ struct OperativeQualificationsEditorView: View {
         .onChange(of: operative.updatedAt) { _, _ in
             guard isMyQualifications, !hasUnsavedChanges else { return }
             applyOperativeSnapshot(operative)
+        }
+        .task {
+            if operativeStore.qualifications.isEmpty {
+                operativeStore.loadData()
+            }
         }
         .sheet(item: $certificateViewerURL) { item in
             InAppRemoteDocumentViewer(remoteURL: item.url, title: "Certificate")
@@ -195,6 +200,15 @@ struct OperativeQualificationsEditorView: View {
             }
         }
         if isMyQualifications {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingAssignQualificationsPicker = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .disabled(!canEditAssignments)
+                .accessibilityLabel("Add qualifications")
+            }
             if usesOwnNavigationStack {
                 ToolbarItem(placement: .cancellationAction) {
                     if hasUnsavedChanges {
@@ -265,6 +279,7 @@ struct OperativeQualificationsEditorView: View {
             } label: {
                 Label("Add qualifications", systemImage: "plus.circle.fill")
             }
+            .buttonStyle(.borderless)
             .disabled(!canEditAssignments)
         } header: {
             Text("Current qualifications")
@@ -295,10 +310,8 @@ struct OperativeQualificationsEditorView: View {
             } label: {
                 Label("Add qualifications", systemImage: "plus.circle.fill")
             }
-            .disabled(
-                !canEditAssignments
-                    || (operativeStore.qualifications.isEmpty && !userStore.canManageOrganisationQualifications())
-            )
+            .buttonStyle(.borderless)
+            .disabled(!canEditAssignments)
         } header: {
             Text("My qualifications")
         }

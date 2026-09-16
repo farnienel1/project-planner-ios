@@ -9,6 +9,7 @@ import SwiftUI
 
 struct NotificationsView: View {
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var userStore: UserStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var filterOption: FilterOption = .newest
@@ -76,8 +77,13 @@ struct NotificationsView: View {
                 } else {
                     List {
                         ForEach(filteredNotifications) { notification in
-                            NotificationRowView(notification: notification)
-                                .listRowSeparator(.visible)
+                            Button {
+                                open(notification)
+                            } label: {
+                                NotificationRowView(notification: notification)
+                            }
+                            .buttonStyle(.plain)
+                            .listRowSeparator(.visible)
                         }
                     }
                     .listStyle(.plain)
@@ -107,6 +113,14 @@ struct NotificationsView: View {
             .onDisappear {
                 notificationService.prepareInboxPresentation()
             }
+        }
+    }
+
+    private func open(_ notification: AppNotification) {
+        dismiss()
+        let info = NotificationDeepLink.userInfo(for: notification)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            NotificationCenter.default.post(name: .openNotificationDeepLink, object: nil, userInfo: info)
         }
     }
 }

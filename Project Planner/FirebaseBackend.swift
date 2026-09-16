@@ -133,6 +133,8 @@ class FirebaseBackend: ObservableObject {
     private var lastOrganizationDidLoadBroadcastOrgId: String?
     private var lastOrganizationDidLoadBroadcastAt: Date?
     private var organizationDocumentListener: ListenerRegistration?
+    private var bookingsLiveListener: ListenerRegistration?
+    private var managerScheduleLiveListener: ListenerRegistration?
     /// True when `organizations/{orgId}.settings.myScheduleOptions` exists in Firestore.
     /// Writable from membership helpers in `FirebaseBackend+OrganizationMembership`.
     var organizationHasFirestoreMyScheduleOptions = false
@@ -193,6 +195,14 @@ class FirebaseBackend: ObservableObject {
     private func stopOrganizationDocumentListener() {
         organizationDocumentListener?.remove()
         organizationDocumentListener = nil
+        stopScheduleLiveListeners()
+    }
+
+    func stopScheduleLiveListeners() {
+        bookingsLiveListener?.remove()
+        bookingsLiveListener = nil
+        managerScheduleLiveListener?.remove()
+        managerScheduleLiveListener = nil
     }
 
     private func startOrganizationDocumentListener(organizationId: String) {
@@ -5207,8 +5217,11 @@ class FirebaseBackend: ObservableObject {
             }
         }
         
-        return snapshot.documents.compactMap { doc in
-            let data = doc.data()
+        return snapshot.documents.compactMap { bookingFromFirestoreDocument($0) }
+    }
+
+    func bookingFromFirestoreDocument(_ doc: QueryDocumentSnapshot) -> Booking? {
+        let data = doc.data()
             
             guard let operativeIdString = data["operativeId"] as? String,
                   let operativeId = UUID(uuidString: operativeIdString),
@@ -5255,7 +5268,25 @@ class FirebaseBackend: ObservableObject {
                 createdAt: createdAt,
                 updatedAt: updatedAt
             )
-        }
+    }
+
+    func listenBookings(organizationId: String, onChange: @escaping ([Booking]) -> Void) {
+        bookingsLiveListener?.remove()
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty else { return }
+        bookingsLiveListener = db.collection("organizations").document(orgId).collection("bookings")
+            .addSnapshotListener { [weak self] snapshot, error in
+                if let error {
+                    print("🔥🔥🔥 DEBUG: bookings live listener error: \(error.localizedDescription)")
+                    return
+                }
+                guard let snapshot else { return }
+                Task { @MainActor in
+                    guard let self else { return }
+                    let list = snapshot.documents.compactMap { self.bookingFromFirestoreDocument($0) }
+                    onChange(list)
+                }
+            }
     }
     
     func deleteBooking(_ booking: Booking, organizationId: String) async throws {
@@ -5303,39 +5334,60 @@ class FirebaseBackend: ObservableObject {
 
     func loadManagerSiteBookings(organizationId: String) async throws -> [ManagerSiteBooking] {
         let snapshot = try await db.collection("organizations").document(organizationId).collection("managerSiteBookings").getDocuments()
-        return snapshot.documents.compactMap { doc -> ManagerSiteBooking? in
-            let data = doc.data()
-            guard let userId = data["userId"] as? String,
-                  let date = (data["date"] as? Timestamp)?.dateValue(),
-                  let timeSlotRaw = data["timeSlot"] as? String,
-                  let timeSlot = ManagerTimeSlot(rawValue: timeSlotRaw),
-                  let locationTypeRaw = data["locationType"] as? String,
-                  let locationType = ManagerLocationType(rawValue: locationTypeRaw) else { return nil }
-            let id = UUID(uuidString: doc.documentID) ?? UUID()
-            let locationId = (data["locationId"] as? String).flatMap { UUID(uuidString: $0) }
-            let customLocationName = data["customLocationName"] as? String
-            let workStartTime = data["workStartTime"] as? String
-            let workEndTime = data["workEndTime"] as? String
-            let isBreakRemoved = (data["isBreakRemoved"] as? Bool) ?? false
-            let bookingGroupId = data["bookingGroupId"] as? String
-            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-            let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-            return ManagerSiteBooking(
-                id: id,
-                userId: userId,
-                date: date,
-                timeSlot: timeSlot,
-                locationType: locationType,
-                locationId: locationId,
-                customLocationName: customLocationName,
-                workStartTime: workStartTime,
-                workEndTime: workEndTime,
-                isBreakRemoved: isBreakRemoved,
-                bookingGroupId: bookingGroupId,
-                createdAt: createdAt,
-                updatedAt: updatedAt
-            )
-        }
+        return snapshot.documents.compactMap { managerSiteBookingFromFirestoreDocument($0) }
+    }
+
+    func managerSiteBookingFromFirestoreDocument(_ doc: QueryDocumentSnapshot) -> ManagerSiteBooking? {
+        let data = doc.data()
+        guard let userId = data["userId"] as? String,
+              let date = (data["date"] as? Timestamp)?.dateValue(),
+              let timeSlotRaw = data["timeSlot"] as? String,
+              let timeSlot = ManagerTimeSlot(rawValue: timeSlotRaw),
+              let locationTypeRaw = data["locationType"] as? String,
+              let locationType = ManagerLocationType(rawValue: locationTypeRaw) else { return nil }
+        let id = UUID(uuidString: doc.documentID) ?? UUID()
+        let locationId = (data["locationId"] as? String).flatMap { UUID(uuidString: $0) }
+        let customLocationName = data["customLocationName"] as? String
+        let workStartTime = data["workStartTime"] as? String
+        let workEndTime = data["workEndTime"] as? String
+        let isBreakRemoved = (data["isBreakRemoved"] as? Bool) ?? false
+        let bookingGroupId = data["bookingGroupId"] as? String
+        let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+        let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
+        return ManagerSiteBooking(
+            id: id,
+            userId: userId,
+            date: date,
+            timeSlot: timeSlot,
+            locationType: locationType,
+            locationId: locationId,
+            customLocationName: customLocationName,
+            workStartTime: workStartTime,
+            workEndTime: workEndTime,
+            isBreakRemoved: isBreakRemoved,
+            bookingGroupId: bookingGroupId,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    func listenManagerSiteBookings(organizationId: String, onChange: @escaping ([ManagerSiteBooking]) -> Void) {
+        managerScheduleLiveListener?.remove()
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty else { return }
+        managerScheduleLiveListener = db.collection("organizations").document(orgId).collection("managerSiteBookings")
+            .addSnapshotListener { [weak self] snapshot, error in
+                if let error {
+                    print("🔥🔥🔥 DEBUG: manager schedule live listener error: \(error.localizedDescription)")
+                    return
+                }
+                guard let snapshot else { return }
+                Task { @MainActor in
+                    guard let self else { return }
+                    let list = snapshot.documents.compactMap { self.managerSiteBookingFromFirestoreDocument($0) }
+                    onChange(list)
+                }
+            }
     }
 
     func deleteManagerSiteBooking(_ booking: ManagerSiteBooking, organizationId: String) async throws {

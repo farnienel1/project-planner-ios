@@ -70,6 +70,7 @@ enum TimesheetPayrollCollector {
             guard operativeIds.contains(booking.operativeId) else { continue }
             let day = cal.startOfDay(for: booking.date)
             guard day >= range.lowerBound && day <= range.upperBound else { continue }
+            guard TimesheetPayrollPolicy.isBillableSelfEmployedDay(user, on: day, calendar: cal) else { continue }
             let policy = dayPolicy(for: day)
             let standardDayHours = max(policy.standardPaidHours, 0.01)
             shiftCount += 1
@@ -135,6 +136,7 @@ enum TimesheetPayrollCollector {
             guard scheduleOptions.includesManagerScheduleLocation(booking) else { continue }
             let day = cal.startOfDay(for: booking.date)
             guard day >= range.lowerBound && day <= range.upperBound else { continue }
+            guard TimesheetPayrollPolicy.isBillableSelfEmployedDay(user, on: day, calendar: cal) else { continue }
             let policy = dayPolicy(for: day)
             let standardDayHours = max(policy.standardPaidHours, 0.01)
             shiftCount += 1

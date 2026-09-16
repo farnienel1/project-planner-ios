@@ -161,6 +161,18 @@ struct ContentView: View {
                     NotificationCenter.default.post(name: .mainMenuOpenSurface, object: nil, userInfo: payload)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .openNotificationDeepLink)) { notification in
+                let info = NotificationDeepLink.userInfo(from: notification.userInfo ?? [:])
+                showMoreMenuSheet = false
+                showingHolidaySheet = false
+                selectTab(0)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NotificationDeepLink.route(
+                        userInfo: info,
+                        isOperativeMode: userStore.isOperativeMode()
+                    )
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToTimesheetReview"))) { notification in
                 let payload = notification.userInfo
                 selectTab(0)
@@ -332,6 +344,10 @@ struct ContentView: View {
                     // toggles (e.g. Annual Leave Management) applied by an admin take effect
                     // without requiring sign-out.
                     await userStore.loadCurrentUser()
+                    if firebaseBackend.hasBootstrappedOrgDataLoad {
+                        bookingStore.loadData()
+                        managerScheduleStore.loadData(force: true)
+                    }
                     // Do not reload the full notifications inbox on every foreground —
                     // that alone can jetsam Simulator orgs with 100+ notification docs.
                 }

@@ -527,7 +527,7 @@ enum WarningsComputation {
         while day <= coverageEnd {
             let weekday = cal.component(.weekday, from: day)
             if isUnbookedLabourWeekday(weekday, includeWeekends: input.warningDetection.includeWeekendsForUnbookedLabour) {
-                let names = scheduleIndex.unbookedNames(
+                let people = scheduleIndex.unbookedPeople(
                     on: day,
                     operativeUsers: operativeUsers,
                     managerUsers: managerUsers,
@@ -538,14 +538,19 @@ enum WarningsComputation {
                     excludedUserIds: input.warningDetection.excludedUserIdsFromUnbookedWarnings,
                     standardPaidHours: input.payrollTimePolicy.standardPaidHours
                 )
-                if !names.isEmpty {
+                for person in people {
                     generated.append(Warning(
-                        resolutionKey: "unbooked-\(day.timeIntervalSince1970)",
+                        resolutionKey: "unbooked-\(day.timeIntervalSince1970)-\(person.personKey)",
                         type: .unbookedLabour,
-                        title: "Unbooked labour", message: "\(names.count) \(names.count == 1 ? "person is" : "people are") below the standard paid day on \(formatDay(day)). Missing hours are shown per person below.",
+                        title: "Unbooked labour",
+                        message: "\(person.displayName) is below the standard paid day on \(formatDay(day)). Missing hours are shown below.",
                         severity: .high,
                         occurrenceDate: day,
-                        unbookedLabour: Warning.UnbookedLabourWarningDetails(date: day, names: names)
+                        unbookedLabour: Warning.UnbookedLabourWarningDetails(
+                            date: day,
+                            names: [person.displayLine],
+                            personKeys: [person.personKey]
+                        )
                     ))
                 }
             }
@@ -833,6 +838,12 @@ private struct WarningsScheduleIndex {
         holidayByOperativeId = byOp
     }
 
+    struct UnbookedPerson {
+        let personKey: String
+        let displayName: String
+        let displayLine: String
+    }
+
     nonisolated func unbookedNames(
         on day: Date,
         operativeUsers: [WarningsComputationSnapshot.UserSnapshot],
@@ -844,6 +855,30 @@ private struct WarningsScheduleIndex {
         excludedUserIds: Set<String>,
         standardPaidHours: Double
     ) -> [String] {
+        unbookedPeople(
+            on: day,
+            operativeUsers: operativeUsers,
+            managerUsers: managerUsers,
+            rosterOperatives: rosterOperatives,
+            operativesByEmail: operativesByEmail,
+            usersById: usersById,
+            managerAdminUserIds: managerAdminUserIds,
+            excludedUserIds: excludedUserIds,
+            standardPaidHours: standardPaidHours
+        ).map(\.displayLine)
+    }
+
+    nonisolated func unbookedPeople(
+        on day: Date,
+        operativeUsers: [WarningsComputationSnapshot.UserSnapshot],
+        managerUsers: [WarningsComputationSnapshot.UserSnapshot],
+        rosterOperatives: [WarningsComputationSnapshot.OperativeSnapshot],
+        operativesByEmail: [String: WarningsComputationSnapshot.OperativeSnapshot],
+        usersById: [String: WarningsComputationSnapshot.UserSnapshot],
+        managerAdminUserIds: Set<String>,
+        excludedUserIds: Set<String>,
+        standardPaidHours: Double
+    ) -> [UnbookedPerson] {
         let dayStart = calendar.startOfDay(for: day)
         let dayKeySuffix = dayStart.timeIntervalSince1970
 
@@ -895,14 +930,20 @@ private struct WarningsScheduleIndex {
 
         let operativeUserEmails = Set(operativeUsers.map(\.emailLowercased))
         var seenEmails = Set<String>()
-        var names: [String] = []
-        names.reserveCapacity(operativeUsers.count + managerUsers.count + rosterOperatives.count)
+        var people: [UnbookedPerson] = []
+        people.reserveCapacity(operativeUsers.count + managerUsers.count + rosterOperatives.count)
 
-        func appendIfUnderBooked(name: String, emailKey: String, paid: Double) {
+        func appendIfUnderBooked(personKey: String, name: String, emailKey: String, paid: Double) {
             guard seenEmails.insert(emailKey).inserted else { return }
             guard paid < requiredPaidHours else { return }
             let missing = max(0, requiredPaidHours - paid)
-            names.append("\(name) (missing \(WarningsComputation.formatHours(missing))h)")
+            people.append(
+                UnbookedPerson(
+                    personKey: personKey,
+                    displayName: name,
+                    displayLine: "\(name) (missing \(WarningsComputation.formatHours(missing))h)"
+                )
+            )
         }
 
         for user in operativeUsers {
@@ -911,10 +952,10 @@ private struct WarningsScheduleIndex {
             if hasHoliday(userId: user.id, operativeId: linked?.id) { continue }
             if let linked {
                 let paid = operativePaidTotal(linked.id) + managerPaidTotal(user.id)
-                appendIfUnderBooked(name: linked.name, emailKey: user.emailLowercased, paid: paid)
+                appendIfUnderBooked(personKey: user.id, name: linked.name, emailKey: user.emailLowercased, paid: paid)
             } else {
                 let paid = managerPaidTotal(user.id)
-                appendIfUnderBooked(name: user.displayName, emailKey: user.emailLowercased, paid: paid)
+                appendIfUnderBooked(personKey: user.id, name: user.displayName, emailKey: user.emailLowercased, paid: paid)
             }
         }
 
@@ -923,7 +964,7 @@ private struct WarningsScheduleIndex {
             let linked = operativesByEmail[user.emailLowercased]
             if hasHoliday(userId: user.id, operativeId: linked?.id) { continue }
             let paid = managerPaidTotal(user.id) + (linked.map { operativePaidTotal($0.id) } ?? 0)
-            appendIfUnderBooked(name: user.displayName, emailKey: user.emailLowercased, paid: paid)
+            appendIfUnderBooked(personKey: user.id, name: user.displayName, emailKey: user.emailLowercased, paid: paid)
         }
 
         for op in rosterOperatives where op.isActive {
@@ -937,9 +978,14 @@ private struct WarningsScheduleIndex {
             if isExcluded(userId: linkedUserId) { continue }
             if hasHoliday(userId: linkedUserId, operativeId: op.id) { continue }
             let paid = operativePaidTotal(op.id) + (linkedUserId.map { managerPaidTotal($0) } ?? 0)
-            appendIfUnderBooked(name: op.name, emailKey: email, paid: paid)
+            appendIfUnderBooked(
+                personKey: linkedUserId ?? op.id.uuidString,
+                name: op.name,
+                emailKey: email,
+                paid: paid
+            )
         }
-        return names.sorted()
+        return people.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
     }
 
     fileprivate struct ManagerPersonDayItem {

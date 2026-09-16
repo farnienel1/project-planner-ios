@@ -406,7 +406,7 @@ struct AppUser: Identifiable, Codable, Hashable {
     var annualLeaveYearEndMonth: Int
     /// When true, unused allowance from the previous leave year is added to the current year (simple model).
     var annualLeaveCarriesOver: Bool
-    /// When true, schedule feeds into timesheets and payroll sign-off applies. Operatives default on; managers/admins default off.
+    /// Kept in Firestore for older clients. Access is driven by employment type (self-employed vs PAYE), not this flag.
     var timesheetsEnabled: Bool
     /// VAT registration number (optional; shown on invoices when set).
     var vatNumber: String?
@@ -502,14 +502,12 @@ private extension String {
 extension AppUser {
     /// Operatives default on; self-employed managers/admins default on; PAYE managers/admins default off.
     static func defaultTimesheetsEnabled(for permissions: UserPermissions, employmentType: EmploymentType = .paye) -> Bool {
-        if permissions.operativeMode { return true }
-        if employmentType == .selfEmployed { return true }
-        return false
+        employmentType == .selfEmployed
     }
 
-    /// Whether this account participates in the timesheet workflow (toggle + employment type).
+    /// Whether this account's schedule feeds timesheets on a given day (self-employed only; PAYE supersedes day rate).
     func participatesInTimesheets(on date: Date = Date()) -> Bool {
-        timesheetsEnabled || employmentType(on: date) == .selfEmployed
+        employmentType(on: date) == .selfEmployed
     }
 
     var trimmedUTRNumber: String? {

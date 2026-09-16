@@ -7,6 +7,7 @@
 
 import SwiftUI
 import FirebaseAuth
+import UIKit
 
 private enum LoginBrand {
     static let bgDeep = Color(red: 0.024, green: 0.055, blue: 0.102) // #060E1A
@@ -178,34 +179,29 @@ struct AuthenticationView: View {
     private var formSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             fieldGroup(label: "Email") {
-                TextField("your@email.com", text: $email)
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textContentType(.emailAddress)
-                    .submitLabel(.next)
-                    .focused($focusedField, equals: .email)
-                    .foregroundStyle(.white)
-                    .tint(LoginBrand.cyan)
+                LoginAutofillField(
+                    text: $email,
+                    placeholder: "your@email.com",
+                    isSecure: false,
+                    contentType: .username,
+                    keyboardType: .emailAddress,
+                    returnKey: .next,
+                    onSubmit: { focusedField = .password }
+                )
             }
             .padding(.bottom, 16)
 
             fieldGroup(label: "Password") {
                 HStack(spacing: 0) {
-                    Group {
-                        if showPassword {
-                            TextField("Enter your password", text: $password)
-                        } else {
-                            SecureField("Enter your password", text: $password)
-                        }
-                    }
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textContentType(.password)
-                    .submitLabel(.done)
-                    .focused($focusedField, equals: .password)
-                    .foregroundStyle(.white)
-                    .tint(LoginBrand.cyan)
+                    LoginAutofillField(
+                        text: $password,
+                        placeholder: "Enter your password",
+                        isSecure: !showPassword,
+                        contentType: .password,
+                        keyboardType: .default,
+                        returnKey: .done,
+                        onSubmit: signIn
+                    )
 
                     Button {
                         showPassword.toggle()
@@ -388,6 +384,79 @@ struct AuthenticationView: View {
                     firebaseBackend.errorMessage = "Sign in failed. Please check your email/password and try again."
                 }
             }
+        }
+    }
+}
+
+/// UIKit fields so iOS Passwords / Keychain AutoFill can write into login (SwiftUI TextField + SecureField swaps often swallow the fill).
+private struct LoginAutofillField: UIViewRepresentable {
+    @Binding var text: String
+    var placeholder: String
+    var isSecure: Bool
+    var contentType: UITextContentType
+    var keyboardType: UIKeyboardType
+    var returnKey: UIReturnKeyType
+    var onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onSubmit: onSubmit)
+    }
+
+    func makeUIView(context: Context) -> UITextField {
+        let field = UITextField()
+        field.delegate = context.coordinator
+        field.borderStyle = .none
+        field.backgroundColor = .clear
+        field.textColor = .white
+        field.tintColor = UIColor(red: 0.133, green: 0.898, blue: 1.0, alpha: 1)
+        field.autocapitalizationType = .none
+        field.autocorrectionType = .no
+        field.spellCheckingType = .no
+        field.smartDashesType = .no
+        field.smartQuotesType = .no
+        field.keyboardAppearance = .dark
+        field.attributedPlaceholder = NSAttributedString(
+            string: placeholder,
+            attributes: [.foregroundColor: UIColor.white.withAlphaComponent(0.28)]
+        )
+        field.addTarget(context.coordinator, action: #selector(Coordinator.editingChanged(_:)), for: .editingChanged)
+        applyChrome(to: field)
+        return field
+    }
+
+    func updateUIView(_ field: UITextField, context: Context) {
+        context.coordinator.onSubmit = onSubmit
+        if field.text != text {
+            field.text = text
+        }
+        applyChrome(to: field)
+    }
+
+    private func applyChrome(to field: UITextField) {
+        field.isSecureTextEntry = isSecure
+        field.textContentType = contentType
+        field.keyboardType = keyboardType
+        field.returnKeyType = returnKey
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var text: Binding<String>
+        var onSubmit: () -> Void
+
+        init(text: Binding<String>, onSubmit: @escaping () -> Void) {
+            self.text = text
+            self.onSubmit = onSubmit
+        }
+
+        @objc func editingChanged(_ sender: UITextField) {
+            text.wrappedValue = sender.text ?? ""
+        }
+
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            onSubmit()
+            return true
         }
     }
 }

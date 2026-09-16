@@ -64,6 +64,9 @@ enum MainMenuSurfaceRoute: String, CaseIterable {
     case orgSitesMap
     case siteAudit
     case invoicing
+    case mySchedule
+    case dailyOverview
+    case warnings
 }
 
 enum MainMenuShellSection: String, CaseIterable, Identifiable {

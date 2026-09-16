@@ -1342,7 +1342,6 @@ struct EditUserView: View {
     @State private var employmentTypeConfirmationAccepted = false
     @State private var showingEmploymentTypeEffectiveDatePicker = false
     @State private var employmentTypeEffectiveDate = Date()
-    @State private var timesheetsEnabledDraft: Bool
     @State private var vatNumberDraft: String
     @State private var utrNumberDraft: String
     @State private var showingPayeDayRateWarning = false
@@ -1370,7 +1369,6 @@ struct EditUserView: View {
         self._annualLeaveCarriesOver = State(initialValue: user.annualLeaveCarriesOver)
         self._annualLeaveEnabledDraft = State(initialValue: user.annualLeaveEnabled)
         self._employmentTypeDraft = State(initialValue: user.employmentType)
-        self._timesheetsEnabledDraft = State(initialValue: user.timesheetsEnabled)
         self._vatNumberDraft = State(initialValue: user.vatNumber ?? "")
         self._utrNumberDraft = State(initialValue: user.utrNumber ?? "")
     }
@@ -1655,7 +1653,6 @@ struct EditUserView: View {
         let origTradeC = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let tradeChanged = dayRateEligible && (trimmedTradeP != origTradeP || trimmedTradeC != origTradeC)
         let billingChanged = normalizedVATDraft != displayedUser.vatNumber || normalizedUTRDraft != displayedUser.utrNumber
-        let timesheetsChanged = timesheetsEnabledDraft != displayedUser.timesheetsEnabled
         let payrollRateDirty = isPayrollRateDirty(versus: user)
         let operativeProfileChanged = (permissions.operativeMode || permissions.manager || permissions.adminAccess) && (
             Set(selectedLineManagerUserIds) != Set(user.lineManagerUserIds) ||
@@ -1674,10 +1671,9 @@ struct EditUserView: View {
                 employmentTypeChanged ||
                 annualLeaveAccessDirty ||
                 annualLeaveEntitlementDirty ||
-                billingChanged ||
-                timesheetsChanged
+                billingChanged
         }
-        if canEditPermissionsMatrix && (identityDirty || operativeProfileChanged || tradeChanged || staffDayRateChanged || employmentTypeChanged || annualLeaveAccessDirty || annualLeaveEntitlementDirty || billingChanged || timesheetsChanged) {
+        if canEditPermissionsMatrix && (identityDirty || operativeProfileChanged || tradeChanged || staffDayRateChanged || employmentTypeChanged || annualLeaveAccessDirty || annualLeaveEntitlementDirty || billingChanged) {
             return true
         }
         if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative) {
@@ -1688,8 +1684,7 @@ struct EditUserView: View {
                 employmentTypeChanged ||
                 annualLeaveAccessDirty ||
                 annualLeaveEntitlementDirty ||
-                billingChanged ||
-                timesheetsChanged
+                billingChanged
         }
         return false
     }
@@ -1885,10 +1880,6 @@ struct EditUserView: View {
                 ManageUserSectionTitle(text: "Billing details")
                 billingDetailsCard
             }
-            VStack(alignment: .leading, spacing: 8) {
-                ManageUserSectionTitle(text: "Timesheets access")
-                timesheetsAccessCard
-            }
         }
     }
 
@@ -1934,7 +1925,6 @@ struct EditUserView: View {
         annualLeaveCarriesOver = u.annualLeaveCarriesOver
         annualLeaveEnabledDraft = u.annualLeaveEnabled
         employmentTypeDraft = u.employmentType
-        timesheetsEnabledDraft = u.timesheetsEnabled
         vatNumberDraft = u.vatNumber ?? ""
         utrNumberDraft = u.utrNumber ?? ""
         hasNoLineManagerDraft = u.hasNoLineManager
@@ -2595,46 +2585,6 @@ struct EditUserView: View {
                     autocapitalization: .characters
                 )
             }
-        }
-    }
-
-    private var timesheetsAccessCard: some View {
-        ManageUserCard {
-            ManageUserExpandablePermissionToggleRow(
-                iconName: "clock.fill",
-                iconBackground: ManageUserProfilePalette.chipTealBg,
-                iconForeground: ManageUserProfilePalette.chipTealFg,
-                title: "Timesheets",
-                description: "When on, schedule feeds into timesheets and payroll sign-off applies. Operatives default to on; managers and admins default to off.",
-                isOn: $timesheetsEnabledDraft
-            )
-            .onChange(of: permissions.operativeMode) { _, isOperative in
-                syncTimesheetsToggleForOperativeMode(isOperative)
-            }
-            .onChange(of: permissions.adminAccess) { _, isAdmin in
-                syncTimesheetsToggleForAdminAccess(isAdmin)
-            }
-            .onChange(of: permissions.manager) { _, isManager in
-                syncTimesheetsToggleForManagerFlag(isManager)
-            }
-        }
-    }
-
-    private func syncTimesheetsToggleForOperativeMode(_ isOperative: Bool) {
-        if isOperative && !timesheetsEnabledDraft {
-            timesheetsEnabledDraft = true
-        }
-    }
-
-    private func syncTimesheetsToggleForAdminAccess(_ isAdmin: Bool) {
-        if isAdmin {
-            timesheetsEnabledDraft = false
-        }
-    }
-
-    private func syncTimesheetsToggleForManagerFlag(_ isManager: Bool) {
-        if isManager && !permissions.operativeMode && !permissions.adminAccess {
-            timesheetsEnabledDraft = false
         }
     }
 
@@ -3531,14 +3481,6 @@ struct EditUserView: View {
             )
         }
 
-        var timesheetsSuccess = true
-        if canEditPermissionsMatrix && timesheetsEnabledDraft != subjectUser.timesheetsEnabled {
-            timesheetsSuccess = await userStore.updateUserTimesheetsEnabled(
-                userId: user.id,
-                enabled: timesheetsEnabledDraft
-            )
-        }
-
         if didPersistPermissions && permissionsSuccess {
             await holidayStore.loadData()
         }
@@ -3563,7 +3505,7 @@ struct EditUserView: View {
             employmentTypeConfirmationAccepted = false
             showingEmploymentTypeEffectiveDatePicker = false
             selfBookOffConfirmationAccepted = false
-            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && employmentTypeSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess && billingSuccess && timesheetsSuccess {
+            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && employmentTypeSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess && billingSuccess {
                 dismiss()
             } else {
                 saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."

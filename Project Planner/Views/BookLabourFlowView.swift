@@ -830,8 +830,8 @@ struct BookLabourFlowView: View {
                         isBreakRemoved: draft.breakRemoved
                     ),
                     onSave: { start, end, breakRemoved, otMult in
-                        saveOperativeBooking(
-                            operative: op,
+                        saveOperativeProjectSlot(
+                            person: person,
                             project: project,
                             slot: .customHours,
                             workStart: start,
@@ -852,199 +852,109 @@ struct BookLabourFlowView: View {
 
     @ViewBuilder
     private func pickSlotOperativeView(person: BookLabourCandidate, project: Project) -> some View {
-        if let op = person.linkedOperative {
-            let draft = operativeDraft(for: project.id, operativeId: op.id)
-            let existingIntervals = existingIntervalsForOperative(op.id)
-            let existingPaidHours = existingPaidHoursForOperative(op.id)
-            let newPaidHours = paidHours(for: draft)
-            let combinedPaidHours = existingPaidHours + newPaidHours
-            let remainingHours = max(0, max(payrollTimePolicy.standardPaidHours, 0) - combinedPaidHours)
-            ZStack(alignment: .top) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        bookLabourPersonSummaryCard(people: activeParty(fallback: person))
-                        HStack(spacing: 8) {
-                            Text(project.jobNumber)
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(ProjectWorksRevampColors.blue)
-                            Text(project.siteName)
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
-                        }
-                        Text(bookFlowDayLine)
-                            .font(.system(size: 11))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-
-                        bookLabourSectionLabel("0-24 timeline")
-                        BookLabourRectifyTimeline(
-                            day: day,
-                            policy: dayPayrollPolicy,
-                            existingIntervals: existingIntervals,
-                            proposedStart: draft.startMinutes,
-                            proposedEnd: draft.endMinutes
-                        )
-
-                        bookLabourSectionLabel("Quick options")
-                        HStack(spacing: 10) {
+        if person.linkedOperative != nil {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    bookLabourPersonSummaryCard(people: activeParty(fallback: person))
+                    HStack(spacing: 8) {
+                        Text(project.jobNumber)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                        Text(project.siteName)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                    }
+                    Text(bookFlowDayLine)
+                        .font(.system(size: 11))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                    bookLabourSectionLabel("Select slot")
+                    HStack(spacing: 10) {
+                        ForEach([TimeSlot.fullDay, .morning, .afternoon], id: \.self) { slot in
                             Button {
-                                var transaction = Transaction()
-                                transaction.disablesAnimations = true
-                                withTransaction(transaction) {
-                                    applyQuickTimeSlot(.fullDay, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
-                                }
+                                saveOperativeProjectSlot(person: person, project: project, slot: slot)
                             } label: {
-                                quickDraftButtonLabel("FULL DAY")
-                            }
-                            .buttonStyle(.plain)
-                            Button {
-                                var transaction = Transaction()
-                                transaction.disablesAnimations = true
-                                withTransaction(transaction) {
-                                    applyQuickTimeSlot(.morning, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
-                                }
-                            } label: {
-                                quickDraftButtonLabel("AM")
-                            }
-                            .buttonStyle(.plain)
-                            Button {
-                                var transaction = Transaction()
-                                transaction.disablesAnimations = true
-                                withTransaction(transaction) {
-                                    applyQuickTimeSlot(.afternoon, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
-                                }
-                            } label: {
-                                quickDraftButtonLabel("PM")
-                            }
-                            .buttonStyle(.plain)
-                            Button {
-                                phase = .pickCustomOperative(person, project: project)
-                            } label: {
-                                quickDraftButtonLabel("CUSTOM")
-                            }
-                            .buttonStyle(.plain)
-                        }
-
-                        HStack(spacing: 8) {
-                            draftTimePicker(
-                                title: "Start",
-                                value: draft.startMinutes,
-                                allowedRange: 0...(max(0, draft.endMinutes - 30))
-                            ) { value in
-                                setOperativeDraft(
-                                    for: project.id,
-                                    draft: .init(
-                                        startMinutes: value,
-                                        endMinutes: draft.endMinutes,
-                                        breakRemoved: draft.breakRemoved,
-                                        timeSlot: .customHours
+                                Text(operativeSlotChipTitle(slot))
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(Color(red: 0.902, green: 0.945, blue: 0.984))
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
                                     )
-                                )
                             }
-                            draftTimePicker(
-                                title: "End",
-                                value: draft.endMinutes,
-                                allowedRange: (draft.startMinutes + 30)...(24 * 60)
-                            ) { value in
-                                setOperativeDraft(
-                                    for: project.id,
-                                    draft: .init(
-                                        startMinutes: draft.startMinutes,
-                                        endMinutes: value,
-                                        breakRemoved: draft.breakRemoved,
-                                        timeSlot: .customHours
-                                    )
-                                )
-                            }
-                        }
-
-                        Toggle("No break on this booking", isOn: Binding(
-                            get: { draft.breakRemoved },
-                            set: { value in
-                                setOperativeDraft(
-                                    for: project.id,
-                                    draft: .init(
-                                        startMinutes: draft.startMinutes,
-                                        endMinutes: draft.endMinutes,
-                                        breakRemoved: value,
-                                        timeSlot: draft.timeSlot
-                                    )
-                                )
-                            }
-                        ))
-                        .font(.system(size: 12, weight: .medium))
-                        .tint(ProjectWorksRevampColors.blue)
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Breakdown")
-                                .font(.system(size: 12, weight: .semibold))
-                            Text("Existing booked: \(ScheduleCoverageFormat.hours(existingPaidHours))h")
-                                .font(.system(size: 11))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
-                            Text("New booking: \(ScheduleCoverageFormat.hours(newPaidHours))h")
-                                .font(.system(size: 11))
-                                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                            Text("Total booked: \(ScheduleCoverageFormat.hours(combinedPaidHours))h")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
-                            if remainingHours > 0.05 {
-                                Text("Missing to standard day: \(ScheduleCoverageFormat.hours(remainingHours))h")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                            }
-                        }
-                        .padding(10)
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-                        )
-
-                        Button {
-                            let persistTimes = draft.timeSlot == .customHours
-                            saveOperativeBooking(
-                                operative: op,
-                                project: project,
-                                slot: draft.timeSlot,
-                                workStart: persistTimes ? timeText(from: draft.startMinutes) : nil,
-                                workEnd: persistTimes ? timeText(from: draft.endMinutes) : nil,
-                                breakRemoved: draft.breakRemoved
-                            )
-                        } label: {
-                            Text("Save booking")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(ProjectWorksRevampColors.blue)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
-                        .disabled(isSaving || draft.endMinutes <= draft.startMinutes)
-
-                        Button {
-                            phase = .pickCustomOperative(person, project: project)
-                        } label: {
-                            Text("Advanced editor")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.blue)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(Color.white)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
-                                )
+                            .buttonStyle(.plain)
+                            .disabled(isSaving)
                         }
                     }
-                    .padding(18)
+                    Button {
+                        phase = .pickCustomOperative(person, project: project)
+                    } label: {
+                        Text("Custom")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color(red: 0.902, green: 0.945, blue: 0.984))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isSaving)
                 }
-                .scrollIndicators(.hidden)
+                .padding(18)
             }
+            .scrollIndicators(.hidden)
         } else {
             Text("No operative profile for this user.")
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .padding()
+        }
+    }
+
+    private func operativeSlotChipTitle(_ slot: TimeSlot) -> String {
+        switch slot {
+        case .fullDay: return "FULL DAY"
+        case .morning: return "AM"
+        case .afternoon: return "PM"
+        default: return "CUSTOM"
+        }
+    }
+
+    private func saveOperativeProjectSlot(
+        person: BookLabourCandidate,
+        project: Project,
+        slot: TimeSlot,
+        workStart: String? = nil,
+        workEnd: String? = nil,
+        breakRemoved: Bool = false,
+        otMultiplierOverride: Double? = nil
+    ) {
+        let locationType: ManagerLocationType = project.jobType == .smallWorks ? .smallWork : .project
+        savePartyBookings(
+            fallbackPerson: person,
+            slot: managerSlot(from: slot),
+            locationType: locationType,
+            locationId: project.id,
+            customLocationName: nil,
+            workStart: workStart,
+            workEnd: workEnd,
+            breakRemoved: breakRemoved,
+            otMultiplierOverride: otMultiplierOverride
+        )
+    }
+
+    private func managerSlot(from slot: TimeSlot) -> ManagerTimeSlot {
+        switch slot {
+        case .morning: return .morning
+        case .afternoon: return .afternoon
+        case .customHours: return .customHours
+        default: return .fullDay
         }
     }
 
@@ -1085,108 +995,10 @@ struct BookLabourFlowView: View {
             .sorted { $0.0 < $1.0 }
     }
 
-    private func existingPaidHoursForOperative(_ operativeId: UUID) -> Double {
-        bookingStore.bookings
-            .filter {
-                $0.operativeId == operativeId &&
-                calendar.isDate($0.date, inSameDayAs: day) &&
-                ($0.status == .confirmed || $0.status == .tentative)
-            }
-            .reduce(0.0) { $0 + $1.paidBookedHours(policy: dayPayrollPolicy) }
-    }
-
-    private func paidHours(for draft: OperativeRectifyDraft) -> Double {
-        switch draft.timeSlot {
-        case .morning, .afternoon:
-            return max(payrollTimePolicy.standardPaidHours, 0) / 2
-        case .fullDay:
-            return max(payrollTimePolicy.standardPaidHours, 0)
-        default:
-            break
-        }
-        guard draft.endMinutes > draft.startMinutes else { return 0 }
-        var wall = Double(draft.endMinutes - draft.startMinutes) / 60.0
-        if !draft.breakRemoved {
-            wall = max(0, wall - payrollTimePolicy.standardUnpaidBreakHours)
-        }
-        return wall
-    }
-
-    private func applyQuickTimeSlot(_ slot: TimeSlot, projectId: UUID, currentBreakRemoved: Bool) {
-        let policy = dayPayrollPolicy
-        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
-        guard let ds = timeline.standardWindowStartMinutes,
-              let de = timeline.standardWindowEndMinutes,
-              de > ds else { return }
-        let mid = ds + ((de - ds) / 2)
-        let breakRemoved = timeline.allHoursAtMultiplier ? true : currentBreakRemoved
-        let next: OperativeRectifyDraft
-        switch slot {
-        case .fullDay:
-            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved, timeSlot: .fullDay)
-        case .morning:
-            next = .init(startMinutes: ds, endMinutes: mid, breakRemoved: breakRemoved, timeSlot: .morning)
-        case .afternoon:
-            next = .init(startMinutes: mid, endMinutes: de, breakRemoved: breakRemoved, timeSlot: .afternoon)
-        default:
-            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved, timeSlot: .customHours)
-        }
-        setOperativeDraft(for: projectId, draft: next)
-    }
-
     private func timeText(from minutes: Int) -> String {
         if minutes >= 24 * 60 { return "24:00" }
         let clamped = max(0, min(minutes, 24 * 60 - 1))
         return String(format: "%02d:%02d", clamped / 60, clamped % 60)
-    }
-
-    private func quickDraftButtonLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(ProjectWorksRevampColors.blue)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(Color(red: 0.902, green: 0.945, blue: 0.984))
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
-            )
-    }
-
-    private func draftTimePicker(
-        title: String,
-        value: Int,
-        allowedRange: ClosedRange<Int>,
-        onChange: @escaping (Int) -> Void
-    ) -> some View {
-        let safeValue = min(max(value, allowedRange.lowerBound), allowedRange.upperBound)
-        return VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-            Picker(title, selection: Binding(
-                get: { safeValue },
-                set: { onChange($0) }
-            )) {
-                ForEach(Array(stride(from: 0, through: 24 * 60, by: 30)), id: \.self) { minute in
-                    if minute >= allowedRange.lowerBound && minute <= allowedRange.upperBound {
-                        Text(timeText(from: minute)).tag(minute)
-                    }
-                }
-            }
-            .pickerStyle(.wheel)
-            .frame(maxWidth: .infinity)
-            .frame(height: 92)
-            .clipped()
-        }
-        .padding(8)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
     }
 
     // MARK: - Revamp layout (HTML reference)

@@ -94,6 +94,22 @@ final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationC
         completionHandler([.banner, .sound, .badge, .list])
     }
 
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let info = response.notification.request.content.userInfo
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .openNotificationDeepLink,
+                object: nil,
+                userInfo: NotificationDeepLink.userInfo(from: info)
+            )
+        }
+        completionHandler()
+    }
+
     func application(
         _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
