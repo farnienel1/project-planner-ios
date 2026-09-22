@@ -25,6 +25,8 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case timesheetPendingManagerSignoff = "timesheet_pending_manager_signoff"
         case timesheetSignedByManager = "timesheet_signed_by_manager"
         case lineManagerPeerUpdate = "line_manager_peer_update"
+        case materialAdded = "material_added"
+        case toolboxTalkIssued = "toolbox_talk_issued"
     }
     
     let id: UUID

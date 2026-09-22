@@ -35,7 +35,7 @@ struct NotificationsView: View {
             }
             sorted = grouped.values.flatMap { $0 }.sorted { $0.createdAt > $1.createdAt }
         }
-        return Array(sorted.prefix(100))
+        return Array(sorted.prefix(150))
     }
 
     var body: some View {
@@ -177,6 +177,8 @@ struct NotificationRowView: View {
         case .timesheetPendingManagerSignoff: return "signature"
         case .timesheetSignedByManager: return "checkmark.seal.fill"
         case .lineManagerPeerUpdate: return "person.2.fill"
+        case .materialAdded: return "shippingbox.fill"
+        case .toolboxTalkIssued: return "list.clipboard.fill"
         }
     }
 
@@ -198,6 +200,8 @@ struct NotificationRowView: View {
         case .timesheetPendingManagerSignoff: return .orange
         case .timesheetSignedByManager: return .green
         case .lineManagerPeerUpdate: return .blue
+        case .materialAdded: return .teal
+        case .toolboxTalkIssued: return .indigo
         }
     }
 }

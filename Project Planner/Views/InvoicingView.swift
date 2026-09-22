@@ -3820,64 +3820,82 @@ private enum InvoicePDFGenerationSupport {
         dayRateHistoryCollection: OperativeDayRateHistoryCollection
     ) async -> URL? {
         guard let currentUser = userStore.displayUser else { return nil }
-        let rows = invoiceLineItems(
-            for: period,
-            currentUser: currentUser,
-            firebaseBackend: firebaseBackend,
-            bookingStore: bookingStore,
-            operativeStore: operativeStore,
-            projectStore: projectStore,
-            managerScheduleStore: managerScheduleStore,
-            dayRateHistoryCollection: dayRateHistoryCollection
-        )
-        let total = rows.reduce(0) { $0 + $1.amount }
+        let userCopy = currentUser
+        let bookings = bookingStore.bookings
+        let managerBookings = managerScheduleStore.managerSiteBookings
+        let operatives = operativeStore.allOperatives
+        let projects = projectStore.projects
+        let smallWorks = projectStore.smallWorks
+        let organization = firebaseBackend.currentOrganization
+        let policy = organization?.settings.payrollTimePolicy ?? .default
+        let scheduleOptions = organization?.settings.myScheduleOptions ?? MyScheduleOptions()
+        let orgName = organization?.name ?? "Organization"
         let userName = currentUser.fullName.isEmpty ? currentUser.email : currentUser.fullName
-        let rateChangeNotes = rateChangeNotes(
-            for: period,
-            currentUser: currentUser,
-            operativeStore: operativeStore,
-            dayRateHistoryCollection: dayRateHistoryCollection
-        )
+        let history = dayRateHistoryCollection
+        let periodCopy = period
 
-        return InvoicePDFBuilder.makePDF(
-            context: InvoicePDFBuilder.Context(
-                organizationName: firebaseBackend.currentOrganization?.name ?? "Organization",
-                userName: userName,
-                vatNumber: currentUser.trimmedVATNumber,
-                utrNumber: currentUser.trimmedUTRNumber,
-                generatedAt: Date(),
-                periodTitle: period.title,
-                periodDateRange: period.dateRangeText,
-                lineItems: rows,
-                totalAmount: total,
-                rateChangeNotes: rateChangeNotes
+        return await Task.detached(priority: .userInitiated) {
+            let rows = invoiceLineItems(
+                for: periodCopy,
+                currentUser: userCopy,
+                policy: policy,
+                scheduleOptions: scheduleOptions,
+                organization: organization,
+                bookings: bookings,
+                managerBookings: managerBookings,
+                operatives: operatives,
+                projects: projects,
+                smallWorks: smallWorks,
+                history: history
             )
-        )
+            let total = rows.reduce(0) { $0 + $1.amount }
+            let notes = rateChangeNotes(
+                for: periodCopy,
+                currentUser: userCopy,
+                operatives: operatives,
+                dayRateHistoryCollection: history
+            )
+            return InvoicePDFBuilder.makePDF(
+                context: InvoicePDFBuilder.Context(
+                    organizationName: orgName,
+                    userName: userName,
+                    vatNumber: userCopy.trimmedVATNumber,
+                    utrNumber: userCopy.trimmedUTRNumber,
+                    generatedAt: Date(),
+                    periodTitle: periodCopy.title,
+                    periodDateRange: periodCopy.dateRangeText,
+                    lineItems: rows,
+                    totalAmount: total,
+                    rateChangeNotes: notes
+                )
+            )
+        }.value
     }
 
-    private static func invoiceLineItems(
+    nonisolated private static func invoiceLineItems(
         for period: InvoicePeriodOption,
         currentUser: AppUser,
-        firebaseBackend: FirebaseBackend,
-        bookingStore: BookingStore,
-        operativeStore: OperativeStore,
-        projectStore: ProjectStore,
-        managerScheduleStore: ManagerScheduleStore,
-        dayRateHistoryCollection: OperativeDayRateHistoryCollection
+        policy: OrgPayrollTimePolicy,
+        scheduleOptions: MyScheduleOptions,
+        organization: Organization?,
+        bookings: [Booking],
+        managerBookings: [ManagerSiteBooking],
+        operatives: [Operative],
+        projects: [Project],
+        smallWorks: [Project],
+        history: OperativeDayRateHistoryCollection
     ) -> [InvoiceLineItem] {
-        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
-        let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
         let summary = TimesheetPayrollCollector.collect(
             for: currentUser,
             in: period.startDate...period.endDate,
-            bookings: bookingStore.bookings,
-            managerBookings: managerScheduleStore.managerSiteBookings,
-            operatives: operativeStore.allOperatives,
-            projects: projectStore.projects,
-            smallWorks: projectStore.smallWorks,
-            history: dayRateHistoryCollection,
+            bookings: bookings,
+            managerBookings: managerBookings,
+            operatives: operatives,
+            projects: projects,
+            smallWorks: smallWorks,
+            history: history,
             policy: policy,
-            organization: firebaseBackend.currentOrganization,
+            organization: organization,
             scheduleOptions: scheduleOptions
         )
         var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
@@ -3929,10 +3947,10 @@ private enum InvoicePDFGenerationSupport {
         }
     }
 
-    private static func rateChangeNotes(
+    nonisolated private static func rateChangeNotes(
         for period: InvoicePeriodOption,
         currentUser: AppUser,
-        operativeStore: OperativeStore,
+        operatives: [Operative],
         dayRateHistoryCollection: OperativeDayRateHistoryCollection
     ) -> [String] {
         let cal = Calendar.current
@@ -3949,7 +3967,7 @@ private enum InvoicePDFGenerationSupport {
             notes.append("Rate updated to \(formatCurrency(entry.dayRate)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
         }
 
-        let matchedOperatives = operativeStore.allOperatives.filter {
+        let matchedOperatives = operatives.filter {
             $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 == currentUser.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         }
@@ -3968,7 +3986,7 @@ private enum InvoicePDFGenerationSupport {
         return Array(Set(notes)).sorted()
     }
 
-    private static func formatCurrency(_ value: Double) -> String {
+    nonisolated private static func formatCurrency(_ value: Double) -> String {
         String(format: "£%.2f", value)
     }
 }

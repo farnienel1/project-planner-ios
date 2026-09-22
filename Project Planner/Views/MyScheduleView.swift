@@ -123,7 +123,7 @@ fileprivate func managerBookingOtChipText(_ b: ManagerSiteBooking, policy: OrgPa
     guard ot > 0.05 else { return nil }
     let m = PayrollTimePolicyCatalog.effectiveMultiplier(for: b, policy: policy)
     let s = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
-    return "OT \(ScheduleCoverageFormat.hours(ot))h × \(s)"
+    return "OT \(ScheduleCoverageFormat.overtimeEquation(rawHours: ot, multiplier: m))"
 }
 
 /// Clock range plus paid hours (break deducted for standard window bookings).
@@ -148,7 +148,7 @@ fileprivate func operativeBookingOtChipText(_ b: Booking, policy: OrgPayrollTime
     guard ot > 0.05 else { return nil }
     let m = b.effectiveWeekdayOtMultiplier(policy: policy)
     let s = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
-    return "OT \(ScheduleCoverageFormat.hours(ot))h × \(s)"
+    return "OT \(ScheduleCoverageFormat.overtimeEquation(rawHours: ot, multiplier: m))"
 }
 
 fileprivate func operativeBookingClockSubtitle(_ b: Booking, day: Date, policy: OrgPayrollTimePolicy) -> String {

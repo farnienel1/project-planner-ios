@@ -66,7 +66,9 @@ struct BookingEditHoursBreakdown {
         let standardRate = result.segments
             .filter { $0.kind == .standardWindow }
             .reduce(0.0) { $0 + $1.paidHours }
-        let ot = max(0, result.totalPaidHours - standardRate)
+        let ot = max(0, result.segments
+            .filter { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }
+            .reduce(0.0) { $0 + $1.baseHours })
         let breakH = (breakIncluded && PayrollTimePolicyCatalog.isWeekday(day) && policy.standardUnpaidBreakHours > 0.05)
             ? policy.standardUnpaidBreakHours
             : 0
@@ -796,9 +798,6 @@ struct OperativeCustomHoursSheet: View {
 
     private var breakdownCard: some View {
         let bd = breakdown
-        let multStr = abs(bd.overtimeMultiplier - bd.overtimeMultiplier.rounded()) < 0.05
-            ? String(format: "%.0f", bd.overtimeMultiplier)
-            : String(format: "%.1f", bd.overtimeMultiplier)
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
@@ -834,7 +833,7 @@ struct OperativeCustomHoursSheet: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
                     Spacer()
-                    Text("\(formatHours(bd.overtimeHours))h × \(multStr)")
+                    Text("\(ScheduleCoverageFormat.overtimeEquation(rawHours: bd.overtimeHours, multiplier: bd.overtimeMultiplier))h")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
                 }

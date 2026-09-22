@@ -224,12 +224,27 @@ class OperativeStore: ObservableObject {
                         }
                         
                         // Load qualifications from Firebase
+                        let existingQualifications = self.qualifications
                         let firebaseQualifications = try await withTimeout(seconds: 5) {
                             try await firebaseBackend.loadQualifications(organizationId: organizationId)
                         }
-                        self.qualifications = firebaseQualifications
-                        if let smartCache = smartCache {
-                            smartCache.cacheQualifications(firebaseQualifications)
+                        if firebaseQualifications.isEmpty {
+                            let recovered = qualificationsRecoveredFromAssignments(firebaseOperatives)
+                            if !existingQualifications.isEmpty {
+                                self.qualifications = existingQualifications
+                            } else if !recovered.isEmpty {
+                                self.qualifications = recovered
+                            } else {
+                                self.qualifications = []
+                            }
+                            if let smartCache = smartCache, !self.qualifications.isEmpty {
+                                smartCache.cacheQualifications(self.qualifications)
+                            }
+                        } else {
+                            self.qualifications = firebaseQualifications
+                            if let smartCache = smartCache {
+                                smartCache.cacheQualifications(firebaseQualifications)
+                            }
                         }
 
                         // Skills catalogue is retired — do not load or rewrite it.
@@ -501,13 +516,13 @@ class OperativeStore: ObservableObject {
             return
         }
         qualifications.append(qualification)
-        _ = await saveDataWithRetry(description: "adding qualification \(qualification.name)")
+        await persistQualificationCatalogueChange(qualification, deleting: false)
     }
     
     func updateQualification(_ qualification: Qualification) async {
         if let index = qualifications.firstIndex(where: { $0.id == qualification.id }) {
             qualifications[index] = qualification
-            _ = await saveDataWithRetry(description: "updating qualification \(qualification.name)")
+            await persistQualificationCatalogueChange(qualification, deleting: false)
         }
     }
     
@@ -516,7 +531,23 @@ class OperativeStore: ObservableObject {
         // UI actions — never permission toggles, and never `saveQualifications` with an empty
         // list used as a side effect of turning `permissions.qualifications` off.
         qualifications.removeAll { $0.id == qualification.id }
-        _ = await saveDataWithRetry(description: "deleting qualification \(qualification.name)")
+        await persistQualificationCatalogueChange(qualification, deleting: true)
+    }
+
+    private func persistQualificationCatalogueChange(_ qualification: Qualification, deleting: Bool) async {
+        guard let firebaseBackend,
+              firebaseBackend.isAuthenticated,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        do {
+            if deleting {
+                try await firebaseBackend.deleteQualification(qualification.id, organizationId: organizationId)
+            } else {
+                try await firebaseBackend.saveQualification(qualification, organizationId: organizationId)
+            }
+            smartCache?.cacheQualifications(qualifications)
+        } catch {
+            print("🔥🔥🔥 DEBUG: Qualification catalogue save failed: \(error.localizedDescription)")
+        }
     }
     
     // MARK: - Persistence
@@ -577,9 +608,7 @@ class OperativeStore: ObservableObject {
         }
         
         // Skills catalogue is retired — do not rewrite organizations/{orgId}/skills.
-
-        // Save qualifications (saves entire collection)
-        try await firebaseBackend.saveQualifications(organizationId: organizationId, qualifications: qualifications)
+        // Qualifications are saved only from add/update/delete qualification — not from roster saves.
         
         // Update cache
         if let smartCache = smartCache {
@@ -610,5 +639,26 @@ class OperativeStore: ObservableObject {
         // This would send an email to the operative to set up their password
         // Implementation depends on your email service
         print("🔥🔥🔥 DEBUG: Would send password setup email to \(operative.email)")
+    }
+
+    private func qualificationsRecoveredFromAssignments(_ operatives: [Operative]) -> [Qualification] {
+        var byName: [String: Qualification] = [:]
+        for operative in operatives {
+            for row in operative.qualifications {
+                let name = row.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { continue }
+                let key = name.lowercased()
+                if byName[key] == nil {
+                    byName[key] = Qualification(
+                        id: row.id,
+                        name: name,
+                        hasEndDate: false,
+                        createdAt: row.createdAt,
+                        updatedAt: Date()
+                    )
+                }
+            }
+        }
+        return byName.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 }

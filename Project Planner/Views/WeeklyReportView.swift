@@ -1367,8 +1367,8 @@ struct WeeklyReportView: View {
             let resolved = resolvedPayrollRate(user: linkedUser, operative: operative, on: booking.date)
             let paid = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
-            let normalHours = max(0, paid - otHours)
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
+            let normalHours = max(0, paid - (otHours * otMultiplier))
             let standardDayHours = max(policy.standardPaidHours, 0.01)
             let rateKey = resolved.basis == .hourly
                 ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
@@ -1398,8 +1398,8 @@ struct WeeklyReportView: View {
             let resolved = resolvedPayrollRate(user: manager, operative: linkedOperative, on: booking.date)
             let paid = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
-            let normalHours = max(0, paid - otHours)
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
+            let normalHours = max(0, paid - (otHours * otMultiplier))
             let standardDayHours = max(policy.standardPaidHours, 0.01)
             let rateKey = resolved.basis == .hourly
                 ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"

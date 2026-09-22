@@ -283,6 +283,6 @@ extension ManagerSiteBooking {
     func overtimeHoursBeyondPaidStandard(policy: OrgPayrollTimePolicy = .default) -> Double {
         payrollHoursResult(policy: policy).segments
             .filter { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }
-            .reduce(0) { $0 + $1.paidHours }
+            .reduce(0) { $0 + $1.baseHours }
     }
 }
