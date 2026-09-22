@@ -66,6 +66,8 @@ enum TimesheetPayrollCollector {
         }
         let operativeIds = Set(matchedOperatives.map(\.id))
 
+        let projectsById = Dictionary(projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let smallWorksById = Dictionary(smallWorks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for booking in bookings where booking.status != .cancelled {
             guard operativeIds.contains(booking.operativeId) else { continue }
             let day = cal.startOfDay(for: booking.date)
@@ -83,14 +85,15 @@ enum TimesheetPayrollCollector {
             )
             let paidHours = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
-            let normalHours = max(0, paidHours - otHours)
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
+            let overtimePaidHours = otHours * otMultiplier
+            let normalHours = max(0, paidHours - overtimePaidHours)
             totalHours += paidHours
             overtimeHours += otHours
 
             let normalAmount = resolved.payForHours(normalHours, standardDayHours: standardDayHours)
             baseAmount += normalAmount
-            let labels = projectLabel(for: booking.projectId, projects: projects, smallWorks: smallWorks)
+            let labels = projectLabel(for: booking.projectId, projectsById: projectsById, smallWorksById: smallWorksById)
             lineItems.append(
                 TimesheetPayrollLineItem(
                     id: "op-\(booking.id.uuidString)-normal",
@@ -118,7 +121,7 @@ enum TimesheetPayrollCollector {
                         date: day,
                         jobNumber: labels.jobNumber,
                         projectName: "\(labels.siteName) (Overtime)",
-                        details: "OT \(formatHours(otHours))h",
+                        details: "OT \(ScheduleCoverageFormat.overtimeEquation(rawHours: otHours, multiplier: otMultiplier))",
                         paidHours: otHours,
                         payrollBasis: resolved.basis,
                         dayRate: otDisplayRate,
@@ -147,14 +150,15 @@ enum TimesheetPayrollCollector {
             )
             let paidHours = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
-            let normalHours = max(0, paidHours - otHours)
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
+            let overtimePaidHours = otHours * otMultiplier
+            let normalHours = max(0, paidHours - overtimePaidHours)
             totalHours += paidHours
             overtimeHours += otHours
 
             let normalAmount = resolved.payForHours(normalHours, standardDayHours: standardDayHours)
             baseAmount += normalAmount
-            let labels = managerBookingLabels(for: booking, projects: projects, smallWorks: smallWorks)
+            let labels = managerBookingLabels(for: booking, projectsById: projectsById, smallWorksById: smallWorksById)
             lineItems.append(
                 TimesheetPayrollLineItem(
                     id: "mgr-\(booking.id.uuidString)-normal",
@@ -182,7 +186,7 @@ enum TimesheetPayrollCollector {
                         date: day,
                         jobNumber: labels.jobNumber,
                         projectName: "\(labels.siteName) (Overtime)",
-                        details: "OT \(formatHours(otHours))h",
+                        details: "OT \(ScheduleCoverageFormat.overtimeEquation(rawHours: otHours, multiplier: otMultiplier))",
                         paidHours: otHours,
                         payrollBasis: resolved.basis,
                         dayRate: otDisplayRate,
@@ -248,10 +252,22 @@ enum TimesheetPayrollCollector {
         projects: [Project],
         smallWorks: [Project]
     ) -> (jobNumber: String, siteName: String) {
-        if let project = projects.first(where: { $0.id == id }) {
+        projectLabel(
+            for: id,
+            projectsById: Dictionary(projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
+            smallWorksById: Dictionary(smallWorks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        )
+    }
+
+    static func projectLabel(
+        for id: UUID,
+        projectsById: [UUID: Project],
+        smallWorksById: [UUID: Project]
+    ) -> (jobNumber: String, siteName: String) {
+        if let project = projectsById[id] {
             return (project.jobNumber, project.siteName)
         }
-        if let project = smallWorks.first(where: { $0.id == id }) {
+        if let project = smallWorksById[id] {
             return (project.jobNumber, project.siteName)
         }
         return ("—", "Unknown Project")
@@ -262,10 +278,22 @@ enum TimesheetPayrollCollector {
         projects: [Project],
         smallWorks: [Project]
     ) -> (jobNumber: String, siteName: String) {
+        managerBookingLabels(
+            for: booking,
+            projectsById: Dictionary(projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
+            smallWorksById: Dictionary(smallWorks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        )
+    }
+
+    static func managerBookingLabels(
+        for booking: ManagerSiteBooking,
+        projectsById: [UUID: Project],
+        smallWorksById: [UUID: Project]
+    ) -> (jobNumber: String, siteName: String) {
         switch booking.locationType {
         case .project, .smallWork:
             if let locationId = booking.locationId {
-                return projectLabel(for: locationId, projects: projects, smallWorks: smallWorks)
+                return projectLabel(for: locationId, projectsById: projectsById, smallWorksById: smallWorksById)
             }
             return ("—", "Site")
         case .office:

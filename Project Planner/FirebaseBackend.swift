@@ -50,13 +50,23 @@ func normalizedOrganizationId(_ organizationId: String) -> String {
 
 private func isOfflineNetworkError(_ error: Error) -> Bool {
     let nsError = error as NSError
-    if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorNotConnectedToInternet {
+    let networkCodes: Set<Int> = [
+        NSURLErrorNotConnectedToInternet,
+        NSURLErrorTimedOut,
+        NSURLErrorNetworkConnectionLost,
+        NSURLErrorCannotConnectToHost,
+        NSURLErrorCannotFindHost,
+        NSURLErrorDNSLookupFailed
+    ]
+    if nsError.domain == NSURLErrorDomain && networkCodes.contains(nsError.code) {
         return true
     }
-    if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
-        return underlying.domain == NSURLErrorDomain && underlying.code == NSURLErrorNotConnectedToInternet
+    if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError,
+       underlying.domain == NSURLErrorDomain && networkCodes.contains(underlying.code) {
+        return true
     }
-    return false
+    let message = nsError.localizedDescription.lowercased()
+    return message.contains("offline") || message.contains("network") || message.contains("unavailable")
 }
 
 // MARK: - Firebase Backend Manager
@@ -1522,8 +1532,8 @@ class FirebaseBackend: ObservableObject {
         do {
             snapshot = try await db.collection("organizations").document(orgId).collection("projects").getDocuments(source: .server)
         } catch {
-            if isFirestorePermissionDenied(error) {
-                print("🔥🔥🔥 DEBUG: [LOAD] Server denied projects read for \(orgId) - trying cache fallback")
+            if isFirestorePermissionDenied(error) || isOfflineNetworkError(error) {
+                print("🔥🔥🔥 DEBUG: [LOAD] Server projects read failed for \(orgId) - trying cache fallback")
                 snapshot = try await db.collection("organizations").document(orgId).collection("projects").getDocuments(source: .cache)
             } else {
                 throw error
@@ -1705,8 +1715,8 @@ class FirebaseBackend: ObservableObject {
         do {
             snapshot = try await db.collection("organizations").document(orgId).collection("clients").getDocuments(source: .server)
         } catch {
-            if isFirestorePermissionDenied(error) {
-                print("🔥🔥🔥 DEBUG: [LOAD CLIENTS] Server denied clients read for \(orgId) - trying cache fallback")
+            if isFirestorePermissionDenied(error) || isOfflineNetworkError(error) {
+                print("🔥🔥🔥 DEBUG: [LOAD CLIENTS] Server clients read failed for \(orgId) - trying cache fallback")
                 snapshot = try await db.collection("organizations").document(orgId).collection("clients").getDocuments(source: .cache)
             } else {
                 throw error
@@ -1873,8 +1883,8 @@ class FirebaseBackend: ObservableObject {
         do {
             snapshot = try await db.collection("organizations").document(orgId).collection("smallWorks").getDocuments(source: .server)
         } catch {
-            if isFirestorePermissionDenied(error) {
-                print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Server denied smallWorks read for \(orgId) - trying cache fallback")
+            if isFirestorePermissionDenied(error) || isOfflineNetworkError(error) {
+                print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Server smallWorks read failed for \(orgId) - trying cache fallback")
                 snapshot = try await db.collection("organizations").document(orgId).collection("smallWorks").getDocuments(source: .cache)
             } else {
                 throw error
@@ -2035,6 +2045,10 @@ class FirebaseBackend: ObservableObject {
             print("🔥🔥🔥 DEBUG: [saveJobTypes] ensureUserDocumentLinked: \(error.localizedDescription)")
         }
         await repairCurrentUserOrganizationAccess(organizationId: orgId)
+        if jobTypes.isEmpty {
+            print("🔥🔥🔥 DEBUG: Refusing to overwrite job types with an empty list")
+            return
+        }
         let data: [String: Any] = [
             "jobTypes": Array(jobTypes),
             "organizationId": orgId,
@@ -2062,13 +2076,33 @@ class FirebaseBackend: ObservableObject {
                 throw error
             }
         }
-        if doc.exists, let data = doc.data(), let jobTypesArray = data["jobTypes"] as? [String] {
-            let jobTypes = Set(jobTypesArray)
-            print("🔥🔥🔥 DEBUG: Loaded \(jobTypes.count) job types from Firebase")
-            return jobTypes
+        if doc.exists, let data = doc.data() {
+            let parsed = parseJobTypeList(data["jobTypes"])
+            if !parsed.isEmpty {
+                print("🔥🔥🔥 DEBUG: Loaded \(parsed.count) job types from Firebase")
+                return parsed
+            }
         }
         print("🔥🔥🔥 DEBUG: No job types found in Firebase, returning empty set")
         return []
+    }
+
+    private func parseJobTypeList(_ raw: Any?) -> Set<String> {
+        var names: [String] = []
+        if let array = raw as? [String] {
+            names = array
+        } else if let array = raw as? [Any] {
+            names = array.compactMap { item in
+                if let s = item as? String { return s }
+                if let map = item as? [String: Any] {
+                    return (map["name"] as? String) ?? (map["rawValue"] as? String)
+                }
+                return nil
+            }
+        } else if let s = raw as? String {
+            names = s.split(separator: ",").map(String.init)
+        }
+        return Set(names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
     }
     
     // MARK: - Project Task Management
@@ -3088,33 +3122,60 @@ class FirebaseBackend: ObservableObject {
     }
     
     func saveQualifications(organizationId: String, qualifications: [Qualification]) async throws {
+        let orgId = try await ensureReadableOrganization(organizationId)
+        let qualsRef = db.collection("organizations").document(orgId).collection("qualifications")
+        let existingSnapshot: QuerySnapshot
+        do {
+            existingSnapshot = try await qualsRef.getDocuments(source: .server)
+        } catch {
+            existingSnapshot = try await qualsRef.getDocuments(source: .cache)
+        }
+
+        if qualifications.isEmpty && !existingSnapshot.documents.isEmpty {
+            print("🔥🔥🔥 DEBUG: Refusing to overwrite qualifications with an empty list")
+            return
+        }
+
+        let newIds = Set(qualifications.map { $0.id.uuidString })
         let batch = db.batch()
-        
-        // Clear existing qualifications
-        let existingSnapshot = try await db.collection("organizations").document(organizationId).collection("qualifications").getDocuments()
-        for document in existingSnapshot.documents {
+        for document in existingSnapshot.documents where !newIds.contains(document.documentID) {
             batch.deleteDocument(document.reference)
         }
-        
-        // Add new qualifications
         for qualification in qualifications {
-            let docRef = db.collection("organizations").document(organizationId).collection("qualifications").document(qualification.id.uuidString)
+            let docRef = qualsRef.document(qualification.id.uuidString)
             var data: [String: Any] = [
                 "name": qualification.name,
                 "hasEndDate": qualification.hasEndDate,
                 "createdAt": Timestamp(date: qualification.createdAt),
                 "updatedAt": Timestamp(date: qualification.updatedAt)
             ]
-            
             if let endDate = qualification.endDate {
                 data["endDate"] = Timestamp(date: endDate)
             }
-            
-            batch.setData(data, forDocument: docRef)
+            batch.setData(data, forDocument: docRef, merge: true)
         }
-        
         try await batch.commit()
         print("🔥🔥🔥 DEBUG: Successfully saved \(qualifications.count) qualifications to Firebase")
+    }
+
+    func saveQualification(_ qualification: Qualification, organizationId: String) async throws {
+        let orgId = try await ensureReadableOrganization(organizationId)
+        let docRef = db.collection("organizations").document(orgId).collection("qualifications").document(qualification.id.uuidString)
+        var data: [String: Any] = [
+            "name": qualification.name,
+            "hasEndDate": qualification.hasEndDate,
+            "createdAt": Timestamp(date: qualification.createdAt),
+            "updatedAt": Timestamp(date: Date())
+        ]
+        if let endDate = qualification.endDate {
+            data["endDate"] = Timestamp(date: endDate)
+        }
+        try await docRef.setData(data, merge: true)
+    }
+
+    func deleteQualification(_ qualificationId: UUID, organizationId: String) async throws {
+        let orgId = try await ensureReadableOrganization(organizationId)
+        try await db.collection("organizations").document(orgId).collection("qualifications").document(qualificationId.uuidString).delete()
     }
     
     func saveSkills(organizationId: String, skills: [OrganizationSkill]) async throws {
@@ -3142,22 +3203,27 @@ class FirebaseBackend: ObservableObject {
     
     func loadQualifications(organizationId: String) async throws -> [Qualification] {
         let orgId = try await ensureReadableOrganization(organizationId)
-        let snapshot = try await db.collection("organizations").document(orgId).collection("qualifications").getDocuments(source: .server)
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await db.collection("organizations").document(orgId).collection("qualifications").getDocuments(source: .server)
+        } catch {
+            snapshot = try await db.collection("organizations").document(orgId).collection("qualifications").getDocuments(source: .cache)
+        }
         
         var qualifications: [Qualification] = []
         
         for doc in snapshot.documents {
             let data = doc.data()
-            
-            guard let name = data["name"] as? String,
-                  let hasEndDate = data["hasEndDate"] as? Bool,
-                  let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
-                  let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() else {
+            let name = (data["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !name.isEmpty else {
                 print("🔥🔥🔥 DEBUG: Failed to parse qualification data for document: \(doc.documentID)")
                 continue
             }
             
             let id = UUID(uuidString: doc.documentID) ?? UUID()
+            let hasEndDate = data["hasEndDate"] as? Bool ?? false
+            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+            let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? createdAt
             let endDate = (data["endDate"] as? Timestamp)?.dateValue()
             
             let qualification = Qualification(
@@ -3172,7 +3238,7 @@ class FirebaseBackend: ObservableObject {
             qualifications.append(qualification)
         }
         
-        return qualifications
+        return qualifications.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
     
     func loadSkills(organizationId: String) async throws -> [OrganizationSkill] {
@@ -8000,9 +8066,9 @@ extension FirebaseBackend {
         do {
             doc = try await ref.getDocument(source: .server)
         } catch {
-            if isFirestorePermissionDenied(error) {
+            do {
                 doc = try await ref.getDocument(source: .cache)
-            } else {
+            } catch {
                 throw error
             }
         }
@@ -8057,12 +8123,27 @@ extension FirebaseBackend {
         await repairCurrentUserOrganizationAccess(organizationId: orgId)
         try await validateDataIntegrity(organizationId: orgId)
 
+        let existing: HSProjectSafetyData
+        do {
+            existing = try await loadHealthSafetyData(project: project, organizationId: orgId)
+        } catch {
+            existing = .empty
+        }
+
+        // Never clobber a populated catalogue with an empty in-memory snapshot.
+        // An empty talks seed or a failed load used to wipe issued TBTs from Tracking.
+        let talks = safetyData.talks.isEmpty && !existing.talks.isEmpty ? existing.talks : safetyData.talks
+        let issues = safetyData.issues.isEmpty && !existing.issues.isEmpty ? existing.issues : safetyData.issues
+        let signatures = safetyData.signatures.isEmpty && !existing.signatures.isEmpty ? existing.signatures : safetyData.signatures
+        let ramsDocuments = safetyData.ramsDocuments.isEmpty && !existing.ramsDocuments.isEmpty ? existing.ramsDocuments : safetyData.ramsDocuments
+        let otherDocuments = safetyData.otherDocuments.isEmpty && !existing.otherDocuments.isEmpty ? existing.otherDocuments : safetyData.otherDocuments
+
         let payload: [String: Any] = [
-            "talks": safetyData.talks.map(hsTalkMap),
-            "issues": safetyData.issues.map(hsIssueMap),
-            "signatures": safetyData.signatures.map(hsSignatureMap),
-            "ramsDocuments": safetyData.ramsDocuments.map(hsRamsMap),
-            "otherDocuments": safetyData.otherDocuments.map(hsOtherDocMap),
+            "talks": talks.map(hsTalkMap),
+            "issues": issues.map(hsIssueMap),
+            "signatures": signatures.map(hsSignatureMap),
+            "ramsDocuments": ramsDocuments.map(hsRamsMap),
+            "otherDocuments": otherDocuments.map(hsOtherDocMap),
             "updatedAt": Timestamp(date: Date())
         ]
         let ref = hsStateDocumentRef(organizationId: orgId, project: project)

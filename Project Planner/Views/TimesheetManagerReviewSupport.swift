@@ -305,11 +305,12 @@ enum TimesheetPayrollLineBookingLookup {
         )
         let paid = probe.paidBookedHours(policy: policy)
         let ot = probe.overtimeHoursBeyondPaidStandard(policy: policy)
+        let otPaid = ot * (otMultiplier ?? probe.effectiveWeekdayOtMultiplier(policy: policy))
         let relevantHours: Double
         if row.isOvertimeLine {
             relevantHours = ot
         } else {
-            relevantHours = max(0, paid - ot)
+            relevantHours = max(0, paid - otPaid)
         }
         guard row.paidHours > 0.01 else { return row.amount }
         return row.amount * (relevantHours / row.paidHours)

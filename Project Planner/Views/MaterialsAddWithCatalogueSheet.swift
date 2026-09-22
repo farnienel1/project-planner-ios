@@ -27,6 +27,8 @@ struct MaterialsAddWithCatalogueSheet: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var smartCache: SmartCacheService
+    @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var operativeStore: OperativeStore
 
     let project: Project
     let initialDate: Date
@@ -659,6 +661,24 @@ struct MaterialsAddWithCatalogueSheet: View {
                 firebaseBackend: firebaseBackend,
                 isOnline: smartCache.isOnline
             )
+            if existingMaterial == nil {
+                let managerEmails = Set(project.managerIds.compactMap { id in
+                    operativeStore.managers.first(where: { $0.id == id })?.email
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .lowercased()
+                }.filter { !$0.isEmpty })
+                let managerUserIds = userStore.organizationUsers
+                    .filter { managerEmails.contains($0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
+                    .map(\.id)
+                await notificationService.notifyMaterialAdded(
+                    projectId: project.id,
+                    siteName: project.siteName,
+                    materialName: item.material,
+                    addedByName: addedBy,
+                    addedByUserId: ownerUid,
+                    extraRecipientUserIds: managerUserIds
+                )
+            }
             NotificationCenter.default.post(
                 name: NSNotification.Name("reloadMaterials"),
                 object: nil,

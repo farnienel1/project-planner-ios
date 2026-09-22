@@ -110,9 +110,15 @@ struct ProjectsView: View {
         }
     }
 
+    private var isWaitingForVisibilityData: Bool {
+        guard userStore.isOperativeMode() else { return false }
+        if operativeStore.isLoading || bookingStore.isLoading { return true }
+        return userStore.currentUser == nil
+    }
+
     private var projectsRootContent: some View {
         Group {
-            if projectStore.isLoading {
+            if projectStore.isLoading || isWaitingForVisibilityData {
                 ProgressView("Loading projects...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if projectsBeforeStatusFilter.isEmpty {

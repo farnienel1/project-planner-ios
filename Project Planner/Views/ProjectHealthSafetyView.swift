@@ -69,10 +69,8 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         userStore: UserStore
     ) async {
         guard !recipients.isEmpty else { return }
-        let calendar = Calendar.current
-        let selectedDay = calendar.startOfDay(for: weekCommencing)
-        let today = calendar.startOfDay(for: Date())
-        let publishAt: Date? = selectedDay > today ? calendar.date(bySettingHour: 7, minute: 0, second: 0, of: selectedDay) : nil
+        // Date on the issue sheet is the talk date, not a hidden schedule. Issued talks
+        // must appear in Tracking immediately — matching how managers expect the flow.
         let issueId = UUID().uuidString
         let issue = HSToolboxIssue(
             id: issueId,
@@ -81,7 +79,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
             weekCommencing: weekCommencing,
             issuedByUserId: issuedByUserId,
             issuedAt: Date(),
-            publishAt: publishAt,
+            publishAt: nil,
             recipientUserIds: recipients,
             status: .awaiting
         )
@@ -103,14 +101,35 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         }
         recalculateIssueStatuses()
         await persist(firebaseBackend: firebaseBackend, userStore: userStore)
-        if let publishAt {
-            _ = await LocalNotificationService.shared.requestAuthorization()
-            await LocalNotificationService.shared.scheduleQualificationExpiryOneShot(
-                identifier: "hs-toolbox-scheduled-\(issueId)",
-                title: "Scheduled Toolbox Talk",
-                body: "\(talk.title) is now due.",
-                fireAt: publishAt
+        await notifyToolboxTalkIssued(
+            talk: talk,
+            recipients: recipients,
+            firebaseBackend: firebaseBackend,
+            userStore: userStore
+        )
+    }
+
+    private func notifyToolboxTalkIssued(
+        talk: HSToolboxTalk,
+        recipients: [String],
+        firebaseBackend: FirebaseBackend,
+        userStore: UserStore
+    ) async {
+        guard let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) else { return }
+        let site = project.siteName
+        for userId in recipients {
+            let notification = AppNotification(
+                organizationId: orgId,
+                type: .toolboxTalkIssued,
+                title: "Toolbox Talk issued",
+                message: "\(talk.title) on \(site) needs your signature.",
+                userId: userId,
+                relatedId: nil,
+                isRead: false,
+                createdAt: Date(),
+                requiresPermission: nil
             )
+            try? await firebaseBackend.saveNotification(notification, organizationId: orgId)
         }
     }
 
@@ -129,13 +148,17 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         var uploadedURL: String?
         if let localFileURL,
            let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) {
-            uploadedURL = try? await firebaseBackend.uploadHealthSafetyFile(
-                localFileURL,
-                organizationId: orgId,
-                projectId: project.id,
-                category: "toolboxTalks",
-                fileName: originalFileName ?? localFileURL.lastPathComponent
-            )
+            do {
+                uploadedURL = try await uploadScopedHealthSafetyFile(
+                    localFileURL,
+                    organizationId: orgId,
+                    category: "toolboxTalks",
+                    fileName: originalFileName ?? localFileURL.lastPathComponent,
+                    firebaseBackend: firebaseBackend
+                )
+            } catch {
+                errorMessage = "Could not upload the toolbox talk file. \(error.localizedDescription)"
+            }
         }
         let talk = HSToolboxTalk(
             id: "TBT-UP-\(UUID().uuidString.prefix(8))",
@@ -304,13 +327,17 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         var uploadedURL: String?
         if let localFileURL,
            let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) {
-            uploadedURL = try? await firebaseBackend.uploadHealthSafetyFile(
-                localFileURL,
-                organizationId: orgId,
-                projectId: project.id,
-                category: "rams",
-                fileName: originalFileName ?? localFileURL.lastPathComponent
-            )
+            do {
+                uploadedURL = try await uploadScopedHealthSafetyFile(
+                    localFileURL,
+                    organizationId: orgId,
+                    category: "rams",
+                    fileName: originalFileName ?? localFileURL.lastPathComponent,
+                    firebaseBackend: firebaseBackend
+                )
+            } catch {
+                errorMessage = "Could not upload the RAMS file. \(error.localizedDescription)"
+            }
         }
         data.ramsDocuments.insert(
             HSRamsDocument(
@@ -343,13 +370,17 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         var uploadedURL: String?
         if let localFileURL,
            let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) {
-            uploadedURL = try? await firebaseBackend.uploadHealthSafetyFile(
-                localFileURL,
-                organizationId: orgId,
-                projectId: project.id,
-                category: "otherDocuments",
-                fileName: originalFileName ?? localFileURL.lastPathComponent
-            )
+            do {
+                uploadedURL = try await uploadScopedHealthSafetyFile(
+                    localFileURL,
+                    organizationId: orgId,
+                    category: "otherDocuments",
+                    fileName: originalFileName ?? localFileURL.lastPathComponent,
+                    firebaseBackend: firebaseBackend
+                )
+            } catch {
+                errorMessage = "Could not upload the H&S document. \(error.localizedDescription)"
+            }
         }
         data.otherDocuments.insert(
             HSOtherDocument(
@@ -365,6 +396,39 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
             at: 0
         )
         await persist(firebaseBackend: firebaseBackend, userStore: userStore)
+    }
+
+    func trackedIssues() -> [HSToolboxIssue] {
+        data.issues.sorted { $0.issuedAt > $1.issuedAt }
+    }
+
+    func talkTitle(for issue: HSToolboxIssue) -> String {
+        if let talk = data.talks.first(where: { $0.id == issue.talkId }), !talk.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return talk.title
+        }
+        return "Toolbox talk"
+    }
+
+    private func uploadScopedHealthSafetyFile(
+        _ localFileURL: URL,
+        organizationId: String,
+        category: String,
+        fileName: String,
+        firebaseBackend: FirebaseBackend
+    ) async throws -> String {
+        let accessed = localFileURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessed {
+                localFileURL.stopAccessingSecurityScopedResource()
+            }
+        }
+        return try await firebaseBackend.uploadHealthSafetyFile(
+            localFileURL,
+            organizationId: organizationId,
+            projectId: project.id,
+            category: category,
+            fileName: fileName
+        )
     }
 
     func signatures(for issueId: String) -> [HSToolboxSignature] {
@@ -865,8 +929,11 @@ struct ProjectHealthSafetyView: View {
     }
 
     private func downloadTalkFromLibrary(_ talk: HSToolboxTalk) {
-        guard let generated = HSTalkPDFBuilder.makePDF(for: talk) else { return }
-        presentTalkShareSheet(with: generated)
+        Task {
+            if let url = await HSTalkDocumentResolver.resolvedFileURL(for: talk) {
+                await MainActor.run { presentTalkShareSheet(with: url) }
+            }
+        }
     }
 
     private func myAssignedIssueEntries() -> [(issue: HSToolboxIssue, signature: HSToolboxSignature)] {
@@ -1048,7 +1115,7 @@ struct ProjectHealthSafetyView: View {
                 .foregroundStyle(HS.slate2)
                 .textCase(.uppercase)
             HStack(spacing: 10) {
-                hsMetricCard(title: "Talks issued", value: "\(vm.visibleIssues().count)")
+                hsMetricCard(title: "Talks issued", value: "\(vm.trackedIssues().count)")
                 hsMetricCard(title: "Awaiting signatures", value: "\(vm.data.signatures.filter { $0.status == .pending }.count)")
                 hsMetricCard(title: "RAMS docs", value: "\(vm.data.ramsDocuments.count)")
             }
@@ -1173,6 +1240,11 @@ struct ProjectHealthSafetyView: View {
 
     private var managerTracking: some View {
         VStack(spacing: 8) {
+            Text("Toolbox talk tracking")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(HS.slate2)
+                .textCase(.uppercase)
+                .frame(maxWidth: .infinity, alignment: .leading)
             let myEntries = myAssignedIssueEntries()
             if !myEntries.isEmpty {
                 let visibleMyEntries = showAllAssignedInTracking ? myEntries : Array(myEntries.prefix(2))
@@ -1198,11 +1270,10 @@ struct ProjectHealthSafetyView: View {
                         }
                     }
                     ForEach(visibleMyEntries, id: \.issue.id) { entry in
-                        let talk = vm.data.talks.first(where: { $0.id == entry.issue.talkId })
                         let isPending = entry.signature.status != .signed
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(talk?.title ?? "Toolbox talk")
+                                Text(vm.talkTitle(for: entry.issue))
                                     .font(.system(size: 14, weight: .semibold))
                                     .lineLimit(2)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -1223,12 +1294,20 @@ struct ProjectHealthSafetyView: View {
                 }
                 .hsCard()
             }
-            ForEach(vm.visibleIssues(), id: \.id) { issue in
+            let issues = vm.trackedIssues()
+            if issues.isEmpty {
+                Text("No toolbox talks issued yet. Issued talks appear here as soon as they are sent.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .hsCard(padding: 12)
+            }
+            ForEach(issues, id: \.id) { issue in
                 let signatures = vm.signatures(for: issue.id)
                 let signedCount = signatures.filter { $0.status == .signed }.count
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
-                        Text(vm.data.talks.first(where: { $0.id == issue.talkId })?.title ?? "Toolbox talk")
+                        Text(vm.talkTitle(for: issue))
                             .font(.system(size: 14, weight: .semibold))
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1240,7 +1319,7 @@ struct ProjectHealthSafetyView: View {
                     ProgressView(value: Double(signedCount), total: Double(max(signatures.count, 1)))
                         .tint(issue.status == .completed ? .green : .orange)
                     HStack {
-                        Text("W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
+                        Text("Date \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -2273,10 +2352,11 @@ private struct HSSignTalkView: View {
                         .hsCard()
                     }
                     Button {
-                        let generated = talk.flatMap { HSTalkPDFBuilder.makePDF(for: $0) }
-                        if let generated {
-                            previewURL = generated
-                            showPreviewShare = true
+                        Task {
+                            if let talk, let url = await HSTalkDocumentResolver.resolvedFileURL(for: talk) {
+                                previewURL = url
+                                showPreviewShare = true
+                            }
                         }
                     } label: {
                         Label("Preview / download talk", systemImage: "arrow.down.circle.fill")
@@ -2448,7 +2528,7 @@ private struct HSUploadTalkSheet: View {
                 allowsMultipleSelection: false
             ) { result in
                 if case .success(let urls) = result, let url = urls.first {
-                    selectedFileURL = url
+                    selectedFileURL = HSTalkDocumentResolver.copySecurityScopedFile(url) ?? url
                     selectedFileName = url.lastPathComponent
                 }
             }
@@ -2552,7 +2632,7 @@ private struct HSRamsUploadSheet: View {
                 allowsMultipleSelection: false
             ) { result in
                 if case .success(let urls) = result, let url = urls.first {
-                    selectedFileURL = url
+                    selectedFileURL = HSTalkDocumentResolver.copySecurityScopedFile(url) ?? url
                     selectedFileName = url.lastPathComponent
                 }
             }
@@ -2628,7 +2708,7 @@ private struct HSOtherDocumentUploadSheet: View {
                 allowsMultipleSelection: false
             ) { result in
                 if case .success(let urls) = result, let url = urls.first {
-                    selectedFileURL = url
+                    selectedFileURL = HSTalkDocumentResolver.copySecurityScopedFile(url) ?? url
                     selectedFileName = url.lastPathComponent
                 }
             }
@@ -2732,6 +2812,61 @@ private struct HSFormMenuField<MenuContent: View>: View {
                         .foregroundStyle(HS.slate2)
                 }
             }
+        }
+    }
+}
+
+private enum HSTalkDocumentResolver {
+    static func copySecurityScopedFile(_ url: URL) -> URL? {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessed {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hs-upload-\(UUID().uuidString)-\(url.lastPathComponent)")
+        do {
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: url, to: destination)
+            return destination
+        } catch {
+            return nil
+        }
+    }
+
+    static func resolvedFileURL(for talk: HSToolboxTalk) async -> URL? {
+        if let remote = remoteFileURL(from: talk.fileURL) {
+            if let downloaded = await downloadRemoteFile(remote, talkId: talk.id) {
+                return downloaded
+            }
+        }
+        return HSTalkPDFBuilder.makePDF(for: talk)
+    }
+
+    private static func remoteFileURL(from raw: String?) -> URL? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        guard let url = URL(string: raw) else { return nil }
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
+        return url
+    }
+
+    private static func downloadRemoteFile(_ remoteURL: URL, talkId: String) async -> URL? {
+        do {
+            let (data, response) = try await URLSession.shared.data(from: remoteURL)
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                return nil
+            }
+            guard !data.isEmpty else { return nil }
+            let ext = remoteURL.pathExtension.isEmpty ? "pdf" : remoteURL.pathExtension
+            let localURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("ToolboxTalk-\(talkId)-\(Int(Date().timeIntervalSince1970)).\(ext)")
+            try data.write(to: localURL, options: .atomic)
+            return localURL
+        } catch {
+            return nil
         }
     }
 }
@@ -2858,15 +2993,27 @@ private enum HSTalkPDFBuilder {
                 }
 
                 sectionTitle("Purpose")
+                let purposeText: String = {
+                    let trimmed = talk.purpose.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { return trimmed }
+                    if talk.fileURL?.isEmpty == false {
+                        return "This toolbox talk is stored as an uploaded document. Open the original file for the full content."
+                    }
+                    return "No purpose text was stored for this toolbox talk."
+                }()
                 let purposeRect = CGRect(x: margin, y: y, width: pageRect.width - margin * 2, height: 48)
-                (talk.purpose as NSString).draw(with: purposeRect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [
+                (purposeText as NSString).draw(with: purposeRect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [
                     .font: UIFont.systemFont(ofSize: 13.5, weight: .regular),
                     .foregroundColor: UIColor(red: 0.184, green: 0.243, blue: 0.314, alpha: 1)
                 ], context: nil)
                 y += 60
 
                 sectionTitle("Key control points")
-                for point in talk.keyPoints {
+                let points = talk.keyPoints.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                let displayPoints = points.isEmpty
+                    ? ["No control points were stored for this talk. If a PDF was uploaded, use that file for the full briefing."]
+                    : points
+                for point in displayPoints {
                     cyan.setFill()
                     UIBezierPath(ovalIn: CGRect(x: margin + 4, y: y + 6, width: 8, height: 8)).fill()
                     let pointRect = CGRect(x: margin + 18, y: y, width: pageRect.width - margin * 2 - 20, height: 34)

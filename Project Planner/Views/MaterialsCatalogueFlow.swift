@@ -132,16 +132,18 @@ struct MaterialCatalogueRootView: View {
                     Button("Done") { dismiss() }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 12) {
-                        Button { showingBulkImport = true } label: {
-                            Image(systemName: "square.and.arrow.down")
-                                .foregroundStyle(MaterialsOrderingTheme.primary)
-                        }
-                        Button { showingAdd = true } label: {
-                            Image(systemName: "plus.circle.fill")
-                                .foregroundStyle(MaterialsOrderingTheme.primary)
-                        }
+                    Button { showingBulkImport = true } label: {
+                        Image(systemName: "square.and.arrow.down")
+                            .foregroundStyle(MaterialsOrderingTheme.primary)
                     }
+                    .accessibilityLabel("Upload or download catalogue")
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showingAdd = true } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundStyle(MaterialsOrderingTheme.primary)
+                    }
+                    .accessibilityLabel("Add catalogue item")
                 }
             }
             .task {

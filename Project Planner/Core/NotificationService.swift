@@ -414,6 +414,42 @@ class NotificationService: ObservableObject {
         )
         await saveNotification(notification)
     }
+
+    func notifyMaterialAdded(
+        projectId: UUID,
+        siteName: String,
+        materialName: String,
+        addedByName: String,
+        addedByUserId: String?,
+        extraRecipientUserIds: [String]
+    ) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let adder = addedByUserId.map(resolvedRecipientUserId)
+        var recipientIds = Set(extraRecipientUserIds.map(resolvedRecipientUserId))
+        for user in userStore?.organizationUsers ?? [] {
+            if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
+                recipientIds.insert(resolvedRecipientUserId(user.id))
+            }
+        }
+        if let adder {
+            recipientIds.remove(adder)
+        }
+        guard !recipientIds.isEmpty else { return }
+        let trimmedMaterial = materialName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let detail = trimmedMaterial.isEmpty ? "a material" : trimmedMaterial
+        for userId in recipientIds {
+            let notification = AppNotification(
+                organizationId: organizationId,
+                type: .materialAdded,
+                title: "Material added",
+                message: "\(addedByName) added \(detail) on \(siteName).",
+                userId: userId,
+                relatedId: projectId
+            )
+            await saveNotification(notification)
+        }
+    }
     
     func notifyBookingClash(booking1Id: UUID, booking2Id: UUID, operativeName: String, date: Date, userId1: String, userId2: String) async {
         guard let firebaseBackend = firebaseBackend,
@@ -874,7 +910,7 @@ class NotificationService: ObservableObject {
               let currentUser = userStore?.currentUser else { return }
 
         hasLoadedNotificationsThisSession = true
-        let fetched = try? await firebaseBackend.loadNotifications(organizationId: organizationId, limit: 50)
+        let fetched = try? await firebaseBackend.loadNotifications(organizationId: organizationId, limit: 150)
         let fallbackExisting = notifications.filter { $0.requiresPermission != "syntheticAnnualLeave" }
         let allNotifications = fetched ?? fallbackExisting
         print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] currentUser=\(currentUser.id) totalLoaded=\(allNotifications.count)")
@@ -1073,7 +1109,7 @@ class NotificationService: ObservableObject {
             .document(organizationId)
             .collection("notifications")
             .order(by: "createdAt", descending: true)
-            .limit(to: 50)
+            .limit(to: 150)
             .addSnapshotListener { [weak self] snapshot, error in
                 guard let self else { return }
                 if let error {

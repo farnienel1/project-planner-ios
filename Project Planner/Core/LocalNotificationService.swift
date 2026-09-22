@@ -91,6 +91,12 @@ class LocalNotificationService {
         case .lineManagerPeerUpdate:
             content.title = "Line manager update"
             content.body = details.isEmpty ? "Another line manager actioned a shared request." : details
+        case .materialAdded:
+            content.title = "Material added"
+            content.body = details.isEmpty ? "A material was added to a job." : details
+        case .toolboxTalkIssued:
+            content.title = "Toolbox Talk issued"
+            content.body = details.isEmpty ? "A toolbox talk needs your signature." : details
         }
         
         // Set sound

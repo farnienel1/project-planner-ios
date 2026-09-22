@@ -30,13 +30,7 @@ struct ScheduleOperativeView: View {
     @State private var selectedDates: Set<Date> = []
     @State private var dateSlotChoices: [String: OperativeDayBookingChoice] = [:]
     /// Default hours applied to every selected date (bulk). Kept in sync when dates are added.
-    @State private var sharedBulkChoice: OperativeDayBookingChoice = OperativeDayBookingChoice(
-        timeSlot: .customHours,
-        workStartTime: OrgPayrollTimePolicy.default.standardDayStart,
-        workEndTime: OrgPayrollTimePolicy.default.standardDayEnd,
-        isBreakRemoved: false,
-        otMultiplierOverride: nil
-    )
+    @State private var sharedBulkChoice: OperativeDayBookingChoice = .legacy(.fullDay)
     /// Per-operative, per-day overrides on top of `dateSlotChoices` (key: `operativeUUID|yyyy-m-d`).
     @State private var operativeSlotOverrides: [String: OperativeDayBookingChoice] = [:]
     /// Hours template per operative when no dates selected yet (applied when dates are first chosen).
@@ -103,13 +97,65 @@ struct ScheduleOperativeView: View {
         if PayrollTimePolicyCatalog.isWeekend(day) {
             return PayrollTimePolicyCatalog.defaultWeekendBookingChoice(policy: policy, day: day)
         }
-        return OperativeDayBookingChoice(
-            timeSlot: .customHours,
-            workStartTime: policy.standardDayStart,
-            workEndTime: policy.standardDayEnd,
-            isBreakRemoved: false,
-            otMultiplierOverride: nil
-        )
+        return .legacy(.fullDay)
+    }
+
+    private func applyBulkTimeSlot(_ slot: TimeSlot) {
+        let refDay = selectedDates.sorted().first ?? Date()
+        let p = payrollPolicy(for: refDay)
+        let next: OperativeDayBookingChoice
+        switch slot {
+        case .morning, .afternoon:
+            next = .legacy(slot)
+        case .fullDay:
+            if PayrollTimePolicyCatalog.isWeekend(refDay) {
+                next = defaultChoiceForDay(refDay, policy: p)
+            } else {
+                next = .legacy(.fullDay)
+            }
+        default:
+            return
+        }
+        sharedBulkChoice = next
+        syncSharedBulkToAllSelectedDates()
+        operativeSlotOverrides.removeAll()
+    }
+
+    private func currentBulkChoice() -> OperativeDayBookingChoice {
+        if let refDay = selectedDates.sorted().first {
+            return baseChoice(for: refDay)
+        }
+        return sharedBulkChoice
+    }
+
+    private func isBulkSelectedSlot(_ slot: TimeSlot) -> Bool {
+        let choice = currentBulkChoice()
+        switch slot {
+        case .morning, .afternoon:
+            return choice.timeSlot == slot
+        case .fullDay:
+            if choice.timeSlot == .morning || choice.timeSlot == .afternoon { return false }
+            if choice.timeSlot == .fullDay { return true }
+            return isBulkStandardDay
+        case .customHours:
+            if choice.timeSlot == .morning || choice.timeSlot == .afternoon || choice.timeSlot == .fullDay {
+                return false
+            }
+            return !isBulkStandardDay
+        default:
+            return choice.timeSlot == slot
+        }
+    }
+
+    private func displayClockWindow(for choice: OperativeDayBookingChoice, day: Date, policy: OrgPayrollTimePolicy) -> (start: String, end: String) {
+        if let s = choice.workStartTime, let e = choice.workEndTime, !s.isEmpty, !e.isEmpty {
+            return (s, e)
+        }
+        let probe = choice.bookingProbe(operativeId: UUID(), projectId: project.id, date: day, bookedBy: "")
+        if let iv = OperativeBookingInterval.clashInterval(for: probe, policy: policy) {
+            return (ManagerScheduleInterval.formatMinutes(iv.0), ManagerScheduleInterval.formatMinutes(iv.1))
+        }
+        return (policy.standardDayStart, policy.standardDayEnd)
     }
 
     private func isStandardChoiceForDay(_ choice: OperativeDayBookingChoice, day: Date, policy: OrgPayrollTimePolicy) -> Bool {
@@ -191,13 +237,8 @@ struct ScheduleOperativeView: View {
     private func refreshDefaultHoursFromOrgPolicy() {
         guard !didApplyEditingBookingPrefill, !didApplyEditingGroupPrefill else { return }
         let p = primarySelectedDatePolicy
-        sharedBulkChoice = OperativeDayBookingChoice(
-            timeSlot: .customHours,
-            workStartTime: p.standardDayStart,
-            workEndTime: p.standardDayEnd,
-            isBreakRemoved: false,
-            otMultiplierOverride: nil
-        )
+        let refDay = selectedDates.sorted().first ?? Date()
+        sharedBulkChoice = defaultChoiceForDay(refDay, policy: p)
         didApplyOrgDefaultHours = true
         if !selectedDates.isEmpty {
             syncSharedBulkToAllSelectedDates()
@@ -539,9 +580,10 @@ struct ScheduleOperativeView: View {
     }
 
     private var isBulkStandardDay: Bool {
+        let choice = currentBulkChoice()
+        if choice.timeSlot == .fullDay { return true }
         guard let refDay = selectedDates.sorted().first else { return false }
         let p = payrollPolicy(for: refDay)
-        let choice = baseChoice(for: refDay)
         return isStandardChoiceForDay(choice, day: refDay, policy: p)
     }
 
@@ -565,6 +607,11 @@ struct ScheduleOperativeView: View {
     private func operativeLineForChoice(_ c: OperativeDayBookingChoice, day: Date? = nil) -> String {
         let refDay = day ?? selectedDates.sorted().first ?? Date()
         let p = payrollPolicy(for: refDay)
+        if c.timeSlot == .morning { return "AM" }
+        if c.timeSlot == .afternoon { return "PM" }
+        if c.timeSlot == .fullDay {
+            return "FULL DAY · \(p.standardDayStart)–\(p.standardDayEnd)"
+        }
         if isStandardChoiceForDay(c, day: refDay, policy: p) {
             if PayrollTimePolicyCatalog.isWeekend(refDay) {
                 let weekend = PayrollTimePolicyCatalog.weekendSettings(for: refDay, policy: p)
@@ -623,8 +670,15 @@ struct ScheduleOperativeView: View {
 
     private var bottomBarStandardCaption: String {
         if hasAnyOperativeOverrides { return "Mixed / custom" }
-        if isBulkStandardDay { return "All standard" }
-        return "Custom hours"
+        switch currentBulkChoice().timeSlot {
+        case .morning: return "AM"
+        case .afternoon: return "PM"
+        case .fullDay: return "FULL DAY"
+        case .customHours:
+            return isBulkStandardDay ? "All standard" : "Custom hours"
+        default:
+            return currentBulkChoice().timeSlot.displayName
+        }
     }
 
     private func formatHoursOneDecimal(_ h: Double) -> String {
@@ -929,12 +983,36 @@ struct ScheduleOperativeView: View {
         }
     }
 
+    @ViewBuilder
+    private func bulkHoursSlotChip(title: String, slot: TimeSlot, enabled: Bool) -> some View {
+        let selected = isBulkSelectedSlot(slot)
+        Button {
+            guard enabled else { return }
+            applyBulkTimeSlot(slot)
+        } label: {
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(selected ? Color(red: 0.902, green: 0.945, blue: 0.984) : Color.white)
+                .foregroundStyle(selected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.ink)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(selected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.searchBorder, lineWidth: selected ? 1.5 : 0.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
     private var scheduleBookingBulkHoursCard: some View {
         let refDay = selectedDates.sorted().first ?? Date()
         let p = payrollPolicy(for: refDay)
         let choice = selectedDates.isEmpty ? sharedBulkChoice : baseChoice(for: refDay)
-        let start = choice.workStartTime ?? p.standardDayStart
-        let end = choice.workEndTime ?? p.standardDayEnd
+        let window = displayClockWindow(for: choice, day: refDay, policy: p)
+        let start = window.start
+        let end = window.end
         let probe = OperativeDayBookingChoice(
             timeSlot: .customHours,
             workStartTime: start,
@@ -957,28 +1035,12 @@ struct ScheduleOperativeView: View {
                 .tracking(0.4)
                 .padding(.leading, 4)
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    Button {
-                        guard canBookStandardDayWindow else { return }
-                        let standard = defaultChoiceForDay(refDay, policy: p)
-                        sharedBulkChoice = standard
-                        syncSharedBulkToAllSelectedDates()
-                        operativeSlotOverrides.removeAll()
-                    } label: {
-                        Text("Standard day")
-                            .font(.system(size: 10, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
-                            .background(isBulkStandardDay ? Color(red: 0.902, green: 0.945, blue: 0.984) : Color.white)
-                            .foregroundStyle(isBulkStandardDay ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.ink)
-                            .clipShape(Capsule())
-                            .overlay(
-                                Capsule()
-                                    .stroke(isBulkStandardDay ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.searchBorder, lineWidth: isBulkStandardDay ? 1.5 : 0.5)
-                            )
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        bulkHoursSlotChip(title: "AM", slot: .morning, enabled: canBookStandardDayWindow)
+                        bulkHoursSlotChip(title: "PM", slot: .afternoon, enabled: canBookStandardDayWindow)
+                        bulkHoursSlotChip(title: "FULL DAY", slot: .fullDay, enabled: canBookStandardDayWindow)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!canBookStandardDayWindow)
                     Button {
                         operativeCustomHoursPick = OperativeCustomHoursPick(
                             operativeId: nil,
@@ -990,12 +1052,12 @@ struct ScheduleOperativeView: View {
                             .font(.system(size: 10, weight: .medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
-                            .background(!isBulkStandardDay ? Color(red: 0.902, green: 0.945, blue: 0.984) : Color.white)
-                            .foregroundStyle(!isBulkStandardDay ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.ink)
+                            .background(isBulkSelectedSlot(.customHours) ? Color(red: 0.902, green: 0.945, blue: 0.984) : Color.white)
+                            .foregroundStyle(isBulkSelectedSlot(.customHours) ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.ink)
                             .clipShape(Capsule())
                             .overlay(
                                 Capsule()
-                                    .stroke(!isBulkStandardDay ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.searchBorder, lineWidth: !isBulkStandardDay ? 1.5 : 0.5)
+                                    .stroke(isBulkSelectedSlot(.customHours) ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.searchBorder, lineWidth: isBulkSelectedSlot(.customHours) ? 1.5 : 0.5)
                             )
                     }
                     .buttonStyle(.plain)

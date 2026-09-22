@@ -114,7 +114,7 @@ extension Booking {
         let result = payrollHoursResult(policy: policy)
         return result.segments
             .filter { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }
-            .reduce(0) { $0 + $1.paidHours }
+            .reduce(0) { $0 + $1.baseHours }
     }
 
     /// Second line under the person’s name (daily overview / my schedule): clock-first, full-day phrasing, OT hint.
@@ -129,9 +129,10 @@ extension Booking {
             let result = payrollHoursResult(policy: policy)
             let ot = overtimeHoursBeyondPaidStandard(policy: policy)
             if ot > 0.05, let outside = result.segments.first(where: { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }) {
-                let stdShow = result.totalPaidHours - ot
-                let multStr = outside.multiplierLabel
-                return ("\(s)–\(e) · \(ScheduleCoverageFormat.hours(stdShow))h + \(ScheduleCoverageFormat.hours(ot))h × \(multStr) (Multiplier)", true)
+                let paidOT = outside.paidHours
+                let stdShow = result.totalPaidHours - paidOT
+                let equation = ScheduleCoverageFormat.overtimeEquation(rawHours: ot, multiplier: outside.multiplier, paidHours: paidOT)
+                return ("\(s)–\(e) · \(ScheduleCoverageFormat.hours(stdShow))h + \(equation)", true)
             }
             var t = "\(s)–\(e)"
             if isBreakRemoved {
@@ -220,6 +221,19 @@ enum ScheduleCoverageFormat {
             return String(format: "%.0f", rounded)
         }
         return String(format: "%.1f", rounded)
+    }
+
+    static func multiplier(_ m: Double) -> String {
+        if abs(m - m.rounded()) < 0.05 {
+            return String(format: "%.0f", m)
+        }
+        return String(format: "%.1f", m)
+    }
+
+    /// Raw overtime hours × multiplier = paid equivalent, e.g. `2 × 1.5 = 3`.
+    static func overtimeEquation(rawHours: Double, multiplier: Double, paidHours: Double? = nil) -> String {
+        let paid = paidHours ?? (rawHours * multiplier)
+        return "\(hours(rawHours)) × \(Self.multiplier(multiplier)) = \(hours(paid))"
     }
 }
 

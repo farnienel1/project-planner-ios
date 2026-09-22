@@ -208,17 +208,38 @@ class ProjectStore: ObservableObject {
                         
                         // Load projects/small works from Firebase, but never wipe existing in-memory data on failed reads.
                         let existingProjectsBeforeLoad = self.projects
+                        async let projectsOutcome: Result<[Project], Error> = {
+                            do {
+                                let items = try await withTimeout(seconds: 10) {
+                                    try await firebaseBackend.loadProjects(organizationId: organizationId)
+                                }
+                                return .success(items.filter { $0.jobType != .smallWorks })
+                            } catch {
+                                return .failure(error)
+                            }
+                        }()
+                        async let smallWorksOutcome: Result<[Project], Error> = {
+                            do {
+                                let items = try await withTimeout(seconds: 10) {
+                                    try await firebaseBackend.loadSmallWorks(organizationId: organizationId)
+                                }
+                                return .success(items)
+                            } catch {
+                                return .failure(error)
+                            }
+                        }()
+                        let loadedProjects = await projectsOutcome
+                        let loadedSmallWorks = await smallWorksOutcome
+
                         var firebaseProjects: [Project] = []
                         var projectsLoaded = false
                         var projectsError: Error?
-                        do {
-                            firebaseProjects = try await withTimeout(seconds: 10) {
-                                try await firebaseBackend.loadProjects(organizationId: organizationId)
-                            }
-                            firebaseProjects = firebaseProjects.filter { $0.jobType != .smallWorks }
+                        switch loadedProjects {
+                        case .success(let items):
+                            firebaseProjects = items
                             projectsLoaded = true
                             print("🔥🔥🔥 DEBUG: ✅ Successfully loaded \(firebaseProjects.count) projects from Firebase (excluding small works)")
-                        } catch {
+                        case .failure(let error):
                             projectsError = error
                             print("🔥🔥🔥 DEBUG: ❌❌❌ ERROR loading projects: \(error.localizedDescription)")
                         }
@@ -226,13 +247,12 @@ class ProjectStore: ObservableObject {
                         var firebaseSmallWorks: [Project] = []
                         var smallWorksLoaded = false
                         var smallWorksError: Error?
-                        do {
-                            firebaseSmallWorks = try await withTimeout(seconds: 10) {
-                                try await firebaseBackend.loadSmallWorks(organizationId: organizationId)
-                            }
+                        switch loadedSmallWorks {
+                        case .success(let items):
+                            firebaseSmallWorks = items
                             smallWorksLoaded = true
                             print("🔥🔥🔥 DEBUG: ✅ Successfully loaded \(firebaseSmallWorks.count) small works from Firebase")
-                        } catch {
+                        case .failure(let error):
                             smallWorksError = error
                             print("🔥🔥🔥 DEBUG: ❌❌❌ ERROR loading small works: \(error.localizedDescription)")
                         }
@@ -286,13 +306,34 @@ class ProjectStore: ObservableObject {
                         }
                         
                         // Load job types from Firebase
+                        let existingJobTypesBeforeLoad = self.jobTypes
                         do {
                             let firebaseJobTypes = try await withTimeout(seconds: 5) {
                                 try await firebaseBackend.loadJobTypes(organizationId: organizationId)
                             }
-                            self.jobTypes = firebaseJobTypes
-                            print("🔥🔥🔥 DEBUG: Loaded \(firebaseJobTypes.count) job types from Firebase")
+                            let recovered = jobTypesRecoveredFromWorks(allItems)
+                            if firebaseJobTypes.isEmpty {
+                                if !existingJobTypesBeforeLoad.isEmpty {
+                                    self.jobTypes = existingJobTypesBeforeLoad.union(recovered)
+                                    print("🔥🔥🔥 DEBUG: Firebase returned 0 job types, preserving \(self.jobTypes.count) in-memory/recovered types")
+                                } else if !recovered.isEmpty {
+                                    self.jobTypes = recovered
+                                    print("🔥🔥🔥 DEBUG: Recovered \(recovered.count) job types from live projects/small works")
+                                } else {
+                                    self.jobTypes = Set(JobType.allCases.map(\.rawValue))
+                                    print("🔥🔥🔥 DEBUG: No stored job types; seeding recommended defaults")
+                                }
+                            } else {
+                                self.jobTypes = firebaseJobTypes.union(recovered)
+                                print("🔥🔥🔥 DEBUG: Loaded \(firebaseJobTypes.count) job types from Firebase (+ \(recovered.count) recovered)")
+                            }
                         } catch {
+                            let recovered = jobTypesRecoveredFromWorks(allItems)
+                            if !existingJobTypesBeforeLoad.isEmpty {
+                                self.jobTypes = existingJobTypesBeforeLoad.union(recovered)
+                            } else if !recovered.isEmpty {
+                                self.jobTypes = recovered
+                            }
                             print("🔥🔥🔥 DEBUG: Error loading job types from Firebase: \(error.localizedDescription)")
                         }
                         
@@ -978,13 +1019,16 @@ class ProjectStore: ObservableObject {
                     }
                 }
                 
-                // Save job types to Firebase
-                do {
-                    try await firebaseBackend.saveJobTypes(organizationId: organizationId, jobTypes: jobTypes)
-                    print("🔥🔥🔥 DEBUG: Successfully saved \(jobTypes.count) job types to Firebase")
-                } catch {
-                    let errorMsg = "Error saving job types to Firebase: \(error.localizedDescription)"
-                    print("🔥🔥🔥 DEBUG: \(errorMsg)")
+                // Save job types only when the catalogue still has names. Empty overwrites
+                // were wiping Job Types Management while projects still had custom types.
+                if !jobTypes.isEmpty {
+                    do {
+                        try await firebaseBackend.saveJobTypes(organizationId: organizationId, jobTypes: jobTypes)
+                        print("🔥🔥🔥 DEBUG: Successfully saved \(jobTypes.count) job types to Firebase")
+                    } catch {
+                        let errorMsg = "Error saving job types to Firebase: \(error.localizedDescription)"
+                        print("🔥🔥🔥 DEBUG: \(errorMsg)")
+                    }
                 }
                 
                 if !projectSaveErrors.isEmpty || !smallWorksSaveErrors.isEmpty || !clientSaveErrors.isEmpty {
@@ -1020,16 +1064,44 @@ class ProjectStore: ObservableObject {
     // MARK: - Job Types Management
     
     func addJobType(_ jobType: String) {
-        jobTypes.insert(jobType)
+        let trimmed = jobType.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        jobTypes.insert(trimmed)
         Task {
-            await saveData()
+            await saveJobTypesCatalogue()
         }
     }
     
     func removeJobType(_ jobType: String) {
         jobTypes.remove(jobType)
         Task {
-            await saveData()
+            await saveJobTypesCatalogue()
         }
+    }
+
+    private func saveJobTypesCatalogue() async {
+        guard let firebaseBackend,
+              firebaseBackend.isAuthenticated,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+              !jobTypes.isEmpty else { return }
+        do {
+            try await firebaseBackend.saveJobTypes(organizationId: organizationId, jobTypes: jobTypes)
+        } catch {
+            print("🔥🔥🔥 DEBUG: Error saving job types catalogue: \(error.localizedDescription)")
+        }
+    }
+
+    private func jobTypesRecoveredFromWorks(_ works: [Project]) -> Set<String> {
+        var names = Set<String>()
+        for work in works {
+            if let custom = work.customJobType?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty {
+                names.insert(custom)
+            }
+            let typeName = work.jobType.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !typeName.isEmpty {
+                names.insert(typeName)
+            }
+        }
+        return names
     }
 }

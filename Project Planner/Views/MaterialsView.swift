@@ -552,6 +552,8 @@ struct AddMaterialView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var smartCache: SmartCacheService
+    @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var operativeStore: OperativeStore
     
     let project: Project
     let date: Date
@@ -705,6 +707,22 @@ struct AddMaterialView: View {
                     )
                     savedCount += 1
                     print("✅ Material saved: \(material.material) for date: \(normalizedDate)")
+                    let managerEmails = Set(project.managerIds.compactMap { id in
+                        operativeStore.managers.first(where: { $0.id == id })?.email
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .lowercased()
+                    }.filter { !$0.isEmpty })
+                    let managerUserIds = userStore.organizationUsers
+                        .filter { managerEmails.contains($0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
+                        .map(\.id)
+                    await notificationService.notifyMaterialAdded(
+                        projectId: project.id,
+                        siteName: project.siteName,
+                        materialName: material.material,
+                        addedByName: addedBy,
+                        addedByUserId: material.addedByUserId,
+                        extraRecipientUserIds: managerUserIds
+                    )
                 } catch {
                     print("❌ Error saving material: \(error.localizedDescription)")
                     if firstError == nil {
