@@ -1525,20 +1525,33 @@ class FirebaseBackend: ObservableObject {
         }
     }
     
+    /// Server-first collection read. An empty Firestore persistence cache is NOT treated as
+    /// "this organisation has zero documents" — that is what made TestFlight lists vanish.
+    private func getDocumentsPreferringServer(_ collection: CollectionReference) async throws -> QuerySnapshot {
+        do {
+            return try await collection.getDocuments(source: .server)
+        } catch {
+            guard isFirestorePermissionDenied(error) || isOfflineNetworkError(error) else { throw error }
+            let cached: QuerySnapshot
+            do {
+                cached = try await collection.getDocuments(source: .cache)
+            } catch {
+                throw error
+            }
+            if cached.documents.isEmpty {
+                print("🔥🔥🔥 DEBUG: Empty Firestore cache after server failure — not treating as a successful empty list")
+                throw error
+            }
+            return cached
+        }
+    }
+
     func loadProjects(organizationId: String) async throws -> [Project] {
         let orgId = try await ensureReadableOrganization(organizationId)
         print("🔥🔥🔥 DEBUG: [LOAD] Starting to load projects for organization: \(orgId)")
-        let snapshot: QuerySnapshot
-        do {
-            snapshot = try await db.collection("organizations").document(orgId).collection("projects").getDocuments(source: .server)
-        } catch {
-            if isFirestorePermissionDenied(error) || isOfflineNetworkError(error) {
-                print("🔥🔥🔥 DEBUG: [LOAD] Server projects read failed for \(orgId) - trying cache fallback")
-                snapshot = try await db.collection("organizations").document(orgId).collection("projects").getDocuments(source: .cache)
-            } else {
-                throw error
-            }
-        }
+        let snapshot = try await getDocumentsPreferringServer(
+            db.collection("organizations").document(orgId).collection("projects")
+        )
         print("🔥🔥🔥 DEBUG: [LOAD] Found \(snapshot.documents.count) project documents in Firebase")
         
         var loadedProjects: [Project] = []
@@ -1879,17 +1892,9 @@ class FirebaseBackend: ObservableObject {
     func loadSmallWorks(organizationId: String) async throws -> [Project] {
         let orgId = try await ensureReadableOrganization(organizationId)
         print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Starting to load small works for organization: \(orgId)")
-        let snapshot: QuerySnapshot
-        do {
-            snapshot = try await db.collection("organizations").document(orgId).collection("smallWorks").getDocuments(source: .server)
-        } catch {
-            if isFirestorePermissionDenied(error) || isOfflineNetworkError(error) {
-                print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Server smallWorks read failed for \(orgId) - trying cache fallback")
-                snapshot = try await db.collection("organizations").document(orgId).collection("smallWorks").getDocuments(source: .cache)
-            } else {
-                throw error
-            }
-        }
+        let snapshot = try await getDocumentsPreferringServer(
+            db.collection("organizations").document(orgId).collection("smallWorks")
+        )
         print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Found \(snapshot.documents.count) small works documents in Firebase")
         
         var loadedSmallWorks: [Project] = []
@@ -5145,20 +5150,7 @@ class FirebaseBackend: ObservableObject {
     func loadBookings(organizationId: String) async throws -> [Booking] {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
         let bookingsRef = db.collection("organizations").document(orgId).collection("bookings")
-        let snapshot: QuerySnapshot
-        do {
-            snapshot = try await bookingsRef.getDocuments(source: .server)
-        } catch {
-            if isFirestorePermissionDenied(error) {
-                print("🔥🔥🔥 DEBUG: [BOOKING LOAD] Server denied bookings read for \(orgId) - trying cache fallback")
-                snapshot = try await bookingsRef.getDocuments(source: .cache)
-            } else if isOfflineNetworkError(error) {
-                print("🔥🔥🔥 DEBUG: [BOOKING LOAD] Offline while loading bookings for \(orgId) - trying cache fallback")
-                snapshot = try await bookingsRef.getDocuments(source: .cache)
-            } else {
-                throw error
-            }
-        }
+        let snapshot = try await getDocumentsPreferringServer(bookingsRef)
         
         return snapshot.documents.compactMap { doc in
             let data = doc.data()

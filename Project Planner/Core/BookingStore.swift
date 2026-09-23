@@ -120,8 +120,21 @@ class BookingStore: ObservableObject {
                     
                     // Load bookings from Firebase
                     let firebaseBookings = try await firebaseBackend.loadBookings(organizationId: organizationId)
-                    self.bookings = firebaseBookings
-                    self.smartCache?.cacheBookings(firebaseBookings)
+                    if firebaseBookings.isEmpty && !self.bookings.isEmpty {
+                        print("🔥🔥🔥 DEBUG: Remote returned 0 bookings, preserving \(self.bookings.count) in-memory bookings")
+                    } else if firebaseBookings.isEmpty {
+                        let cached = (try? await persistenceService.loadBookingData()) ?? []
+                        if !cached.isEmpty {
+                            self.bookings = cached
+                            print("🔥🔥🔥 DEBUG: Remote returned 0 bookings, restored \(cached.count) from disk")
+                        } else {
+                            self.bookings = firebaseBookings
+                        }
+                    } else {
+                        self.bookings = firebaseBookings
+                        self.smartCache?.cacheBookings(firebaseBookings)
+                        Task { try? await persistenceService.saveBookingData(bookings: firebaseBookings) }
+                    }
                     
                     print("🔥🔥🔥 DEBUG: Loaded \(firebaseBookings.count) bookings from Firebase")
                     
@@ -132,8 +145,10 @@ class BookingStore: ObservableObject {
                     print("🔥🔥🔥 DEBUG: Authenticated: \(firebaseBackend?.isAuthenticated ?? false)")
                     print("🔥🔥🔥 DEBUG: Organization: \(firebaseBackend?.currentOrganization?.name ?? "nil")")
                     let bookings = try await persistenceService.loadBookingData()
-                    self.bookings = bookings
-                    print("🔥🔥🔥 DEBUG: Loaded \(bookings.count) bookings from local storage")
+                    if !bookings.isEmpty || self.bookings.isEmpty {
+                        self.bookings = bookings
+                    }
+                    print("🔥🔥🔥 DEBUG: Loaded \(self.bookings.count) bookings from local storage")
                 }
                 
             } catch {

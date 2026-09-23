@@ -17,6 +17,8 @@ class ProjectStore: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
     @Published var isOffline: Bool = false
+    /// True when the latest Firebase read was empty/failed and the list is coming from memory or disk.
+    @Published var lastWorkLoadUnreliable: Bool = false
     
     private let persistenceService: PersistenceService
     private var firebaseBackend: FirebaseBackend?
@@ -140,6 +142,7 @@ class ProjectStore: ObservableObject {
 
         isLoading = true
         errorMessage = nil
+        lastWorkLoadUnreliable = false
         pendingReloadAfterCurrentLoad = false
         loadGeneration += 1
         let generation = loadGeneration
@@ -175,6 +178,9 @@ class ProjectStore: ObservableObject {
             }
             
             do {
+                // Show last-known jobs immediately so a slow/failed Firebase read cannot blank the UI.
+                let diskCache = await hydrateFromLocalCacheIfNeeded()
+
                 // Try to load from Firebase first if authenticated
                 if let firebaseBackend = firebaseBackend, 
                    firebaseBackend.isAuthenticated {
@@ -228,8 +234,37 @@ class ProjectStore: ObservableObject {
                                 return .failure(error)
                             }
                         }()
-                        let loadedProjects = await projectsOutcome
-                        let loadedSmallWorks = await smallWorksOutcome
+                        var loadedProjects = await projectsOutcome
+                        var loadedSmallWorks = await smallWorksOutcome
+
+                        // Auth/token races on TestFlight can return a one-shot empty snapshot.
+                        // Retry once before deciding the organisation has no work.
+                        if case .success(let projects) = loadedProjects,
+                           case .success(let smallWorks) = loadedSmallWorks,
+                           projects.isEmpty && smallWorks.isEmpty {
+                            print("🔥🔥🔥 DEBUG: Both collections empty — retrying Firebase once (auth/token race)")
+                            try? await Task.sleep(nanoseconds: 1_200_000_000)
+                            loadedProjects = await {
+                                do {
+                                    let items = try await withTimeout(seconds: 10) {
+                                        try await firebaseBackend.loadProjects(organizationId: organizationId)
+                                    }
+                                    return .success(items.filter { $0.jobType != .smallWorks })
+                                } catch {
+                                    return .failure(error)
+                                }
+                            }()
+                            loadedSmallWorks = await {
+                                do {
+                                    let items = try await withTimeout(seconds: 10) {
+                                        try await firebaseBackend.loadSmallWorks(organizationId: organizationId)
+                                    }
+                                    return .success(items)
+                                } catch {
+                                    return .failure(error)
+                                }
+                            }()
+                        }
 
                         var firebaseProjects: [Project] = []
                         var projectsLoaded = false
@@ -257,19 +292,35 @@ class ProjectStore: ObservableObject {
                             print("🔥🔥🔥 DEBUG: ❌❌❌ ERROR loading small works: \(error.localizedDescription)")
                         }
 
-                        let allItems = ProjectWorksMerge.uniqueWorks(firebaseProjects + firebaseSmallWorks)
-                        if projectsLoaded || smallWorksLoaded {
-                            if allItems.isEmpty && !existingProjectsBeforeLoad.isEmpty {
-                                self.projects = existingProjectsBeforeLoad
-                                print("🔥🔥🔥 DEBUG: Remote returned 0 projects/small works, preserving \(existingProjectsBeforeLoad.count) existing items")
-                            } else {
-                                self.projects = allItems
-                            }
-                            print("🔥🔥🔥 DEBUG: ✅ Total loaded: \(firebaseProjects.count) projects + \(firebaseSmallWorks.count) small works")
-                        } else {
-                            self.projects = existingProjectsBeforeLoad
-                            print("🔥🔥🔥 DEBUG: Both project and small works loads failed; preserving \(existingProjectsBeforeLoad.count) in-memory items")
+                        let cachedProjects = diskCache.projects.filter { $0.jobType != .smallWorks }
+                        let cachedSmallWorks = diskCache.projects.filter { $0.jobType == .smallWorks }
+                        var merged = existingProjectsBeforeLoad
+                        merged = ProjectWorksMerge.mergeWorkSlice(
+                            existingAll: merged,
+                            remoteSlice: projectsLoaded ? firebaseProjects : nil,
+                            cachedSlice: cachedProjects,
+                            isSmallWorks: false
+                        )
+                        merged = ProjectWorksMerge.mergeWorkSlice(
+                            existingAll: merged,
+                            remoteSlice: smallWorksLoaded ? firebaseSmallWorks : nil,
+                            cachedSlice: cachedSmallWorks,
+                            isSmallWorks: true
+                        )
+                        self.projects = merged
+                        let usedFallback =
+                            (!projectsLoaded || (firebaseProjects.isEmpty && merged.contains { $0.jobType != .smallWorks })) ||
+                            (!smallWorksLoaded || (firebaseSmallWorks.isEmpty && merged.contains { $0.jobType == .smallWorks }))
+                        lastWorkLoadUnreliable = (usedFallback && !merged.isEmpty) || (!projectsLoaded && !smallWorksLoaded)
+                        if !projectsLoaded && !smallWorksLoaded {
+                            errorMessage = projectsError?.localizedDescription
+                                ?? smallWorksError?.localizedDescription
+                                ?? "Could not load projects from the server."
                         }
+                        if !merged.isEmpty {
+                            Task { try? await persistenceService.saveProjectData(projects: merged, clients: self.clients) }
+                        }
+                        print("🔥🔥🔥 DEBUG: ✅ Total loaded: \(firebaseProjects.count) projects + \(firebaseSmallWorks.count) small works (store=\(merged.count), unreliable=\(lastWorkLoadUnreliable))")
                         
                         if self.projects.isEmpty {
                             print("🔥🔥🔥 DEBUG: ⚠️⚠️⚠️ WARNING: No projects or small works loaded! This could mean:")
@@ -286,7 +337,7 @@ class ProjectStore: ObservableObject {
                             }
                             if firebaseClients.isEmpty {
                                 // Avoid wiping in-memory clients on transient empty reads.
-                                let inferred = extractClientsFromProjects(allItems)
+                                let inferred = extractClientsFromProjects(merged)
                                 if !existingClientsBeforeLoad.isEmpty {
                                     self.clients = existingClientsBeforeLoad
                                     print("🔥🔥🔥 DEBUG: Firebase returned 0 clients, preserving \(existingClientsBeforeLoad.count) existing in-memory clients")
@@ -301,7 +352,7 @@ class ProjectStore: ObservableObject {
                         } catch {
                             print("🔥🔥🔥 DEBUG: Error loading clients from Firebase, extracting from projects: \(error.localizedDescription)")
                             // Fallback: extract clients from all loaded work items
-                            let inferred = extractClientsFromProjects(allItems)
+                            let inferred = extractClientsFromProjects(merged)
                             self.clients = inferred.isEmpty ? existingClientsBeforeLoad : inferred
                         }
                         
@@ -311,7 +362,7 @@ class ProjectStore: ObservableObject {
                             let firebaseJobTypes = try await withTimeout(seconds: 5) {
                                 try await firebaseBackend.loadJobTypes(organizationId: organizationId)
                             }
-                            let recovered = jobTypesRecoveredFromWorks(allItems)
+                            let recovered = jobTypesRecoveredFromWorks(merged)
                             if firebaseJobTypes.isEmpty {
                                 if !existingJobTypesBeforeLoad.isEmpty {
                                     self.jobTypes = existingJobTypesBeforeLoad.union(recovered)
@@ -328,7 +379,7 @@ class ProjectStore: ObservableObject {
                                 print("🔥🔥🔥 DEBUG: Loaded \(firebaseJobTypes.count) job types from Firebase (+ \(recovered.count) recovered)")
                             }
                         } catch {
-                            let recovered = jobTypesRecoveredFromWorks(allItems)
+                            let recovered = jobTypesRecoveredFromWorks(merged)
                             if !existingJobTypesBeforeLoad.isEmpty {
                                 self.jobTypes = existingJobTypesBeforeLoad.union(recovered)
                             } else if !recovered.isEmpty {
@@ -341,7 +392,7 @@ class ProjectStore: ObservableObject {
                             isPermissionDeniedError(projectsError) || isPermissionDeniedError(smallWorksError)
                         let shouldTryOrgAutoSwitch =
                             !didAttemptOrgAutoSwitch &&
-                            (allItems.isEmpty || permissionDeniedWhileLoadingWork)
+                            (merged.isEmpty || permissionDeniedWhileLoadingWork)
 
                         if shouldTryOrgAutoSwitch,
                            let userId = firebaseBackend.currentUser?.uid {
@@ -377,35 +428,19 @@ class ProjectStore: ObservableObject {
                             }
                         }
 
-                        // Local fallback
+                        // Local fallback — never replace known jobs with an empty disk read.
                         print("🔥🔥🔥 DEBUG: Organization still nil after recovery, loading from local storage")
-                        let (projects, clients) = try await persistenceService.loadProjectData()
-                        self.projects = projects
-                        self.clients = clients
-                        print("🔥🔥🔥 DEBUG: Loaded \(projects.count) projects and \(clients.count) clients from local storage")
+                        applyLocalProjectFallback(diskCache.projects, clients: diskCache.clients)
+                        lastWorkLoadUnreliable = !self.projects.isEmpty
+                        print("🔥🔥🔥 DEBUG: Loaded \(self.projects.count) projects and \(self.clients.count) clients from local storage")
                     }
                     
                 } else {
                     // Fallback to local storage
                     print("🔥🔥🔥 DEBUG: Loading data from local storage (Firebase not available or not authenticated)")
-                    do {
-                        let (projects, clients) = try await persistenceService.loadProjectData()
-                        self.projects = projects
-                        self.clients = clients
-                        print("🔥🔥🔥 DEBUG: Loaded \(projects.count) projects and \(clients.count) clients from local storage")
-                        
-                        // If we have local data but Firebase is available, try to sync it
-                        if let firebaseBackend = firebaseBackend,
-                           !firebaseBackend.isAuthenticated,
-                           !projects.isEmpty {
-                            print("🔥🔥🔥 DEBUG: Found local projects but Firebase not authenticated - projects will be available locally")
-                        }
-                    } catch {
-                        print("🔥🔥🔥 DEBUG: Error loading from local storage: \(error.localizedDescription)")
-                        // Don't throw - just use empty arrays
-                        self.projects = []
-                        self.clients = []
-                    }
+                    applyLocalProjectFallback(diskCache.projects, clients: diskCache.clients)
+                    lastWorkLoadUnreliable = !self.projects.isEmpty
+                    print("🔥🔥🔥 DEBUG: Loaded \(self.projects.count) projects and \(self.clients.count) clients from local storage")
                 }
                 
                 print("🔥🔥🔥 DEBUG: Finished loading - Total projects: \(self.projects.count), Total clients: \(self.clients.count)")
@@ -425,6 +460,39 @@ class ProjectStore: ObservableObject {
     }
     
     // Helper function to add timeout to async operations
+    private func hydrateFromLocalCacheIfNeeded() async -> (projects: [Project], clients: [Client]) {
+        do {
+            let cached = try await persistenceService.loadProjectData()
+            if self.projects.isEmpty && !cached.projects.isEmpty {
+                self.projects = cached.projects
+                print("🔥🔥🔥 DEBUG: Hydrated \(cached.projects.count) jobs from local disk before Firebase")
+            }
+            if self.clients.isEmpty && !cached.clients.isEmpty {
+                self.clients = cached.clients
+            }
+            return cached
+        } catch {
+            print("🔥🔥🔥 DEBUG: Local project hydrate failed: \(error.localizedDescription)")
+            return (self.projects, self.clients)
+        }
+    }
+
+    private func applyLocalProjectFallback(_ projects: [Project], clients: [Client]) {
+        if !projects.isEmpty {
+            self.projects = projects
+        }
+        if !clients.isEmpty {
+            self.clients = clients
+        }
+    }
+
+    private func replaceProjectsPreservingSmallWorks(_ loadedProjects: [Project]) {
+        guard !loadedProjects.isEmpty else { return }
+        let smallWorks = self.projects.filter { $0.jobType == .smallWorks }
+        let remoteProjects = loadedProjects.filter { $0.jobType != .smallWorks }
+        self.projects = ProjectWorksMerge.uniqueWorks(remoteProjects + smallWorks)
+    }
+
     private func withTimeout<T>(seconds: Double, operation: @escaping () async throws -> T) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in
             group.addTask {
@@ -568,8 +636,7 @@ class ProjectStore: ObservableObject {
                 let verified = loadedProjects.contains { $0.id == project.id }
                 if verified {
                     print("🔥🔥🔥 DEBUG: ✅✅✅ VERIFIED: Project \(project.siteName) was saved and loaded successfully!")
-                    // Update local array with reloaded data to ensure consistency
-                    self.projects = loadedProjects
+                    replaceProjectsPreservingSmallWorks(loadedProjects)
                 } else {
                     print("🔥🔥🔥 DEBUG: ⚠️⚠️⚠️ WARNING: Project save verification failed!")
                     print("🔥🔥🔥 DEBUG: Project ID we're looking for: \(project.id.uuidString)")
@@ -583,7 +650,7 @@ class ProjectStore: ObservableObject {
                         // Reload again after retry
                         try? await Task.sleep(nanoseconds: 500_000_000)
                         let retryLoadedProjects = try await firebaseBackend.loadProjects(organizationId: organizationId)
-                        self.projects = retryLoadedProjects
+                        replaceProjectsPreservingSmallWorks(retryLoadedProjects)
                         if retryLoadedProjects.contains(where: { $0.id == project.id }) {
                             print("🔥🔥🔥 DEBUG: ✅ Project saved successfully after retry!")
                         } else {
@@ -729,9 +796,10 @@ class ProjectStore: ObservableObject {
             let verified = loadedSmallWorks.contains { $0.id == smallWork.id }
             if verified {
                 print("🔥🔥🔥 DEBUG: ✅✅✅ VERIFIED: Small Works \(smallWork.siteName) was saved and loaded successfully!")
-                // Update local array with reloaded data to ensure consistency
-                let currentProjects = projects.filter { $0.jobType != .smallWorks }
-                self.projects = currentProjects + loadedSmallWorks
+                if !loadedSmallWorks.isEmpty {
+                    let currentProjects = projects.filter { $0.jobType != .smallWorks }
+                    self.projects = currentProjects + loadedSmallWorks
+                }
             } else {
                 print("🔥🔥🔥 DEBUG: ⚠️⚠️⚠️ WARNING: Small Works save verification failed!")
                 print("🔥🔥🔥 DEBUG: Small Works ID we're looking for: \(smallWork.id.uuidString)")
@@ -756,8 +824,10 @@ class ProjectStore: ObservableObject {
                     // Reload again after retry
                     try? await Task.sleep(nanoseconds: 500_000_000)
                     let retryLoadedSmallWorks = try await firebaseBackend.loadSmallWorks(organizationId: organizationId)
-                    let currentProjects = projects.filter { $0.jobType != .smallWorks }
-                    self.projects = currentProjects + retryLoadedSmallWorks
+                    if !retryLoadedSmallWorks.isEmpty {
+                        let currentProjects = projects.filter { $0.jobType != .smallWorks }
+                        self.projects = currentProjects + retryLoadedSmallWorks
+                    }
                     if retryLoadedSmallWorks.contains(where: { $0.id == smallWork.id }) {
                         print("🔥🔥🔥 DEBUG: ✅ Small Works saved successfully after retry!")
                     } else {

@@ -38,4 +38,38 @@ enum ProjectWorksMerge {
     static func uniqueWorks(_ projects: [Project]) -> [Project] {
         dedupeByJobNumber(uniqueById(projects))
     }
+
+    /// Merge one collection (projects or small works) without letting an empty/failed
+    /// remote snapshot wipe jobs that are already in memory or on disk.
+    static func mergeWorkSlice(
+        existingAll: [Project],
+        remoteSlice: [Project]?,
+        cachedSlice: [Project],
+        isSmallWorks: Bool
+    ) -> [Project] {
+        let matches: (Project) -> Bool = { project in
+            isSmallWorks ? project.jobType == .smallWorks : project.jobType != .smallWorks
+        }
+        let existingSlice = existingAll.filter(matches)
+        let otherSlice = existingAll.filter { !matches($0) }
+        let resolvedSlice: [Project]
+        if let remoteSlice {
+            if remoteSlice.isEmpty {
+                if !existingSlice.isEmpty {
+                    resolvedSlice = existingSlice
+                } else if !cachedSlice.isEmpty {
+                    resolvedSlice = cachedSlice
+                } else {
+                    resolvedSlice = []
+                }
+            } else {
+                resolvedSlice = remoteSlice
+            }
+        } else if !existingSlice.isEmpty {
+            resolvedSlice = existingSlice
+        } else {
+            resolvedSlice = cachedSlice
+        }
+        return uniqueWorks(resolvedSlice + otherSlice)
+    }
 }
