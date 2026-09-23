@@ -7,7 +7,7 @@ import SwiftUI
 import UIKit
 
 enum AppBranding {
-    static let webAppBaseURL = "https://project-planner-f986c.web.app"
+    static let webAppBaseURL = "https://www.projectplanner.us"
     static let organisationSetupURL = "\(webAppBaseURL)/setup"
 
     @MainActor
