@@ -404,42 +404,37 @@ struct SettingsProfileDetailView: View {
 struct SettingsNotificationsHubView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var userStore: UserStore
     let canConfigureMaterialCutOff: Bool
+
+    private var visibleToggles: [UserNotificationToggle] {
+        guard let user = userStore.currentUser else { return [] }
+        return UserNotificationToggle.visible(for: user).filter { key in
+            if key == .materialOrderCutOff { return canConfigureMaterialCutOff }
+            return true
+        }
+    }
 
     var body: some View {
         List {
             Section {
-                NavigationLink {
-                    GeneralAppSettingsView()
-                        .environmentObject(appSettings)
-                } label: {
-                    Label {
+                ForEach(visibleToggles) { key in
+                    Toggle(isOn: Binding(
+                        get: { appSettings.settings.notifications.isEnabled(key) },
+                        set: { enabled in
+                            Task { await updateToggle(key, enabled: enabled) }
+                        }
+                    )) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("General app options")
-                            Text("My schedule list on this device")
+                            Text(key.title)
+                            Text(key.subtitle)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                    } icon: {
-                        Image(systemName: "calendar.badge.clock")
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
                     }
                 }
             } footer: {
-                Text("Controls extra rows in My Schedule (office, WFH, custom labels).")
-            }
-
-            if canConfigureMaterialCutOff {
-                Section {
-                    Toggle("Material order cut-off (4:00 PM daily)", isOn: Binding(
-                        get: { appSettings.settings.notifications.materialOrderCutOff },
-                        set: { enabled in
-                            Task { await updateMaterial(enabled) }
-                        }
-                    ))
-                } footer: {
-                    Text("Sends a daily reminder at 4:00 PM for admins and managers.")
-                }
+                Text("Turn off any reminder you do not want. Organisation cut-off time is set in organisation settings.")
             }
         }
         .listStyle(.insetGrouped)
@@ -450,10 +445,15 @@ struct SettingsNotificationsHubView: View {
         .appChromeNavigationBarSurface()
     }
 
-    private func updateMaterial(_ enabled: Bool) async {
+    private func updateToggle(_ key: UserNotificationToggle, enabled: Bool) async {
         var updated = appSettings.settings.notifications
-        updated.materialOrderCutOff = enabled
+        updated.set(key, enabled: enabled)
         await appSettings.updateNotifications(updated)
-        await notificationService.refreshDailyMaterialCutOffReminder()
+        if key == .materialOrderCutOff {
+            await notificationService.refreshDailyMaterialCutOffReminder()
+        }
+        if key == .qualificationExpiry {
+            await notificationService.refreshQualificationExpiryReminders()
+        }
     }
 }

@@ -364,6 +364,7 @@ struct AppUser: Identifiable, Codable, Hashable {
     var isSuperAdmin: Bool
     var policyAccepted: Bool // GDPR privacy policy acceptance
     var policyAcceptedAt: Date? // When policy was accepted
+    var legalPackVersion: String?
     /// For operative accounts: Firebase Auth UID of their line manager (holiday requests route here).
     /// Legacy single manager — use `assignedManagerUserIds` for multiple managers.
     var assignedManagerUserId: String?
@@ -420,6 +421,7 @@ struct AppUser: Identifiable, Codable, Hashable {
         isSuperAdmin: Bool = false,
         policyAccepted: Bool = false,
         policyAcceptedAt: Date? = nil,
+        legalPackVersion: String? = nil,
         assignedManagerUserId: String? = nil,
         assignedManagerUserIds: [String] = [],
         hasNoLineManager: Bool = false,
@@ -455,6 +457,7 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.isSuperAdmin = isSuperAdmin
         self.policyAccepted = policyAccepted
         self.policyAcceptedAt = policyAcceptedAt
+        self.legalPackVersion = legalPackVersion
         self.assignedManagerUserId = assignedManagerUserId
         self.assignedManagerUserIds = assignedManagerUserIds
         self.hasNoLineManager = hasNoLineManager
@@ -1112,7 +1115,7 @@ private extension OrgWeekendDayPayrollSettings {
     }
 }
 
-struct WorkingHours: Codable, Hashable {
+nonisolated struct WorkingHours: Codable, Hashable {
     var startTime: String // "08:00"
     var endTime: String   // "17:00"
     var lunchBreak: Int   // minutes
@@ -1337,7 +1340,22 @@ struct NotificationSettings: Codable, Sendable {
     var materialCutOffMinute: Int
     var materialCutOffOnSaturday: Bool
     var materialCutOffOnSunday: Bool
-    
+    var annualLeaveRequests: Bool
+    var annualLeaveDecisions: Bool
+    var projectCreated: Bool
+    var smallWorksCreated: Bool
+    var materialAdded: Bool
+    var bookingCreated: Bool
+    var operativeCreated: Bool
+    var managerCreated: Bool
+    var clientCreated: Bool
+    var warningRemoved: Bool
+    var taskAssigned: Bool
+    var toolboxTalkIssued: Bool
+    var timesheetSignoff: Bool
+    var qualificationExpiry: Bool
+    var lineManagerPeerUpdate: Bool
+
     nonisolated init(
         bookingConflicts: Bool = true,
         projectDeadlines: Bool = true,
@@ -1347,7 +1365,22 @@ struct NotificationSettings: Codable, Sendable {
         materialCutOffHour: Int = 16,
         materialCutOffMinute: Int = 0,
         materialCutOffOnSaturday: Bool = false,
-        materialCutOffOnSunday: Bool = false
+        materialCutOffOnSunday: Bool = false,
+        annualLeaveRequests: Bool = true,
+        annualLeaveDecisions: Bool = true,
+        projectCreated: Bool = true,
+        smallWorksCreated: Bool = true,
+        materialAdded: Bool = true,
+        bookingCreated: Bool = true,
+        operativeCreated: Bool = true,
+        managerCreated: Bool = true,
+        clientCreated: Bool = true,
+        warningRemoved: Bool = true,
+        taskAssigned: Bool = true,
+        toolboxTalkIssued: Bool = true,
+        timesheetSignoff: Bool = true,
+        qualificationExpiry: Bool = true,
+        lineManagerPeerUpdate: Bool = true
     ) {
         self.bookingConflicts = bookingConflicts
         self.projectDeadlines = projectDeadlines
@@ -1358,13 +1391,31 @@ struct NotificationSettings: Codable, Sendable {
         self.materialCutOffMinute = materialCutOffMinute
         self.materialCutOffOnSaturday = materialCutOffOnSaturday
         self.materialCutOffOnSunday = materialCutOffOnSunday
+        self.annualLeaveRequests = annualLeaveRequests
+        self.annualLeaveDecisions = annualLeaveDecisions
+        self.projectCreated = projectCreated
+        self.smallWorksCreated = smallWorksCreated
+        self.materialAdded = materialAdded
+        self.bookingCreated = bookingCreated
+        self.operativeCreated = operativeCreated
+        self.managerCreated = managerCreated
+        self.clientCreated = clientCreated
+        self.warningRemoved = warningRemoved
+        self.taskAssigned = taskAssigned
+        self.toolboxTalkIssued = toolboxTalkIssued
+        self.timesheetSignoff = timesheetSignoff
+        self.qualificationExpiry = qualificationExpiry
+        self.lineManagerPeerUpdate = lineManagerPeerUpdate
     }
-    
+
     nonisolated enum CodingKeys: String, CodingKey {
         case bookingConflicts, projectDeadlines, operativeAvailability, dailyReports, materialOrderCutOff
         case materialCutOffHour, materialCutOffMinute, materialCutOffOnSaturday, materialCutOffOnSunday
+        case annualLeaveRequests, annualLeaveDecisions, projectCreated, smallWorksCreated, materialAdded
+        case bookingCreated, operativeCreated, managerCreated, clientCreated, warningRemoved
+        case taskAssigned, toolboxTalkIssued, timesheetSignoff, qualificationExpiry, lineManagerPeerUpdate
     }
-    
+
     nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         bookingConflicts = try container.decodeIfPresent(Bool.self, forKey: .bookingConflicts) ?? true
@@ -1376,8 +1427,23 @@ struct NotificationSettings: Codable, Sendable {
         materialCutOffMinute = try container.decodeIfPresent(Int.self, forKey: .materialCutOffMinute) ?? 0
         materialCutOffOnSaturday = try container.decodeIfPresent(Bool.self, forKey: .materialCutOffOnSaturday) ?? false
         materialCutOffOnSunday = try container.decodeIfPresent(Bool.self, forKey: .materialCutOffOnSunday) ?? false
+        annualLeaveRequests = try container.decodeIfPresent(Bool.self, forKey: .annualLeaveRequests) ?? true
+        annualLeaveDecisions = try container.decodeIfPresent(Bool.self, forKey: .annualLeaveDecisions) ?? true
+        projectCreated = try container.decodeIfPresent(Bool.self, forKey: .projectCreated) ?? true
+        smallWorksCreated = try container.decodeIfPresent(Bool.self, forKey: .smallWorksCreated) ?? true
+        materialAdded = try container.decodeIfPresent(Bool.self, forKey: .materialAdded) ?? true
+        bookingCreated = try container.decodeIfPresent(Bool.self, forKey: .bookingCreated) ?? true
+        operativeCreated = try container.decodeIfPresent(Bool.self, forKey: .operativeCreated) ?? true
+        managerCreated = try container.decodeIfPresent(Bool.self, forKey: .managerCreated) ?? true
+        clientCreated = try container.decodeIfPresent(Bool.self, forKey: .clientCreated) ?? true
+        warningRemoved = try container.decodeIfPresent(Bool.self, forKey: .warningRemoved) ?? true
+        taskAssigned = try container.decodeIfPresent(Bool.self, forKey: .taskAssigned) ?? true
+        toolboxTalkIssued = try container.decodeIfPresent(Bool.self, forKey: .toolboxTalkIssued) ?? true
+        timesheetSignoff = try container.decodeIfPresent(Bool.self, forKey: .timesheetSignoff) ?? true
+        qualificationExpiry = try container.decodeIfPresent(Bool.self, forKey: .qualificationExpiry) ?? true
+        lineManagerPeerUpdate = try container.decodeIfPresent(Bool.self, forKey: .lineManagerPeerUpdate) ?? true
     }
-    
+
     nonisolated func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(bookingConflicts, forKey: .bookingConflicts)
@@ -1389,6 +1455,217 @@ struct NotificationSettings: Codable, Sendable {
         try container.encode(materialCutOffMinute, forKey: .materialCutOffMinute)
         try container.encode(materialCutOffOnSaturday, forKey: .materialCutOffOnSaturday)
         try container.encode(materialCutOffOnSunday, forKey: .materialCutOffOnSunday)
+        try container.encode(annualLeaveRequests, forKey: .annualLeaveRequests)
+        try container.encode(annualLeaveDecisions, forKey: .annualLeaveDecisions)
+        try container.encode(projectCreated, forKey: .projectCreated)
+        try container.encode(smallWorksCreated, forKey: .smallWorksCreated)
+        try container.encode(materialAdded, forKey: .materialAdded)
+        try container.encode(bookingCreated, forKey: .bookingCreated)
+        try container.encode(operativeCreated, forKey: .operativeCreated)
+        try container.encode(managerCreated, forKey: .managerCreated)
+        try container.encode(clientCreated, forKey: .clientCreated)
+        try container.encode(warningRemoved, forKey: .warningRemoved)
+        try container.encode(taskAssigned, forKey: .taskAssigned)
+        try container.encode(toolboxTalkIssued, forKey: .toolboxTalkIssued)
+        try container.encode(timesheetSignoff, forKey: .timesheetSignoff)
+        try container.encode(qualificationExpiry, forKey: .qualificationExpiry)
+        try container.encode(lineManagerPeerUpdate, forKey: .lineManagerPeerUpdate)
+    }
+
+    func isEnabled(_ key: UserNotificationToggle) -> Bool {
+        switch key {
+        case .materialOrderCutOff: return materialOrderCutOff
+        case .annualLeaveRequests: return annualLeaveRequests
+        case .annualLeaveDecisions: return annualLeaveDecisions
+        case .projectCreated: return projectCreated
+        case .smallWorksCreated: return smallWorksCreated
+        case .bookingConflicts: return bookingConflicts
+        case .materialAdded: return materialAdded
+        case .bookingCreated: return bookingCreated
+        case .operativeCreated: return operativeCreated
+        case .managerCreated: return managerCreated
+        case .clientCreated: return clientCreated
+        case .warningRemoved: return warningRemoved
+        case .taskAssigned: return taskAssigned
+        case .toolboxTalkIssued: return toolboxTalkIssued
+        case .timesheetSignoff: return timesheetSignoff
+        case .qualificationExpiry: return qualificationExpiry
+        case .lineManagerPeerUpdate: return lineManagerPeerUpdate
+        }
+    }
+
+    mutating func set(_ key: UserNotificationToggle, enabled: Bool) {
+        switch key {
+        case .materialOrderCutOff: materialOrderCutOff = enabled
+        case .annualLeaveRequests: annualLeaveRequests = enabled
+        case .annualLeaveDecisions: annualLeaveDecisions = enabled
+        case .projectCreated: projectCreated = enabled
+        case .smallWorksCreated: smallWorksCreated = enabled
+        case .bookingConflicts: bookingConflicts = enabled
+        case .materialAdded: materialAdded = enabled
+        case .bookingCreated: bookingCreated = enabled
+        case .operativeCreated: operativeCreated = enabled
+        case .managerCreated: managerCreated = enabled
+        case .clientCreated: clientCreated = enabled
+        case .warningRemoved: warningRemoved = enabled
+        case .taskAssigned: taskAssigned = enabled
+        case .toolboxTalkIssued: toolboxTalkIssued = enabled
+        case .timesheetSignoff: timesheetSignoff = enabled
+        case .qualificationExpiry: qualificationExpiry = enabled
+        case .lineManagerPeerUpdate: lineManagerPeerUpdate = enabled
+        }
     }
 }
+
+enum UserNotificationToggle: String, CaseIterable, Identifiable, Sendable {
+    case materialOrderCutOff
+    case annualLeaveRequests
+    case annualLeaveDecisions
+    case projectCreated
+    case smallWorksCreated
+    case bookingConflicts
+    case materialAdded
+    case bookingCreated
+    case operativeCreated
+    case managerCreated
+    case clientCreated
+    case warningRemoved
+    case taskAssigned
+    case toolboxTalkIssued
+    case timesheetSignoff
+    case qualificationExpiry
+    case lineManagerPeerUpdate
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .materialOrderCutOff: return "Material order cut-off"
+        case .annualLeaveRequests: return "Annual leave requests"
+        case .annualLeaveDecisions: return "Annual leave approved or declined"
+        case .projectCreated: return "New project created"
+        case .smallWorksCreated: return "New small works"
+        case .bookingConflicts: return "Booking clashes"
+        case .materialAdded: return "New material order"
+        case .bookingCreated: return "You've been booked"
+        case .operativeCreated: return "New operative created"
+        case .managerCreated: return "New manager created"
+        case .clientCreated: return "New client created"
+        case .warningRemoved: return "Warning dismissed"
+        case .taskAssigned: return "Tasks assigned or completed"
+        case .toolboxTalkIssued: return "Toolbox talk issued"
+        case .timesheetSignoff: return "Timesheet sign-off"
+        case .qualificationExpiry: return "Qualification expiry"
+        case .lineManagerPeerUpdate: return "Line manager peer updates"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .materialOrderCutOff:
+            return "Daily reminder at the time set in organisation settings."
+        case .annualLeaveRequests:
+            return "When someone you manage requests annual leave."
+        case .annualLeaveDecisions:
+            return "When your annual leave is approved or declined."
+        case .projectCreated:
+            return "When a new project is added."
+        case .smallWorksCreated:
+            return "When new small works are added."
+        case .bookingConflicts:
+            return "When two bookings overlap."
+        case .materialAdded:
+            return "When a material order is placed."
+        case .bookingCreated:
+            return "When you are booked onto a job."
+        case .operativeCreated:
+            return "When a new operative is added."
+        case .managerCreated:
+            return "When a new manager is added."
+        case .clientCreated:
+            return "When a new client is added."
+        case .warningRemoved:
+            return "When someone dismisses a warning."
+        case .taskAssigned:
+            return "When a task is assigned to you or marked complete."
+        case .toolboxTalkIssued:
+            return "When a toolbox talk is issued to you."
+        case .timesheetSignoff:
+            return "When a timesheet needs your sign-off or has been signed."
+        case .qualificationExpiry:
+            return "Reminders before qualifications expire."
+        case .lineManagerPeerUpdate:
+            return "When another line manager actions a shared request."
+        }
+    }
+
+    static func visible(for user: AppUser) -> [UserNotificationToggle] {
+        if user.permissions.operativeMode {
+            return [
+                .bookingCreated,
+                .annualLeaveDecisions,
+                .taskAssigned,
+                .toolboxTalkIssued,
+                .timesheetSignoff,
+                .qualificationExpiry
+            ]
+        }
+        let isAdmin = user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin
+        if isAdmin {
+            return [
+                .materialOrderCutOff,
+                .annualLeaveRequests,
+                .annualLeaveDecisions,
+                .projectCreated,
+                .smallWorksCreated,
+                .bookingConflicts,
+                .materialAdded,
+                .bookingCreated,
+                .operativeCreated,
+                .managerCreated,
+                .clientCreated,
+                .warningRemoved,
+                .taskAssigned,
+                .toolboxTalkIssued,
+                .timesheetSignoff,
+                .qualificationExpiry,
+                .lineManagerPeerUpdate
+            ]
+        }
+        return [
+            .materialOrderCutOff,
+            .annualLeaveRequests,
+            .annualLeaveDecisions,
+            .bookingConflicts,
+            .materialAdded,
+            .bookingCreated,
+            .taskAssigned,
+            .toolboxTalkIssued,
+            .timesheetSignoff,
+            .qualificationExpiry,
+            .lineManagerPeerUpdate
+        ]
+    }
+
+    static func preference(for type: AppNotification.NotificationType) -> UserNotificationToggle? {
+        switch type {
+        case .bookingCreated: return .bookingCreated
+        case .operativeCreated: return .operativeCreated
+        case .managerCreated: return .managerCreated
+        case .clientCreated: return .clientCreated
+        case .projectCreated: return .projectCreated
+        case .smallWorksCreated: return .smallWorksCreated
+        case .bookingClash: return .bookingConflicts
+        case .warningRemoved: return .warningRemoved
+        case .taskCompleted, .taskCreated: return .taskAssigned
+        case .holidayRequestSubmitted: return .annualLeaveRequests
+        case .holidayRequestApproved, .holidayRequestDeclined: return .annualLeaveDecisions
+        case .timesheetPendingManagerSignoff, .timesheetSignedByManager: return .timesheetSignoff
+        case .lineManagerPeerUpdate: return .lineManagerPeerUpdate
+        case .materialAdded: return .materialAdded
+        case .toolboxTalkIssued: return .toolboxTalkIssued
+        }
+    }
+}
+
 

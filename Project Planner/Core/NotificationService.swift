@@ -140,6 +140,8 @@ class NotificationService: ObservableObject {
         await LocalNotificationService.shared.removeQualificationExpiryReminders()
         let authorized = await LocalNotificationService.shared.requestAuthorization()
         guard authorized else { return }
+        let prefs = appSettingsStore?.settings.notifications ?? NotificationSettings()
+        guard prefs.qualificationExpiry else { return }
 
         let myCanonicalId = await resolvedRecipientUserIdResolvingStaleIds(currentUser.id)
 
@@ -1022,35 +1024,32 @@ class NotificationService: ObservableObject {
         if let userId = notification.userId {
             let targetCanonical = resolvedRecipientUserId(userId)
             let currentCanonical = resolvedRecipientUserId(user.id)
-            return targetCanonical == currentCanonical
-        }
-        
-        // Check if user has required permission
-        if let requiredPermission = notification.requiresPermission {
+            guard targetCanonical == currentCanonical else { return false }
+        } else if let requiredPermission = notification.requiresPermission {
             switch requiredPermission {
             case "hasAdminAccess":
-                return userStore?.hasAdminAccess() ?? false
+                guard userStore?.hasAdminAccess() ?? false else { return false }
             case "canBookWork":
-                return userStore?.canBookWork() ?? false
+                guard userStore?.canBookWork() ?? false else { return false }
             case "canViewOperatives":
-                return userStore?.canViewOperatives() ?? false
+                guard userStore?.canViewOperatives() ?? false else { return false }
             case "canViewManagers":
-                return userStore?.canViewManagers() ?? false
+                guard userStore?.canViewManagers() ?? false else { return false }
             case "canViewProjects":
-                return userStore?.canViewProjects() ?? false
+                guard userStore?.canViewProjects() ?? false else { return false }
             case "superAdminOrAdmin":
-                return user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin
+                guard user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin else { return false }
             case "operativeMode":
-                // For operative mode, check if task is assigned to them
-                // This is now handled by userId targeting, so this case should not be used
-                // But keep it for backward compatibility
-                return user.permissions.operativeMode
+                guard user.permissions.operativeMode else { return false }
             default:
-                return true
+                break
             }
         }
-        
-        // No permission requirement, show to all
+
+        if let key = UserNotificationToggle.preference(for: notification.type) {
+            let settings = appSettingsStore?.settings.notifications ?? NotificationSettings()
+            return settings.isEnabled(key)
+        }
         return true
     }
 

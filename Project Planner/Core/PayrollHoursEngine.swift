@@ -103,7 +103,10 @@ enum PayrollHoursEngine {
         let insideEnd = min(em, de)
         if insideEnd > insideStart {
             var insideHours = Double(insideEnd - insideStart) / 60.0
-            if !policy.breakPaid, !booking.isBreakRemoved {
+            // AM/PM already exclude the unpaid break (it sits in the gap between sessions).
+            // Only deduct the break from full-day / custom spans that cover the break window.
+            let isHalfDay = booking.timeSlot == .morning || booking.timeSlot == .afternoon
+            if !isHalfDay, !policy.breakPaid, !booking.isBreakRemoved {
                 insideHours = max(0, insideHours - breakDeductionMinutes(booking: booking, policy: policy, interval: interval) / 60.0)
             }
             if insideHours > 0.001 {

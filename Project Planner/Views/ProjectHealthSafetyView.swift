@@ -126,7 +126,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
                 organizationId: orgId,
                 type: .toolboxTalkIssued,
                 title: "Toolbox Talk issued",
-                message: "\(talk.title) on \(site) needs your signature.",
+                message: "\(talk.displayTitle) on \(site) needs your signature.",
                 userId: userId,
                 relatedId: nil,
                 isRead: false,
@@ -519,6 +519,7 @@ struct ProjectHealthSafetyView: View {
     private var filteredLibraryTalks: [HSToolboxTalk] {
         vm.data.talks.filter { talk in
             let matchesSearch: Bool = talkSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || talk.displayTitle.localizedCaseInsensitiveContains(talkSearchText)
                 || talk.title.localizedCaseInsensitiveContains(talkSearchText)
                 || talk.purpose.localizedCaseInsensitiveContains(talkSearchText)
             guard matchesSearch else { return false }
@@ -804,9 +805,9 @@ struct ProjectHealthSafetyView: View {
         }
     }
 
-    private func downloadTalkFromLibrary(_ talk: HSToolboxTalk) {
+    private func openHealthSafetyDocument(urlString: String?, id: String) {
         Task {
-            if let url = await HSTalkDocumentResolver.resolvedFileURL(for: talk) {
+            if let url = await HSTalkDocumentResolver.resolvedRemoteFile(urlString: urlString, id: id) {
                 await MainActor.run { presentTalkShareSheet(with: url) }
             }
         }
@@ -1220,15 +1221,32 @@ struct ProjectHealthSafetyView: View {
                 .buttonStyle(FilledButtonStyle(tone: .blue))
             }
 
+            if vm.data.ramsDocuments.isEmpty {
+                Text("No RAMS yet. Upload a RAMS document for this job.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .hsCard(padding: 12)
+            }
+
             ForEach(vm.data.ramsDocuments, id: \.id) { doc in
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(doc.title).font(.system(size: 13, weight: .semibold))
-                        Text("\(doc.trade) · v\(doc.version)").font(.system(size: 11)).foregroundStyle(.secondary)
+                Button {
+                    openHealthSafetyDocument(urlString: doc.fileURL, id: doc.id)
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(doc.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(HS.ink)
+                            Text("\(doc.trade) · v\(doc.version)").font(.system(size: 11)).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(doc.status.capitalized).font(.system(size: 11, weight: .medium)).foregroundStyle(.green)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(HS.slate2)
                     }
-                    Spacer()
-                    Text(doc.status.capitalized).font(.system(size: 11, weight: .medium)).foregroundStyle(.green)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .hsCard(padding: 12)
             }
         }
@@ -1245,16 +1263,33 @@ struct ProjectHealthSafetyView: View {
                 .buttonStyle(FilledButtonStyle(tone: .blue))
             }
 
+            if vm.data.otherDocuments.isEmpty {
+                Text("No other H&S documents yet.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .hsCard(padding: 12)
+            }
+
             ForEach(vm.data.otherDocuments, id: \.id) { doc in
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(doc.title).font(.system(size: 13, weight: .semibold))
-                        Text((doc.trade ?? "General") + " · " + doc.category.capitalized)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                Button {
+                    openHealthSafetyDocument(urlString: doc.fileURL, id: doc.id)
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(doc.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(HS.ink)
+                            Text((doc.trade ?? "General") + " · " + doc.category.capitalized)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(HS.slate2)
                     }
-                    Spacer()
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .hsCard(padding: 12)
             }
         }
@@ -1398,6 +1433,7 @@ private struct HSIssueTalkSheet: View {
         talks.filter { talk in
             let search = talkSearch.trimmingCharacters(in: .whitespacesAndNewlines)
             let matchesSearch = search.isEmpty
+                || talk.displayTitle.localizedCaseInsensitiveContains(search)
                 || talk.title.localizedCaseInsensitiveContains(search)
                 || talk.purpose.localizedCaseInsensitiveContains(search)
             guard matchesSearch else { return false }
@@ -1717,7 +1753,7 @@ private struct HSToolboxTalkDetailView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     VStack(alignment: .leading, spacing: 8) {
                         HSStatusBadge(text: "\(talk.source == .uploaded ? "Uploaded" : "Library") · \(talk.id)", tone: talk.source == .uploaded ? .info : .ok)
-                        Text(talk.title)
+                        Text(talk.displayTitle)
                             .font(.system(size: 22, weight: .bold))
                             .foregroundStyle(HS.ink)
                         Text(talk.isGeneral ? "General" : talk.trades.joined(separator: ", "))
@@ -2119,7 +2155,7 @@ private struct HSTrackIssueView: View {
         NavigationStack {
             List {
                 Section {
-                    Text(talk?.displayTitle ?? "Toolbox talk")
+                    Text(talk?.displayTitle ?? ToolboxTalkLibrary.resolvedTitle(talkId: issue.talkId, storedTalks: []))
                     let signedCount = signatures.filter { $0.status == .signed }.count
                     ProgressView(value: Double(signedCount), total: Double(max(signatures.count, 1)))
                     Text("\(signedCount) of \(max(signatures.count, 1)) signed")
@@ -2720,6 +2756,11 @@ private enum HSTalkDocumentResolver {
             }
         }
         return HSTalkPDFBuilder.makePDF(for: talk)
+    }
+
+    static func resolvedRemoteFile(urlString: String?, id: String) async -> URL? {
+        guard let remote = remoteFileURL(from: urlString) else { return nil }
+        return await downloadRemoteFile(remote, talkId: id)
     }
 
     private static func remoteFileURL(from raw: String?) -> URL? {

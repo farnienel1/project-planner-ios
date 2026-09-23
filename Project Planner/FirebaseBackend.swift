@@ -3431,6 +3431,7 @@ class FirebaseBackend: ObservableObject {
             isSuperAdmin: isSuperAdmin,
             policyAccepted: policyAccepted,
             policyAcceptedAt: policyAcceptedAt,
+            legalPackVersion: data["legalPackVersion"] as? String,
             assignedManagerUserId: assignedManagerUserIds.first ?? assignedManagerUserId,
             assignedManagerUserIds: assignedManagerUserIds,
             hasNoLineManager: hasNoLineManager,
@@ -3851,7 +3852,22 @@ class FirebaseBackend: ObservableObject {
             materialCutOffHour: (data["materialCutOffHour"] as? NSNumber)?.intValue ?? (data["materialCutOffHour"] as? Int) ?? 16,
             materialCutOffMinute: (data["materialCutOffMinute"] as? NSNumber)?.intValue ?? (data["materialCutOffMinute"] as? Int) ?? 0,
             materialCutOffOnSaturday: data["materialCutOffOnSaturday"] as? Bool ?? false,
-            materialCutOffOnSunday: data["materialCutOffOnSunday"] as? Bool ?? false
+            materialCutOffOnSunday: data["materialCutOffOnSunday"] as? Bool ?? false,
+            annualLeaveRequests: data["annualLeaveRequests"] as? Bool ?? true,
+            annualLeaveDecisions: data["annualLeaveDecisions"] as? Bool ?? true,
+            projectCreated: data["projectCreated"] as? Bool ?? true,
+            smallWorksCreated: data["smallWorksCreated"] as? Bool ?? true,
+            materialAdded: data["materialAdded"] as? Bool ?? true,
+            bookingCreated: data["bookingCreated"] as? Bool ?? true,
+            operativeCreated: data["operativeCreated"] as? Bool ?? true,
+            managerCreated: data["managerCreated"] as? Bool ?? true,
+            clientCreated: data["clientCreated"] as? Bool ?? true,
+            warningRemoved: data["warningRemoved"] as? Bool ?? true,
+            taskAssigned: data["taskAssigned"] as? Bool ?? true,
+            toolboxTalkIssued: data["toolboxTalkIssued"] as? Bool ?? true,
+            timesheetSignoff: data["timesheetSignoff"] as? Bool ?? true,
+            qualificationExpiry: data["qualificationExpiry"] as? Bool ?? true,
+            lineManagerPeerUpdate: data["lineManagerPeerUpdate"] as? Bool ?? true
         )
     }
 
@@ -3866,6 +3882,21 @@ class FirebaseBackend: ObservableObject {
             "materialCutOffMinute": settings.materialCutOffMinute,
             "materialCutOffOnSaturday": settings.materialCutOffOnSaturday,
             "materialCutOffOnSunday": settings.materialCutOffOnSunday,
+            "annualLeaveRequests": settings.annualLeaveRequests,
+            "annualLeaveDecisions": settings.annualLeaveDecisions,
+            "projectCreated": settings.projectCreated,
+            "smallWorksCreated": settings.smallWorksCreated,
+            "materialAdded": settings.materialAdded,
+            "bookingCreated": settings.bookingCreated,
+            "operativeCreated": settings.operativeCreated,
+            "managerCreated": settings.managerCreated,
+            "clientCreated": settings.clientCreated,
+            "warningRemoved": settings.warningRemoved,
+            "taskAssigned": settings.taskAssigned,
+            "toolboxTalkIssued": settings.toolboxTalkIssued,
+            "timesheetSignoff": settings.timesheetSignoff,
+            "qualificationExpiry": settings.qualificationExpiry,
+            "lineManagerPeerUpdate": settings.lineManagerPeerUpdate,
         ]
     }
     
@@ -4001,6 +4032,9 @@ class FirebaseBackend: ObservableObject {
         } else {
             userData["policyAcceptedAt"] = FieldValue.delete()
         }
+        if let legalPackVersion = user.legalPackVersion, !legalPackVersion.isEmpty {
+            userData["legalPackVersion"] = legalPackVersion
+        }
         
         let lineManagerIds = user.lineManagerUserIds
         if lineManagerIds.isEmpty {
@@ -4072,6 +4106,32 @@ class FirebaseBackend: ObservableObject {
         }
         
         try await db.collection("users").document(user.id).setData(userData, merge: true)
+    }
+
+    func recordLegalPackAcceptance(
+        userId: String,
+        email: String,
+        organizationName: String,
+        authorisedToBind: Bool
+    ) async throws {
+        try await db.collection("users").document(userId).setData(
+            [
+                "legalPackVersion": CustomerLegalPack.version,
+                "legalPackAcceptedAt": Timestamp(date: Date()),
+                "legalAcceptances": [
+                    "saas": true,
+                    "dpa": true,
+                    "aup": true,
+                    "privacy": true,
+                    "authorisedToBind": authorisedToBind,
+                    "organizationName": organizationName,
+                    "email": email,
+                    "userId": userId,
+                ],
+                "updatedAt": Timestamp(date: Date()),
+            ],
+            merge: true
+        )
     }
 
     /// Patch-only: annual leave entitlement fields (managers with operative management use this path).
@@ -7964,10 +8024,7 @@ extension FirebaseBackend {
         let fileURL = (map["fileURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return HSToolboxTalk(
             id: id,
-            title: {
-                let raw = (map["title"] as? String) ?? ""
-                return ToolboxTalkLibrary.isPlaceholderTitle(raw) ? "" : raw
-            }(),
+            title: (map["title"] as? String) ?? "",
             category: HSToolboxTalkCategory(rawValue: categoryRaw) ?? .general,
             isGeneral: map["isGeneral"] as? Bool ?? false,
             trades: map["trades"] as? [String] ?? [],
@@ -8110,7 +8167,7 @@ extension FirebaseBackend {
                 ?? (data["toolboxTalks"] as? [[String: Any]])
                 ?? (data["items"] as? [[String: Any]])
                 ?? []
-            let talks = raw.compactMap(parseHSTalk).filter { !ToolboxTalkLibrary.isPlaceholderTitle($0.title) }
+            let talks = raw.compactMap(parseHSTalk)
             if !talks.isEmpty {
                 return talks
             }
