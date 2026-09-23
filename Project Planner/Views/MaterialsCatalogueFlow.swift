@@ -74,6 +74,7 @@ struct MaterialCatalogueRootView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     heroCard
+                    catalogueActionsRow
                     searchField
                     categoryChips
                     categoryTiles
@@ -128,17 +129,15 @@ struct MaterialCatalogueRootView: View {
             .navigationTitle("Material catalogue")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { showingBulkImport = true } label: {
                         Image(systemName: "square.and.arrow.down")
                             .foregroundStyle(MaterialsOrderingTheme.primary)
                     }
                     .accessibilityLabel("Upload or download catalogue")
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingAdd = true } label: {
                         Image(systemName: "plus.circle.fill")
                             .foregroundStyle(MaterialsOrderingTheme.primary)
@@ -254,6 +253,30 @@ struct MaterialCatalogueRootView: View {
         .padding(14)
         .background(MaterialsOrderingTheme.primaryGradient)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var catalogueActionsRow: some View {
+        HStack(spacing: 10) {
+            Button { showingBulkImport = true } label: {
+                Label("Upload / Download", systemImage: "square.and.arrow.down")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.bordered)
+            .tint(MaterialsOrderingTheme.primary)
+            .accessibilityLabel("Upload or download catalogue")
+
+            Button { showingAdd = true } label: {
+                Label("Add item", systemImage: "plus.circle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(MaterialsOrderingTheme.primary)
+            .accessibilityLabel("Add catalogue item")
+        }
     }
 
     private func statTile(value: String, label: String) -> some View {

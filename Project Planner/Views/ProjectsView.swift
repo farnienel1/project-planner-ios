@@ -116,13 +116,19 @@ struct ProjectsView: View {
         return userStore.currentUser == nil
     }
 
+    private var showsBlockingLoader: Bool {
+        let storeHasProjects = projectStore.projects.contains { $0.jobType != .smallWorks }
+        if projectStore.isLoading && !storeHasProjects && projectsBeforeStatusFilter.isEmpty {
+            return true
+        }
+        return false
+    }
+
     private var projectsRootContent: some View {
         Group {
-            if projectStore.isLoading || isWaitingForVisibilityData {
+            if showsBlockingLoader {
                 ProgressView("Loading projects...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if projectsBeforeStatusFilter.isEmpty {
-                emptyStateView
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
@@ -140,7 +146,11 @@ struct ProjectsView: View {
                             }
                         }
                         filterChipsRow
-                        if searchFilteredProjects.isEmpty {
+                        if isWaitingForVisibilityData {
+                            ProgressView("Finding jobs assigned to you...")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 28)
+                        } else if searchFilteredProjects.isEmpty {
                             if filteredProjects.isEmpty {
                                 emptyStateView
                             } else {
@@ -229,32 +239,73 @@ struct ProjectsView: View {
     
     private var emptyStateView: some View {
         VStack(spacing: 16) {
-            Image(systemName: "folder")
+            Image(systemName: emptyStateIcon)
                 .font(.system(size: 48))
                 .foregroundColor(.secondary)
             
-            Text("No projects found")
+            Text(emptyStateTitle)
                 .font(.headline)
                 .foregroundColor(.secondary)
             
+            Text(emptyStateMessage)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+
             if isEmptyDueToStatusFilterOnly {
-                Text("The current filter hides older or completed jobs. Choose “All” or “Completed” above to see everything.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
                 Button("Show all projects") {
                     selectedStatus = nil
                 }
                 .buttonStyle(.borderedProminent)
-            } else {
-                Text("Get started by adding your first project")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+            } else if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil || isUnmatchedOperativeWithJobs {
+                Button("Retry") {
+                    projectStore.loadData()
+                }
+                .buttonStyle(.borderedProminent)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+        .padding(.horizontal)
+    }
+
+    private var emptyStateIcon: String {
+        if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil {
+            return "wifi.exclamationmark"
+        }
+        return "folder"
+    }
+
+    private var emptyStateTitle: String {
+        if isEmptyDueToStatusFilterOnly {
+            return "No projects in this filter"
+        }
+        if isUnmatchedOperativeWithJobs {
+            return "Jobs couldn’t be matched to you"
+        }
+        if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil {
+            return "Couldn’t load projects"
+        }
+        return "No projects found"
+    }
+
+    private var emptyStateMessage: String {
+        if isEmptyDueToStatusFilterOnly {
+            return "The current filter hides older or completed jobs. Choose “All” or “Completed” above to see everything."
+        }
+        if isUnmatchedOperativeWithJobs {
+            return "Your account isn’t matched to an operative record yet, so assigned jobs can’t be listed. Pull to refresh, or ask an admin to check the email on your operative profile."
+        }
+        if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil {
+            return "This is a load problem, not deleted jobs. Pull down to retry. Existing jobs stay on the server and on web."
+        }
+        return "Get started by adding your first project"
+    }
+
+    private var isUnmatchedOperativeWithJobs: Bool {
+        userStore.isOperativeMode()
+            && resolvedCurrentOperative == nil
+            && projectStore.projects.contains { $0.jobType != .smallWorks }
     }
     
     /// Regular projects (not small works), with operative visibility applied but without status chip filter.

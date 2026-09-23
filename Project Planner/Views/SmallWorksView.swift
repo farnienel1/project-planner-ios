@@ -121,13 +121,25 @@ struct SmallWorksView: View {
         }
     }
 
+    private var showsBlockingLoader: Bool {
+        let storeHasSmallWorks = !projectStore.smallWorks.isEmpty
+        if projectStore.isLoading && !storeHasSmallWorks && smallWorksBeforeStatusFilter.isEmpty {
+            return true
+        }
+        return false
+    }
+
+    private var isWaitingForVisibilityData: Bool {
+        guard userStore.isOperativeMode() else { return false }
+        if operativeStore.isLoading || bookingStore.isLoading { return true }
+        return userStore.currentUser == nil
+    }
+
     private var smallWorksRootContent: some View {
         Group {
-            if projectStore.isLoading {
+            if showsBlockingLoader {
                 ProgressView("Loading small works...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if smallWorksBeforeStatusFilter.isEmpty {
-                emptyStateView
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
@@ -145,7 +157,11 @@ struct SmallWorksView: View {
                             }
                         }
                         filterChipsRow
-                        if searchFilteredSmallWorks.isEmpty {
+                        if isWaitingForVisibilityData {
+                            ProgressView("Finding jobs assigned to you...")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 28)
+                        } else if searchFilteredSmallWorks.isEmpty {
                             if filteredSmallWorks.isEmpty {
                                 emptyStateView
                             } else {
@@ -234,32 +250,73 @@ struct SmallWorksView: View {
     
     private var emptyStateView: some View {
         VStack(spacing: 16) {
-            Image(systemName: "hammer.fill")
+            Image(systemName: emptyStateIcon)
                 .font(.system(size: 48))
                 .foregroundColor(.secondary)
             
-            Text("No small works found")
+            Text(emptyStateTitle)
                 .font(.headline)
                 .foregroundColor(.secondary)
             
+            Text(emptyStateMessage)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+
             if isEmptyDueToStatusFilterOnly {
-                Text("The current filter hides older or completed jobs. Choose “All” or “Completed” above to see everything.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
                 Button("Show all small works") {
                     selectedStatus = nil
                 }
                 .buttonStyle(.borderedProminent)
-            } else {
-                Text("Add small works via the menu on the home screen.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+            } else if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil || isUnmatchedOperativeWithJobs {
+                Button("Retry") {
+                    projectStore.loadData()
+                }
+                .buttonStyle(.borderedProminent)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+        .padding(.horizontal)
+    }
+
+    private var emptyStateIcon: String {
+        if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil {
+            return "wifi.exclamationmark"
+        }
+        return "hammer.fill"
+    }
+
+    private var emptyStateTitle: String {
+        if isEmptyDueToStatusFilterOnly {
+            return "No small works in this filter"
+        }
+        if isUnmatchedOperativeWithJobs {
+            return "Jobs couldn’t be matched to you"
+        }
+        if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil {
+            return "Couldn’t load small works"
+        }
+        return "No small works found"
+    }
+
+    private var emptyStateMessage: String {
+        if isEmptyDueToStatusFilterOnly {
+            return "The current filter hides older or completed jobs. Choose “All” or “Completed” above to see everything."
+        }
+        if isUnmatchedOperativeWithJobs {
+            return "Your account isn’t matched to an operative record yet, so assigned jobs can’t be listed. Pull to refresh, or ask an admin to check the email on your operative profile."
+        }
+        if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil {
+            return "This is a load problem, not deleted jobs. Pull down to retry. Existing jobs stay on the server and on web."
+        }
+        return "Add small works via the menu on the home screen."
+    }
+
+    private var isUnmatchedOperativeWithJobs: Bool {
+        userStore.isOperativeMode()
+            && resolvedCurrentOperative == nil
+            && !projectStore.smallWorks.isEmpty
     }
     
     /// Small works with operative visibility applied but without status chip filter.
