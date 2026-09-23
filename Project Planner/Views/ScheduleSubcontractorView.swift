@@ -336,6 +336,7 @@ struct ScheduleSubcontractorView: View {
                         Text("AM").tag(TimeSlot.morning)
                         Text("PM").tag(TimeSlot.afternoon)
                         Text("FULL DAY").tag(TimeSlot.fullDay)
+                        Text("Custom").tag(TimeSlot.customHours)
                     }
                     .pickerStyle(.segmented)
                 }

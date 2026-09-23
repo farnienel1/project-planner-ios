@@ -1029,7 +1029,7 @@ struct ScheduleOperativeView: View {
         let otH = probe.overtimeHoursBeyondPaidStandard(policy: p)
         let breakdown = probe.payrollHoursResult(policy: p)
         return VStack(alignment: .leading, spacing: 10) {
-            Text("HOURS · APPLIES TO ALL SELECTED")
+            Text("HOURS · AM / PM / FULL DAY / CUSTOM")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .tracking(0.4)

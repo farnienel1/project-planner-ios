@@ -17,7 +17,7 @@ struct AnnualLeaveUsageSummary: Equatable {
     var remainingDays: Double
 }
 
-enum AnnualLeavePolicy {
+nonisolated enum AnnualLeavePolicy {
     static let defaultDaysPerYear: Double = 25
     static let defaultStartMonth: Int = 1
     static let defaultEndMonth: Int = 12

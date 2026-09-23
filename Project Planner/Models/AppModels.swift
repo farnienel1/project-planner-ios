@@ -654,7 +654,7 @@ struct Organization: Identifiable, Codable, Hashable {
     }
 }
 
-struct OrganizationSettings: Codable, Hashable {
+nonisolated struct OrganizationSettings: Codable, Hashable, Sendable {
     var allowSelfRegistration: Bool
     var requireEmailVerification: Bool
     var defaultUserRole: UserRole
@@ -677,7 +677,7 @@ struct OrganizationSettings: Codable, Hashable {
     /// ISO 4217 currency code for org-wide money display (e.g. GBP).
     var currencyCode: String?
     
-    init(
+    nonisolated init(
         allowSelfRegistration: Bool = true,
         requireEmailVerification: Bool = true,
         defaultUserRole: UserRole = .basic,
@@ -689,8 +689,8 @@ struct OrganizationSettings: Codable, Hashable {
         invoicing: OrganizationInvoicingSettings = .default,
         annualLeaveDefaults: OrganizationAnnualLeaveDefaults = .default,
         myScheduleOptions: MyScheduleOptions = MyScheduleOptions(),
-        bankHolidayRegionId: String? = BankHolidayRegionDirectory.defaultRegionId,
-        currencyCode: String? = OrganizationCurrencyCatalog.defaultCode
+        bankHolidayRegionId: String? = "GB-ENG-WLS",
+        currencyCode: String? = "GBP"
     ) {
         self.allowSelfRegistration = allowSelfRegistration
         self.requireEmailVerification = requireEmailVerification
@@ -760,7 +760,7 @@ struct OrganizationAnnualLeaveDefaults: Codable, Hashable {
     var endMonth: Int
     var carriesOver: Bool
 
-    static let `default` = OrganizationAnnualLeaveDefaults(
+    nonisolated static let `default` = OrganizationAnnualLeaveDefaults(
         daysPerYear: AnnualLeavePolicy.defaultDaysPerYear,
         startMonth: AnnualLeavePolicy.defaultStartMonth,
         endMonth: AnnualLeavePolicy.defaultEndMonth,
@@ -846,7 +846,7 @@ struct OrganizationInvoicingSettings: Codable, Hashable {
     var recurringRunEndDay: RecurringPaymentDay
     var recurringPaymentDay: RecurringPaymentDay
 
-    static let `default` = OrganizationInvoicingSettings(
+    nonisolated static let `default` = OrganizationInvoicingSettings(
         paymentRunMode: .dateRanges,
         paymentDateMode: .specificDates,
         paymentRunDateRanges: [PaymentRunDateRange(startDay: 1, endDay: 2)],
@@ -1018,7 +1018,7 @@ struct OrgPayrollTimePolicy: Codable, Hashable {
         max(0, Double(unpaidBreakMinutes)) / 60.0
     }
 
-    static let `default` = OrgPayrollTimePolicy(
+    nonisolated static let `default` = OrgPayrollTimePolicy(
         standardDayStart: "07:30",
         standardDayEnd: "16:00",
         unpaidBreakMinutes: 30,
@@ -1118,7 +1118,7 @@ struct WorkingHours: Codable, Hashable {
     var lunchBreak: Int   // minutes
     var workingDays: Set<Weekday>
     
-    init(
+    nonisolated init(
         startTime: String = "07:30",
         endTime: String = "16:00",
         lunchBreak: Int = 30,

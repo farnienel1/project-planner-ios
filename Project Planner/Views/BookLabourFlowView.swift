@@ -642,6 +642,7 @@ struct BookLabourFlowView: View {
                             }
                         }
 
+                        bookLabourSectionLabel("Custom hours")
                         HStack(spacing: 8) {
                             draftTimePicker(
                                 title: "Start",

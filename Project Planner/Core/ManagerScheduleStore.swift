@@ -79,37 +79,39 @@ class ManagerScheduleStore: ObservableObject {
 
         isLoading = true
         errorMessage = nil
-        Task {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
                 let list = try await fb.loadManagerSiteBookings(organizationId: orgId)
-                let duplicates = duplicatesToDelete(from: list)
-                managerSiteBookings = deduplicated(list)
-                OfflineManagerScheduleLocalStore.save(managerSiteBookings, organizationId: orgId)
-                lastLoadAt = Date()
+                let duplicates = self.duplicatesToDelete(from: list)
+                self.managerSiteBookings = self.deduplicated(list)
+                OfflineManagerScheduleLocalStore.save(self.managerSiteBookings, organizationId: orgId)
+                self.lastLoadAt = Date()
                 if !duplicates.isEmpty {
                     // Defer duplicate cleanup — sequential deletes on launch freeze Simulator.
                     let orgIdForDeletes = orgId
                     let duplicatesToRemove = duplicates
+                    let backend = fb
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 45_000_000_000)
                         print("🔥🔥🔥 DEBUG: ManagerSchedule deferred duplicate cleanup (\(duplicatesToRemove.count))…")
                         for duplicate in duplicatesToRemove {
-                            try? await fb.deleteManagerSiteBooking(duplicate, organizationId: orgIdForDeletes)
+                            try? await backend.deleteManagerSiteBooking(duplicate, organizationId: orgIdForDeletes)
                         }
                     }
                 }
-                NotificationCenter.default.post(name: didChangeNotificationName, object: nil)
+                NotificationCenter.default.post(name: self.didChangeNotificationName, object: nil)
             } catch {
                 let cached = OfflineManagerScheduleLocalStore.load(organizationId: orgId)
                 if !cached.isEmpty {
-                    managerSiteBookings = deduplicated(cached)
-                    errorMessage = "Showing cached schedule. Reconnect to refresh."
+                    self.managerSiteBookings = self.deduplicated(cached)
+                    self.errorMessage = "Showing cached schedule. Reconnect to refresh."
                 } else {
-                    errorMessage = error.localizedDescription
-                    managerSiteBookings = []
+                    self.errorMessage = error.localizedDescription
+                    self.managerSiteBookings = []
                 }
             }
-            isLoading = false
+            self.isLoading = false
         }
     }
 

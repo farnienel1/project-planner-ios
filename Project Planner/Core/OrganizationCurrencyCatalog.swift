@@ -13,8 +13,8 @@ struct OrganizationCurrencyOption: Identifiable, Hashable, Codable, Sendable {
     var id: String { code }
 }
 
-enum OrganizationCurrencyCatalog {
-    static let defaultCode = "GBP"
+nonisolated enum OrganizationCurrencyCatalog: Sendable {
+    nonisolated static let defaultCode = "GBP"
 
     static let all: [OrganizationCurrencyOption] = [
         OrganizationCurrencyOption(code: "GBP", title: "British pound", symbol: "£"),

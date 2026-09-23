@@ -73,8 +73,8 @@ enum ManagerTimeSlot: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .morning: return "AM"
         case .afternoon: return "PM"
-        case .fullDay: return "Full Day"
-        case .customHours: return "Hours"
+        case .fullDay: return "FULL DAY"
+        case .customHours: return "Custom"
         }
     }
 }

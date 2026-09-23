@@ -20,8 +20,8 @@ struct BankHolidayRegion: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
-enum BankHolidayRegionDirectory {
-    static let defaultRegionId = "GB-ENG-WLS"
+nonisolated enum BankHolidayRegionDirectory: Sendable {
+    nonisolated static let defaultRegionId = "GB-ENG-WLS"
 
     /// Curated regions — UK subdivisions plus countries aligned with org company settings.
     static let all: [BankHolidayRegion] = [

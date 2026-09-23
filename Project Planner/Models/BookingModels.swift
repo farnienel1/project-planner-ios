@@ -107,7 +107,7 @@ enum TimeSlot: String, CaseIterable, Identifiable, Codable {
         case .fullDay: return "FULL DAY"
         case .evening: return "Evening"
         case .overtime: return "Overtime"
-        case .customHours: return "Hours"
+        case .customHours: return "Custom"
         }
     }
     
@@ -118,7 +118,7 @@ enum TimeSlot: String, CaseIterable, Identifiable, Codable {
         case .fullDay: return "FULL DAY"
         case .evening: return "Eve"
         case .overtime: return "OT"
-        case .customHours: return "Hrs"
+        case .customHours: return "Custom"
         }
     }
     
