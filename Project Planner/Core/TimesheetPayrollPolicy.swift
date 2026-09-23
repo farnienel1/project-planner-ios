@@ -257,7 +257,7 @@ enum TimesheetPayrollPolicy {
 }
 
 extension RecurringPaymentDay {
-    var isoWeekOffset: Int {
+    nonisolated var isoWeekOffset: Int {
         switch self {
         case .monday: return 0
         case .tuesday: return 1
@@ -270,13 +270,13 @@ extension RecurringPaymentDay {
     }
 
     /// `Calendar` weekday (Sunday = 1 … Saturday = 7).
-    fileprivate var calendarWeekday: Int {
+    fileprivate nonisolated var calendarWeekday: Int {
         (isoWeekOffset + 1) % 7 + 1
     }
 }
 
 extension Date {
-    var startOfISOWeek: Date? {
+    nonisolated var startOfISOWeek: Date? {
         var cal = Calendar(identifier: .iso8601)
         cal.timeZone = .current
         let components = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: self)
