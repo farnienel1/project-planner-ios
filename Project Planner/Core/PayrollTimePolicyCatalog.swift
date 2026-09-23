@@ -63,7 +63,7 @@ enum PayrollTimePolicyCatalog {
         }
     }
 
-    static func dayKey(_ date: Date) -> String {
+    nonisolated static func dayKey(_ date: Date) -> String {
         let f = DateFormatter()
         f.calendar = Calendar.current
         f.locale = Locale(identifier: "en_GB")
@@ -72,7 +72,7 @@ enum PayrollTimePolicyCatalog {
         return f.string(from: Calendar.current.startOfDay(for: date))
     }
 
-    static func date(fromDayKey key: String) -> Date? {
+    nonisolated static func date(fromDayKey key: String) -> Date? {
         let f = DateFormatter()
         f.calendar = Calendar.current
         f.locale = Locale(identifier: "en_GB")
@@ -82,7 +82,7 @@ enum PayrollTimePolicyCatalog {
     }
 
     /// Promotes a due scheduled change into live + prior policy on the org document fields.
-    static func appliedPolicyState(
+    nonisolated static func appliedPolicyState(
         current: OrgPayrollTimePolicy,
         prior: OrgPayrollTimePolicy?,
         effectiveFrom: Date,
