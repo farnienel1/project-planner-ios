@@ -62,7 +62,7 @@ struct InvoicingView: View {
                 }
                 .padding(16)
             }
-            .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("Timesheets")
             .navigationBarTitleDisplayMode(.inline)
             .task {
@@ -181,10 +181,10 @@ struct InvoicingView: View {
                     .frame(width: 40, height: 40)
                     .background(Color.orange.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                Text("Timesheets not enabled")
+                Text("Timesheets follow employment type")
                     .font(.headline)
             }
-            Text("You currently do not have access to Timesheets. This is usually due to a PAYE status, where timesheets are not required. If you require timesheets in order to get paid, then please contact your line manager who can request for this to be updated.")
+            Text("My Timesheets is for self-employed pay. PAYE accounts keep the current pay run until it is paid, then schedule hours no longer fill the next timesheet. Switch the person back to self-employed if they need timesheets again.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -878,7 +878,7 @@ private struct MyTimesheetsHubView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("My Timesheets")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
@@ -1443,7 +1443,7 @@ private struct MyTimesheetView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Timesheet")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { loadDraft() }
@@ -1471,6 +1471,8 @@ private struct MyTimesheetView: View {
                     saveDraft()
                     showPriceWorkSheet = false
                 }
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
             }
         }
         .sheet(isPresented: $showExpenseSheet) {
@@ -1480,6 +1482,8 @@ private struct MyTimesheetView: View {
                     saveDraft()
                     showExpenseSheet = false
                 }
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
             }
         }
         .sheet(isPresented: $showInvoiceUTRWarning) {
@@ -1612,17 +1616,21 @@ private struct MyTimesheetView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color(.systemBackground))
+        .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
     }
 
     @ViewBuilder
     private func sectionHeader(_ value: String) -> some View {
         Text(value)
-            .font(.caption.weight(.bold))
-            .foregroundStyle(.secondary)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(ProjectWorksRevampColors.muted)
             .textCase(.uppercase)
-            .tracking(1.0)
+            .tracking(0.4)
     }
 
     @ViewBuilder
@@ -1631,22 +1639,21 @@ private struct MyTimesheetView: View {
             Text("Payment Runs and Payouts")
                 .font(.headline)
             if settings.paymentRunMode == .dateRanges {
-                ForEach(settings.normalizedRanges, id: \.id) { range in
+                ForEach(Array(settings.normalizedRanges.enumerated()), id: \.element.id) { index, range in
                     Text("• Run: \(range.startDay) - \(range.endDay)")
                         .font(.subheadline)
+                    if let payout = interleavedPayoutLine(settings: settings, runIndex: index) {
+                        Text(payout)
+                            .font(.subheadline)
+                    }
                 }
             } else {
                 Text("• \(settings.recurringRunDisplaySummary)")
                     .font(.subheadline)
-            }
-            if settings.paymentDateMode == .specificDates {
-                ForEach(settings.normalizedPaymentDates, id: \.self) { day in
-                    Text("• Payout day \(day)")
+                if let payout = interleavedPayoutLine(settings: settings, runIndex: 0) {
+                    Text(payout)
                         .font(.subheadline)
                 }
-            } else {
-                Text("• Payout every \(settings.recurringPaymentDay.title)")
-                    .font(.subheadline)
             }
             if !settings.normalizedUserNote.isEmpty {
                 Divider()
@@ -1667,6 +1674,15 @@ private struct MyTimesheetView: View {
         )
     }
 
+    private func interleavedPayoutLine(settings: OrganizationInvoicingSettings, runIndex: Int) -> String? {
+        if settings.paymentDateMode == .specificDates {
+            let dates = settings.normalizedPaymentDates
+            guard runIndex < dates.count else { return nil }
+            return "• Payout day \(dates[runIndex])"
+        }
+        return "• Payout every \(settings.recurringPaymentDay.title)"
+    }
+
     @ViewBuilder
     private func sectionCard<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1675,8 +1691,12 @@ private struct MyTimesheetView: View {
             content()
         }
         .padding(14)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
     }
 
     private func loadDraft() {
@@ -1911,7 +1931,7 @@ private struct PreviousTimesheetsView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Previous Timesheets")
         .navigationBarTitleDisplayMode(.inline)
         .task {
@@ -2368,7 +2388,7 @@ private struct OperativeTimesheetsView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle(isAdminViewer ? "User Timesheets" : "Operative Timesheets")
         .navigationBarTitleDisplayMode(.inline)
         .task {
@@ -2480,7 +2500,8 @@ private struct OperativeTimesheetsView: View {
             organizationName: orgName,
             scheduleOptions: scheduleOptions,
             recipientEmail: recipientEmail,
-            recipientName: exporter.fullName.isEmpty ? exporter.email : exporter.fullName
+            recipientName: exporter.fullName.isEmpty ? exporter.email : exporter.fullName,
+            firebaseBackend: firebaseBackend
         )
 
         guard result.emailSent else {
@@ -2709,7 +2730,7 @@ private struct OperativeTimesheetReviewView: View {
 
     var body: some View {
         reviewScrollContent
-            .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("Review Timesheet")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
@@ -2894,7 +2915,14 @@ private struct OperativeTimesheetReviewView: View {
 
     @ViewBuilder
     private var reviewSignOffSection: some View {
-        if operative.hasLineManager, draft.managerSignedAt == nil {
+        if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative) {
+            Label("Signed off", systemImage: "checkmark.circle.fill")
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .foregroundStyle(Color.green)
+                .background(Color.green.opacity(0.14))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        } else if operative.hasLineManager, draft.managerSignedAt == nil {
             if needsExtrasReviewMessage {
                 Text("Approve, decline or edit every expense and price-work line before signing off.")
                     .font(.caption)
@@ -3204,15 +3232,13 @@ private struct OperativeTimesheetReviewView: View {
             organizationId: orgId
         ) else { return }
         await MainActor.run { draft = remote }
-        if let current = userStore.displayUser {
-            var updated = remote
-            TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &updated, user: current)
-            if updated.managerSignedAt != remote.managerSignedAt {
-                draft = updated
-                saveDraft()
-            } else {
-                draft = remote
-            }
+        var updated = remote
+        TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &updated, user: operative)
+        if updated.managerSignedAt != remote.managerSignedAt {
+            draft = updated
+            saveDraft()
+        } else {
+            draft = remote
         }
     }
 
@@ -3463,6 +3489,8 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
 
 private struct TimesheetMoneyEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var projectStore: ProjectStore
     let mode: Mode
     let onSaveExpense: (TimesheetExpenseEntry) -> Void
     let onSavePriceWork: (TimesheetPriceWorkEntry) -> Void
@@ -3482,6 +3510,41 @@ private struct TimesheetMoneyEntrySheet: View {
         Double(amountText.replacingOccurrences(of: "£", with: "").trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    private var managerSuggestions: [String] {
+        let query = managerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        var seen = Set<String>()
+        var names: [String] = []
+        for user in userStore.organizationUsers where user.isActive {
+            let isManager = user.permissions.manager || user.role == .manager || user.permissions.adminAccess || user.role == .admin || user.isSuperAdmin
+            guard isManager else { continue }
+            let haystack = "\(user.fullName) \(user.firstName) \(user.surname) \(user.email)"
+            guard haystack.localizedCaseInsensitiveContains(query) else { continue }
+            let name = user.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, name.caseInsensitiveCompare(query) != .orderedSame, seen.insert(name.lowercased()).inserted else { continue }
+            names.append(name)
+        }
+        return Array(names.prefix(6))
+    }
+
+    private var jobSuggestions: [String] {
+        let query = jobNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        var seen = Set<String>()
+        return ProjectWorksMerge.uniqueWorks(projectStore.projects)
+            .compactMap { project -> String? in
+                let number = project.jobNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !number.isEmpty else { return nil }
+                let haystack = "\(number) \(project.siteName)"
+                guard haystack.localizedCaseInsensitiveContains(query),
+                      number.caseInsensitiveCompare(query) != .orderedSame,
+                      seen.insert(number.lowercased()).inserted else { return nil }
+                return number
+            }
+            .prefix(6)
+            .map { $0 }
+    }
+
     init(mode: Mode, onSave: @escaping (TimesheetExpenseEntry) -> Void) {
         self.mode = mode
         self.onSaveExpense = onSave
@@ -3495,75 +3558,103 @@ private struct TimesheetMoneyEntrySheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                TextField(mode == .expense ? "Expense name" : "Price work name", text: $entryTitle)
-                TextField("Description", text: $details, axis: .vertical)
-                    .lineLimit(3, reservesSpace: true)
-                TextField("Job number", text: $jobNumber)
-                TextField("Amount", text: $amountText)
-                    .keyboardType(.decimalPad)
-                DatePicker(mode == .expense ? "Date" : "Start date", selection: $date, displayedComponents: .date)
-                if mode == .expense {
-                    PhotosPicker(selection: $receiptItem, matching: .any(of: [.images, .not(.livePhotos)])) {
-                        HStack {
-                            Label("Upload receipt", systemImage: "paperclip")
-                            Spacer()
-                            Text(receiptName ?? "Required")
-                                .foregroundStyle(receiptName == nil ? Color.secondary : Color.blue)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                moneyCard {
+                    labeledField(mode == .expense ? "Expense name" : "Price work name", text: $entryTitle)
+                    Divider().overlay(ProjectWorksRevampColors.border)
+                    labeledMultiline("Description", text: $details)
+                    Divider().overlay(ProjectWorksRevampColors.border)
+                    labeledField("Job number", text: $jobNumber)
+                    suggestionRow(jobSuggestions) { jobNumber = $0 }
+                    Divider().overlay(ProjectWorksRevampColors.border)
+                    labeledField("Amount", text: $amountText, keyboard: .decimalPad)
+                }
+
+                moneyCard {
+                    DatePicker(mode == .expense ? "Date" : "Start date", selection: $date, displayedComponents: .date)
+                        .font(.system(size: 13, weight: .medium))
+                    if mode == .priceWork {
+                        Divider().overlay(ProjectWorksRevampColors.border)
+                        Toggle("Add end date", isOn: $includeEndDate)
+                            .font(.system(size: 13, weight: .medium))
+                        if includeEndDate {
+                            DatePicker("End date", selection: Binding(
+                                get: { endDate ?? date },
+                                set: { endDate = $0 }
+                            ), displayedComponents: .date)
+                            .font(.system(size: 13, weight: .medium))
                         }
                     }
                 }
+
                 if mode == .priceWork {
-                    TextField("Manager who agreed this", text: $managerName)
-                    Toggle("Add end date", isOn: $includeEndDate)
-                    if includeEndDate {
-                        DatePicker("End date", selection: Binding(
-                            get: { endDate ?? date },
-                            set: { endDate = $0 }
-                        ), displayedComponents: .date)
+                    moneyCard {
+                        labeledField("Manager who agreed this", text: $managerName)
+                        suggestionRow(managerSuggestions) { managerName = $0 }
+                    }
+                }
+
+                if mode == .expense {
+                    moneyCard {
+                        PhotosPicker(selection: $receiptItem, matching: .any(of: [.images, .not(.livePhotos)])) {
+                            HStack {
+                                Image(systemName: "paperclip")
+                                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                                Text("Upload receipt")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                                Spacer()
+                                Text(receiptName ?? "Required")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(receiptName == nil ? ProjectWorksRevampColors.requiredPillFg : ProjectWorksRevampColors.blue)
+                            }
+                        }
                     }
                 }
             }
-            .navigationTitle(mode == .expense ? "Add Expense" : "Add Price Work")
-            .navigationBarBackButtonHidden(true)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(mode == .expense ? "Add expense" : "Add price work") {
-                        guard let amount, amount > 0 else { return }
-                        if mode == .expense {
-                            onSaveExpense(
-                                .init(
-                                    id: UUID(),
-                                    title: entryTitle.isEmpty ? "Untitled expense" : entryTitle,
-                                    details: details,
-                                    jobNumber: jobNumber,
-                                    date: date,
-                                    amount: amount,
-                                    receiptName: receiptName
-                                )
+            .padding(16)
+        }
+        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .navigationTitle(mode == .expense ? "Add Expense" : "Add Price Work")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button(mode == .expense ? "Add expense" : "Add price work") {
+                    guard let amount, amount > 0 else { return }
+                    if mode == .expense {
+                        onSaveExpense(
+                            .init(
+                                id: UUID(),
+                                title: entryTitle.isEmpty ? "Untitled expense" : entryTitle,
+                                details: details,
+                                jobNumber: jobNumber,
+                                date: date,
+                                amount: amount,
+                                receiptName: receiptName
                             )
-                        } else {
-                            onSavePriceWork(
-                                .init(
-                                    id: UUID(),
-                                    title: entryTitle.isEmpty ? "Untitled price work" : entryTitle,
-                                    details: details,
-                                    jobNumber: jobNumber,
-                                    agreedManagerName: managerName.isEmpty ? "Manager" : managerName,
-                                    startDate: date,
-                                    endDate: includeEndDate ? endDate : nil,
-                                    amount: amount
-                                )
+                        )
+                    } else {
+                        onSavePriceWork(
+                            .init(
+                                id: UUID(),
+                                title: entryTitle.isEmpty ? "Untitled price work" : entryTitle,
+                                details: details,
+                                jobNumber: jobNumber,
+                                agreedManagerName: managerName.isEmpty ? "Manager" : managerName,
+                                startDate: date,
+                                endDate: includeEndDate ? endDate : nil,
+                                amount: amount
                             )
-                        }
-                        dismiss()
+                        )
                     }
-                    .disabled(amount == nil || (amount ?? 0) <= 0 || (mode == .expense && receiptName == nil))
+                    dismiss()
                 }
+                .disabled(amount == nil || (amount ?? 0) <= 0 || (mode == .expense && receiptName == nil))
             }
         }
         .onChange(of: receiptItem) { _, newItem in
@@ -3572,6 +3663,69 @@ private struct TimesheetMoneyEntrySheet: View {
                 receiptName = "receipt.\(name)"
             } else {
                 receiptName = "receipt-uploaded"
+            }
+        }
+    }
+
+    private func moneyCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            content()
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
+    }
+
+    private func labeledField(_ title: String, text: Binding<String>, keyboard: UIKeyboardType = .default) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .tracking(0.4)
+            TextField(title, text: text)
+                .font(.system(size: 14, weight: .medium))
+                .keyboardType(keyboard)
+        }
+    }
+
+    private func labeledMultiline(_ title: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .tracking(0.4)
+            TextField(title, text: text, axis: .vertical)
+                .font(.system(size: 14))
+                .lineLimit(3, reservesSpace: true)
+        }
+    }
+
+    @ViewBuilder
+    private func suggestionRow(_ suggestions: [String], onSelect: @escaping (String) -> Void) -> some View {
+        if !suggestions.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(suggestions, id: \.self) { suggestion in
+                        Button {
+                            onSelect(suggestion)
+                        } label: {
+                            Text(suggestion)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.blue)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(ProjectWorksRevampColors.blue.opacity(0.1))
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.bottom, 4)
             }
         }
     }
@@ -3674,7 +3828,7 @@ private struct SignTimesheetView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Sign Timesheet")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -3725,7 +3879,7 @@ private struct ManagerTimesheetSignOffView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Sign Off")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -4094,7 +4248,7 @@ private struct GenerateInvoiceView: View {
             }
             .padding(16)
         }
-        .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Generate Invoice")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showInvoiceUTRWarning) {
@@ -4141,32 +4295,29 @@ private struct GenerateInvoiceView: View {
             if settings.paymentRunMode == .dateRanges {
                 ForEach(Array(settings.normalizedRanges.enumerated()), id: \.element.id) { index, range in
                     summaryRow(chip: "\(range.startDay) - \(range.endDay)", text: index == 0 ? "First payment run" : "Second payment run")
+                    if let payout = payoutSummary(forRunIndex: index) {
+                        summaryRow(chip: payout.chip, text: payout.text)
+                    }
                 }
             } else {
                 summaryRow(chip: "\(settings.recurringRunStartDay.title.prefix(3)) - \(settings.recurringRunEndDay.title.prefix(3))", text: settings.recurringRunDisplaySummary)
-            }
-
-            Text("Payment Day / Dates")
-                .font(.footnote.weight(.black))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .tracking(1.2)
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 6)
-                .overlay(alignment: .top) { Divider().padding(.horizontal, 16) }
-
-            if settings.paymentDateMode == .specificDates {
-                ForEach(Array(settings.normalizedPaymentDates.enumerated()), id: \.offset) { index, day in
-                    summaryRow(chip: "Day \(day)", text: index == 0 ? "Run 1 payout" : "Run 2 payout")
+                if let payout = payoutSummary(forRunIndex: 0) {
+                    summaryRow(chip: payout.chip, text: payout.text)
                 }
-            } else {
-                summaryRow(chip: "Every \(settings.recurringPaymentDay.title)", text: "Recurring payout day")
             }
         }
         .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(color: Color.black.opacity(0.07), radius: 8, y: 2)
+    }
+
+    private func payoutSummary(forRunIndex index: Int) -> (chip: String, text: String)? {
+        if settings.paymentDateMode == .specificDates {
+            let dates = settings.normalizedPaymentDates
+            guard index < dates.count else { return nil }
+            return ("Day \(dates[index])", "Payout day")
+        }
+        return ("Every \(settings.recurringPaymentDay.title)", "Payout day")
     }
 
     @ViewBuilder
@@ -4601,7 +4752,7 @@ private struct InvoiceLineItem {
     }
 
     var resolvedPayrollRate: ResolvedPayrollRate {
-        ResolvedPayrollRate(basis: payrollBasis, dayRate: dayRate > 0 ? dayRate : nil, hourlyRate: hourlyRate)
+        ResolvedPayrollRate(basis: payrollBasis, dayRate: dayRate, hourlyRate: hourlyRate)
     }
 
     var hasPayrollRate: Bool {
@@ -5010,7 +5161,8 @@ private enum TimesheetExportHelper {
         organizationName: String,
         scheduleOptions: MyScheduleOptions = MyScheduleOptions(),
         recipientEmail: String,
-        recipientName: String
+        recipientName: String,
+        firebaseBackend: FirebaseBackend? = nil
     ) async -> Result {
         var emailedUserIds = Set<String>()
         var failed: [String] = []
@@ -5068,22 +5220,46 @@ private enum TimesheetExportHelper {
             return Result(emailedUserIds: [], failed: failed.isEmpty ? ["No timesheet PDFs could be built"] : failed, emailSent: false)
         }
 
+        var downloadLinks: [(fileName: String, url: String)] = []
+        if let firebaseBackend, let orgId = organization?.firestoreDocumentId {
+            for attachment in attachments {
+                if let url = try? await firebaseBackend.uploadTimesheetExportPDF(
+                    attachment.data,
+                    fileName: attachment.fileName,
+                    organizationId: orgId
+                ) {
+                    downloadLinks.append((attachment.fileName, url))
+                }
+            }
+        }
+
         let html = managerExportEmailHTML(
             recipientName: recipientName,
             weekTitle: week.title,
             paymentRunStamp: paymentRunStamp,
             organizationName: organizationName,
             attachmentNames: attachments.map(\.fileName),
+            downloadLinks: downloadLinks,
             timesheetCount: attachments.count
         )
         let resend = ResendEmailService()
-        let sent = await resend.sendTimesheetExportEmail(
+        let payload = attachments.map { (fileName: $0.fileName, data: $0.data) }
+        var sent = await resend.sendTimesheetExportEmail(
             to: recipientEmail,
             subject: "Signed timesheets for filing — \(paymentRunStamp) — \(organizationName)",
             htmlContent: html,
-            pdfAttachments: attachments.map { (fileName: $0.fileName, data: $0.data) },
+            pdfAttachments: payload,
             fromName: organizationName
         )
+        if !sent {
+            sent = await resend.sendTimesheetExportEmail(
+                to: recipientEmail,
+                subject: "Signed timesheets for filing — \(paymentRunStamp) — \(organizationName)",
+                htmlContent: html,
+                pdfAttachments: [],
+                fromName: organizationName
+            )
+        }
 
         if sent {
             return Result(emailedUserIds: emailedUserIds, failed: failed, emailSent: true)
@@ -5198,14 +5374,23 @@ private enum TimesheetExportHelper {
         paymentRunStamp: String,
         organizationName: String,
         attachmentNames: [String],
+        downloadLinks: [(fileName: String, url: String)] = [],
         timesheetCount: Int
     ) -> String {
-        let list = attachmentNames.map { "<li>\($0)</li>" }.joined()
+        let list: String
+        if downloadLinks.isEmpty {
+            list = attachmentNames.map { "<li>\($0)</li>" }.joined()
+        } else {
+            list = downloadLinks.map { "<li><a href=\"\($0.url)\">\($0.fileName)</a></li>" }.joined()
+        }
+        let attachNote = downloadLinks.isEmpty
+            ? "\(timesheetCount) signed-off timesheet PDF\(timesheetCount == 1 ? "" : "s") for payment run <strong>\(paymentRunStamp)</strong> (\(weekTitle)) from <strong>\(organizationName)</strong> \(timesheetCount == 1 ? "is" : "are") attached for your records."
+            : "\(timesheetCount) signed-off timesheet PDF\(timesheetCount == 1 ? "" : "s") for payment run <strong>\(paymentRunStamp)</strong> (\(weekTitle)) from <strong>\(organizationName)</strong> \(timesheetCount == 1 ? "is" : "are") attached, with backup download links below."
         return """
         <html><body style="font-family:Arial,sans-serif;max-width:720px;margin:0 auto;padding:20px;">
         <h2 style="color:#0D67ED;">Signed timesheets for filing</h2>
         <p>Hello \(recipientName),</p>
-        <p>\(timesheetCount) signed-off timesheet PDF\(timesheetCount == 1 ? "" : "s") for payment run <strong>\(paymentRunStamp)</strong> (\(weekTitle)) from <strong>\(organizationName)</strong> \(timesheetCount == 1 ? "is" : "are") attached for your records.</p>
+        <p>\(attachNote)</p>
         <p>Each file is named: <em>User Name timesheet for payment run date \(paymentRunStamp)</em>.</p>
         <ul>\(list)</ul>
         <p style="color:#666;font-size:13px;">These timesheets were counter-signed and exported from Operative Timesheets → Signed off.</p>

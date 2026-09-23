@@ -10,6 +10,9 @@ import Combine
 #if canImport(Network)
 import Network
 #endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - Smart Cache Service for Offline Functionality
 
@@ -50,6 +53,17 @@ class SmartCacheService: ObservableObject {
                 self?.refreshOutboxCounts()
             }
         startNetworkMonitoring()
+        #if canImport(UIKit)
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                await self?.refreshConnectionAndSync()
+            }
+        }
+        #endif
     }
 
     deinit {
@@ -64,8 +78,11 @@ class SmartCacheService: ObservableObject {
     }
 
     func refreshOutboxCounts() {
-        pendingSyncCount = OfflineOutboxStore.shared.pendingCount
+        pendingSyncCount = OfflineOutboxStore.shared.pendingCount + SiteAuditOfflineStore.shared.pendingCount
         failedSyncCount = OfflineOutboxStore.shared.failedCount
+        if isOnline && pendingSyncCount == 0 && failedSyncCount == 0 {
+            isSyncing = false
+        }
     }
 
     // MARK: - Network Monitoring
@@ -103,6 +120,16 @@ class SmartCacheService: ObservableObject {
     func retryFailedSync() async {
         guard isOnline else { return }
         await performSync()
+    }
+
+    /// Re-check the current network path and push the outbox if we are back online.
+    func refreshConnectionAndSync() async {
+        #if canImport(Network)
+        isOnline = networkMonitor.currentPath.status == .satisfied
+        #endif
+        if isOnline {
+            await performSync()
+        }
     }
 
     private func performSync() async {

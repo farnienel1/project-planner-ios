@@ -50,10 +50,14 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             var loaded = try await firebaseBackend.loadHealthSafetyData(project: project, organizationId: orgId)
-            if loaded.talks.isEmpty {
-                loaded.talks = Self.defaultLibraryTalks
+            let platform = (try? await firebaseBackend.loadPlatformToolboxLibrary()) ?? []
+            let mergedTalks = ToolboxTalkLibrary.merge(stored: loaded.talks, platform: platform)
+            let storedWereBroken = loaded.talks.contains { ToolboxTalkLibrary.isPlaceholderTitle($0.title) }
+                || loaded.talks.isEmpty
+            loaded.talks = mergedTalks
+            if storedWereBroken {
                 loaded.updatedAt = Date()
-                try await firebaseBackend.saveHealthSafetyData(loaded, project: project, organizationId: orgId)
+                try? await firebaseBackend.saveHealthSafetyData(loaded, project: project, organizationId: orgId)
             }
             data = loaded
         } catch {
@@ -70,10 +74,8 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         userStore: UserStore
     ) async {
         guard !recipients.isEmpty else { return }
-        let calendar = Calendar.current
-        let selectedDay = calendar.startOfDay(for: weekCommencing)
-        let today = calendar.startOfDay(for: Date())
-        let publishAt: Date? = selectedDay > today ? calendar.date(bySettingHour: 7, minute: 0, second: 0, of: selectedDay) : nil
+        // Date on the issue sheet is the talk date, not a hidden schedule. Issued talks
+        // must appear in Tracking immediately — matching how managers expect the flow.
         let issueId = UUID().uuidString
         let issue = HSToolboxIssue(
             id: issueId,
@@ -82,7 +84,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
             weekCommencing: weekCommencing,
             issuedByUserId: issuedByUserId,
             issuedAt: Date(),
-            publishAt: publishAt,
+            publishAt: nil,
             recipientUserIds: recipients,
             status: .awaiting
         )
@@ -104,15 +106,6 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         }
         recalculateIssueStatuses()
         await persist(firebaseBackend: firebaseBackend, userStore: userStore)
-        if let publishAt {
-            _ = await LocalNotificationService.shared.requestAuthorization()
-            await LocalNotificationService.shared.scheduleQualificationExpiryOneShot(
-                identifier: "hs-toolbox-scheduled-\(issueId)",
-                title: "Scheduled Toolbox Talk",
-                body: "\(talk.title) is now due.",
-                fireAt: publishAt
-            )
-        }
     }
 
     func addUploadedTalk(
@@ -461,7 +454,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
            let rams = data.ramsDocuments.first(where: { $0.id == ramsId }) {
             return rams.title
         }
-        return data.talks.first(where: { $0.id == issue.talkId })?.title ?? "Sign-off"
+        return ToolboxTalkLibrary.resolvedTitle(talkId: issue.talkId, storedTalks: data.talks)
     }
 
     private func recalculateIssueStatuses() {
@@ -493,132 +486,6 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private static let defaultLibraryTalks: [HSToolboxTalk] = {
-        let now = Date()
-
-        func parseExternalLibrary(from path: String) -> [HSToolboxTalk] {
-            guard let markdown = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
-            let regexPattern = #"\*\*(TBT-[A-Z]+-[0-9]{3}) · ([^\*]+)\*\*"#
-            guard let regex = try? NSRegularExpression(pattern: regexPattern) else { return [] }
-            let ns = markdown as NSString
-            let matches = regex.matches(in: markdown, range: NSRange(location: 0, length: ns.length))
-            guard !matches.isEmpty else { return [] }
-
-            func tradeMeta(for id: String) -> (isGeneral: Bool, trades: [String]) {
-                if id.hasPrefix("TBT-GEN-") { return (true, []) }
-                if id.hasPrefix("TBT-ELE-") { return (false, ["Electrical"]) }
-                if id.hasPrefix("TBT-MEC-") { return (false, ["Mechanical / HVAC"]) }
-                if id.hasPrefix("TBT-PLG-") { return (false, ["Plumbing & Gas"]) }
-                if id.hasPrefix("TBT-GRD-") { return (false, ["Groundworks"]) }
-                if id.hasPrefix("TBT-SCA-") { return (false, ["Scaffolding"]) }
-                if id.hasPrefix("TBT-BRK-") { return (false, ["Brick & Block"]) }
-                if id.hasPrefix("TBT-JOI-") { return (false, ["Joinery"]) }
-                if id.hasPrefix("TBT-DRY-") { return (false, ["Drylining"]) }
-                if id.hasPrefix("TBT-PNT-") { return (false, ["Painting"]) }
-                if id.hasPrefix("TBT-ROO-") { return (false, ["Roofing"]) }
-                if id.hasPrefix("TBT-DEM-") { return (false, ["Demolition"]) }
-                if id.hasPrefix("TBT-STL-") { return (false, ["Steel Fixing"]) }
-                if id.hasPrefix("TBT-PLA-") { return (false, ["Plant"]) }
-                return (false, ["General"])
-            }
-
-            return matches.compactMap { match in
-                guard match.numberOfRanges >= 3 else { return nil }
-                let id = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                let title = ns.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
-                let meta = tradeMeta(for: id)
-                return HSToolboxTalk(
-                    id: id,
-                    title: title,
-                    category: meta.isGeneral ? .general : .trade,
-                    isGeneral: meta.isGeneral,
-                    trades: meta.trades,
-                    purpose: "Review controls and safe method of work for \(title.lowercased()) before starting the task.",
-                    keyPoints: [
-                        "Brief the team on hazards and controls for this task.",
-                        "Confirm competence, permits, and PPE requirements before work starts.",
-                        "Stop work and escalate if site conditions change or controls fail."
-                    ],
-                    source: .library,
-                    ownerOrganizationId: nil,
-                    status: .approved,
-                    version: 1,
-                    updatedAt: now,
-                    fileURL: nil
-                )
-            }
-        }
-
-        let externalPaths = [
-            Bundle.main.path(forResource: "TOOLBOX-TALK-LIBRARY", ofType: "md"),
-            "/workspace/Project Planner/Resources/TOOLBOX-TALK-LIBRARY.md",
-            "/Users/farnienel/Downloads/TBT and Dash/TOOLBOX-TALK-LIBRARY.md",
-            "/Users/farnienel/Downloads/Toolbox t/TOOLBOX-TALK-LIBRARY.md"
-        ].compactMap { $0 }
-        for path in externalPaths {
-            let parsed = parseExternalLibrary(from: path)
-            if !parsed.isEmpty {
-                return parsed
-            }
-        }
-
-        let general = [
-            "Working at Height", "Manual Handling", "PPE Selection and Use", "Slips Trips and Falls", "Fire Prevention and Emergency Routes",
-            "Housekeeping and Waste Segregation", "Working Around Mobile Plant", "Noise and Vibration Awareness", "Site Induction and Welfare Rules", "Accident and Near-Miss Reporting"
-        ]
-        let electrical = [
-            "Safe Isolation Procedure", "Temporary Electrical Installations", "Cable Management and Trip Prevention", "Testing and Verification Records",
-            "Live Services Avoidance", "Portable Appliance Safety", "RCD and Circuit Protection", "Lockout Tagout for Electrical Works"
-        ]
-        let groundworks = [
-            "Excavations and Services Avoidance", "Trench Support and Edge Protection", "Ground Stability and Weather Risk", "Plant Banksman Controls",
-            "Manual Handling in Groundworks", "Confined Spaces Entry Control", "Buried Services Permit to Dig", "Backfilling and Compaction Safety"
-        ]
-        let joinery = [
-            "Wood Dust and Extraction", "Bench and Portable Saw Safety", "Hand Tool Maintenance", "Ladder and Podium Use for Joiners",
-            "Adhesives and Solvent Ventilation", "Fire Door Installation Controls", "Manual Handling of Sheet Materials", "Workshop Housekeeping Standards"
-        ]
-        let mechanical = [
-            "Hot Works Permit Controls", "Lifting and Rigging Awareness", "Ductwork Installation Safety", "Pressurised Systems Isolation",
-            "Plant Room Access Controls", "Working at Height for Mechanical Install", "Hand Arm Vibration in Mechanical Works", "Temporary Supports and Bracing"
-        ]
-        let plumbing = [
-            "Gas Safe Working and Purging", "Legionella and Water Hygiene", "Pressure Testing Water Systems", "Soldering and Fire Watch",
-            "Working in Service Voids", "Asbestos Awareness for Plumbing Works", "Safe Use of Pipe Press Tools", "Draining Down and Refill Controls"
-        ]
-
-        func makeTalk(id: String, title: String, trade: String?) -> HSToolboxTalk {
-            let isGeneral = trade == nil
-            return HSToolboxTalk(
-                id: id,
-                title: title,
-                category: isGeneral ? .general : .trade,
-                isGeneral: isGeneral,
-                trades: trade.map { [$0] } ?? [],
-                purpose: "Ensure safe planning, communication, and execution for \(title.lowercased()).",
-                keyPoints: [
-                    "Review hazards and controls before work starts.",
-                    "Confirm competence, permits, and required PPE for the task.",
-                    "Stop and report immediately if site conditions change."
-                ],
-                source: .library,
-                ownerOrganizationId: nil,
-                status: .approved,
-                version: 1,
-                updatedAt: now,
-                fileURL: nil
-            )
-        }
-
-        var output: [HSToolboxTalk] = []
-        output += general.enumerated().map { makeTalk(id: String(format: "TBT-GEN-%03d", $0.offset + 1), title: $0.element, trade: nil) }
-        output += electrical.enumerated().map { makeTalk(id: String(format: "TBT-ELE-%03d", $0.offset + 1), title: $0.element, trade: "Electrical") }
-        output += groundworks.enumerated().map { makeTalk(id: String(format: "TBT-GRD-%03d", $0.offset + 1), title: $0.element, trade: "Groundworks") }
-        output += joinery.enumerated().map { makeTalk(id: String(format: "TBT-JOI-%03d", $0.offset + 1), title: $0.element, trade: "Joinery") }
-        output += mechanical.enumerated().map { makeTalk(id: String(format: "TBT-MEC-%03d", $0.offset + 1), title: $0.element, trade: "Mechanical / HVAC") }
-        output += plumbing.enumerated().map { makeTalk(id: String(format: "TBT-PLG-%03d", $0.offset + 1), title: $0.element, trade: "Plumbing & Gas") }
-        return output
-    }()
 }
 
 struct ProjectHealthSafetyView: View {
@@ -682,7 +549,7 @@ struct ProjectHealthSafetyView: View {
     private var filteredLibraryTalks: [HSToolboxTalk] {
         vm.data.talks.filter { talk in
             let matchesSearch: Bool = talkSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || talk.title.localizedCaseInsensitiveContains(talkSearchText)
+                || talk.displayTitle.localizedCaseInsensitiveContains(talkSearchText)
                 || talk.purpose.localizedCaseInsensitiveContains(talkSearchText)
                 || talk.id.localizedCaseInsensitiveContains(talkSearchText)
             guard matchesSearch else { return false }
@@ -1110,7 +977,7 @@ struct ProjectHealthSafetyView: View {
 
     private func downloadTalkFromLibrary(_ talk: HSToolboxTalk) {
         if talk.isCustomUpload, let remote = talk.storedFileURL {
-            presentDocumentPreview(HSDocumentPreviewItem(title: talk.title, remoteURL: remote, noun: "toolbox talk"))
+            presentDocumentPreview(HSDocumentPreviewItem(title: talk.displayTitle, remoteURL: remote, noun: "toolbox talk"))
             return
         }
         guard let generated = HSTalkPDFBuilder.makePDF(for: talk) else { return }
@@ -1418,7 +1285,7 @@ struct ProjectHealthSafetyView: View {
                     VStack(spacing: HSMetric.rowGap) {
                         ForEach(group.talks, id: \.id) { talk in
                             HSLibraryRow(
-                                title: talk.title,
+                                title: talk.displayTitle,
                                 reference: talk.id,
                                 purpose: talk.purpose,
                                 trade: talk.tradeLabel,
@@ -1758,7 +1625,7 @@ private struct HSIssueTalkSheet: View {
         talks.filter { talk in
             let search = talkSearch.trimmingCharacters(in: .whitespacesAndNewlines)
             let matchesSearch = search.isEmpty
-                || talk.title.localizedCaseInsensitiveContains(search)
+                || talk.displayTitle.localizedCaseInsensitiveContains(search)
                 || talk.purpose.localizedCaseInsensitiveContains(search)
             guard matchesSearch else { return false }
             switch selectedTalkTrade {
@@ -1874,7 +1741,7 @@ private struct HSIssueTalkSheet: View {
                                         } label: {
                                             HStack(alignment: .top, spacing: 10) {
                                                 VStack(alignment: .leading, spacing: 4) {
-                                                    Text(talk.title)
+                                                    Text(talk.displayTitle)
                                                         .font(.system(size: 14, weight: .semibold))
                                                         .foregroundStyle(HS.ink)
                                                         .multilineTextAlignment(.leading)
@@ -2081,7 +1948,7 @@ private struct HSToolboxTalkDetailView: View {
                             text: talk.isCustomUpload ? "Your upload · \(talk.id)" : "Library · \(talk.id)",
                             tone: talk.isCustomUpload ? .scheduled : .ok
                         )
-                        Text(talk.title)
+                        Text(talk.displayTitle)
                             .font(HSFont.heroTitle)
                             .foregroundStyle(HS.ink)
                             .hsNoClip(3)
@@ -2141,7 +2008,7 @@ private struct HSToolboxTalkDetailView: View {
                         Button {
                             HSHaptic.tap()
                             if talk.isCustomUpload, let remote = talk.storedFileURL {
-                                remotePreview = HSDocumentPreviewItem(title: talk.title, remoteURL: remote, noun: "toolbox talk")
+                                remotePreview = HSDocumentPreviewItem(title: talk.displayTitle, remoteURL: remote, noun: "toolbox talk")
                             } else {
                                 onDownload()
                             }
@@ -2770,11 +2637,11 @@ private struct HSSignTalkView: View {
             return
         }
         if let talk, talk.isCustomUpload, let remote = talk.storedFileURL {
-            documentPreview = HSDocumentPreviewItem(title: talk.title, remoteURL: remote, noun: "toolbox talk")
+            documentPreview = HSDocumentPreviewItem(title: talk.displayTitle, remoteURL: remote, noun: "toolbox talk")
             return
         }
         if let talk, let generated = HSTalkPDFBuilder.makePDF(for: talk) {
-            documentPreview = HSDocumentPreviewItem(title: talk.title, localURL: generated, noun: "toolbox talk")
+            documentPreview = HSDocumentPreviewItem(title: talk.displayTitle, localURL: generated, noun: "toolbox talk")
         }
     }
 }
@@ -3228,7 +3095,7 @@ private enum HSTalkPDFBuilder {
         signatures: [HSToolboxSignature],
         userLookup: [AppUser]
     ) -> URL? {
-        let safeName = talk.title.replacingOccurrences(of: " ", with: "_")
+        let safeName = talk.displayTitle.replacingOccurrences(of: " ", with: "_")
         let fileName = "ToolboxTalk-\(safeName)-\(Int(Date().timeIntervalSince1970)).pdf"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
         let pageRect = CGRect(x: 0, y: 0, width: 595, height: 842)
@@ -3290,7 +3157,7 @@ private enum HSTalkPDFBuilder {
                 // Body
                 let margin: CGFloat = 26
                 var y: CGFloat = 114
-                (talk.title as NSString).draw(at: CGPoint(x: margin, y: y), withAttributes: [
+                (talk.displayTitle as NSString).draw(at: CGPoint(x: margin, y: y), withAttributes: [
                     .font: UIFont.systemFont(ofSize: 26, weight: .bold),
                     .foregroundColor: ink
                 ])

@@ -14,6 +14,7 @@ struct OperativeQualificationsEditorView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var userStore: UserStore
 
     let operative: Operative
     let title: String
@@ -72,9 +73,18 @@ struct OperativeQualificationsEditorView: View {
     private var hasUnsavedChanges: Bool {
         if !certificateUploadTargets.isEmpty { return true }
         if selectedQualifications != baselineQualifications { return true }
-        if qualificationExpiryDates != baselineExpiry { return true }
+        if !expiryMapsMatch(qualificationExpiryDates, baselineExpiry) { return true }
         if qualificationCertificateURLs != baselineCerts { return true }
         return false
+    }
+
+    private func expiryMapsMatch(_ lhs: [UUID: Date], _ rhs: [UUID: Date]) -> Bool {
+        guard lhs.keys == rhs.keys else { return false }
+        let cal = Calendar.current
+        return lhs.allSatisfy { id, date in
+            guard let other = rhs[id] else { return false }
+            return cal.isDate(date, inSameDayAs: other)
+        }
     }
 
     private var qualificationFilterTrimmed: String {
@@ -127,9 +137,10 @@ struct OperativeQualificationsEditorView: View {
                 errorMessage = "Could not select file: \(error.localizedDescription)"
             }
         }
-        .sheet(isPresented: $showingAssignQualificationsPicker) {
+        .fullScreenCover(isPresented: $showingAssignQualificationsPicker) {
             AssignQualificationsPickerView(selectedQualifications: $selectedQualifications)
                 .environmentObject(operativeStore)
+                .environmentObject(userStore)
         }
         .sheet(isPresented: $showingListFilters) {
             NavigationStack {
@@ -151,6 +162,11 @@ struct OperativeQualificationsEditorView: View {
         .onChange(of: operative.updatedAt) { _, _ in
             guard isMyQualifications, !hasUnsavedChanges else { return }
             applyOperativeSnapshot(operative)
+        }
+        .task {
+            if operativeStore.qualifications.isEmpty {
+                operativeStore.loadData()
+            }
         }
         .sheet(item: $certificateViewerURL) { item in
             InAppRemoteDocumentViewer(remoteURL: item.url, title: "Certificate")
@@ -184,6 +200,15 @@ struct OperativeQualificationsEditorView: View {
             }
         }
         if isMyQualifications {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingAssignQualificationsPicker = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .disabled(!canEditAssignments)
+                .accessibilityLabel("Add qualifications")
+            }
             if usesOwnNavigationStack {
                 ToolbarItem(placement: .cancellationAction) {
                     if hasUnsavedChanges {
@@ -234,8 +259,12 @@ struct OperativeQualificationsEditorView: View {
     private var manageQualificationsSections: some View {
         Section {
             if operativeStore.qualifications.isEmpty {
-                Text("No qualifications available yet. Ask an admin to add organisation qualification templates first.")
-                    .foregroundStyle(.secondary)
+                Text(
+                    userStore.canManageOrganisationQualifications()
+                        ? "No qualification templates yet. Tap Add qualifications, then Add, to create one for the organisation."
+                        : "No qualifications available yet. Ask someone who can manage qualifications to add organisation templates first."
+                )
+                .foregroundStyle(.secondary)
             } else if filteredSelectedQualifications.isEmpty {
                 Text(qualificationFilterTrimmed.isEmpty ? "No qualifications assigned yet." : "No qualifications match this filter.")
                     .foregroundStyle(.secondary)
@@ -250,6 +279,7 @@ struct OperativeQualificationsEditorView: View {
             } label: {
                 Label("Add qualifications", systemImage: "plus.circle.fill")
             }
+            .buttonStyle(.borderless)
             .disabled(!canEditAssignments)
         } header: {
             Text("Current qualifications")
@@ -260,8 +290,12 @@ struct OperativeQualificationsEditorView: View {
     private var myQualificationsQualSection: some View {
         Section {
             if operativeStore.qualifications.isEmpty {
-                Text("No qualifications have been set up for your organisation yet. Ask a manager or admin to add qualification templates.")
-                    .foregroundStyle(.secondary)
+                Text(
+                    userStore.canManageOrganisationQualifications()
+                        ? "No qualification templates yet. Tap Add qualifications, then Add, to create one for the organisation."
+                        : "No qualifications have been set up for your organisation yet. Ask a manager or admin to add qualification templates."
+                )
+                .foregroundStyle(.secondary)
             } else if selectedQualifications.isEmpty {
                 Text("You have not added any qualifications yet. Tap Add qualifications to pick from your organisation list, then set expiry dates and certificates below.")
                     .foregroundStyle(.secondary)
@@ -276,7 +310,8 @@ struct OperativeQualificationsEditorView: View {
             } label: {
                 Label("Add qualifications", systemImage: "plus.circle.fill")
             }
-            .disabled(!canEditAssignments || operativeStore.qualifications.isEmpty)
+            .buttonStyle(.borderless)
+            .disabled(!canEditAssignments)
         } header: {
             Text("My qualifications")
         }
@@ -291,48 +326,71 @@ struct OperativeQualificationsEditorView: View {
     @ViewBuilder
     private func qualificationRow(_ qualification: Qualification) -> some View {
         let isSelected = selectedQualifications.contains(qualification)
+        let hasExpiry = qualificationExpiryDates[qualification.id] != nil
 
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(qualification.name)
                     .font(.body)
                     .fontWeight(.medium)
                 Spacer()
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(isSelected ? .blue : .gray)
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard canEditAssignments else { return }
-                toggleQualification(qualification)
+                Button {
+                    guard canEditAssignments else { return }
+                    toggleQualification(qualification)
+                } label: {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(isSelected ? .blue : .gray)
+                }
+                .buttonStyle(.borderless)
+                .disabled(!canEditAssignments)
+                .accessibilityLabel(isSelected ? "Remove qualification" : "Keep qualification")
             }
 
             if isSelected {
-                DatePicker(
-                    "Expiry Date",
-                    selection: Binding(
-                        get: { qualificationExpiryDates[qualification.id] ?? Date() },
-                        set: { qualificationExpiryDates[qualification.id] = $0 }
-                    ),
-                    displayedComponents: .date
-                )
-                .disabled(!canEditAssignments)
-
                 HStack {
-                    Button("Remove Expiry") {
-                        qualificationExpiryDates.removeValue(forKey: qualification.id)
-                    }
-                    .disabled(!canEditAssignments || qualificationExpiryDates[qualification.id] == nil)
-
+                    Text("Expiry date")
+                        .font(.subheadline)
                     Spacer()
-
-                    Button("Upload Certificate") {
-                        pendingUploadQualificationId = qualification.id
-                        showingCertificateImporter = true
+                    Picker("Expiry date", selection: Binding(
+                        get: { hasExpiry },
+                        set: { enabled in
+                            if enabled {
+                                if qualificationExpiryDates[qualification.id] == nil {
+                                    qualificationExpiryDates[qualification.id] = Calendar.current.startOfDay(for: Date())
+                                }
+                            } else {
+                                qualificationExpiryDates.removeValue(forKey: qualification.id)
+                            }
+                        }
+                    )) {
+                        Text("No").tag(false)
+                        Text("Yes").tag(true)
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 140)
                     .disabled(!canEditAssignments)
                 }
+
+                if hasExpiry, let expiry = qualificationExpiryDates[qualification.id] {
+                    DatePicker(
+                        "Expires",
+                        selection: Binding(
+                            get: { expiry },
+                            set: { qualificationExpiryDates[qualification.id] = Calendar.current.startOfDay(for: $0) }
+                        ),
+                        displayedComponents: .date
+                    )
+                    .disabled(!canEditAssignments)
+                }
+
+                Button("Upload Certificate") {
+                    pendingUploadQualificationId = qualification.id
+                    showingCertificateImporter = true
+                }
+                .buttonStyle(.borderless)
                 .font(.caption)
+                .disabled(!canEditAssignments)
 
                 Text("PDF or JPEG only · max 10MB")
                     .font(.caption2)
@@ -355,7 +413,9 @@ struct OperativeQualificationsEditorView: View {
                             Button("View certificate") {
                                 certificateViewerURL = IdentifiableURL(url)
                             }
-                            .font(.caption)
+                            .buttonStyle(.borderless)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.green)
                         }
                     }
                 } else {
@@ -369,6 +429,7 @@ struct OperativeQualificationsEditorView: View {
                         qualificationCertificateURLs.removeValue(forKey: qualification.id)
                         certificateUploadTargets.removeValue(forKey: qualification.id)
                     }
+                    .buttonStyle(.borderless)
                     .font(.caption)
                     .foregroundColor(.red)
                     .disabled(!canEditAssignments)
@@ -585,7 +646,7 @@ struct OperativeQualificationsEditorView: View {
         updatedOperative.qualifications = selectedQualifications
         updatedOperative.qualificationExpiryDates = qualificationExpiryDates.filter { entry in
             selectedQualifications.contains(where: { $0.id == entry.key })
-        }
+        }.mapValues { Calendar.current.startOfDay(for: $0) }
         updatedOperative.qualificationCertificateURLs = updatedCertificateURLs.filter { entry in
             selectedQualifications.contains(where: { $0.id == entry.key })
         }

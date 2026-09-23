@@ -18,6 +18,33 @@ extension Notification.Name {
     static let mainMenuResetPassword = Notification.Name("mainMenuResetPassword")
     /// Sign out (clears UserStore and Firebase session).
     static let mainMenuSignOut = Notification.Name("mainMenuSignOut")
+    /// Open the real Projects / Small Works catalogue and push a job (from Daily Overview).
+    static let openWorkCatalogueDetail = Notification.Name("openWorkCatalogueDetail")
+    static let pushWorkCatalogueDetail = Notification.Name("pushWorkCatalogueDetail")
+}
+
+/// Holds a catalogue job to open immediately when Projects / Small Works appears,
+/// so the empty list is not shown first.
+enum WorkCatalogueDeepLink {
+    static var pendingProjectId: UUID?
+    static var pendingIsSmallWorks = false
+
+    static func set(projectId: UUID, isSmallWorks: Bool) {
+        pendingProjectId = projectId
+        pendingIsSmallWorks = isSmallWorks
+    }
+
+    static func peek(isSmallWorks: Bool) -> Bool {
+        pendingIsSmallWorks == isSmallWorks && pendingProjectId != nil
+    }
+
+    static func take(isSmallWorks: Bool) -> UUID? {
+        guard pendingIsSmallWorks == isSmallWorks else { return nil }
+        let id = pendingProjectId
+        pendingProjectId = nil
+        pendingIsSmallWorks = false
+        return id
+    }
 }
 
 /// Home surfaces opened from either Main Menu or More (HomeView owns the sheets).
@@ -37,6 +64,9 @@ enum MainMenuSurfaceRoute: String, CaseIterable {
     case orgSitesMap
     case siteAudit
     case invoicing
+    case mySchedule
+    case dailyOverview
+    case warnings
 }
 
 enum MainMenuShellSection: String, CaseIterable, Identifiable {
@@ -415,17 +445,11 @@ enum MainMenuCatalog {
     }
 
     static func canCreateProject(userStore: UserStore) -> Bool {
-        guard let user = userStore.currentUser else { return false }
-        if user.permissions.operativeMode { return false }
-        if user.isSuperAdmin || user.permissions.adminAccess { return true }
-        return user.permissions.manager && user.permissions.projects
+        userStore.canManageWorkCatalogue(.projects)
     }
 
     static func canCreateSmallWorks(userStore: UserStore) -> Bool {
-        guard let user = userStore.currentUser else { return false }
-        if user.permissions.operativeMode { return false }
-        if user.isSuperAdmin || user.permissions.adminAccess { return true }
-        return user.permissions.manager && user.permissions.smallWorks
+        userStore.canManageWorkCatalogue(.smallWorks)
     }
 
     static func canAddUserQuick(userStore: UserStore) -> Bool {

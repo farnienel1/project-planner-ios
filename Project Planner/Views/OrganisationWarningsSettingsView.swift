@@ -409,7 +409,7 @@ struct OrganisationWarningsSettingsView: View {
 
             toggleRow(
                 title: "Booking clashes",
-                subtitle: "Flags when an operative is double-booked on the same date across two or more projects. Clashes are always treated as high-urgency warnings.",
+                subtitle: "Flags when a person is double-booked on the same date. Operative, manager, and admin clashes are high-urgency; each can be approved for the weekly report.",
                 isOn: $draft.detectClashes
             )
 
@@ -428,8 +428,8 @@ struct OrganisationWarningsSettingsView: View {
         warningsCard {
             sectionHeader(icon: "exclamationmark.triangle.fill", title: "Warning severity guide", subtitle: "For reference — severity levels are assigned automatically based on warning type.")
 
-            severityRow(title: "High", description: "Operative clashes and unbooked labour — these directly affect project delivery and must be resolved promptly.", tint: .red)
-            severityRow(title: "Medium", description: "Manager and admin overlaps — flagged for the weekly report but less time-critical to act on immediately.", tint: .orange)
+            severityRow(title: "High", description: "Operative, manager, and admin booking clashes, plus unbooked labour. Approve a clash to note it on the weekly report.", tint: .red)
+            severityRow(title: "Medium", description: "Less urgent flags that do not block the day immediately.", tint: .orange)
             severityRow(title: "Low", description: "Materials not ordered by the required cut-off date — useful reminders that won't block site work immediately.", tint: .blue)
         }
     }

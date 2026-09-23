@@ -117,44 +117,43 @@ private struct SiteAuditProjectAccess {
         userStore: UserStore,
         projectStore: ProjectStore,
         bookingStore: BookingStore,
-        operativeStore: OperativeStore
+        operativeStore: OperativeStore,
+        managerBookings: [ManagerSiteBooking] = [],
+        taskStore: ProjectTaskStore? = nil,
+        extraProjectIds: Set<UUID> = []
     ) -> [Project] {
-        let all = uniqueWorks(projectStore.projects)
         if !userStore.canViewSiteAudit() {
             return []
         }
-        guard userStore.isOperativeMode() else {
-            if let currentUser = userStore.currentUser,
-               !userStore.hasAdminAccess(),
-               currentUser.permissions.manager {
-                return all.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
-            }
-            return all
-        }
-
-        guard let email = userStore.currentUser?.email.lowercased(),
-              let operative = operativeStore.allOperatives.first(where: { $0.email.lowercased() == email }),
-              let currentUserId = userStore.currentUser?.id else {
-            return []
-        }
-
-        let assigned = Set(bookingStore.bookings.filter {
-            $0.operativeId == operative.id && ($0.status == .confirmed || $0.status == .tentative)
-        }.map(\.projectId))
-        return all.filter { assigned.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId) }
+        return WorkAccess.visibleWorks(
+            from: uniqueWorks(projectStore.projects),
+            catalogue: .all,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerBookings: managerBookings,
+            taskStore: taskStore,
+            deadlineAssignedProjectIds: extraProjectIds
+        )
     }
 
     static func visibleProjects(
         userStore: UserStore,
         projectStore: ProjectStore,
         bookingStore: BookingStore,
-        operativeStore: OperativeStore
+        operativeStore: OperativeStore,
+        managerBookings: [ManagerSiteBooking] = [],
+        taskStore: ProjectTaskStore? = nil,
+        extraProjectIds: Set<UUID> = []
     ) -> [Project] {
         visibleWorks(
             userStore: userStore,
             projectStore: projectStore,
             bookingStore: bookingStore,
-            operativeStore: operativeStore
+            operativeStore: operativeStore,
+            managerBookings: managerBookings,
+            taskStore: taskStore,
+            extraProjectIds: extraProjectIds
         ).filter { $0.jobType != .smallWorks }
     }
 
@@ -162,13 +161,19 @@ private struct SiteAuditProjectAccess {
         userStore: UserStore,
         projectStore: ProjectStore,
         bookingStore: BookingStore,
-        operativeStore: OperativeStore
+        operativeStore: OperativeStore,
+        managerBookings: [ManagerSiteBooking] = [],
+        taskStore: ProjectTaskStore? = nil,
+        extraProjectIds: Set<UUID> = []
     ) -> [Project] {
         visibleWorks(
             userStore: userStore,
             projectStore: projectStore,
             bookingStore: bookingStore,
-            operativeStore: operativeStore
+            operativeStore: operativeStore,
+            managerBookings: managerBookings,
+            taskStore: taskStore,
+            extraProjectIds: extraProjectIds
         ).filter { $0.jobType == .smallWorks }
     }
 }
@@ -284,9 +289,12 @@ struct SiteAuditProjectsBrowserView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var taskStore: ProjectTaskStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @State private var selectedFilter: SiteAuditProjectFilter = .all
     @State private var selectedProject: Project?
     @State private var authoredAuditProjectIds: Set<UUID> = []
+    @State private var extraVisibleProjectIds: Set<UUID> = []
 
     private var mergedWorksForSiteAudit: [Project] {
         let visible: [Project] = {
@@ -296,14 +304,20 @@ struct SiteAuditProjectsBrowserView: View {
                     userStore: userStore,
                     projectStore: projectStore,
                     bookingStore: bookingStore,
-                    operativeStore: operativeStore
+                    operativeStore: operativeStore,
+                    managerBookings: managerScheduleStore.managerSiteBookings,
+                    taskStore: taskStore,
+                    extraProjectIds: extraVisibleProjectIds
                 )
             case .smallWorks:
                 return SiteAuditProjectAccess.visibleSmallWorks(
                     userStore: userStore,
                     projectStore: projectStore,
                     bookingStore: bookingStore,
-                    operativeStore: operativeStore
+                    operativeStore: operativeStore,
+                    managerBookings: managerScheduleStore.managerSiteBookings,
+                    taskStore: taskStore,
+                    extraProjectIds: extraVisibleProjectIds
                 )
             }
         }()
@@ -329,44 +343,40 @@ struct SiteAuditProjectsBrowserView: View {
         kind == .projects ? "No Projects" : "No Small Works"
     }
 
+    private var listCounts: WorksListStatusCounts {
+        WorksListStatusCounts.from(mergedWorksForSiteAudit.filter { kind.includes($0) })
+    }
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                Picker("Filter", selection: $selectedFilter) {
-                    ForEach(SiteAuditProjectFilter.allCases) { filter in
-                        Text(filter.rawValue).tag(filter)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .padding()
-
-                if filteredProjects.isEmpty {
-                    ContentUnavailableView(
-                        emptyTitle,
-                        systemImage: kind == .projects ? "folder" : "wrench.and.screwdriver",
-                        description: Text(
-                            userStore.isOperativeMode()
-                            ? "Shows \(kind == .projects ? "projects" : "small works") you are booked onto, plus any job where you previously submitted a site audit."
-                            : "Try switching the filter to All."
-                        )
-                    )
-                } else {
-                    List(filteredProjects) { project in
-                        Button {
-                            selectedProject = project
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(project.jobNumber).font(.headline)
-                                Text(project.siteName).font(.subheadline).foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    filterChipsRow
+                    if filteredProjects.isEmpty {
+                        emptyStateView
+                    } else {
+                        LazyVStack(spacing: 10) {
+                            ForEach(filteredProjects) { project in
+                                Button {
+                                    selectedProject = project
+                                } label: {
+                                    ProjectDetailRowView(project: project)
+                                        .environmentObject(userStore)
+                                        .environmentObject(operativeStore)
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
-                        .buttonStyle(.plain)
+                        .padding(.bottom, 8)
                     }
-                    .listStyle(.plain)
                 }
+                .padding(.horizontal, 18)
+                .padding(.top, 8)
             }
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
             .navigationTitle(kind.navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
+            .appChromeNavigationBarSurface()
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .sheet(item: $selectedProject) { project in
                 SiteAuditProjectAuditsView(project: project)
@@ -380,20 +390,94 @@ struct SiteAuditProjectsBrowserView: View {
         }
     }
 
+    private var filterChipsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                WorksRevampFilterChip(
+                    title: "All · \(listCounts.all)",
+                    isSelected: selectedFilter == .all,
+                    selectedForeground: ProjectWorksRevampColors.activeGreen
+                ) { selectedFilter = .all }
+                WorksRevampFilterChip(
+                    title: "Active · \(listCounts.active)",
+                    isSelected: selectedFilter == .active,
+                    selectedForeground: ProjectWorksRevampColors.activeGreen
+                ) { selectedFilter = .active }
+                WorksRevampFilterChip(
+                    title: "Upcoming · \(listCounts.upcoming)",
+                    isSelected: selectedFilter == .upcoming,
+                    selectedForeground: ProjectWorksRevampColors.upcomingAmber
+                ) { selectedFilter = .upcoming }
+                WorksRevampFilterChip(
+                    title: "Completed · \(listCounts.completed)",
+                    isSelected: selectedFilter == .completed,
+                    selectedForeground: ProjectWorksRevampColors.muted
+                ) { selectedFilter = .completed }
+            }
+        }
+    }
+
+    private var emptyStateView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: kind == .projects ? "folder" : "wrench.and.screwdriver")
+                .font(.system(size: 36))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+            Text(emptyTitle)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
+            Text(
+                userStore.isOperativeMode()
+                ? "Shows \(kind == .projects ? "projects" : "small works") you are booked onto, plus any job where you previously submitted a site audit."
+                : "Try switching the filter to All."
+            )
+            .font(.system(size: 13))
+            .foregroundStyle(ProjectWorksRevampColors.muted)
+            .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 36)
+        .padding(.horizontal, 16)
+    }
+
     private func loadAuthoredAuditProjectIds() async {
-        guard userStore.isOperativeMode(),
-              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
-              let uid = userStore.currentUser?.id else {
-            await MainActor.run { authoredAuditProjectIds = [] }
+        guard userStore.isOperativeMode() else {
+            await MainActor.run {
+                authoredAuditProjectIds = []
+                extraVisibleProjectIds = []
+            }
             return
         }
-        do {
-            let audits = try await firebaseBackend.loadSiteAudits(organizationId: orgId, createdByUserId: uid)
-            await MainActor.run {
-                authoredAuditProjectIds = Set(audits.map(\.projectId))
+        let email = userStore.currentUser?.email
+        let operative = operativeStore.allOperatives.first(where: {
+            $0.email.lowercased() == (email ?? "").lowercased()
+        })
+        var extras = WorkAccess.taskAssignedProjectIds(
+            currentUser: userStore.currentUser,
+            taskStore: taskStore,
+            operatives: operative.map { [$0] } ?? [],
+            managers: operativeStore.allManagers
+        )
+        if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+           let uid = userStore.currentUser?.id {
+            extras.formUnion(await firebaseBackend.loadDeadlineAssignedProjectIds(userId: uid, organizationId: orgId))
+            do {
+                let audits = try await firebaseBackend.loadSiteAudits(organizationId: orgId, createdByUserId: uid)
+                await MainActor.run {
+                    authoredAuditProjectIds = Set(audits.map(\.projectId))
+                    extraVisibleProjectIds = extras
+                }
+                return
+            } catch {
+                await MainActor.run {
+                    authoredAuditProjectIds = []
+                    extraVisibleProjectIds = extras
+                }
+                return
             }
-        } catch {
-            await MainActor.run { authoredAuditProjectIds = [] }
+        }
+        await MainActor.run {
+            authoredAuditProjectIds = []
+            extraVisibleProjectIds = extras
         }
     }
 }
@@ -550,6 +634,8 @@ struct SiteAuditCreateFlowView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var smartCache: SmartCacheService
+    @EnvironmentObject var taskStore: ProjectTaskStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
 
     /// When set, the flow starts on this project and optionally locks the picker.
     var initialProject: Project? = nil
@@ -581,6 +667,7 @@ struct SiteAuditCreateFlowView: View {
     @State private var operativeAccessVisibleToOperatives = true
     @State private var didBootstrapExisting = false
     @State private var savedOffline = false
+    @State private var extraVisibleProjectIds: Set<UUID> = []
 
     private var isEditing: Bool { existingAudit != nil }
 
@@ -594,8 +681,25 @@ struct SiteAuditCreateFlowView: View {
                 userStore: userStore,
                 projectStore: projectStore,
                 bookingStore: bookingStore,
-                operativeStore: operativeStore
+                operativeStore: operativeStore,
+                managerBookings: managerScheduleStore.managerSiteBookings,
+                taskStore: taskStore,
+                extraProjectIds: extraVisibleProjectIds
             )
+        )
+    }
+
+    private func extraIdsForCurrentUser() -> Set<UUID> {
+        guard userStore.isOperativeMode() else { return [] }
+        let email = userStore.currentUser?.email
+        let operative = operativeStore.allOperatives.first(where: {
+            $0.email.lowercased() == (email ?? "").lowercased()
+        })
+        return WorkAccess.taskAssignedProjectIds(
+            currentUser: userStore.currentUser,
+            taskStore: taskStore,
+            operatives: operative.map { [$0] } ?? [],
+            managers: operativeStore.allManagers
         )
     }
 
@@ -701,6 +805,16 @@ struct SiteAuditCreateFlowView: View {
                         operativeAccessVisibleToOperatives = true
                     }
                 }
+                .task {
+                    extraVisibleProjectIds = extraIdsForCurrentUser()
+                    if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+                       let uid = userStore.currentUser?.id,
+                       userStore.isOperativeMode() {
+                        extraVisibleProjectIds.formUnion(
+                            await firebaseBackend.loadDeadlineAssignedProjectIds(userId: uid, organizationId: orgId)
+                        )
+                    }
+                }
                 .alert("Site Audit", isPresented: Binding(
                     get: { errorMessage != nil },
                     set: { if !$0 { errorMessage = nil } }
@@ -758,6 +872,7 @@ struct SiteAuditCreateFlowView: View {
                 clientName: project.client.name,
                 items: items,
                 organizationName: firebaseBackend.currentOrganization?.name,
+                organizationAbbreviation: firebaseBackend.currentOrganization?.documentAbbreviation,
                 onEdit: { step = 2 },
                 onSubmit: { submitAudit() },
                 isSubmitting: isSubmitting,
@@ -982,10 +1097,12 @@ struct SiteAuditCreateFlowView: View {
                 await MainActor.run { submitStatusMessage = "Generating PDF…" }
                 let logoImage = await loadOrganizationLogoImage()
                 let orgName = await MainActor.run { firebaseBackend.currentOrganization?.name }
+                let orgAbbrev = await MainActor.run { firebaseBackend.currentOrganization?.documentAbbreviation }
                 let pdfURL = await SiteAuditPDFBuilder.makePDFAsync(
                     audit: audit,
                     localItems: drafts,
                     organizationName: orgName,
+                    organizationAbbreviation: orgAbbrev,
                     logoImage: logoImage,
                     clientName: project.client.name,
                     siteAddress: project.siteAddress
@@ -1090,6 +1207,7 @@ struct SiteAuditCreateFlowView: View {
                 audit: audit,
                 localItems: drafts,
                 organizationName: firebaseBackend.currentOrganization?.name,
+                organizationAbbreviation: firebaseBackend.currentOrganization?.documentAbbreviation,
                 logoImage: nil,
                 clientName: project.client.name,
                 siteAddress: project.siteAddress
@@ -1753,12 +1871,14 @@ struct SiteAuditDetailView: View {
         }
         let audit = displayAudit
         let orgName = firebaseBackend.currentOrganization?.name
+        let orgAbbrev = firebaseBackend.currentOrganization?.documentAbbreviation
         let client = clientProject?.client.name
         let address = clientProject?.siteAddress
         let generated = await SiteAuditPDFBuilder.makePDFAsync(
             audit: audit,
             localItems: drafts,
             organizationName: orgName,
+            organizationAbbreviation: orgAbbrev,
             logoImage: logo,
             clientName: client,
             siteAddress: address

@@ -100,6 +100,21 @@ nonisolated enum BankHolidayRegionDirectory: Sendable {
         }
     }
 
+    /// Regions shown in the annual-leave picker. `"GB"` (all nations) is kept internally so existing calendars still resolve holidays.
+    static func pickerRegions() -> [(group: String, regions: [BankHolidayRegion])] {
+        groupedRegions().compactMap { group, regions in
+            let filtered = regions.filter { $0.id != "GB" }
+            return filtered.isEmpty ? nil : (group, filtered)
+        }
+    }
+
+    /// Map the retired all-nations id onto a picker value without dropping the stored calendar region until save.
+    static func pickerSelection(forStoredRegionId storedId: String?) -> String {
+        if storedId == "GB" { return defaultRegionId }
+        if let storedId, region(id: storedId) != nil { return storedId }
+        return defaultRegionId
+    }
+
     static func groupTitle(for countryCode: String) -> String {
         switch countryCode.uppercased() {
         case "GB": return "United Kingdom"

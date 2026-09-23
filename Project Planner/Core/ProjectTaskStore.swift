@@ -41,6 +41,13 @@ class ProjectTaskStore: ObservableObject {
             return
         }
         
+        if tasks.isEmpty {
+            let cached = OfflineTaskLocalStore.shared.load(organizationId: organizationId)
+            if !cached.isEmpty {
+                tasks = cached
+            }
+        }
+
         print("🔥🔥🔥 DEBUG: TaskStore - Loading tasks for organization: \(organizationId)")
         isLoading = true
         errorMessage = nil
@@ -65,9 +72,20 @@ class ProjectTaskStore: ObservableObject {
             let loadedIds = Set(loadedTasks.map(\.id))
             let pendingLocal = tasks.filter { !loadedIds.contains($0.id) }
             tasks = (loadedTasks + pendingLocal).sorted { $0.createdAt > $1.createdAt }
+            OfflineTaskLocalStore.shared.save(tasks, organizationId: organizationId)
         } catch {
             print("🔥🔥🔥 DEBUG: TaskStore - Error loading tasks: \(error.localizedDescription)")
-            errorMessage = "Failed to load tasks: \(error.localizedDescription)"
+            let cached = OfflineTaskLocalStore.shared.load(organizationId: organizationId)
+            if !cached.isEmpty {
+                let cachedIds = Set(cached.map(\.id))
+                let pendingLocal = tasks.filter { !cachedIds.contains($0.id) }
+                tasks = (cached + pendingLocal).sorted { $0.createdAt > $1.createdAt }
+                errorMessage = nil
+            } else if tasks.isEmpty {
+                errorMessage = "Failed to load tasks: \(error.localizedDescription)"
+            } else {
+                errorMessage = nil
+            }
         }
     }
     
@@ -90,6 +108,9 @@ class ProjectTaskStore: ObservableObject {
         }
         
         tasks.append(task)
+        if let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId {
+            OfflineTaskLocalStore.shared.upsert(task, organizationId: organizationId)
+        }
         await save(task)
     }
     
@@ -115,6 +136,9 @@ class ProjectTaskStore: ObservableObject {
     func updateTask(_ task: ProjectTask) async {
         if let index = tasks.firstIndex(where: { $0.id == task.id }) {
             tasks[index] = task
+            if let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId {
+                OfflineTaskLocalStore.shared.upsert(task, organizationId: organizationId)
+            }
             await save(task)
         }
     }
@@ -132,6 +156,7 @@ class ProjectTaskStore: ObservableObject {
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
             return
         }
+        OfflineTaskLocalStore.shared.remove(taskId: task.id, organizationId: organizationId)
         
         do {
             try await firebaseBackend.deleteProjectTask(taskId: task.id, organizationId: organizationId)

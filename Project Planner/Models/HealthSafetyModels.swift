@@ -41,6 +41,12 @@ struct HSToolboxTalk: Identifiable, Codable, Hashable {
     var fileURL: String?
 }
 
+extension HSToolboxTalk {
+    var displayTitle: String {
+        ToolboxTalkLibrary.resolvedTitle(talkId: id, storedTalks: [self])
+    }
+}
+
 struct HSToolboxIssue: Identifiable, Codable, Hashable {
     let id: String
     var projectId: UUID

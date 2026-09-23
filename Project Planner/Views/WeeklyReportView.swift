@@ -677,9 +677,10 @@ struct WeeklyReportView: View {
             }
             service.replaceWithPeriodWarnings(filtered)
             periodHighCount = service.operativeBookingClashes(in: range, source: .period).count
-                + service.unbookedLabourWarnings(in: range, source: .period).count
-            periodMediumCount = service.unresolvedManagerClashes(in: range, source: .period).count
+                + service.unresolvedManagerClashes(in: range, source: .period).count
                 + service.approvedManagerClashes(in: range, source: .period).count
+                + service.unbookedLabourWarnings(in: range, source: .period).count
+            periodMediumCount = 0
             periodLowCount = service.materialsCutoffWarnings(in: range, source: .period).count
             periodSummaryReady = true
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT period from LIVE cache count=\(filtered.count)")
@@ -699,9 +700,10 @@ struct WeeklyReportView: View {
         let range = reportDateRange
         let shared = WarningsService.shared
         periodHighCount = shared.operativeBookingClashes(in: range).count
-            + shared.unbookedLabourWarnings(in: range).count
-        periodMediumCount = shared.unresolvedManagerClashes(in: range).count
+            + shared.unresolvedManagerClashes(in: range).count
             + shared.approvedManagerClashes(in: range).count
+            + shared.unbookedLabourWarnings(in: range).count
+        periodMediumCount = 0
         periodLowCount = shared.materialsCutoffWarnings(in: range).count
         periodSummaryReady = true
     }
@@ -790,14 +792,11 @@ struct WeeklyReportView: View {
         var sections: [WeeklyReportExportBuilder.Section] = []
 
         var warningRows: [[String]] = []
-        for warning in activeWarningsService.operativeBookingClashes(in: range) {
-            warningRows.append(clashExportCells(warning, status: "Active — remove booking"))
+        for warning in activeWarningsService.unresolvedBookingClashes(in: range) {
+            warningRows.append(clashExportCells(warning, status: "Not ticked for report"))
         }
         for warning in activeWarningsService.unbookedLabourWarnings(in: range) {
             warningRows.append(clashExportCells(warning, status: "Active"))
-        }
-        for warning in activeWarningsService.unresolvedManagerClashes(in: range) {
-            warningRows.append(clashExportCells(warning, status: "Not ticked for report"))
         }
         for warning in activeWarningsService.approvedManagerClashes(in: range) {
             warningRows.append(clashExportCells(warning, status: "Ticked — on report"))
@@ -922,14 +921,11 @@ struct WeeklyReportView: View {
         rows.append(["WARNINGS SUMMARY"])
         rows.append(["Status", "Priority", "Type", "Date", "Description", "Detail", "For"])
 
-        for warning in activeWarningsService.operativeBookingClashes(in: range) {
-            rows.append(clashExportCells(warning, status: "Active — remove booking"))
+        for warning in activeWarningsService.unresolvedBookingClashes(in: range) {
+            rows.append(clashExportCells(warning, status: "Not ticked for report"))
         }
         for warning in activeWarningsService.unbookedLabourWarnings(in: range) {
             rows.append(clashExportCells(warning, status: "Active"))
-        }
-        for warning in activeWarningsService.unresolvedManagerClashes(in: range) {
-            rows.append(clashExportCells(warning, status: "Not ticked for report"))
         }
         for warning in activeWarningsService.approvedManagerClashes(in: range) {
             rows.append(clashExportCells(warning, status: "Ticked — on report"))
@@ -937,9 +933,8 @@ struct WeeklyReportView: View {
         for warning in activeWarningsService.materialsCutoffWarnings(in: range) {
             rows.append(clashExportCells(warning, status: "Active"))
         }
-        if activeWarningsService.operativeBookingClashes(in: range).isEmpty
+        if activeWarningsService.unresolvedBookingClashes(in: range).isEmpty
             && activeWarningsService.unbookedLabourWarnings(in: range).isEmpty
-            && activeWarningsService.unresolvedManagerClashes(in: range).isEmpty
             && activeWarningsService.approvedManagerClashes(in: range).isEmpty
             && activeWarningsService.materialsCutoffWarnings(in: range).isEmpty {
             rows.append(["", "", "", "", "No warnings in period", ""])
@@ -1502,26 +1497,26 @@ struct WeeklyReportView: View {
         return input
     }
 
+    private func clashTypeLabel(_ type: Warning.WarningType) -> String {
+        switch type {
+        case .operativeBookingClash: return "Operative booking clash"
+        case .managerLocationClash: return "Manager booking clash"
+        case .unbookedLabour: return "Unbooked labour"
+        case .materialsCutoff: return "Material order not placed"
+        default: return type.rawValue
+        }
+    }
+
     private func clashExportCells(_ warning: Warning, status: String) -> [String] {
         [
             status,
             warning.severity.rawValue.capitalized,
-            clashTypeLabel(warning.type),
+            warning.clashPersonKind?.bookingClashTitle ?? clashTypeLabel(warning.type),
             warning.occurrenceDate.map(formatDate) ?? "",
             warning.title,
             warning.message,
             warning.affectedPersonNames,
         ]
-    }
-
-    private func clashTypeLabel(_ type: Warning.WarningType) -> String {
-        switch type {
-        case .operativeBookingClash: return "Operative booking clash"
-        case .managerLocationClash: return "Manager/admin clash"
-        case .unbookedLabour: return "Unbooked labour"
-        case .materialsCutoff: return "Material order not placed"
-        default: return type.rawValue
-        }
     }
 }
 

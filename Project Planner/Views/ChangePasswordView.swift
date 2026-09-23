@@ -17,106 +17,84 @@ struct ChangePasswordView: View {
     @State private var showingSuccessMessage = false
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 30) {
-                // Header
-                VStack(spacing: 16) {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 60))
-                        .foregroundColor(.blue)
-                    
-                    Text("Change Password")
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                        .foregroundColor(.blue)
-                    
-                    Text("Enter your current password and choose a new one.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .padding(.top, 40)
-                
-                // Form
-                VStack(spacing: 20) {
-                    // Current Password
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Current Password")
-                            .font(.headline)
-                            .foregroundColor(.primary)
-                        
-                        CustomSecureField(title: "Enter your current password", text: $currentPassword)
-                    }
-                    
-                    // New Password
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("New Password")
-                            .font(.headline)
-                            .foregroundColor(.primary)
-                        
-                        CustomSecureField(title: "Enter your new password", text: $newPassword)
-                    }
-                    
-                    // Confirm New Password
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Confirm New Password")
-                            .font(.headline)
-                            .foregroundColor(.primary)
-                        
-                        CustomSecureField(title: "Confirm your new password", text: $confirmPassword)
-                    }
-                }
-                .padding(.horizontal, 40)
-                
-                // Error Message
-                if let errorMessage = firebaseBackend.errorMessage {
-                    Text(errorMessage)
-                        .foregroundColor(.red)
-                        .font(.caption)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
-                }
-                
-                // Success Message
-                if showingSuccessMessage {
-                    Text("Password changed successfully")
-                        .foregroundColor(.green)
-                        .font(.caption)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
-                }
-                
-                // Change Password Button
-                Button(action: changePassword) {
-                    HStack {
-                        if firebaseBackend.isLoading {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.8)
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    SettingsHubChrome.sectionTitle("Change Password")
+                    SettingsHubChrome.card {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Enter your current password and choose a new one.")
+                                .font(.system(size: 13))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .padding(.top, 12)
+                            labeledSecure("Current Password", title: "Enter your current password", text: $currentPassword)
+                            Divider().overlay(ProjectWorksRevampColors.border)
+                            labeledSecure("New Password", title: "Enter your new password", text: $newPassword)
+                            Divider().overlay(ProjectWorksRevampColors.border)
+                            labeledSecure("Confirm New Password", title: "Confirm your new password", text: $confirmPassword)
                         }
-                        
-                        Text("Change Password")
-                            .font(.headline)
-                            .foregroundColor(.white)
+                        .padding(.bottom, 12)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.blue)
-                    .cornerRadius(12)
+
+                    if let errorMessage = firebaseBackend.errorMessage {
+                        Text(errorMessage)
+                            .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                            .font(.system(size: 12))
+                            .padding(.horizontal, 4)
+                            .padding(.bottom, 8)
+                    }
+
+                    if showingSuccessMessage {
+                        Text("Password changed successfully")
+                            .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                            .font(.system(size: 12))
+                            .padding(.horizontal, 4)
+                            .padding(.bottom, 8)
+                    }
+
+                    Button(action: changePassword) {
+                        HStack {
+                            if firebaseBackend.isLoading {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.8)
+                            }
+                            Text("Change Password")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(ProjectWorksRevampColors.blue)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(firebaseBackend.isLoading || !isFormValid)
+                    .opacity(isFormValid ? 1.0 : 0.6)
+                    .padding(.top, 8)
                 }
-                .disabled(firebaseBackend.isLoading || !isFormValid)
-                .opacity(isFormValid ? 1.0 : 0.6)
-                .padding(.horizontal, 40)
-                
-                Spacer()
+                .padding(16)
             }
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
-            .navigationBarItems(
-                leading: Button("Cancel") {
-                    presentationMode.wrappedValue.dismiss()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        presentationMode.wrappedValue.dismiss()
+                    }
                 }
-            )
+            }
         }
+    }
+
+    private func labeledSecure(_ label: String, title: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
+            CustomSecureField(title: title, text: text)
+        }
+        .padding(.vertical, 8)
     }
     
     private var isFormValid: Bool {

@@ -36,10 +36,14 @@ enum TradeTypeInventory {
     }
 
     static func register(_ trade: String) {
-        let value = normalized(trade)
-        guard !value.isEmpty else { return }
+        register(trades: [trade])
+    }
+
+    static func register(trades: [String]) {
+        let incoming = trades.map(normalized).filter { !$0.isEmpty }
+        guard !incoming.isEmpty else { return }
         let stored = UserDefaults.standard.stringArray(forKey: storageKey) ?? []
-        let merged = uniqueSorted(from: stored + [value])
+        let merged = uniqueSorted(from: stored + incoming)
         UserDefaults.standard.set(merged, forKey: storageKey)
     }
 

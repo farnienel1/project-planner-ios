@@ -362,16 +362,15 @@ struct WarningsDetailView: View {
         case .operativeBookingClash:
             OperativeClashWarningCard(
                 warning: warning,
-                onRemoveA: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingAId) },
-                onRemoveB: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingBId) },
+                onRemove: { removeClashEntry(warning, entry: $0) },
+                onApprove: { warningsService.approveWarning(warning) },
                 onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
             )
         case .managerLocationClash:
             ManagerClashWarningCard(
                 warning: warning,
-                onRemoveA: { removeManagerBooking(warning, entry: warning.managerClash?.entryA) },
-                onRemoveB: { removeManagerBooking(warning, entry: warning.managerClash?.entryB) },
+                onRemove: { removeClashEntry(warning, entry: $0) },
                 onApprove: { warningsService.approveWarning(warning) },
                 onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
@@ -671,6 +670,14 @@ struct WarningsDetailView: View {
         warningsService.dismissWarning(warning)
         Task {
             await notificationService.notifyWarningRemoved(warning: warning, removedBy: removedBy)
+        }
+    }
+
+    private func removeClashEntry(_ warning: Warning, entry: Warning.ClashTimelineEntry) {
+        if entry.managerBookingId != nil {
+            removeManagerBooking(warning, entry: entry)
+        } else {
+            removeOperativeBooking(warning, bookingId: entry.bookingId)
         }
     }
 

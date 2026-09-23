@@ -184,6 +184,7 @@ extension FirebaseBackend {
             defaultLatitude: data["defaultLatitude"] as? Double,
             defaultLongitude: data["defaultLongitude"] as? Double,
             companyLogoURL: data["companyLogoURL"] as? String,
+            documentAbbreviation: OrganizationDocumentAbbreviation.normalized(data["documentAbbreviation"] as? String),
             creatorUserId: data["creatorUserId"] as? String
         )
         Self.applyPayrollPolicyFields(from: data, to: &organization)

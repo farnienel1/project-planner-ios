@@ -135,6 +135,7 @@ class BookingStore: ObservableObject {
                         self.smartCache?.cacheBookings(firebaseBookings)
                         Task { try? await persistenceService.saveBookingData(bookings: firebaseBookings) }
                     }
+                    self.startLiveUpdates(organizationId: organizationId)
                     
                     print("🔥🔥🔥 DEBUG: Loaded \(firebaseBookings.count) bookings from Firebase")
                     
@@ -514,6 +515,30 @@ class BookingStore: ObservableObject {
         } catch {
             errorMessage = "Failed to save data: \(error.localizedDescription)"
         }
+        ScheduleChangeNotifier.postBookingStoreDidChange()
+    }
+
+    func startLiveUpdates(organizationId: String) {
+        firebaseBackend?.listenBookings(organizationId: organizationId) { [weak self] remote in
+            guard let self else { return }
+            self.applyRemoteBookings(remote)
+        }
+    }
+
+    private func applyRemoteBookings(_ remote: [Booking]) {
+        let incoming = remote.sorted { $0.id.uuidString < $1.id.uuidString }
+        let current = bookings.sorted { $0.id.uuidString < $1.id.uuidString }
+        if incoming.count == current.count {
+            let same = zip(incoming, current).allSatisfy { lhs, rhs in
+                lhs.id == rhs.id && lhs.updatedAt == rhs.updatedAt && lhs.status == rhs.status
+                    && lhs.timeSlot == rhs.timeSlot && lhs.workStartTime == rhs.workStartTime
+                    && lhs.workEndTime == rhs.workEndTime && lhs.projectId == rhs.projectId
+                    && lhs.operativeId == rhs.operativeId
+            }
+            if same { return }
+        }
+        bookings = remote
+        smartCache?.cacheBookings(remote)
         ScheduleChangeNotifier.postBookingStoreDidChange()
     }
     

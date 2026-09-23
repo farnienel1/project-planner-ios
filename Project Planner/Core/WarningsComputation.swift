@@ -412,48 +412,50 @@ enum WarningsComputation {
         }
 
         var processedOpClash: Set<String> = []
+        let managerAdminEmails = Set(managerOrAdminUsers.map(\.emailLowercased))
         if input.warningDetection.detectClashes {
             for (_, dayBookings) in scheduleIndex.operativeBookingsByDayKey {
                 guard dayBookings.count > 1 else { continue }
-                let sorted = dayBookings.sorted { $0.id.uuidString < $1.id.uuidString }
-                for i in 0..<sorted.count {
-                    for j in (i + 1)..<sorted.count {
-                        let a = sorted[i]
-                        let b = sorted[j]
-                        guard let ia = a.clashInterval, let ib = b.clashInterval, intervalsOverlap(ia, ib) else { continue }
-                        let pairKey = [a.id.uuidString, b.id.uuidString].sorted().joined(separator: "|")
-                        guard processedOpClash.insert(pairKey).inserted else { continue }
-                        guard let operative = operativesById[a.operativeId] else { continue }
-                        let day = a.dayStart
-                        let overlapMin = overlapMinutes(ia, ib)
-                        let (summary, detail) = formatOverlapSummary(minutes: overlapMin)
-                        let pA = projectById[a.projectId]
-                        let pB = projectById[b.projectId]
-                        let entryA = operativeTimelineEntry(booking: a, project: pA)
-                        let entryB = operativeTimelineEntry(booking: b, project: pB)
-                        let pALabel = pA?.jobNumber ?? "Job"
-                        let pBLabel = pB?.jobNumber ?? "Job"
-                        generated.append(Warning(
-                            resolutionKey: "op-clash-\(pairKey)",
-                            type: .operativeBookingClash,
-                            title: "Operative booking clash",
-                            message: "\(operative.name) has overlapping operative bookings (\(pALabel) & \(pBLabel)). Remove one booking to clear this warning.",
-                            severity: .high,
-                            occurrenceDate: day,
-                            operativeClash: Warning.OperativeClashWarningDetails(
-                                operativeId: operative.id,
-                                operativeName: operative.name,
-                                date: day,
-                                bookingAId: a.id,
-                                bookingBId: b.id,
-                                entryA: entryA,
-                                entryB: entryB,
-                                overlapMinutes: overlapMin,
-                                overlapSummary: summary,
-                                overlapDetail: detail
-                            )
-                        ))
+                guard let operative = operativesById[dayBookings[0].operativeId] else { continue }
+                if managerAdminEmails.contains(operative.emailLowercased) { continue }
+                let clusters = overlappingClusters(dayBookings) { a, b in
+                    guard let ia = a.clashInterval, let ib = b.clashInterval else { return false }
+                    return intervalsOverlap(ia, ib)
+                }
+                for (clusterIndex, cluster) in clusters.enumerated() {
+                    let sortedCluster = cluster.sorted { $0.id.uuidString < $1.id.uuidString }
+                    let pairKey = sortedCluster.map(\.id.uuidString).joined(separator: "|")
+                    guard processedOpClash.insert(pairKey).inserted else { continue }
+                    let day = sortedCluster[0].dayStart
+                    let entries = sortedCluster.map { booking in
+                        operativeTimelineEntry(booking: booking, project: projectById[booking.projectId])
                     }
+                    let window = WarningTimelineMath.fitWindow(entries: entries)
+                    let analysis = WarningTimelineMath.analyse(entries: entries, window: window)
+                    let overlapMin = analysis.minutes
+                    let (summary, detail) = formatOverlapSummary(minutes: overlapMin)
+                    let place = WarningTimelineMath.placeWord(entries.count)
+                    generated.append(Warning(
+                        resolutionKey: "op-clash-\(operative.id.uuidString)-\(day.timeIntervalSince1970)-\(clusterIndex)",
+                        type: .operativeBookingClash,
+                        title: Warning.ClashPersonKind.operative.bookingClashTitle,
+                        message: "\(operative.name) is booked in \(place) places on \(formatDay(day)). Approve if it's intentional and it'll be noted on the weekly report.",
+                        severity: .high,
+                        occurrenceDate: day,
+                        operativeClash: Warning.OperativeClashWarningDetails(
+                            operativeId: operative.id,
+                            operativeName: operative.name,
+                            date: day,
+                            bookingAId: sortedCluster[0].id,
+                            bookingBId: sortedCluster[1].id,
+                            entryA: entries[0],
+                            entryB: entries[1],
+                            overlapMinutes: overlapMin,
+                            overlapSummary: summary,
+                            overlapDetail: detail,
+                            entries: entries
+                        )
+                    ))
                 }
             }
         }
@@ -469,49 +471,47 @@ enum WarningsComputation {
             )
             for (_, items) in managerPersonDays {
                 guard items.count > 1 else { continue }
-                let sorted = items.sorted { $0.sortKey < $1.sortKey }
-                for i in 0..<sorted.count {
-                    for j in (i + 1)..<sorted.count {
-                        let a = sorted[i]
-                        let b = sorted[j]
-                        guard a.userId == b.userId else { continue }
-                        if a.operativeBooking != nil && b.operativeBooking != nil { continue }
-                        guard scheduleIndex.managerPersonItemsOverlap(a, b),
-                              let ia = a.clashInterval,
-                              let ib = b.clashInterval else { continue }
-                        let pairKey = [a.pairId, b.pairId].sorted().joined(separator: "|")
-                        guard processedMgrClash.insert(pairKey).inserted else { continue }
-                        let person = usersById[a.userId]?.displayName ?? a.userId
-                        let day = a.date
-                        let overlapMin = overlapMinutes(ia, ib)
-                        let (summary, detail) = formatOverlapSummary(minutes: overlapMin)
-                        let entryA = a.timelineEntry(projectsById: projectById)
-                        let entryB = b.timelineEntry(projectsById: projectById)
-                        let locA = entryA.locationLabel
-                        let locB = entryB.locationLabel
-                        let isLocationClash = isOtherLocation(locA) || isOtherLocation(locB)
-                        generated.append(Warning(
-                            resolutionKey: "mgr-clash-\(pairKey)",
-                            type: .managerLocationClash,
-                            title: isLocationClash ? "Manager location clash" : "Manager schedule clash",
-                            message: "\(person) has overlapping manager/admin bookings (\(locA) & \(locB)). Tick to include on the weekly report if intentional.",
-                            severity: .medium,
-                            occurrenceDate: day,
-                            managerClash: Warning.ManagerClashWarningDetails(
-                                userId: a.userId,
-                                personName: person,
-                                date: day,
-                                bookingAId: a.bookingId,
-                                bookingBId: b.bookingId,
-                                entryA: entryA,
-                                entryB: entryB,
-                                overlapMinutes: overlapMin,
-                                overlapSummary: summary,
-                                overlapDetail: detail,
-                                isLocationClash: isLocationClash
-                            )
-                        ))
-                    }
+                let clusters = overlappingClusters(items) { a, b in
+                    scheduleIndex.managerPersonItemsOverlap(a, b)
+                }
+                for (clusterIndex, cluster) in clusters.enumerated() {
+                    let sortedCluster = cluster.sorted { $0.sortKey < $1.sortKey }
+                    let pairKey = sortedCluster.map(\.pairId).joined(separator: "|")
+                    guard processedMgrClash.insert(pairKey).inserted else { continue }
+                    let user = usersById[sortedCluster[0].userId]
+                    let kind = clashPersonKind(for: user)
+                    let person = user?.displayName ?? sortedCluster[0].userId
+                    let day = sortedCluster[0].date
+                    let entries = sortedCluster.map { $0.timelineEntry(projectsById: projectById) }
+                    let window = WarningTimelineMath.fitWindow(entries: entries)
+                    let analysis = WarningTimelineMath.analyse(entries: entries, window: window)
+                    let overlapMin = analysis.minutes
+                    let (summary, detail) = formatOverlapSummary(minutes: overlapMin)
+                    let place = WarningTimelineMath.placeWord(entries.count)
+                    let isLocationClash = entries.contains { isOtherLocation($0.locationLabel) }
+                    generated.append(Warning(
+                        resolutionKey: "mgr-clash-\(sortedCluster[0].userId)-\(day.timeIntervalSince1970)-\(clusterIndex)",
+                        type: .managerLocationClash,
+                        title: kind.bookingClashTitle,
+                        message: "\(person) is booked in \(place) places on \(formatDay(day)). Approve if it's intentional and it'll be noted on the weekly report.",
+                        severity: .high,
+                        occurrenceDate: day,
+                        managerClash: Warning.ManagerClashWarningDetails(
+                            userId: sortedCluster[0].userId,
+                            personName: person,
+                            date: day,
+                            bookingAId: sortedCluster[0].bookingId,
+                            bookingBId: sortedCluster[1].bookingId,
+                            entryA: entries[0],
+                            entryB: entries[1],
+                            overlapMinutes: overlapMin,
+                            overlapSummary: summary,
+                            overlapDetail: detail,
+                            isLocationClash: isLocationClash,
+                            personKind: kind,
+                            entries: entries
+                        )
+                    ))
                 }
             }
         }
@@ -527,7 +527,7 @@ enum WarningsComputation {
         while day <= coverageEnd {
             let weekday = cal.component(.weekday, from: day)
             if isUnbookedLabourWeekday(weekday, includeWeekends: input.warningDetection.includeWeekendsForUnbookedLabour) {
-                let names = scheduleIndex.unbookedNames(
+                let people = scheduleIndex.unbookedPeople(
                     on: day,
                     operativeUsers: operativeUsers,
                     managerUsers: managerUsers,
@@ -538,14 +538,19 @@ enum WarningsComputation {
                     excludedUserIds: input.warningDetection.excludedUserIdsFromUnbookedWarnings,
                     standardPaidHours: input.payrollTimePolicy.standardPaidHours
                 )
-                if !names.isEmpty {
+                for person in people {
                     generated.append(Warning(
-                        resolutionKey: "unbooked-\(day.timeIntervalSince1970)",
+                        resolutionKey: "unbooked-\(day.timeIntervalSince1970)-\(person.personKey)",
                         type: .unbookedLabour,
-                        title: "Unbooked labour", message: "\(names.count) \(names.count == 1 ? "person is" : "people are") below the standard paid day on \(formatDay(day)). Missing hours are shown per person below.",
+                        title: "Unbooked labour",
+                        message: "\(person.displayName) is below the standard paid day on \(formatDay(day)). Missing hours are shown below.",
                         severity: .high,
                         occurrenceDate: day,
-                        unbookedLabour: Warning.UnbookedLabourWarningDetails(date: day, names: names)
+                        unbookedLabour: Warning.UnbookedLabourWarningDetails(
+                            date: day,
+                            names: [person.displayLine],
+                            personKeys: [person.personKey]
+                        )
                     ))
                 }
             }
@@ -623,6 +628,56 @@ enum WarningsComputation {
         return weekday >= 2 && weekday <= 6
     }
 
+    nonisolated private static func clashPersonKind(
+        for user: WarningsComputationSnapshot.UserSnapshot?
+    ) -> Warning.ClashPersonKind {
+        guard let user else { return .manager }
+        if user.hasAdminAccess || user.isAdminRole || user.isSuperAdmin { return .admin }
+        if user.isManager { return .manager }
+        return .operative
+    }
+
+    /// Connected components of overlapping items (one warning per person-day cluster).
+    nonisolated private static func overlappingClusters<T>(
+        _ items: [T],
+        overlap: (T, T) -> Bool
+    ) -> [[T]] {
+        let n = items.count
+        guard n >= 2 else { return [] }
+        var parent = Array(0..<n)
+        func find(_ i: Int) -> Int {
+            var x = i
+            while parent[x] != x { x = parent[x] }
+            var y = i
+            while parent[y] != y {
+                let next = parent[y]
+                parent[y] = x
+                y = next
+            }
+            return x
+        }
+        func union(_ a: Int, _ b: Int) {
+            let ra = find(a)
+            let rb = find(b)
+            if ra != rb { parent[ra] = rb }
+        }
+        var hasEdge = Array(repeating: false, count: n)
+        for i in 0..<n {
+            for j in (i + 1)..<n {
+                if overlap(items[i], items[j]) {
+                    union(i, j)
+                    hasEdge[i] = true
+                    hasEdge[j] = true
+                }
+            }
+        }
+        var groups: [Int: [T]] = [:]
+        for i in 0..<n where hasEdge[i] {
+            groups[find(i), default: []].append(items[i])
+        }
+        return groups.values.filter { $0.count >= 2 }
+    }
+
     nonisolated private static func formatDay(_ day: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -637,12 +692,6 @@ enum WarningsComputation {
 
     nonisolated fileprivate static func intervalsOverlap(_ a: (Int, Int), _ b: (Int, Int)) -> Bool {
         a.0 < b.1 && b.0 < a.1
-    }
-
-    nonisolated private static func overlapMinutes(_ a: (Int, Int), _ b: (Int, Int)) -> Int {
-        let start = max(a.0, b.0)
-        let end = min(a.1, b.1)
-        return max(0, end - start)
     }
 
     nonisolated private static func formatOverlapSummary(minutes: Int) -> (summary: String, detail: String) {
@@ -672,7 +721,7 @@ enum WarningsComputation {
         booking: WarningsComputationSnapshot.OperativeBookingSnapshot,
         project: WarningsComputationSnapshot.ProjectSnapshot?
     ) -> Warning.ClashTimelineEntry {
-        let iv = booking.clashInterval ?? (0, 8 * 60)
+        let iv = booking.clashInterval ?? (8 * 60, 17 * 60)
         let hStr = formatHours(booking.paidHours)
         return Warning.ClashTimelineEntry(
             bookingId: booking.id,
@@ -692,7 +741,7 @@ enum WarningsComputation {
         booking: WarningsComputationSnapshot.ManagerBookingSnapshot,
         projectsById: [UUID: WarningsComputationSnapshot.ProjectSnapshot]
     ) -> Warning.ClashTimelineEntry {
-        let iv = booking.clashInterval ?? (0, 8 * 60)
+        let iv = booking.clashInterval ?? (8 * 60, 17 * 60)
         let hStr = formatHours(booking.paidHours)
         var jobNumber: String?
         var siteName: String?
@@ -789,6 +838,12 @@ private struct WarningsScheduleIndex {
         holidayByOperativeId = byOp
     }
 
+    struct UnbookedPerson {
+        let personKey: String
+        let displayName: String
+        let displayLine: String
+    }
+
     nonisolated func unbookedNames(
         on day: Date,
         operativeUsers: [WarningsComputationSnapshot.UserSnapshot],
@@ -800,6 +855,30 @@ private struct WarningsScheduleIndex {
         excludedUserIds: Set<String>,
         standardPaidHours: Double
     ) -> [String] {
+        unbookedPeople(
+            on: day,
+            operativeUsers: operativeUsers,
+            managerUsers: managerUsers,
+            rosterOperatives: rosterOperatives,
+            operativesByEmail: operativesByEmail,
+            usersById: usersById,
+            managerAdminUserIds: managerAdminUserIds,
+            excludedUserIds: excludedUserIds,
+            standardPaidHours: standardPaidHours
+        ).map(\.displayLine)
+    }
+
+    nonisolated func unbookedPeople(
+        on day: Date,
+        operativeUsers: [WarningsComputationSnapshot.UserSnapshot],
+        managerUsers: [WarningsComputationSnapshot.UserSnapshot],
+        rosterOperatives: [WarningsComputationSnapshot.OperativeSnapshot],
+        operativesByEmail: [String: WarningsComputationSnapshot.OperativeSnapshot],
+        usersById: [String: WarningsComputationSnapshot.UserSnapshot],
+        managerAdminUserIds: Set<String>,
+        excludedUserIds: Set<String>,
+        standardPaidHours: Double
+    ) -> [UnbookedPerson] {
         let dayStart = calendar.startOfDay(for: day)
         let dayKeySuffix = dayStart.timeIntervalSince1970
 
@@ -851,14 +930,20 @@ private struct WarningsScheduleIndex {
 
         let operativeUserEmails = Set(operativeUsers.map(\.emailLowercased))
         var seenEmails = Set<String>()
-        var names: [String] = []
-        names.reserveCapacity(operativeUsers.count + managerUsers.count + rosterOperatives.count)
+        var people: [UnbookedPerson] = []
+        people.reserveCapacity(operativeUsers.count + managerUsers.count + rosterOperatives.count)
 
-        func appendIfUnderBooked(name: String, emailKey: String, paid: Double) {
+        func appendIfUnderBooked(personKey: String, name: String, emailKey: String, paid: Double) {
             guard seenEmails.insert(emailKey).inserted else { return }
             guard paid < requiredPaidHours else { return }
             let missing = max(0, requiredPaidHours - paid)
-            names.append("\(name) (missing \(WarningsComputation.formatHours(missing))h)")
+            people.append(
+                UnbookedPerson(
+                    personKey: personKey,
+                    displayName: name,
+                    displayLine: "\(name) (missing \(WarningsComputation.formatHours(missing))h)"
+                )
+            )
         }
 
         for user in operativeUsers {
@@ -867,10 +952,10 @@ private struct WarningsScheduleIndex {
             if hasHoliday(userId: user.id, operativeId: linked?.id) { continue }
             if let linked {
                 let paid = operativePaidTotal(linked.id) + managerPaidTotal(user.id)
-                appendIfUnderBooked(name: linked.name, emailKey: user.emailLowercased, paid: paid)
+                appendIfUnderBooked(personKey: user.id, name: linked.name, emailKey: user.emailLowercased, paid: paid)
             } else {
                 let paid = managerPaidTotal(user.id)
-                appendIfUnderBooked(name: user.displayName, emailKey: user.emailLowercased, paid: paid)
+                appendIfUnderBooked(personKey: user.id, name: user.displayName, emailKey: user.emailLowercased, paid: paid)
             }
         }
 
@@ -879,7 +964,7 @@ private struct WarningsScheduleIndex {
             let linked = operativesByEmail[user.emailLowercased]
             if hasHoliday(userId: user.id, operativeId: linked?.id) { continue }
             let paid = managerPaidTotal(user.id) + (linked.map { operativePaidTotal($0.id) } ?? 0)
-            appendIfUnderBooked(name: user.displayName, emailKey: user.emailLowercased, paid: paid)
+            appendIfUnderBooked(personKey: user.id, name: user.displayName, emailKey: user.emailLowercased, paid: paid)
         }
 
         for op in rosterOperatives where op.isActive {
@@ -893,9 +978,14 @@ private struct WarningsScheduleIndex {
             if isExcluded(userId: linkedUserId) { continue }
             if hasHoliday(userId: linkedUserId, operativeId: op.id) { continue }
             let paid = operativePaidTotal(op.id) + (linkedUserId.map { managerPaidTotal($0) } ?? 0)
-            appendIfUnderBooked(name: op.name, emailKey: email, paid: paid)
+            appendIfUnderBooked(
+                personKey: linkedUserId ?? op.id.uuidString,
+                name: op.name,
+                emailKey: email,
+                paid: paid
+            )
         }
-        return names.sorted()
+        return people.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
     }
 
     fileprivate struct ManagerPersonDayItem {

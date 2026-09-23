@@ -8,20 +8,6 @@
 import SwiftUI
 import FirebaseAuth
 
-private enum HolidayChrome {
-    static let canvas = ProjectWorksRevampColors.canvas
-    static let ink = ProjectWorksRevampColors.ink
-    static let muted = ProjectWorksRevampColors.muted
-    static let border = ProjectWorksRevampColors.border
-    static let accent = ProjectWorksRevampColors.blue
-    static let taken = Color(red: 0.133, green: 0.545, blue: 0.318)
-    static let pending = Color(red: 0.89, green: 0.22, blue: 0.22)
-    /// Pending request count in summary hero (distinct from calendar request red).
-    static let pendingMetric = Color(red: 0.98, green: 0.62, blue: 0.09)
-    /// Approved half-day on the booking calendar (distinct from pending request orange).
-    static let halfDayBooked = Color(red: 0.95, green: 0.52, blue: 0.12)
-}
-
 struct HolidayView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var holidayStore: HolidayStore

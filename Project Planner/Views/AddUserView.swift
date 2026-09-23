@@ -53,7 +53,6 @@ struct AddUserView: View {
     @State private var annualLeaveStartMonth = 1
     @State private var annualLeaveEndMonth = 12
     @State private var annualLeaveCarriesOver = false
-    @State private var timesheetsEnabled = false
     @State private var vatNumber = ""
     @State private var utrNumber = ""
     @State private var isCreating = false
@@ -486,9 +485,6 @@ struct AddUserView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    .onChange(of: employmentType) { _, _ in
-                        timesheetsEnabled = AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
-                    }
                 }
                 
                 if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
@@ -530,15 +526,9 @@ struct AddUserView: View {
                 }
 
                 if mode == .admin {
-                    Toggle(isOn: $timesheetsEnabled) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Timesheets")
-                                .font(.headline)
-                            Text("Operatives default to on; managers and admins default to off.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
+                    Text("Timesheets follow employment type. Self-employed users get My Timesheets; PAYE users keep the current pay run until it is paid, then schedule no longer fills timesheets.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
             }
         }
@@ -737,7 +727,7 @@ struct AddUserView: View {
                             invitePermissionDivider
                             PermissionToggle(
                                 title: "Weekly Report",
-                                description: "Can open and pull weekly reports.",
+                                description: "Can open Weekly Report from Home. If off, that tile is hidden.",
                                 isOn: $permissions.weeklyReports,
                                 isDisabled: false,
                                 style: .plainInset
@@ -745,7 +735,7 @@ struct AddUserView: View {
                             invitePermissionDivider
                             PermissionToggle(
                                 title: "Daily Overview",
-                                description: "Can open daily overview from the home screen and menus.",
+                                description: "Can open Daily Overview from Home. If off, that tile is hidden.",
                                 isOn: $permissions.dailyOverview,
                                 isDisabled: false,
                                 style: .plainInset
@@ -753,7 +743,7 @@ struct AddUserView: View {
                             invitePermissionDivider
                             PermissionToggle(
                                 title: "Sub Contractors",
-                                description: "Can add and manage sub contractors. If unselected they can still book sub contractors in, but not manage their records.",
+                                description: "Can add and manage sub contractor records. If off, Sub Contractors is hidden on Home and menus. They can still book existing subcontractors on jobs.",
                                 isOn: $permissions.subContractors,
                                 isDisabled: false,
                                 style: .plainInset
@@ -761,7 +751,7 @@ struct AddUserView: View {
                             invitePermissionDivider
                             PermissionToggle(
                                 title: "Manage Qualifications",
-                                description: "When on, this manager can edit Organisation Qualifications. When off, they only see My Qualifications.",
+                                description: "When on, this manager can add and edit organisation qualification templates. When off, they only see My Qualifications, and they can still assign templates others have already added.",
                                 isOn: $permissions.qualifications,
                                 isDisabled: false,
                                 style: .plainInset
@@ -769,7 +759,7 @@ struct AddUserView: View {
                             invitePermissionDivider
                             PermissionToggle(
                                 title: "Projects",
-                                description: "Can create and manage projects. If unselected, this manager can still schedule operatives and sub contractors.",
+                                description: "Can create, edit, and add projects. If off, they still see projects they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit project details.",
                                 isOn: $permissions.projects,
                                 isDisabled: false,
                                 style: .plainInset
@@ -777,7 +767,7 @@ struct AddUserView: View {
                             invitePermissionDivider
                             PermissionToggle(
                                 title: "Small Works",
-                                description: "Can create and manage small works. If unselected, this manager can still schedule operatives and sub contractors.",
+                                description: "Can create, edit, and add small works. If off, they still see small works they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit small works details.",
                                 isOn: $permissions.smallWorks,
                                 isDisabled: false,
                                 style: .plainInset
@@ -1027,6 +1017,8 @@ struct AddUserView: View {
                 smallWorks: true,
                 operativeMode: false,
                 annualLeaveSelfBook: false,
+                weeklyReports: true,
+                dailyOverview: true,
                 wholesalersOrderHistory: true
             )
         case .manager:
@@ -1061,7 +1053,6 @@ struct AddUserView: View {
                 siteAudit: true
             )
         }
-        timesheetsEnabled = AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
     }
     
     private var tradeRequiredAndValid: Bool {
@@ -1159,7 +1150,7 @@ struct AddUserView: View {
                 annualLeaveYearStartMonth: passAnnualLeaveInvite ? annualLeaveStartMonth : nil,
                 annualLeaveYearEndMonth: passAnnualLeaveInvite ? annualLeaveEndMonth : nil,
                 annualLeaveCarriesOver: passAnnualLeaveInvite ? annualLeaveCarriesOver : nil,
-                timesheetsEnabled: mode == .admin ? timesheetsEnabled : AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType),
+                timesheetsEnabled: AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType),
                 vatNumber: vatNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : vatNumber.trimmingCharacters(in: .whitespacesAndNewlines),
                 utrNumber: utrNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : utrNumber.trimmingCharacters(in: .whitespacesAndNewlines)
             )

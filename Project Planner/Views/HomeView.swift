@@ -20,6 +20,7 @@ struct HomeView: View {
     @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var smartCache: SmartCacheService
     @State private var homeWarningCount: Int = 0
     @State private var cachedUpNextSections: [HomeUpNextDaySection] = []
     @State private var cachedOverviewMetrics = HomeOverviewMetrics()
@@ -61,6 +62,7 @@ struct HomeView: View {
     @State private var persistedAdminOverviewMetricIds: [HomeOverviewMetricID] = []
     @State private var hasLoadedAdminOverviewMetrics = false
     @State private var showingHomeProfileCard = false
+    @State private var isRefreshingHomeConnection = false
     
     var body: some View {
         ScrollView {
@@ -73,6 +75,9 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar(.hidden, for: .navigationBar)
         .background(homeCanvasBackground.ignoresSafeArea(edges: .top))
+        .refreshable {
+            await refreshHomeConnection()
+        }
         .sheet(isPresented: $showingWarningsDetail, onDismiss: {
             WarningsRefreshHelper.isWarningsSheetVisible = false
             // REBUILD: no auto warm on dismiss.
@@ -102,10 +107,12 @@ struct HomeView: View {
                 .environmentObject(holidayStore)
                 .environmentObject(notificationService)
                 .environmentObject(firebaseBackend)
+                .environmentObject(bookingStore)
         }
         .sheet(isPresented: $showingNotifications) {
             NotificationsView()
                 .environmentObject(notificationService)
+                .environmentObject(userStore)
         }
         .sheet(isPresented: $showingCreateClient) {
             CreateClientView()
@@ -140,12 +147,14 @@ struct HomeView: View {
                 .environmentObject(operativeStore)
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
         }
         .sheet(isPresented: $showingOperativeQualifications) {
             OperativeQualificationsReadOnlyView()
                 .environmentObject(operativeStore)
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
         }
         .sheet(isPresented: $showingJobTypesManagement) {
             JobTypesManagementView()
@@ -273,8 +282,9 @@ struct HomeView: View {
                 .environmentObject(appSettings)
                 .environmentObject(notificationService)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openOrgSitesMapFromMore"))) { _ in
-            showingOrgSitesMap = true
+        .onReceive(NotificationCenter.default.publisher(for: .openWorkCatalogueDetail)) { _ in
+            showingDailyOverview = false
+            showingWarningsDetail = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openSiteAuditFromMore"))) { _ in
             showingSiteAudit = true
@@ -302,8 +312,22 @@ struct HomeView: View {
             case .siteAudit: showingSiteAudit = true
             case .invoicing:
                 timesheetReviewDeepLinkUserId = note.userInfo?["targetUserId"] as? String
-                timesheetReviewDeepLinkWeekStart = note.userInfo?["weekStart"] as? Date
+                if let date = note.userInfo?["weekStart"] as? Date {
+                    timesheetReviewDeepLinkWeekStart = date
+                } else if let interval = note.userInfo?["weekStart"] as? TimeInterval {
+                    timesheetReviewDeepLinkWeekStart = Date(timeIntervalSince1970: interval)
+                } else if let number = note.userInfo?["weekStart"] as? NSNumber {
+                    timesheetReviewDeepLinkWeekStart = Date(timeIntervalSince1970: number.doubleValue)
+                } else {
+                    timesheetReviewDeepLinkWeekStart = nil
+                }
                 showingInvoicing = true
+            case .mySchedule:
+                showingMySchedule = true
+            case .dailyOverview:
+                showingDailyOverview = true
+            case .warnings:
+                showingWarningsDetail = true
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .mainMenuResetPassword)) { _ in
@@ -567,6 +591,22 @@ struct HomeView: View {
             // REBUILD: no auto Home warm — only sync badge from shared/disk cache.
             homeWarningCount = WarningsService.shared.warningCount
         }
+        .onReceive(NotificationCenter.default.publisher(for: .bookingStoreDidChange)) { _ in
+            Task {
+                await WarningsRefreshHelper.refreshSharedWarnings(
+                    operativeStore: operativeStore,
+                    bookingStore: bookingStore,
+                    projectStore: projectStore,
+                    userStore: userStore,
+                    managerScheduleStore: managerScheduleStore,
+                    holidayStore: holidayStore,
+                    firebaseBackend: firebaseBackend,
+                    appSettings: appSettings,
+                    force: true,
+                    allowWhileSheetVisible: true
+                )
+            }
+        }
         .onChange(of: showingWarningsDetail) { _, isOpen in
             WarningsRefreshHelper.isWarningsSheetVisible = isOpen
         }
@@ -603,6 +643,28 @@ struct HomeView: View {
             }
             Spacer()
             HStack(spacing: 8) {
+                Button {
+                    Task { await refreshHomeConnection() }
+                } label: {
+                    Group {
+                        if isRefreshingHomeConnection {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                    }
+                    .foregroundStyle(homeInk)
+                    .frame(width: 44, height: 44)
+                    .background(ProjectWorksRevampColors.card)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .disabled(isRefreshingHomeConnection)
+                .accessibilityLabel("Refresh")
+                .accessibilityHint("Checks your connection and syncs changes waiting on this device")
                 Button {
                     notificationService.prepareInboxPresentation()
                     showingNotifications = true
@@ -642,6 +704,14 @@ struct HomeView: View {
             }
         }
         .padding(.bottom, 18)
+    }
+
+    @MainActor
+    private func refreshHomeConnection() async {
+        isRefreshingHomeConnection = true
+        defer { isRefreshingHomeConnection = false }
+        await smartCache.refreshConnectionAndSync()
+        await refreshHomeDerivedData()
     }
 
     private var todayOverviewCard: some View {
@@ -811,46 +881,54 @@ struct HomeView: View {
         .contentShape(Rectangle())
     }
 
-    private var quickActionStorageKey: String {
-        let uid = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "anonymous"
-        return "homeQuickActionOrder.\(uid)"
+    private var quickActionStorageKeyUserId: String? {
+        userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? LocalLayoutPreferences.signedInUserId
     }
 
     private var quickActionCustomizeHintKey: String {
-        let uid = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "anonymous"
+        let uid = quickActionStorageKeyUserId ?? "anonymous"
         return "homeQuickActionCustomizeHint.\(uid)"
     }
 
     private func loadPersistedQuickActionsIfNeeded() {
-        let userKey = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? "anonymous"
-        guard hasLoadedQuickActionLayoutForUserKey != userKey else { return }
+        guard let uid = quickActionStorageKeyUserId else { return }
         guard userStore.currentUser != nil || !userStore.isHomeProfileLoading else { return }
-        hasLoadedQuickActionLayoutForUserKey = userKey
-        if let saved = UserDefaults.standard.array(forKey: quickActionStorageKey) as? [String], !saved.isEmpty {
-            let allowed = Set(HomeQuickActionRegistry.allEligibleIds(userStore: userStore))
+        guard hasLoadedQuickActionLayoutForUserKey != uid else { return }
+        hasLoadedQuickActionLayoutForUserKey = uid
+        if let saved = LocalLayoutPreferences.loadQuickActionOrder(userId: uid) {
             var seen = Set<String>()
-            let filtered = saved.filter { allowed.contains($0) }.filter { seen.insert($0).inserted }
-            persistedQuickActionIds = filtered.isEmpty
+            let cleaned = saved.filter { id in
+                HomeQuickActionID.barredFromHome.contains(id) == false
+                    && HomeQuickActionRegistry.meta(for: id) != nil
+                    && seen.insert(id).inserted
+            }
+            persistedQuickActionIds = cleaned.isEmpty
                 ? HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
-                : filtered
+                : cleaned
         } else {
             persistedQuickActionIds = HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
         }
     }
 
     private func savePersistedQuickActions() {
-        UserDefaults.standard.set(persistedQuickActionIds, forKey: quickActionStorageKey)
+        guard let uid = quickActionStorageKeyUserId else { return }
+        LocalLayoutPreferences.saveQuickActionOrder(persistedQuickActionIds, userId: uid)
     }
 
     private func sanitizePersistedQuickActionsIfNeeded() {
         guard userStore.currentUser != nil || !userStore.isHomeProfileLoading else { return }
-        if userStore.organizationUsers.isEmpty { return }
-        let allowed = Set(HomeQuickActionRegistry.allEligibleIds(userStore: userStore))
-        let next = persistedQuickActionIds.filter { allowed.contains($0) }
-        if next.count != persistedQuickActionIds.count {
-            persistedQuickActionIds = next.isEmpty
+        var seen = Set<String>()
+        let cleaned = persistedQuickActionIds.filter { id in
+            HomeQuickActionID.barredFromHome.contains(id) == false
+                && HomeQuickActionRegistry.meta(for: id) != nil
+                && seen.insert(id).inserted
+        }
+        // Keep currently ineligible tiles in storage so permission blips at launch
+        // cannot rewrite the user's layout. Display already filters by eligibility.
+        if cleaned != persistedQuickActionIds {
+            persistedQuickActionIds = cleaned.isEmpty
                 ? HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
-                : next
+                : cleaned
             savePersistedQuickActions()
         }
     }
@@ -1088,13 +1166,16 @@ struct HomeView: View {
         .padding(.bottom, 10)
     }
 
+    private var displayedQuickActionIds: [String] {
+        persistedQuickActionIds.filter { HomeQuickActionRegistry.isEligible(id: $0, userStore: userStore) }
+    }
+
     private let quickGrid = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
 
     private var quickActionsIconGrid: some View {
         LazyVGrid(columns: quickGrid, spacing: 10) {
-            ForEach(persistedQuickActionIds, id: \.self) { id in
-                if let meta = HomeQuickActionRegistry.meta(for: id, userStore: userStore),
-                   HomeQuickActionRegistry.isEligible(id: id, userStore: userStore) {
+            ForEach(displayedQuickActionIds, id: \.self) { id in
+                if let meta = HomeQuickActionRegistry.meta(for: id, userStore: userStore) {
                     if isCustomisingQuickActions {
                         quickActionCustomizeTile(id: id, meta: meta)
                     } else {
@@ -1718,6 +1799,7 @@ struct OperativeQualificationsReadOnlyView: View {
                 .environmentObject(operativeStore)
                 .environmentObject(firebaseBackend)
                 .environmentObject(notificationService)
+                .environmentObject(userStore)
             } else {
                 NavigationStack {
                     ContentUnavailableView(
@@ -1910,7 +1992,7 @@ private struct HomeProfileCardSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     NavigationLink {
-                        SettingsView()
+                        SettingsView(popsNavigationOnBack: true)
                             .environmentObject(firebaseBackend)
                             .environmentObject(projectStore)
                             .environmentObject(operativeStore)

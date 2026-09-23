@@ -1,11 +1,17 @@
 import SwiftUI
 
-/// Lists organisation qualification templates not yet on the profile; tap a row to add it (one-by-one or multiple), then **Done** to return.
+/// Lists organisation qualification templates not yet on the profile; tap + to assign, then **Done**.
+/// Creating a new organisation type is only offered when the acting user can manage organisation qualifications.
 struct AssignQualificationsPickerView: View {
     @Binding var selectedQualifications: Set<Qualification>
     @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var userStore: UserStore
     @Environment(\.dismiss) private var dismiss
-    @State private var showingOrganisationManagement = false
+    @State private var showingAddOrganisationType = false
+
+    private var canCreateOrganisationTypes: Bool {
+        userStore.canManageOrganisationQualifications()
+    }
 
     private var available: [Qualification] {
         operativeStore.qualifications
@@ -18,8 +24,12 @@ struct AssignQualificationsPickerView: View {
             List {
                 if operativeStore.qualifications.isEmpty {
                     Section {
-                        Text("No qualification templates yet. Use Organisation list to create some.")
-                            .foregroundStyle(.secondary)
+                        Text(
+                            canCreateOrganisationTypes
+                                ? "No qualification templates yet. Tap Add to create one for the organisation."
+                                : "No qualification templates yet. Ask someone who can manage qualifications to add them."
+                        )
+                        .foregroundStyle(.secondary)
                     }
                 } else if available.isEmpty {
                     Section {
@@ -28,7 +38,7 @@ struct AssignQualificationsPickerView: View {
                     }
                 } else {
                     Section {
-                        Text("Tap a qualification to add it. Set expiry dates and certificates when you return.")
+                        Text("Tap + to add a qualification. Set expiry dates and certificates when you return.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -53,15 +63,19 @@ struct AssignQualificationsPickerView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Organisation list") {
-                        showingOrganisationManagement = true
+                if canCreateOrganisationTypes {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Add") {
+                            showingAddOrganisationType = true
+                        }
                     }
                 }
             }
-            .sheet(isPresented: $showingOrganisationManagement) {
-                QualificationsManagementView()
-                    .environmentObject(operativeStore)
+            .sheet(isPresented: $showingAddOrganisationType) {
+                NavigationStack {
+                    AddQualificationView()
+                        .environmentObject(operativeStore)
+                }
             }
         }
     }

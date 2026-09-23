@@ -840,6 +840,10 @@ struct CreateSmallWorksView: View {
             guard let u = userStore.organizationUsers.first(where: { $0.id == uid }) else { return false }
             return !u.isExcludedFromManagerVisibilityHiding
         })
+        let resolvedManagers = await ProjectManagerPickerSupport.resolveManagersForSave(
+            selectedManagers,
+            operativeStore: operativeStore
+        )
         let project = Project(
             jobNumber: projectJobNumber.trimmingCharacters(in: .whitespacesAndNewlines),
             siteName: projectSiteName.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -853,8 +857,8 @@ struct CreateSmallWorksView: View {
             jobType: .smallWorks,
             customJobType: selectedJobType.isEmpty ? nil : selectedJobType,
             manager: .custom,
-            managerId: selectedManagers.first?.id,
-            managerIds: selectedManagers.map(\.id),
+            managerId: resolvedManagers.first?.id,
+            managerIds: resolvedManagers.map(\.id),
             isLive: true,
             description: projectDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : projectDescription,
             hiddenManagerUserIds: sanitizedHidden,

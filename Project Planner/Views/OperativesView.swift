@@ -551,7 +551,7 @@ struct OperativeDetailRowView: View {
                             .foregroundColor(.secondary)
                     }
                     
-                    if let dayRate = (operative.dayRate ?? operative.hourlyRate), dayRate > 0 {
+                    if let dayRate = operative.dayRate ?? operative.hourlyRate {
                         let currencySymbol = operative.currencySymbol ?? defaultCurrencySymbol()
                         Text("\(currencySymbol)\(String(format: "%.0f", dayRate))/day")
                             .font(.caption)

@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 enum ProjectWorksRevampColors {
     static let canvas = AppAdaptiveColor.dynamic(
@@ -16,6 +17,7 @@ enum ProjectWorksRevampColors {
         light: .white,
         dark: AppAdaptiveColor.rgb(0.110, 0.122, 0.157)   // #1C1F28
     )
+    static let card = surface
     static let ink = AppAdaptiveColor.dynamic(
         light: AppAdaptiveColor.rgb(0.043, 0.063, 0.125), // #0B1020
         dark: AppAdaptiveColor.rgb(0.953, 0.961, 0.973)   // #F3F5F8
@@ -204,7 +206,7 @@ enum PlannerUIInitials {
         guard !trimmed.isEmpty else { return "?" }
         let parts = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
         if parts.count >= 2 {
-            let letters = parts.prefix(2).compactMap { $0.first }.map { String($0).uppercased() }
+            let letters = parts.prefix(maxLen).compactMap { $0.first }.map { String($0).uppercased() }
             return letters.joined()
         }
         let s = parts.first ?? trimmed

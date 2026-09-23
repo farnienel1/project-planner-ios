@@ -164,6 +164,7 @@ struct OrgSitesMapView: View {
 
         let dayBookings = bookingStore.bookings.filter {
             Calendar.current.isDate($0.date, inSameDayAs: targetDate)
+                && $0.status != .cancelled
         }
 
         let allProjects = ProjectWorksMerge.uniqueWorks(projectStore.projects).filter(\.isLive)
@@ -301,7 +302,7 @@ private struct OSMMapView: UIViewRepresentable {
     private func pinSignature(for pins: [SiteMapPin]) -> String {
         pins
             .sorted(by: { $0.id < $1.id })
-            .map { "\($0.id)|\($0.coordinate.latitude)|\($0.coordinate.longitude)|\($0.pinKind.displayName)" }
+            .map { "\($0.id)|\($0.coordinate.latitude)|\($0.coordinate.longitude)|\($0.pinKind.displayName)|\($0.operativeCount)" }
             .joined(separator: ";")
     }
 

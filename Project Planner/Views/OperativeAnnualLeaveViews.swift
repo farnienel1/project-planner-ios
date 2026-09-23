@@ -8,17 +8,6 @@
 import SwiftUI
 import FirebaseAuth
 
-private enum HolidayChrome {
-    static let canvas = ProjectWorksRevampColors.canvas
-    static let ink = ProjectWorksRevampColors.ink
-    static let muted = ProjectWorksRevampColors.muted
-    static let border = ProjectWorksRevampColors.border
-    static let accent = ProjectWorksRevampColors.blue
-    static let taken = Color(red: 0.133, green: 0.545, blue: 0.318)
-    static let pending = Color(red: 0.89, green: 0.22, blue: 0.22)
-    static let halfDayBooked = Color(red: 0.95, green: 0.52, blue: 0.12)
-}
-
 struct AnnualLeavePerson: Identifiable, Hashable {
     let id: String
     let displayName: String
@@ -240,6 +229,7 @@ private struct OperativeAnnualLeaveApprovedListView: View {
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var operativeStore: OperativeStore
+    @State private var bookingPendingRemoval: HolidayBooking?
 
     private var people: [AnnualLeavePerson] {
         AnnualLeavePersonBuilder.build(
@@ -269,17 +259,48 @@ private struct OperativeAnnualLeaveApprovedListView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(approvedBookings) { booking in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(personFor(booking: booking)?.displayName ?? "Unknown")
-                            .font(.subheadline.weight(.semibold))
-                        Text(dateRangeLabel(booking))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(booking.timeSlot.rawValue)
-                            .font(.caption2)
-                            .foregroundStyle(HolidayChrome.muted)
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(personFor(booking: booking)?.displayName ?? "Unknown")
+                                .font(.subheadline.weight(.semibold))
+                            Text(dateRangeLabel(booking))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(booking.timeSlot.rawValue)
+                                .font(.caption2)
+                                .foregroundStyle(HolidayChrome.muted)
+                        }
+                        Spacer(minLength: 8)
+                        Button {
+                            bookingPendingRemoval = booking
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title3)
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(HolidayChrome.pending)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove annual leave booking")
                     }
                     .padding(.vertical, 2)
+                }
+            }
+        }
+        .overlay {
+            if bookingPendingRemoval != nil {
+                ZStack {
+                    Color.black.opacity(0.32)
+                        .ignoresSafeArea()
+                        .onTapGesture { bookingPendingRemoval = nil }
+                    AnnualLeaveRemoveBookingConfirm(
+                        onYes: {
+                            guard let booking = bookingPendingRemoval else { return }
+                            bookingPendingRemoval = nil
+                            Task { await holidayStore.deleteBooking(booking) }
+                        },
+                        onNo: { bookingPendingRemoval = nil }
+                    )
+                    .padding(28)
                 }
             }
         }
@@ -414,6 +435,7 @@ struct OperativeAnnualLeaveCalendarView: View {
     @State private var bankHolidayTooltip: String?
     @State private var bankHolidayAlertTitle = "Annual leave calendar"
     @State private var bankHolidayCalendarTick = 0
+    @State private var bookingPendingRemoval: HolidayBooking?
 
     private let calendar = Calendar.current
 
@@ -434,6 +456,11 @@ struct OperativeAnnualLeaveCalendarView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 headerCard
+                if let summary = annualLeaveSummary {
+                    AnnualLeaveUsageHeroView(summary: summary)
+                }
+                bookedLeaveCard
+                pendingLeaveCard
                 legendRow
                 monthNavigator
                 calendarGrid
@@ -447,6 +474,24 @@ struct OperativeAnnualLeaveCalendarView: View {
         .background(HolidayChrome.canvas.ignoresSafeArea())
         .navigationTitle(person.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .overlay {
+            if bookingPendingRemoval != nil {
+                ZStack {
+                    Color.black.opacity(0.32)
+                        .ignoresSafeArea()
+                        .onTapGesture { bookingPendingRemoval = nil }
+                    AnnualLeaveRemoveBookingConfirm(
+                        onYes: {
+                            guard let booking = bookingPendingRemoval else { return }
+                            bookingPendingRemoval = nil
+                            Task { await removeApprovedBooking(booking) }
+                        },
+                        onNo: { bookingPendingRemoval = nil }
+                    )
+                    .padding(28)
+                }
+            }
+        }
         .alert("Confirm annual leave booking", isPresented: $showBookConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("Book leave") {
@@ -483,7 +528,10 @@ struct OperativeAnnualLeaveCalendarView: View {
         )) {
             Button("Cancel", role: .cancel) { bookingPendingDelete = nil }
             Button("Delete annual leave", role: .destructive) {
-                Task { await deletePendingBooking() }
+                let booking = bookingPendingDelete
+                bookingPendingDelete = nil
+                guard let booking else { return }
+                Task { await removeApprovedBooking(booking) }
             }
         } message: {
             if let booking = bookingPendingDelete {
@@ -579,18 +627,23 @@ struct OperativeAnnualLeaveCalendarView: View {
             }
             .buttonStyle(.plain)
             .disabled(isSaving || changeSlot == approvedBooking(on: day)?.timeSlot)
-
             if let booking = approvedBooking(on: day) {
                 Button {
-                    bookingPendingDelete = booking
+                    bookingPendingRemoval = booking
                 } label: {
-                    Label("Delete annual leave", systemImage: "xmark.circle.fill")
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(HolidayChrome.pending.opacity(0.12))
-                        .foregroundStyle(HolidayChrome.pending)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    HStack {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(HolidayChrome.pending)
+                        Text("Remove this annual leave day")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(HolidayChrome.pending)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(HolidayChrome.pending.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .disabled(isSaving)
@@ -676,6 +729,52 @@ struct OperativeAnnualLeaveCalendarView: View {
         .buttonStyle(.plain)
     }
 
+    private var leaveProfileUser: AppUser? {
+        if let uid = person.userId {
+            return userStore.organizationUsers.first(where: { $0.id == uid })
+        }
+        if let oid = person.operativeId,
+           let op = operativeStore.allOperatives.first(where: { $0.id == oid }) {
+            return userStore.organizationUsers.first { $0.email.lowercased() == op.email.lowercased() }
+        }
+        return nil
+    }
+
+    private var annualLeaveSummary: AnnualLeaveUsageSummary? {
+        let defaults = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
+        let user = leaveProfileUser
+        return AnnualLeavePolicy.usageSummary(
+            bookings: holidayStore.bookings,
+            profileUserId: user?.id ?? person.userId ?? "",
+            operativeId: person.operativeId,
+            daysPerYear: user?.annualLeaveDaysPerYear ?? defaults.daysPerYear,
+            startMonth: user?.annualLeaveYearStartMonth ?? defaults.startMonth,
+            endMonth: user?.annualLeaveYearEndMonth ?? defaults.endMonth,
+            carriesOver: user?.annualLeaveCarriesOver ?? defaults.carriesOver,
+            referenceDate: Date(),
+            calendar: calendar
+        )
+    }
+
+    private var personHolidayBookings: [HolidayBooking] {
+        holidayStore.myBookings(
+            userId: person.userId ?? leaveProfileUser?.id,
+            operativeId: person.operativeId
+        )
+    }
+
+    private var approvedLeaveBookings: [HolidayBooking] {
+        personHolidayBookings
+            .filter { $0.status == .approved }
+            .sorted { $0.startDate > $1.startDate }
+    }
+
+    private var pendingLeaveBookings: [HolidayBooking] {
+        personHolidayBookings
+            .filter { $0.status == .pending }
+            .sorted { $0.startDate > $1.startDate }
+    }
+
     private var headerCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(person.displayName)
@@ -701,6 +800,90 @@ struct OperativeAnnualLeaveCalendarView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(HolidayChrome.border, lineWidth: 1)
         )
+    }
+
+    private var bookedLeaveCard: some View {
+        leaveListCard(
+            title: "Booked annual leave",
+            emptyText: "No booked annual leave.",
+            bookings: approvedLeaveBookings,
+            accent: HolidayChrome.taken,
+            allowsRemove: true
+        )
+    }
+
+    private var pendingLeaveCard: some View {
+        leaveListCard(
+            title: "Pending requests",
+            emptyText: "No pending requests.",
+            bookings: pendingLeaveBookings,
+            accent: HolidayChrome.pendingMetric,
+            allowsRemove: false
+        )
+    }
+
+    private func leaveListCard(
+        title: String,
+        emptyText: String,
+        bookings: [HolidayBooking],
+        accent: Color,
+        allowsRemove: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(HolidayChrome.ink)
+            if bookings.isEmpty {
+                Text(emptyText)
+                    .font(.caption)
+                    .foregroundStyle(HolidayChrome.muted)
+            } else {
+                ForEach(bookings) { booking in
+                    HStack(alignment: .top, spacing: 10) {
+                        Circle()
+                            .fill(accent)
+                            .frame(width: 8, height: 8)
+                            .padding(.top, 5)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(leaveDateLabel(booking))
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(HolidayChrome.ink)
+                            Text(booking.timeSlot.rawValue)
+                                .font(.caption2)
+                                .foregroundStyle(HolidayChrome.muted)
+                        }
+                        Spacer(minLength: 0)
+                        if allowsRemove {
+                            Button {
+                                bookingPendingRemoval = booking
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.title3)
+                                    .symbolRenderingMode(.hierarchical)
+                                    .foregroundStyle(HolidayChrome.pending)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Remove annual leave booking")
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(HolidayChrome.border, lineWidth: 1)
+        )
+    }
+
+    private func leaveDateLabel(_ booking: HolidayBooking) -> String {
+        if calendar.isDate(booking.startDate, inSameDayAs: booking.endDate) {
+            return booking.startDate.formatted(date: .abbreviated, time: .omitted)
+        }
+        return "\(booking.startDate.formatted(date: .abbreviated, time: .omitted)) – \(booking.endDate.formatted(date: .abbreviated, time: .omitted))"
     }
 
     private var legendRow: some View {
@@ -849,7 +1032,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                         }
                         Spacer(minLength: 8)
                         Button {
-                            bookingPendingDelete = booking
+                            bookingPendingRemoval = booking
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.title3)
@@ -860,7 +1043,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                         .accessibilityLabel("Delete annual leave")
                     }
                     .padding(12)
-                    .background(Color.white)
+                    .background(ProjectWorksRevampColors.surface)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1090,9 +1273,7 @@ struct OperativeAnnualLeaveCalendarView: View {
     }
 
     @MainActor
-    private func deletePendingBooking() async {
-        guard let booking = bookingPendingDelete else { return }
-        bookingPendingDelete = nil
+    private func removeApprovedBooking(_ booking: HolidayBooking) async {
         isSaving = true
         defer { isSaving = false }
         await holidayStore.deleteBooking(booking)
@@ -1111,6 +1292,13 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
         successMessage = "Annual leave deleted."
         showSuccess = true
+    }
+
+    @MainActor
+    private func deletePendingBooking() async {
+        guard let booking = bookingPendingDelete else { return }
+        bookingPendingDelete = nil
+        await removeApprovedBooking(booking)
     }
 
     @MainActor
