@@ -7969,7 +7969,8 @@ extension FirebaseBackend {
             "issuedAt": Timestamp(date: issue.issuedAt),
             "publishAt": issue.publishAt.map(Timestamp.init(date:)) as Any,
             "recipientUserIds": issue.recipientUserIds,
-            "status": issue.status.rawValue
+            "status": issue.status.rawValue,
+            "ramsDocumentId": issue.ramsDocumentId ?? ""
         ]
     }
 
@@ -8043,6 +8044,7 @@ extension FirebaseBackend {
         guard let id = map["id"] as? String, !id.isEmpty else { return nil }
         let projectId = ((map["projectId"] as? String).flatMap(UUID.init(uuidString:))) ?? fallbackProjectId
         let statusRaw = (map["status"] as? String) ?? HSToolboxIssueStatus.awaiting.rawValue
+        let ramsId = (map["ramsDocumentId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return HSToolboxIssue(
             id: id,
             projectId: projectId,
@@ -8052,7 +8054,8 @@ extension FirebaseBackend {
             issuedAt: (map["issuedAt"] as? Timestamp)?.dateValue() ?? Date(),
             publishAt: (map["publishAt"] as? Timestamp)?.dateValue(),
             recipientUserIds: map["recipientUserIds"] as? [String] ?? [],
-            status: HSToolboxIssueStatus(rawValue: statusRaw) ?? .awaiting
+            status: HSToolboxIssueStatus(rawValue: statusRaw) ?? .awaiting,
+            ramsDocumentId: (ramsId?.isEmpty == false) ? ramsId : nil
         )
     }
 
