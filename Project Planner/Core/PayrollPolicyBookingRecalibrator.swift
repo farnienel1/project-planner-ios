@@ -114,21 +114,21 @@ enum PayrollPolicyBookingRecalibrator {
                 otMultiplierOverride: nil
             )
         case .morning:
-            let mid = sMin + (eMin - sMin) / 2
+            let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: newPolicy)
             return OperativeDayBookingChoice(
                 timeSlot: .morning,
-                workStartTime: ManagerScheduleInterval.formatMinutes(sMin),
-                workEndTime: ManagerScheduleInterval.formatMinutes(mid),
-                isBreakRemoved: breakRemoved,
+                workStartTime: windows?.morningStartLabel ?? ManagerScheduleInterval.formatMinutes(sMin),
+                workEndTime: windows?.morningEndLabel ?? ManagerScheduleInterval.formatMinutes(sMin + (eMin - sMin) / 2),
+                isBreakRemoved: true,
                 otMultiplierOverride: nil
             )
         case .afternoon:
-            let mid = sMin + (eMin - sMin) / 2
+            let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: newPolicy)
             return OperativeDayBookingChoice(
                 timeSlot: .afternoon,
-                workStartTime: ManagerScheduleInterval.formatMinutes(mid),
-                workEndTime: ManagerScheduleInterval.formatMinutes(eMin),
-                isBreakRemoved: breakRemoved,
+                workStartTime: windows?.afternoonStartLabel ?? ManagerScheduleInterval.formatMinutes(sMin + (eMin - sMin) / 2),
+                workEndTime: windows?.afternoonEndLabel ?? ManagerScheduleInterval.formatMinutes(eMin),
+                isBreakRemoved: true,
                 otMultiplierOverride: nil
             )
         case .evening:
@@ -190,11 +190,21 @@ enum PayrollPolicyBookingRecalibrator {
         case .fullDay, .customHours:
             return (.customHours, start, end, breakRemoved)
         case .morning:
-            let mid = sMin + (eMin - sMin) / 2
-            return (.morning, ManagerScheduleInterval.formatMinutes(sMin), ManagerScheduleInterval.formatMinutes(mid), breakRemoved)
+            let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: newPolicy)
+            return (
+                .morning,
+                windows?.morningStartLabel ?? ManagerScheduleInterval.formatMinutes(sMin),
+                windows?.morningEndLabel ?? ManagerScheduleInterval.formatMinutes(sMin + (eMin - sMin) / 2),
+                true
+            )
         case .afternoon:
-            let mid = sMin + (eMin - sMin) / 2
-            return (.afternoon, ManagerScheduleInterval.formatMinutes(mid), ManagerScheduleInterval.formatMinutes(eMin), breakRemoved)
+            let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: newPolicy)
+            return (
+                .afternoon,
+                windows?.afternoonStartLabel ?? ManagerScheduleInterval.formatMinutes(sMin + (eMin - sMin) / 2),
+                windows?.afternoonEndLabel ?? ManagerScheduleInterval.formatMinutes(eMin),
+                true
+            )
         }
     }
 }

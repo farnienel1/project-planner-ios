@@ -132,18 +132,6 @@ struct MaterialCatalogueRootView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }
                 }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { showingBulkImport = true } label: {
-                        Image(systemName: "square.and.arrow.down")
-                            .foregroundStyle(MaterialsOrderingTheme.primary)
-                    }
-                    .accessibilityLabel("Upload or download catalogue")
-                    Button { showingAdd = true } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .foregroundStyle(MaterialsOrderingTheme.primary)
-                    }
-                    .accessibilityLabel("Add catalogue item")
-                }
             }
             .task {
                 store.setFirebaseBackend(firebaseBackend)

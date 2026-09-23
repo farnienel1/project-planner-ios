@@ -25,6 +25,13 @@ enum ManagerScheduleInterval {
 
     /// Interval used for clash detection.
     static func clashInterval(for booking: ManagerSiteBooking, policy: OrgPayrollTimePolicy) -> (Int, Int)? {
+        if (booking.timeSlot == .morning || booking.timeSlot == .afternoon),
+           PayrollTimePolicyCatalog.isWeekday(booking.date),
+           let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy) {
+            return booking.timeSlot == .morning
+                ? (windows.morningStart, windows.morningEnd)
+                : (windows.afternoonStart, windows.afternoonEnd)
+        }
         if let s = booking.workStartTime, let e = booking.workEndTime,
            let sm = parseMinutes(s), let em = parseMinutes(e), em > sm {
             return (sm, em)
@@ -39,9 +46,15 @@ enum ManagerScheduleInterval {
         case .fullDay:
             return (dayStart, dayEnd)
         case .morning:
+            if let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy) {
+                return (windows.morningStart, windows.morningEnd)
+            }
             let mid = dayStart + (dayEnd - dayStart) / 2
             return (dayStart, mid)
         case .afternoon:
+            if let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy) {
+                return (windows.afternoonStart, windows.afternoonEnd)
+            }
             let mid = dayStart + (dayEnd - dayStart) / 2
             return (mid, dayEnd)
         case .customHours:

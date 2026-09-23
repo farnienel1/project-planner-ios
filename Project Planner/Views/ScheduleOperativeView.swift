@@ -148,6 +148,12 @@ struct ScheduleOperativeView: View {
     }
 
     private func displayClockWindow(for choice: OperativeDayBookingChoice, day: Date, policy: OrgPayrollTimePolicy) -> (start: String, end: String) {
+        if choice.timeSlot == .morning || choice.timeSlot == .afternoon {
+            let probe = choice.bookingProbe(operativeId: UUID(), projectId: project.id, date: day, bookedBy: "")
+            if let iv = OperativeBookingInterval.clashInterval(for: probe, policy: policy) {
+                return (ManagerScheduleInterval.formatMinutes(iv.0), ManagerScheduleInterval.formatMinutes(iv.1))
+            }
+        }
         if let s = choice.workStartTime, let e = choice.workEndTime, !s.isEmpty, !e.isEmpty {
             return (s, e)
         }

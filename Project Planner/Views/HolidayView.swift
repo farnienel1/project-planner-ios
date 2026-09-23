@@ -64,6 +64,7 @@ struct HolidayView: View {
     @State private var bankHolidayTooltip: String?
     @State private var bankHolidayAlertTitle = "Annual leave calendar"
     @State private var bankHolidayCalendarTick = 0
+    @State private var isManagingTeamLeave = false
 
     enum HolidaySection: String, CaseIterable {
         case calendar = "Book"
@@ -172,16 +173,20 @@ struct HolidayView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Button(action: {
-                    if presentedAsSheet {
-                        dismiss()
-                    } else {
-                        NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+                if isManagingTeamLeave {
+                    Color.clear.frame(width: 20, height: 20)
+                } else {
+                    Button(action: {
+                        if presentedAsSheet {
+                            dismiss()
+                        } else {
+                            NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+                        }
+                    }) {
+                        Image(systemName: "chevron.left")
+                            .foregroundStyle(HolidayChrome.accent)
+                            .font(.system(size: 17, weight: .semibold))
                     }
-                }) {
-                    Image(systemName: "chevron.left")
-                        .foregroundStyle(HolidayChrome.accent)
-                        .font(.system(size: 17, weight: .semibold))
                 }
                 Spacer()
                 Text("Annual leave")
@@ -244,6 +249,8 @@ struct HolidayView: View {
                                             .environmentObject(holidayStore)
                                             .environmentObject(firebaseBackend)
                                             .environmentObject(notificationService)
+                                            .onAppear { isManagingTeamLeave = true }
+                                            .onDisappear { isManagingTeamLeave = false }
                                     } label: {
                                         HStack(spacing: 10) {
                                             Image(systemName: "person.3.fill")

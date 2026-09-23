@@ -41,10 +41,7 @@ struct HSToolboxTalk: Identifiable, Codable, Hashable {
     var fileURL: String?
 
     var displayTitle: String {
-        if ToolboxTalkLibrary.isPlaceholderTitle(title) {
-            return ToolboxTalkLibrary.resolvedTitle(talkId: id, storedTalks: [self])
-        }
-        return title
+        ToolboxTalkLibrary.resolvedTitle(talkId: id, storedTalks: [self])
     }
 }
 

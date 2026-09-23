@@ -9,6 +9,13 @@ import Foundation
 
 enum OperativeBookingInterval {
     static func clashInterval(for booking: Booking, policy: OrgPayrollTimePolicy) -> (Int, Int)? {
+        if booking.timeSlot == .morning || booking.timeSlot == .afternoon,
+           PayrollTimePolicyCatalog.isWeekday(booking.date),
+           let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy) {
+            return booking.timeSlot == .morning
+                ? (windows.morningStart, windows.morningEnd)
+                : (windows.afternoonStart, windows.afternoonEnd)
+        }
         if let s = booking.workStartTime, let e = booking.workEndTime,
            let sm = ManagerScheduleInterval.parseMinutes(s), let em = ManagerScheduleInterval.parseMinutes(e), em > sm {
             return (sm, em)
@@ -23,9 +30,15 @@ enum OperativeBookingInterval {
         case .fullDay:
             return (dayStart, dayEnd)
         case .morning:
+            if let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy) {
+                return (windows.morningStart, windows.morningEnd)
+            }
             let mid = dayStart + (dayEnd - dayStart) / 2
             return (dayStart, mid)
         case .afternoon:
+            if let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy) {
+                return (windows.afternoonStart, windows.afternoonEnd)
+            }
             let mid = dayStart + (dayEnd - dayStart) / 2
             return (mid, dayEnd)
         case .customHours:
@@ -96,6 +109,10 @@ enum OperativeBookingInterval {
 
 extension Booking {
     func scheduleLabel(policy: OrgPayrollTimePolicy = .default) -> String {
+        if timeSlot == .morning || timeSlot == .afternoon,
+           let iv = OperativeBookingInterval.clashInterval(for: self, policy: policy) {
+            return "\(ManagerScheduleInterval.formatMinutes(iv.0))–\(ManagerScheduleInterval.formatMinutes(iv.1))"
+        }
         if let s = workStartTime, let e = workEndTime, !s.isEmpty, !e.isEmpty {
             var base = "\(s)–\(e)"
             if isBreakRemoved { base += " · no break" }

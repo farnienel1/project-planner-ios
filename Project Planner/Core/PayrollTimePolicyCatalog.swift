@@ -186,6 +186,37 @@ enum PayrollTimePolicyCatalog {
         timelinePolicy(for: booking.date, policy: policy).outsideMultiplier
     }
 
+    /// Weekday AM/PM windows use paid hours, not half the wall-clock day.
+    /// Example: 07:30–16:00 with 8 paid hours and a 30-minute unpaid break becomes
+    /// AM 07:30–11:30 (4h) and PM 12:00–16:00 (4h). The unpaid break sits in the gap.
+    struct WeekdayHalfDayWindows: Equatable {
+        let morningStart: Int
+        let morningEnd: Int
+        let afternoonStart: Int
+        let afternoonEnd: Int
+
+        var morningStartLabel: String { ManagerScheduleInterval.formatMinutes(morningStart) }
+        var morningEndLabel: String { ManagerScheduleInterval.formatMinutes(morningEnd) }
+        var afternoonStartLabel: String { ManagerScheduleInterval.formatMinutes(afternoonStart) }
+        var afternoonEndLabel: String { ManagerScheduleInterval.formatMinutes(afternoonEnd) }
+    }
+
+    static func weekdayHalfDayWindows(policy: OrgPayrollTimePolicy) -> WeekdayHalfDayWindows? {
+        guard let start = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
+              let end = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd),
+              end > start else { return nil }
+        let halfPaid = max(1, Int((max(policy.standardPaidHours, 0) * 60.0 / 2.0).rounded()))
+        let morningEnd = start + halfPaid
+        let afternoonStart = end - halfPaid
+        guard morningEnd > start, afternoonStart < end else { return nil }
+        return WeekdayHalfDayWindows(
+            morningStart: start,
+            morningEnd: morningEnd,
+            afternoonStart: max(morningEnd, afternoonStart),
+            afternoonEnd: end
+        )
+    }
+
     static func defaultWeekendBookingChoice(policy: OrgPayrollTimePolicy, day: Date) -> OperativeDayBookingChoice {
         let weekend = weekendSettings(for: day, policy: policy)
         if weekend.allHoursAtMultiplierMode {
