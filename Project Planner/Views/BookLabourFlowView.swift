@@ -975,7 +975,7 @@ struct BookLabourFlowView: View {
                     .disabled(isSaving || draft.endMinutes <= draft.startMinutes)
 
                     Button {
-                        bookLabourOperativeClockEdit = BookLabourOperativeClockEdit(operative: op, project: project)
+                        phase = .pickCustomOperative(person, project: project)
                     } label: {
                         Text("Advanced editor")
                             .font(.system(size: 12, weight: .medium))
