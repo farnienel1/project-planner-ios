@@ -177,9 +177,8 @@ class ProjectStore: ObservableObject {
                 }
             }
             
-            do {
-                // Show last-known jobs immediately so a slow/failed Firebase read cannot blank the UI.
-                let diskCache = await hydrateFromLocalCacheIfNeeded()
+            // Show last-known jobs immediately so a slow/failed Firebase read cannot blank the UI.
+            let diskCache = await hydrateFromLocalCacheIfNeeded()
 
                 // Try to load from Firebase first if authenticated
                 if let firebaseBackend = firebaseBackend, 
@@ -443,19 +442,7 @@ class ProjectStore: ObservableObject {
                     print("🔥🔥🔥 DEBUG: Loaded \(self.projects.count) projects and \(self.clients.count) clients from local storage")
                 }
                 
-                print("🔥🔥🔥 DEBUG: Finished loading - Total projects: \(self.projects.count), Total clients: \(self.clients.count)")
-                
-            } catch {
-                self.errorMessage = error.localizedDescription
-                print("🔥🔥🔥 DEBUG: Error loading data: \(error.localizedDescription)")
-                print("🔥🔥🔥 DEBUG: Stack trace: \(Thread.callStackSymbols.prefix(5).joined(separator: "\n"))")
-                // Don't clear existing data on error - keep what we have
-                if self.projects.isEmpty && self.clients.isEmpty {
-                    print("🔥🔥🔥 DEBUG: No existing data, starting with empty arrays")
-                } else {
-                    print("🔥🔥🔥 DEBUG: Keeping existing data: \(self.projects.count) projects, \(self.clients.count) clients")
-                }
-            }
+            print("🔥🔥🔥 DEBUG: Finished loading - Total projects: \(self.projects.count), Total clients: \(self.clients.count)")
         }
     }
     

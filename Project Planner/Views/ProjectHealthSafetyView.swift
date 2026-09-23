@@ -604,6 +604,10 @@ struct ProjectHealthSafetyView: View {
     }
 
     var body: some View {
+        applySecondarySheets(to: applyPrimarySheets(to: healthSafetyRoot))
+    }
+
+    private var healthSafetyRoot: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 headerCard
@@ -643,6 +647,10 @@ struct ProjectHealthSafetyView: View {
         } message: {
             Text(vm.errorMessage ?? reminderSuccessMessage ?? "")
         }
+    }
+
+    private func applyPrimarySheets<Content: View>(to content: Content) -> some View {
+        content
         .sheet(isPresented: $showingIssueSheet) {
             HSIssueTalkSheet(
                 talks: filteredLibraryTalks,
@@ -702,7 +710,7 @@ struct ProjectHealthSafetyView: View {
             .environmentObject(userStore)
         }
         .sheet(item: $selectedIssueToSign) { issue in
-            HSSignTalkView(issue: issue, talk: vm.data.talks.first(where: { $0.id == issue.talkId })) { base64Signature in
+            HSSignTalkView(issue: issue, talk: talk(for: issue)) { base64Signature in
                 Task {
                     await vm.signTalk(
                         issueId: issue.id,
@@ -716,11 +724,7 @@ struct ProjectHealthSafetyView: View {
             }
         }
         .sheet(item: $selectedIssueToView) { issue in
-            HSSignedTalkView(
-                issue: issue,
-                talk: vm.data.talks.first(where: { $0.id == issue.talkId }),
-                signature: vm.signatures(for: issue.id).first(where: { $0.userId == (userStore.currentUser?.id ?? "") })
-            )
+            signedTalkSheet(for: issue)
         }
         .sheet(item: $selectedTalkForPreview) { talk in
             HSToolboxTalkDetailView(talk: talk) {
@@ -728,9 +732,27 @@ struct ProjectHealthSafetyView: View {
                 selectedTalkForPreview = nil
                 showingIssueSheet = true
             } onDownload: {
-                downloadTalkFromLibrary(talk)
+                openHealthSafetyDocument(urlString: talk.fileURL, id: talk.id)
             }
         }
+    }
+
+    private func talk(for issue: HSToolboxIssue) -> HSToolboxTalk? {
+        vm.data.talks.first(where: { $0.id == issue.talkId })
+    }
+
+    @ViewBuilder
+    private func signedTalkSheet(for issue: HSToolboxIssue) -> some View {
+        let myUserId = userStore.currentUser?.id ?? ""
+        HSSignedTalkView(
+            issue: issue,
+            talk: talk(for: issue),
+            signature: vm.signatures(for: issue.id).first(where: { $0.userId == myUserId })
+        )
+    }
+
+    private func applySecondarySheets<Content: View>(to content: Content) -> some View {
+        content
         .sheet(item: $talkShareItem) { item in
             HSDocumentShareSheet(activityItems: [item.url])
         }

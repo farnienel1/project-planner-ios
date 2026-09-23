@@ -7,8 +7,8 @@
 
 import Foundation
 
-struct InvoicingPeriodInfo: Hashable, Sendable {
-    struct ScheduleRow: Hashable, Sendable {
+nonisolated struct InvoicingPeriodInfo: Hashable, Sendable {
+    nonisolated struct ScheduleRow: Hashable, Sendable {
         let label: String
         let summary: String
     }
@@ -20,7 +20,7 @@ struct InvoicingPeriodInfo: Hashable, Sendable {
     let currentPeriodEndLabel: String
 }
 
-enum InvoicingPeriodResolver {
+nonisolated enum InvoicingPeriodResolver {
     static func resolve(
         invoicing: OrganizationInvoicingSettings,
         referenceDate: Date = Date(),

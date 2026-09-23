@@ -7,13 +7,13 @@
 
 import Foundation
 
-enum HolidayStatus: String, Codable, CaseIterable {
+nonisolated enum HolidayStatus: String, Codable, CaseIterable, Sendable {
     case pending = "pending"
     case approved = "approved"
     case rejected = "rejected"
 }
 
-enum HolidayTimeSlot: String, Codable, CaseIterable {
+nonisolated enum HolidayTimeSlot: String, Codable, CaseIterable, Sendable {
     case fullDay = "FULL DAY"
     case morning = "AM"
     case afternoon = "PM"
@@ -27,7 +27,7 @@ enum HolidayTimeSlot: String, Codable, CaseIterable {
 }
 
 /// One holiday booking. Either self-booked by an app user (userId set, status .approved) or requested by an operative (operativeId set, status pending/approved/rejected).
-struct HolidayBooking: Identifiable, Codable, Hashable {
+nonisolated struct HolidayBooking: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var organizationId: String
     var userId: String?

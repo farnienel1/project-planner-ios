@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct AnnualLeaveUsageSummary: Equatable {
+nonisolated struct AnnualLeaveUsageSummary: Equatable, Sendable {
     /// Human-readable leave year window, e.g. "Apr 2025 – Mar 2026".
     var leaveYearLabel: String
     var entitlementDays: Double
