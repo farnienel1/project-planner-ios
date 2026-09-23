@@ -50,14 +50,10 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             var loaded = try await firebaseBackend.loadHealthSafetyData(project: project, organizationId: orgId)
-            let platform = (try? await firebaseBackend.loadPlatformToolboxLibrary()) ?? []
-            let mergedTalks = ToolboxTalkLibrary.merge(stored: loaded.talks, platform: platform)
-            let storedWereBroken = loaded.talks.contains { ToolboxTalkLibrary.isPlaceholderTitle($0.title) }
-                || loaded.talks.isEmpty
-            loaded.talks = mergedTalks
-            if storedWereBroken {
+            if loaded.talks.isEmpty {
+                loaded.talks = Self.defaultLibraryTalks
                 loaded.updatedAt = Date()
-                try? await firebaseBackend.saveHealthSafetyData(loaded, project: project, organizationId: orgId)
+                try await firebaseBackend.saveHealthSafetyData(loaded, project: project, organizationId: orgId)
             }
             data = loaded
         } catch {
@@ -74,7 +70,10 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         userStore: UserStore
     ) async {
         guard !recipients.isEmpty else { return }
-        // Issued talks must appear in Tracking immediately (later-main behaviour).
+        let calendar = Calendar.current
+        let selectedDay = calendar.startOfDay(for: weekCommencing)
+        let today = calendar.startOfDay(for: Date())
+        let publishAt: Date? = selectedDay > today ? calendar.date(bySettingHour: 7, minute: 0, second: 0, of: selectedDay) : nil
         let issueId = UUID().uuidString
         let issue = HSToolboxIssue(
             id: issueId,
@@ -83,7 +82,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
             weekCommencing: weekCommencing,
             issuedByUserId: issuedByUserId,
             issuedAt: Date(),
-            publishAt: nil,
+            publishAt: publishAt,
             recipientUserIds: recipients,
             status: .awaiting
         )
@@ -105,35 +104,14 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         }
         recalculateIssueStatuses()
         await persist(firebaseBackend: firebaseBackend, userStore: userStore)
-        await notifyToolboxTalkIssued(
-            talk: talk,
-            recipients: recipients,
-            firebaseBackend: firebaseBackend,
-            userStore: userStore
-        )
-    }
-
-    private func notifyToolboxTalkIssued(
-        talk: HSToolboxTalk,
-        recipients: [String],
-        firebaseBackend: FirebaseBackend,
-        userStore: UserStore
-    ) async {
-        guard let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) else { return }
-        let site = project.siteName
-        for userId in recipients {
-            let notification = AppNotification(
-                organizationId: orgId,
-                type: .toolboxTalkIssued,
-                title: "Toolbox Talk issued",
-                message: "\(talk.displayTitle) on \(site) needs your signature.",
-                userId: userId,
-                relatedId: nil,
-                isRead: false,
-                createdAt: Date(),
-                requiresPermission: nil
+        if let publishAt {
+            _ = await LocalNotificationService.shared.requestAuthorization()
+            await LocalNotificationService.shared.scheduleQualificationExpiryOneShot(
+                identifier: "hs-toolbox-scheduled-\(issueId)",
+                title: "Scheduled Toolbox Talk",
+                body: "\(talk.title) is now due.",
+                fireAt: publishAt
             )
-            try? await firebaseBackend.saveNotification(notification, organizationId: orgId)
         }
     }
 
@@ -155,17 +133,13 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         let fileName = persisted?.name ?? originalFileName ?? localFileURL?.lastPathComponent
         if let fileURL,
            let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) {
-            do {
-                uploadedURL = try await uploadScopedHealthSafetyFile(
-                    fileURL,
-                    organizationId: orgId,
-                    category: "toolboxTalks",
-                    fileName: fileName ?? fileURL.lastPathComponent,
-                    firebaseBackend: firebaseBackend
-                )
-            } catch {
-                errorMessage = "Could not upload the toolbox talk file. \(error.localizedDescription)"
-            }
+            uploadedURL = try? await firebaseBackend.uploadHealthSafetyFile(
+                fileURL,
+                organizationId: orgId,
+                projectId: project.id,
+                category: "toolboxTalks",
+                fileName: fileName ?? fileURL.lastPathComponent
+            )
         }
         if localFileURL != nil && uploadedURL == nil {
             errorMessage = "Couldn’t upload the toolbox talk file. Check your connection and try again."
@@ -233,7 +207,9 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         }
         await persist(firebaseBackend: firebaseBackend, userStore: userStore)
         guard let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) else { return pendingUserIds.count }
-        let talkTitle = issueDisplayTitle(issue)
+        let talkTitle = data.talks.first(where: { $0.id == issue.talkId })?.title
+            ?? data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId })?.title
+            ?? "H&S sign-off"
         for userId in pendingUserIds {
             let notification = AppNotification(
                 organizationId: orgId,
@@ -342,17 +318,13 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         let fileName = persisted?.name ?? originalFileName ?? localFileURL?.lastPathComponent
         if let fileURL,
            let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) {
-            do {
-                uploadedURL = try await uploadScopedHealthSafetyFile(
-                    fileURL,
-                    organizationId: orgId,
-                    category: "rams",
-                    fileName: fileName ?? fileURL.lastPathComponent,
-                    firebaseBackend: firebaseBackend
-                )
-            } catch {
-                errorMessage = "Could not upload the RAMS file. \(error.localizedDescription)"
-            }
+            uploadedURL = try? await firebaseBackend.uploadHealthSafetyFile(
+                fileURL,
+                organizationId: orgId,
+                projectId: project.id,
+                category: "rams",
+                fileName: fileName ?? fileURL.lastPathComponent
+            )
         }
         if localFileURL != nil && uploadedURL == nil {
             errorMessage = "Couldn’t upload the RAMS file. Check your connection and try again."
@@ -446,17 +418,13 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         let fileName = persisted?.name ?? originalFileName ?? localFileURL?.lastPathComponent
         if let fileURL,
            let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) {
-            do {
-                uploadedURL = try await uploadScopedHealthSafetyFile(
-                    fileURL,
-                    organizationId: orgId,
-                    category: "otherDocuments",
-                    fileName: fileName ?? fileURL.lastPathComponent,
-                    firebaseBackend: firebaseBackend
-                )
-            } catch {
-                errorMessage = "Could not upload the H&S document. \(error.localizedDescription)"
-            }
+            uploadedURL = try? await firebaseBackend.uploadHealthSafetyFile(
+                fileURL,
+                organizationId: orgId,
+                projectId: project.id,
+                category: "otherDocuments",
+                fileName: fileName ?? fileURL.lastPathComponent
+            )
         }
         if localFileURL != nil && uploadedURL == nil {
             errorMessage = "Couldn’t upload the H&S document. Check your connection and try again."
@@ -482,28 +450,6 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         data.signatures.filter { $0.issueId == issueId }
     }
 
-    private func uploadScopedHealthSafetyFile(
-        _ localFileURL: URL,
-        organizationId: String,
-        category: String,
-        fileName: String,
-        firebaseBackend: FirebaseBackend
-    ) async throws -> String {
-        let accessed = localFileURL.startAccessingSecurityScopedResource()
-        defer {
-            if accessed {
-                localFileURL.stopAccessingSecurityScopedResource()
-            }
-        }
-        return try await firebaseBackend.uploadHealthSafetyFile(
-            localFileURL,
-            organizationId: organizationId,
-            projectId: project.id,
-            category: category,
-            fileName: fileName
-        )
-    }
-
     func trackingSignOffTotals(now: Date = Date()) -> (signed: Int, total: Int) {
         let allSigs = visibleIssues(now: now).flatMap { signatures(for: $0.id) }
         let signed = allSigs.filter { $0.status == .signed }.count
@@ -515,7 +461,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
            let rams = data.ramsDocuments.first(where: { $0.id == ramsId }) {
             return rams.title
         }
-        return ToolboxTalkLibrary.resolvedTitle(talkId: issue.talkId, storedTalks: data.talks)
+        return data.talks.first(where: { $0.id == issue.talkId })?.title ?? "Sign-off"
     }
 
     private func recalculateIssueStatuses() {
@@ -546,6 +492,134 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         let trimmed = orgId.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+
+    private static let defaultLibraryTalks: [HSToolboxTalk] = {
+        let now = Date()
+
+        func parseExternalLibrary(from path: String) -> [HSToolboxTalk] {
+            guard let markdown = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+            let regexPattern = #"\*\*(TBT-[A-Z]+-[0-9]{3}) · ([^\*]+)\*\*"#
+            guard let regex = try? NSRegularExpression(pattern: regexPattern) else { return [] }
+            let ns = markdown as NSString
+            let matches = regex.matches(in: markdown, range: NSRange(location: 0, length: ns.length))
+            guard !matches.isEmpty else { return [] }
+
+            func tradeMeta(for id: String) -> (isGeneral: Bool, trades: [String]) {
+                if id.hasPrefix("TBT-GEN-") { return (true, []) }
+                if id.hasPrefix("TBT-ELE-") { return (false, ["Electrical"]) }
+                if id.hasPrefix("TBT-MEC-") { return (false, ["Mechanical / HVAC"]) }
+                if id.hasPrefix("TBT-PLG-") { return (false, ["Plumbing & Gas"]) }
+                if id.hasPrefix("TBT-GRD-") { return (false, ["Groundworks"]) }
+                if id.hasPrefix("TBT-SCA-") { return (false, ["Scaffolding"]) }
+                if id.hasPrefix("TBT-BRK-") { return (false, ["Brick & Block"]) }
+                if id.hasPrefix("TBT-JOI-") { return (false, ["Joinery"]) }
+                if id.hasPrefix("TBT-DRY-") { return (false, ["Drylining"]) }
+                if id.hasPrefix("TBT-PNT-") { return (false, ["Painting"]) }
+                if id.hasPrefix("TBT-ROO-") { return (false, ["Roofing"]) }
+                if id.hasPrefix("TBT-DEM-") { return (false, ["Demolition"]) }
+                if id.hasPrefix("TBT-STL-") { return (false, ["Steel Fixing"]) }
+                if id.hasPrefix("TBT-PLA-") { return (false, ["Plant"]) }
+                return (false, ["General"])
+            }
+
+            return matches.compactMap { match in
+                guard match.numberOfRanges >= 3 else { return nil }
+                let id = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                let title = ns.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
+                let meta = tradeMeta(for: id)
+                return HSToolboxTalk(
+                    id: id,
+                    title: title,
+                    category: meta.isGeneral ? .general : .trade,
+                    isGeneral: meta.isGeneral,
+                    trades: meta.trades,
+                    purpose: "Review controls and safe method of work for \(title.lowercased()) before starting the task.",
+                    keyPoints: [
+                        "Brief the team on hazards and controls for this task.",
+                        "Confirm competence, permits, and PPE requirements before work starts.",
+                        "Stop work and escalate if site conditions change or controls fail."
+                    ],
+                    source: .library,
+                    ownerOrganizationId: nil,
+                    status: .approved,
+                    version: 1,
+                    updatedAt: now,
+                    fileURL: nil
+                )
+            }
+        }
+
+        let externalPaths = [
+            Bundle.main.path(forResource: "TOOLBOX-TALK-LIBRARY", ofType: "md"),
+            "/workspace/Project Planner/Resources/TOOLBOX-TALK-LIBRARY.md",
+            "/Users/farnienel/Downloads/TBT and Dash/TOOLBOX-TALK-LIBRARY.md",
+            "/Users/farnienel/Downloads/Toolbox t/TOOLBOX-TALK-LIBRARY.md"
+        ].compactMap { $0 }
+        for path in externalPaths {
+            let parsed = parseExternalLibrary(from: path)
+            if !parsed.isEmpty {
+                return parsed
+            }
+        }
+
+        let general = [
+            "Working at Height", "Manual Handling", "PPE Selection and Use", "Slips Trips and Falls", "Fire Prevention and Emergency Routes",
+            "Housekeeping and Waste Segregation", "Working Around Mobile Plant", "Noise and Vibration Awareness", "Site Induction and Welfare Rules", "Accident and Near-Miss Reporting"
+        ]
+        let electrical = [
+            "Safe Isolation Procedure", "Temporary Electrical Installations", "Cable Management and Trip Prevention", "Testing and Verification Records",
+            "Live Services Avoidance", "Portable Appliance Safety", "RCD and Circuit Protection", "Lockout Tagout for Electrical Works"
+        ]
+        let groundworks = [
+            "Excavations and Services Avoidance", "Trench Support and Edge Protection", "Ground Stability and Weather Risk", "Plant Banksman Controls",
+            "Manual Handling in Groundworks", "Confined Spaces Entry Control", "Buried Services Permit to Dig", "Backfilling and Compaction Safety"
+        ]
+        let joinery = [
+            "Wood Dust and Extraction", "Bench and Portable Saw Safety", "Hand Tool Maintenance", "Ladder and Podium Use for Joiners",
+            "Adhesives and Solvent Ventilation", "Fire Door Installation Controls", "Manual Handling of Sheet Materials", "Workshop Housekeeping Standards"
+        ]
+        let mechanical = [
+            "Hot Works Permit Controls", "Lifting and Rigging Awareness", "Ductwork Installation Safety", "Pressurised Systems Isolation",
+            "Plant Room Access Controls", "Working at Height for Mechanical Install", "Hand Arm Vibration in Mechanical Works", "Temporary Supports and Bracing"
+        ]
+        let plumbing = [
+            "Gas Safe Working and Purging", "Legionella and Water Hygiene", "Pressure Testing Water Systems", "Soldering and Fire Watch",
+            "Working in Service Voids", "Asbestos Awareness for Plumbing Works", "Safe Use of Pipe Press Tools", "Draining Down and Refill Controls"
+        ]
+
+        func makeTalk(id: String, title: String, trade: String?) -> HSToolboxTalk {
+            let isGeneral = trade == nil
+            return HSToolboxTalk(
+                id: id,
+                title: title,
+                category: isGeneral ? .general : .trade,
+                isGeneral: isGeneral,
+                trades: trade.map { [$0] } ?? [],
+                purpose: "Ensure safe planning, communication, and execution for \(title.lowercased()).",
+                keyPoints: [
+                    "Review hazards and controls before work starts.",
+                    "Confirm competence, permits, and required PPE for the task.",
+                    "Stop and report immediately if site conditions change."
+                ],
+                source: .library,
+                ownerOrganizationId: nil,
+                status: .approved,
+                version: 1,
+                updatedAt: now,
+                fileURL: nil
+            )
+        }
+
+        var output: [HSToolboxTalk] = []
+        output += general.enumerated().map { makeTalk(id: String(format: "TBT-GEN-%03d", $0.offset + 1), title: $0.element, trade: nil) }
+        output += electrical.enumerated().map { makeTalk(id: String(format: "TBT-ELE-%03d", $0.offset + 1), title: $0.element, trade: "Electrical") }
+        output += groundworks.enumerated().map { makeTalk(id: String(format: "TBT-GRD-%03d", $0.offset + 1), title: $0.element, trade: "Groundworks") }
+        output += joinery.enumerated().map { makeTalk(id: String(format: "TBT-JOI-%03d", $0.offset + 1), title: $0.element, trade: "Joinery") }
+        output += mechanical.enumerated().map { makeTalk(id: String(format: "TBT-MEC-%03d", $0.offset + 1), title: $0.element, trade: "Mechanical / HVAC") }
+        output += plumbing.enumerated().map { makeTalk(id: String(format: "TBT-PLG-%03d", $0.offset + 1), title: $0.element, trade: "Plumbing & Gas") }
+        return output
+    }()
+}
 
 struct ProjectHealthSafetyView: View {
     let project: Project
@@ -607,12 +681,10 @@ struct ProjectHealthSafetyView: View {
 
     private var filteredLibraryTalks: [HSToolboxTalk] {
         vm.data.talks.filter { talk in
-            let search = talkSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-            let matchesSearch: Bool = search.isEmpty
-                || talk.displayTitle.localizedCaseInsensitiveContains(search)
-                || talk.title.localizedCaseInsensitiveContains(search)
-                || talk.purpose.localizedCaseInsensitiveContains(search)
-                || talk.id.localizedCaseInsensitiveContains(search)
+            let matchesSearch: Bool = talkSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || talk.title.localizedCaseInsensitiveContains(talkSearchText)
+                || talk.purpose.localizedCaseInsensitiveContains(talkSearchText)
+                || talk.id.localizedCaseInsensitiveContains(talkSearchText)
             guard matchesSearch else { return false }
             switch selectedTradeFilter {
             case "All":
@@ -733,10 +805,6 @@ struct ProjectHealthSafetyView: View {
     }
 
     var body: some View {
-        applySecondarySheets(to: applyPrimarySheets(to: healthSafetyRoot))
-    }
-
-    private var healthSafetyRoot: some View {
         VStack(spacing: 0) {
             HSNavBar(
                 title: "Health & Safety",
@@ -753,7 +821,7 @@ struct ProjectHealthSafetyView: View {
             }
 
             ScrollView(showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
                     HSContextHero(
                         title: project.siteName,
                         reference: project.jobNumber,
@@ -798,10 +866,6 @@ struct ProjectHealthSafetyView: View {
         } message: {
             Text(vm.errorMessage ?? reminderSuccessMessage ?? "")
         }
-    }
-
-    private func applyPrimarySheets<Content: View>(to content: Content) -> some View {
-        content
         .sheet(isPresented: $showingIssueSheet) {
             HSIssueTalkSheet(
                 talks: vm.data.talks,
@@ -900,10 +964,6 @@ struct ProjectHealthSafetyView: View {
                 downloadTalkFromLibrary(talk)
             }
         }
-    }
-
-    private func applySecondarySheets<Content: View>(to content: Content) -> some View {
-        content
         .sheet(item: $talkShareItem) { item in
             HSDocumentShareSheet(activityItems: [item.url])
         }
@@ -1050,25 +1110,11 @@ struct ProjectHealthSafetyView: View {
 
     private func downloadTalkFromLibrary(_ talk: HSToolboxTalk) {
         if talk.isCustomUpload, let remote = talk.storedFileURL {
-            presentDocumentPreview(HSDocumentPreviewItem(title: talk.displayTitle, remoteURL: remote, noun: "toolbox talk"))
-            return
-        }
-        if talk.fileURL?.isEmpty == false {
-            openHealthSafetyDocument(urlString: talk.fileURL, id: talk.id, title: talk.displayTitle, noun: "toolbox talk")
+            presentDocumentPreview(HSDocumentPreviewItem(title: talk.title, remoteURL: remote, noun: "toolbox talk"))
             return
         }
         guard let generated = HSTalkPDFBuilder.makePDF(for: talk) else { return }
         presentTalkShareSheet(with: generated)
-    }
-
-    private func openHealthSafetyDocument(urlString: String?, id: String, title: String = "Document", noun: String = "document") {
-        Task {
-            if let url = await HSTalkDocumentResolver.resolvedRemoteFile(urlString: urlString, id: id) {
-                await MainActor.run {
-                    presentDocumentPreview(HSDocumentPreviewItem(title: title, localURL: url, noun: noun))
-                }
-            }
-        }
     }
 
     private func downloadBlankTalkTemplate() {
@@ -1369,10 +1415,10 @@ struct ProjectHealthSafetyView: View {
             } else {
                 ForEach(groupedLibraryTalks, id: \.title) { group in
                     HSSectionHeader(title: groupHeaderTitle(group.title))
-                    LazyVStack(spacing: HSMetric.rowGap) {
+                    VStack(spacing: HSMetric.rowGap) {
                         ForEach(group.talks, id: \.id) { talk in
                             HSLibraryRow(
-                                title: talk.displayTitle,
+                                title: talk.title,
                                 reference: talk.id,
                                 purpose: talk.purpose,
                                 trade: talk.tradeLabel,
@@ -1430,7 +1476,7 @@ struct ProjectHealthSafetyView: View {
                     }
                 )
             } else {
-                LazyVStack(spacing: HSMetric.rowGap) {
+                VStack(spacing: HSMetric.rowGap) {
                     ForEach(visible, id: \.id) { issue in
                         let talk = vm.data.talks.first(where: { $0.id == issue.talkId })
                         let signatures = vm.signatures(for: issue.id)
@@ -1487,7 +1533,7 @@ struct ProjectHealthSafetyView: View {
                     message: "Try a different title, trade, or file name."
                 )
             } else {
-                LazyVStack(spacing: HSMetric.rowGap) {
+                VStack(spacing: HSMetric.rowGap) {
                     ForEach(filteredRamsDocuments, id: \.id) { doc in
                         Button {
                             HSHaptic.tap()
@@ -1555,7 +1601,7 @@ struct ProjectHealthSafetyView: View {
                     message: "Try a different title, trade, or file name."
                 )
             } else {
-                LazyVStack(spacing: HSMetric.rowGap) {
+                VStack(spacing: HSMetric.rowGap) {
                     ForEach(filteredOtherDocuments, id: \.id) { doc in
                         Button {
                             HSHaptic.tap()
@@ -3167,67 +3213,6 @@ private struct HSFormMenuField<MenuContent: View>: View {
                         .foregroundStyle(HS.slate2)
                 }
             }
-        }
-    }
-}
-
-
-private enum HSTalkDocumentResolver {
-    static func copySecurityScopedFile(_ url: URL) -> URL? {
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer {
-            if accessed {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-        let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent("hs-upload-\(UUID().uuidString)-\(url.lastPathComponent)")
-        do {
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-            try FileManager.default.copyItem(at: url, to: destination)
-            return destination
-        } catch {
-            return nil
-        }
-    }
-
-    static func resolvedFileURL(for talk: HSToolboxTalk) async -> URL? {
-        if let remote = remoteFileURL(from: talk.fileURL) {
-            if let downloaded = await downloadRemoteFile(remote, talkId: talk.id) {
-                return downloaded
-            }
-        }
-        return HSTalkPDFBuilder.makePDF(for: talk)
-    }
-
-    static func resolvedRemoteFile(urlString: String?, id: String) async -> URL? {
-        guard let remote = remoteFileURL(from: urlString) else { return nil }
-        return await downloadRemoteFile(remote, talkId: id)
-    }
-
-    private static func remoteFileURL(from raw: String?) -> URL? {
-        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
-        guard let url = URL(string: raw) else { return nil }
-        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
-        return url
-    }
-
-    private static func downloadRemoteFile(_ remoteURL: URL, talkId: String) async -> URL? {
-        do {
-            let (data, response) = try await URLSession.shared.data(from: remoteURL)
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                return nil
-            }
-            guard !data.isEmpty else { return nil }
-            let ext = remoteURL.pathExtension.isEmpty ? "pdf" : remoteURL.pathExtension
-            let localURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("ToolboxTalk-\(talkId)-\(Int(Date().timeIntervalSince1970)).\(ext)")
-            try data.write(to: localURL, options: .atomic)
-            return localURL
-        } catch {
-            return nil
         }
     }
 }
