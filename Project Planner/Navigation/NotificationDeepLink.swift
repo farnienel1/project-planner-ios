@@ -100,7 +100,7 @@ enum NotificationDeepLink {
             } else {
                 openSurface(.createSmallWorks)
             }
-        case .bookingClash, .warningRemoved:
+        case .bookingClash, .warningRemoved, .qualificationExpiry, .materialOrderCutOff:
             openSurface(.warnings)
             NotificationCenter.default.post(name: NSNotification.Name("navigateToWarnings"), object: nil)
         case .materialAdded:

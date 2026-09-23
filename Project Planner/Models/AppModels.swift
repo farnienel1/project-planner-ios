@@ -1571,6 +1571,8 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .lineManagerPeerUpdate: return .lineManagerPeerUpdate
         case .materialAdded: return .materialAdded
         case .toolboxTalkIssued: return .toolboxTalkIssued
+        case .qualificationExpiry: return .qualificationExpiry
+        case .materialOrderCutOff: return .materialOrderCutOff
         case .deadlineAssigned, .deadlineReminder, .deadlineDue: return nil
         }
     }
