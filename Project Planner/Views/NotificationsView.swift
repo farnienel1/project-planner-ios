@@ -203,6 +203,8 @@ struct NotificationRowView: View {
         case .taskCompleted: return "checkmark.circle"
         case .taskCreated: return "list.bullet.rectangle"
         case .deadlineAssigned, .deadlineReminder, .deadlineDue: return "calendar.badge.clock"
+        case .qualificationExpiry: return "checkmark.seal"
+        case .materialOrderCutOff: return "shippingbox"
         case .materialAdded: return "shippingbox.fill"
         case .toolboxTalkIssued: return "list.clipboard.fill"
         case .holidayRequestSubmitted: return "sun.max"
@@ -227,6 +229,8 @@ struct NotificationRowView: View {
         case .taskCompleted: return ProjectWorksRevampColors.activeGreen
         case .taskCreated: return ProjectWorksRevampColors.blue
         case .deadlineAssigned, .deadlineReminder, .deadlineDue: return ProjectWorksRevampColors.upcomingAmber
+        case .qualificationExpiry: return ProjectWorksRevampColors.upcomingAmber
+        case .materialOrderCutOff: return ProjectWorksRevampColors.upcomingAmber
         case .materialAdded: return ProjectWorksRevampColors.activeGreen
         case .toolboxTalkIssued: return ProjectWorksRevampColors.blueLight
         case .holidayRequestSubmitted: return ProjectWorksRevampColors.upcomingAmber

@@ -112,15 +112,6 @@ class LocalNotificationService {
         case .toolboxTalkIssued:
             content.title = "Toolbox Talk issued"
             content.body = details.isEmpty ? "A toolbox talk needs your signature." : details
-        case .deadlineAssigned:
-            content.title = "Deadline assigned"
-            content.body = details.isEmpty ? "A deadline was assigned to you." : details
-        case .deadlineReminder:
-            content.title = "Deadline reminder"
-            content.body = details.isEmpty ? "A deadline is coming up." : details
-        case .deadlineDue:
-            content.title = "Deadline due today"
-            content.body = details.isEmpty ? "A deadline is due today." : details
         }
         
         // Set sound

@@ -8,7 +8,7 @@
 import Foundation
 
 struct AppNotification: Identifiable, Codable, Hashable {
-    enum NotificationType: String, Codable {
+    nonisolated enum NotificationType: String, Codable, Sendable {
         case bookingCreated = "booking_created"
         case operativeCreated = "operative_created"
         case managerCreated = "manager_created"
@@ -30,6 +30,8 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case deadlineAssigned = "deadline_assigned"
         case deadlineReminder = "deadline_reminder"
         case deadlineDue = "deadline_due"
+        case qualificationExpiry = "qualification_expiry"
+        case materialOrderCutOff = "material_order_cut_off"
     }
     
     let id: UUID
