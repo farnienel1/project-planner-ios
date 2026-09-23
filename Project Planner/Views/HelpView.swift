@@ -9,160 +9,88 @@ import SwiftUI
 import UIKit
 
 struct HelpView: View {
-    @EnvironmentObject var appSettings: AppSettingsStore
+    /// When Help is opened as the More-menu tab (not via Settings NavigationLink).
+    var showsTabBackButton: Bool = false
+
     @State private var selectedCategory: HelpCategory? = nil
     @State private var searchText = ""
-    
+
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                // Welcome Section
-                welcomeSection
-                
-                // Quick Links
-                quickLinksSection
-                
-                // Categories Section
-                if !HelpCategory.allCases.isEmpty {
-                    categoriesSection
-                }
-                
-                // FAQs Section
-                faqSection
-            }
-            .padding()
-        }
-        .navigationTitle("Help & FAQs")
-        .navigationBarTitleDisplayMode(.large)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button(action: {
-                    // Post notification to go back to previous tab
-                    NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
-                }) {
-                    Image(systemName: "chevron.left")
-                        .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
-                        .font(.system(size: 17, weight: .semibold))
-                }
-            }
-        }
-        .navigationBarBackButtonHidden(true)
-        .onAppear {
-            // Hide default back button - using a safer approach
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                      !windowScene.windows.isEmpty,
-                      let window = windowScene.windows.first else {
-                    return
-                }
-                
-                func findNavigationController(in viewController: UIViewController?) -> UINavigationController? {
-                    guard let viewController = viewController else { return nil }
-                    if let navController = viewController as? UINavigationController {
-                        return navController
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsHubChrome.sectionTitle("Help & support")
+                SettingsHubChrome.card {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Find answers and how-to guides")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                        Text("Browse a topic or expand a frequent question. Get in touch via your organisation admin if you still need help.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    for child in viewController.children {
-                        if let navController = findNavigationController(in: child) {
-                            return navController
+                    .padding(.vertical, 12)
+                }
+
+                SettingsHubChrome.sectionTitle("Search")
+                SettingsHubChrome.card {
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                        TextField("Search topics", text: $searchText)
+                            .font(.system(size: 14))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                    }
+                    .padding(.vertical, 12)
+                }
+
+                SettingsHubChrome.sectionTitle("Browse topics")
+                SettingsHubChrome.card {
+                    ForEach(Array(filteredCategories.enumerated()), id: \.element.id) { index, category in
+                        Button {
+                            selectedCategory = category
+                        } label: {
+                            SettingsHubChrome.row(
+                                icon: category.icon,
+                                iconBg: ProjectWorksRevampColors.blue.opacity(0.12),
+                                iconFg: ProjectWorksRevampColors.blue,
+                                title: category.title,
+                                subtitle: category.description
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        if index < filteredCategories.count - 1 {
+                            SettingsHubChrome.divider()
                         }
                     }
-                    return nil
                 }
-                
-                if let navController = findNavigationController(in: window.rootViewController) {
-                    navController.navigationBar.topItem?.leftBarButtonItem = nil
-                    navController.navigationBar.backItem?.backBarButtonItem = nil
-                    navController.navigationBar.backIndicatorImage = UIImage()
-                    navController.navigationBar.backIndicatorTransitionMaskImage = UIImage()
-                    
-                    let appearance = UINavigationBarAppearance()
-                    appearance.configureWithOpaqueBackground()
-                    appearance.backButtonAppearance.normal.titlePositionAdjustment = UIOffset(horizontal: -1000, vertical: 0)
-                    navController.navigationBar.standardAppearance = appearance
-                    navController.navigationBar.scrollEdgeAppearance = appearance
+
+                SettingsHubChrome.sectionTitle("Frequently asked questions")
+                SettingsHubChrome.card {
+                    ForEach(Array(faqs.enumerated()), id: \.offset) { index, faq in
+                        FAQCard(faq: faq)
+                        if index < faqs.count - 1 {
+                            SettingsHubChrome.divider()
+                        }
+                    }
                 }
             }
+            .padding(16)
         }
-    }
-    
-    // MARK: - Welcome Section
-    
-    private var welcomeSection: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "questionmark.circle.fill")
-                .font(.system(size: 60))
-                .foregroundColor(Color.theme.primary)
-            
-            Text("Welcome to Project Planner Help")
-                .font(.title2)
-                .fontWeight(.bold)
-                .multilineTextAlignment(.center)
-            
-            Text("Find answers to common questions and learn how to use all features of the app")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding()
-        .frame(maxWidth: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.theme.primary.opacity(0.1))
-        )
-    }
-    
-    // MARK: - Quick Links Section
-    
-    private var quickLinksSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Quick Links")
-                .font(.headline)
-            
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                QuickLinkCard(
-                    icon: "folder.fill",
-                    title: "Projects",
-                    color: .blue,
-                    action: { selectedCategory = .projects }
-                )
-                
-                QuickLinkCard(
-                    icon: "hammer.fill",
-                    title: "Small Works",
-                    color: .orange,
-                    action: { selectedCategory = .smallWorks }
-                )
-                
-                QuickLinkCard(
-                    icon: "person.3.fill",
-                    title: "Operatives",
-                    color: .green,
-                    action: { selectedCategory = .operatives }
-                )
-                
-                QuickLinkCard(
-                    icon: "person.badge.key.fill",
-                    title: "Managers",
-                    color: .purple,
-                    action: { selectedCategory = .managers }
-                )
-            }
-        }
-        .sheet(item: $selectedCategory) { category in
-            CategoryHelpView(category: category)
-        }
-    }
-    
-    // MARK: - Categories Section
-    
-    private var categoriesSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Browse by Category")
-                .font(.headline)
-            
-            ForEach(filteredCategories) { category in
-                CategoryCard(category: category) {
-                    selectedCategory = category
+        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .navigationTitle("Help & support")
+        .navigationBarTitleDisplayMode(.inline)
+        .appChromeNavigationBarSurface()
+        .toolbar {
+            if showsTabBackButton {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                    }
                 }
             }
         }
@@ -170,22 +98,7 @@ struct HelpView: View {
             CategoryHelpView(category: category)
         }
     }
-    
-    // MARK: - FAQ Section
-    
-    private var faqSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Frequently Asked Questions")
-                .font(.headline)
-            
-            ForEach(faqs) { faq in
-                FAQCard(faq: faq)
-            }
-        }
-    }
-    
-    // MARK: - Filtered Categories
-    
+
     private var filteredCategories: [HelpCategory] {
         if searchText.isEmpty {
             return HelpCategory.allCases
@@ -197,117 +110,39 @@ struct HelpView: View {
     }
 }
 
-// MARK: - Supporting Views
-
-struct QuickLinkCard: View {
-    let icon: String
-    let title: String
-    let color: Color
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 32))
-                    .foregroundColor(color)
-                
-                Text(title)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.primary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(.systemBackground))
-                    .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-            )
-        }
-        .buttonStyle(PlainButtonStyle())
-    }
-}
-
-struct CategoryCard: View {
-    let category: HelpCategory
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            HStack {
-                Image(systemName: category.icon)
-                    .font(.title2)
-                    .foregroundColor(Color.theme.primary)
-                    .frame(width: 40)
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(category.title)
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    
-                    Text(category.description)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                }
-                
-                Spacer()
-                
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(.systemBackground))
-                    .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-            )
-        }
-        .buttonStyle(PlainButtonStyle())
-    }
-}
-
 struct FAQCard: View {
     let faq: FAQ
     @State private var isExpanded = false
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button(action: {
-                withAnimation {
-                    isExpanded.toggle()
-                }
-            }) {
-                HStack {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isExpanded.toggle()
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 10) {
                     Text(faq.question)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.primary)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
                         .multilineTextAlignment(.leading)
-                    
-                    Spacer()
-                    
+                    Spacer(minLength: 8)
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
+                }
+                if isExpanded {
+                    Text(faq.answer)
+                        .font(.system(size: 12))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .buttonStyle(PlainButtonStyle())
-            
-            if isExpanded {
-                Text(faq.answer)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 4)
-            }
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.secondarySystemBackground))
-        )
+        .buttonStyle(.plain)
     }
 }
 
@@ -316,78 +151,72 @@ struct FAQCard: View {
 struct CategoryHelpView: View {
     let category: HelpCategory
     @Environment(\.dismiss) private var dismiss
-    
+
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Category Header
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Image(systemName: category.icon)
-                                .font(.title)
-                                .foregroundColor(Color.theme.primary)
-                            Text(category.title)
-                                .font(.title2)
-                                .fontWeight(.bold)
+                VStack(alignment: .leading, spacing: 0) {
+                    SettingsHubChrome.sectionTitle(category.title)
+                    SettingsHubChrome.card {
+                        HStack(alignment: .top, spacing: 12) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(ProjectWorksRevampColors.blue.opacity(0.12))
+                                    .frame(width: 36, height: 36)
+                                Image(systemName: category.icon)
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                            }
+                            Text(category.description)
+                                .font(.system(size: 13))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
                         }
-                        
-                        Text(category.description)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+                        .padding(.vertical, 12)
                     }
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16)
-                            .fill(Color.theme.primary.opacity(0.1))
-                    )
-                    
-                    // Steps
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("How to Use")
-                            .font(.headline)
-                        
+
+                    SettingsHubChrome.sectionTitle("How to use")
+                    SettingsHubChrome.card {
                         ForEach(Array(category.steps.enumerated()), id: \.offset) { index, step in
                             StepView(number: index + 1, step: step)
+                            if index < category.steps.count - 1 {
+                                SettingsHubChrome.divider()
+                            }
                         }
                     }
-                    
-                    // Tips
+
                     if !category.tips.isEmpty {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Tips & Tricks")
-                                .font(.headline)
-                            
-                            ForEach(category.tips, id: \.self) { tip in
-                                HStack(alignment: .top, spacing: 8) {
+                        SettingsHubChrome.sectionTitle("Tips")
+                        SettingsHubChrome.card {
+                            ForEach(Array(category.tips.enumerated()), id: \.offset) { index, tip in
+                                HStack(alignment: .top, spacing: 10) {
                                     Image(systemName: "lightbulb.fill")
-                                        .font(.caption)
-                                        .foregroundColor(.yellow)
-                                    
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
                                     Text(tip)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Spacer(minLength: 0)
                                 }
-                                .padding()
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(Color.yellow.opacity(0.1))
-                                )
+                                .padding(.vertical, 11)
+                                if index < category.tips.count - 1 {
+                                    SettingsHubChrome.divider()
+                                }
                             }
                         }
                     }
                 }
-                .padding()
+                .padding(16)
             }
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
             .navigationTitle(category.title)
             .navigationBarTitleDisplayMode(.inline)
+            .appChromeNavigationBarSurface()
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
                 }
             }
         }
@@ -397,40 +226,28 @@ struct CategoryHelpView: View {
 struct StepView: View {
     let number: Int
     let step: HelpStep
-    
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            // Step Number
-            ZStack {
-                Circle()
-                    .fill(Color.theme.primary)
-                    .frame(width: 32, height: 32)
-                
-                Text("\(number)")
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
-            }
-            
-            // Step Content
-            VStack(alignment: .leading, spacing: 4) {
+            Text("\(number)")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 24, height: 24)
+                .background(ProjectWorksRevampColors.blue)
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
                 Text(step.title)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
                 Text(step.description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 12))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.systemBackground))
-                .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
-        )
+        .padding(.vertical, 12)
     }
 }
 

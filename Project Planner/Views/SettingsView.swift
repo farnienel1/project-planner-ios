@@ -378,7 +378,6 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             NavigationLink {
                 HelpView()
-                    .environmentObject(appSettings)
             } label: {
                 settingsHubRow(
                     icon: "questionmark.circle.fill",

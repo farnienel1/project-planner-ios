@@ -50,14 +50,12 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             var loaded = try await firebaseBackend.loadHealthSafetyData(project: project, organizationId: orgId)
-            let platform = (try? await firebaseBackend.loadPlatformToolboxLibrary()) ?? []
-            let mergedTalks = ToolboxTalkLibrary.merge(stored: loaded.talks, platform: platform)
-            let storedWereBroken = loaded.talks.contains { ToolboxTalkLibrary.isPlaceholderTitle($0.title) }
-                || loaded.talks.isEmpty
-            loaded.talks = mergedTalks
-            if storedWereBroken {
+            // PR 46/49: fill an empty library once. Do not merge/rewrite stored talks on every open
+            // (later 51–55 rewrites fought uploads and wiped custom titles).
+            if loaded.talks.isEmpty {
+                loaded.talks = ToolboxTalkLibrary.bundledTalks()
                 loaded.updatedAt = Date()
-                try? await firebaseBackend.saveHealthSafetyData(loaded, project: project, organizationId: orgId)
+                try await firebaseBackend.saveHealthSafetyData(loaded, project: project, organizationId: orgId)
             }
             data = loaded
         } catch {
@@ -653,10 +651,14 @@ struct ProjectHealthSafetyView: View {
         where (booking.locationType == .project || booking.locationType == .smallWork) && booking.locationId == project.id {
             ids.insert(booking.userId)
         }
-        let operativeById = Dictionary(uniqueKeysWithValues: operativeStore.operatives.map { ($0.id, $0) })
+        let operativeById = Dictionary(operativeStore.operatives.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        let userByEmail = Dictionary(
+            userStore.organizationUsers.map { ($0.email.lowercased(), $0) },
+            uniquingKeysWith: { _, last in last }
+        )
         for booking in bookingStore.bookings where booking.projectId == project.id {
             guard let operative = operativeById[booking.operativeId] else { continue }
-            if let user = userStore.organizationUsers.first(where: { $0.email.caseInsensitiveCompare(operative.email) == .orderedSame }) {
+            if let user = userByEmail[operative.email.lowercased()] {
                 ids.insert(user.id)
             }
         }
@@ -688,7 +690,7 @@ struct ProjectHealthSafetyView: View {
             }
 
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     HSContextHero(
                         title: project.siteName,
                         reference: project.jobNumber,
@@ -881,8 +883,8 @@ struct ProjectHealthSafetyView: View {
         .sheet(isPresented: $showingScheduledTalks) {
             HSScheduledTalksView(
                 issues: vm.scheduledIssues(),
-                talksById: Dictionary(uniqueKeysWithValues: vm.data.talks.map { ($0.id, $0) }),
-                usersById: Dictionary(uniqueKeysWithValues: userStore.organizationUsers.map { ($0.id, $0) }),
+                talksById: Dictionary(vm.data.talks.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last }),
+                usersById: Dictionary(userStore.organizationUsers.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last }),
                 onCancelIssue: { issue in
                     Task { await vm.removeIssue(issueId: issue.id, firebaseBackend: firebaseBackend, userStore: userStore) }
                 },
@@ -1280,9 +1282,9 @@ struct ProjectHealthSafetyView: View {
                 )
                 .padding(.top, 16)
             } else {
-                ForEach(groupedLibraryTalks, id: \.title) { group in
-                    HSSectionHeader(title: groupHeaderTitle(group.title))
-                    VStack(spacing: HSMetric.rowGap) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(groupedLibraryTalks, id: \.title) { group in
+                        HSSectionHeader(title: groupHeaderTitle(group.title))
                         ForEach(group.talks, id: \.id) { talk in
                             HSLibraryRow(
                                 title: talk.displayTitle,
@@ -1343,7 +1345,7 @@ struct ProjectHealthSafetyView: View {
                     }
                 )
             } else {
-                VStack(spacing: HSMetric.rowGap) {
+                LazyVStack(spacing: HSMetric.rowGap) {
                     ForEach(visible, id: \.id) { issue in
                         let talk = vm.data.talks.first(where: { $0.id == issue.talkId })
                         let signatures = vm.signatures(for: issue.id)
@@ -1371,9 +1373,10 @@ struct ProjectHealthSafetyView: View {
 
     private var managerRams: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HSSectionHeader(title: "RAMS")
             HSSearchField(placeholder: "Search RAMS…", text: $ramsSearchText)
+                .padding(.top, 16)
                 .padding(.bottom, 12)
+            HSSectionHeader(title: "RAMS")
             if !isOperative {
                 Button {
                     HSHaptic.tap()
@@ -1400,7 +1403,7 @@ struct ProjectHealthSafetyView: View {
                     message: "Try a different title, trade, or file name."
                 )
             } else {
-                VStack(spacing: HSMetric.rowGap) {
+                LazyVStack(spacing: HSMetric.rowGap) {
                     ForEach(filteredRamsDocuments, id: \.id) { doc in
                         Button {
                             HSHaptic.tap()
@@ -1439,9 +1442,10 @@ struct ProjectHealthSafetyView: View {
 
     private var managerOtherDocs: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HSSectionHeader(title: "Other H&S documents")
             HSSearchField(placeholder: "Search other documents…", text: $otherSearchText)
+                .padding(.top, 16)
                 .padding(.bottom, 12)
+            HSSectionHeader(title: "Other H&S documents")
             if !isOperative {
                 Button {
                     HSHaptic.tap()
@@ -1468,7 +1472,7 @@ struct ProjectHealthSafetyView: View {
                     message: "Try a different title, trade, or file name."
                 )
             } else {
-                VStack(spacing: HSMetric.rowGap) {
+                LazyVStack(spacing: HSMetric.rowGap) {
                     ForEach(filteredOtherDocuments, id: \.id) { doc in
                         Button {
                             HSHaptic.tap()
@@ -1733,7 +1737,7 @@ private struct HSIssueTalkSheet: View {
                                 }
                             }
                             ScrollView {
-                                VStack(spacing: 8) {
+                                LazyVStack(spacing: 8) {
                                     ForEach(filteredTalks, id: \.id) { talk in
                                         Button {
                                             selectedTalkId = talk.id

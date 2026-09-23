@@ -44,6 +44,40 @@ enum SettingsHubChrome {
         Divider().overlay(ProjectWorksRevampColors.border)
     }
 
+    static func row(
+        icon: String,
+        iconBg: Color,
+        iconFg: Color,
+        title: String,
+        subtitle: String
+    ) -> some View {
+        HStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(iconBg)
+                    .frame(width: 36, height: 36)
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(iconFg)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                Text(subtitle)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
+        }
+        .padding(.vertical, 13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
     static func saveButton(_ title: String, isSaving: Bool = false, enabled: Bool = true, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack {

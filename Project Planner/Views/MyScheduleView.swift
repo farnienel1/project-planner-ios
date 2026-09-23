@@ -1355,6 +1355,16 @@ struct ManagerScheduleContentView: View {
         }
     }
 
+    private func shiftSelectedDay(by delta: Int) {
+        let base = selectedDate ?? weekDates.first ?? Date()
+        let sod = calendar.startOfDay(for: base)
+        guard let newDay = calendar.date(byAdding: .day, value: delta, to: sod) else { return }
+        selectedDate = newDay
+        if let ws = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: newDay)) {
+            weekStart = ws
+        }
+    }
+
     private func beginEditManagerBooking(_ b: ManagerSiteBooking) {
         let day = calendar.startOfDay(for: b.date)
         let p = payrollPolicy(for: day)
@@ -1486,6 +1496,11 @@ struct ManagerScheduleContentView: View {
         let annualLeaveSlotForDay = annualLeaveTimeSlot(on: day)
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                    MyScheduleDayNavigatorCard(
+                        day: day,
+                        onPrev: { shiftSelectedDay(by: -1) },
+                        onNext: { shiftSelectedDay(by: 1) }
+                    )
                     MyScheduleTodaysHoursCard(
                         day: day,
                         policy: policy,

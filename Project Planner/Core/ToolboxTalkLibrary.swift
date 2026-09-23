@@ -33,7 +33,7 @@ enum ToolboxTalkLibrary {
     }
 
     static func catalogById(now: Date = Date()) -> [String: HSToolboxTalk] {
-        Dictionary(uniqueKeysWithValues: bundledTalks(now: now).map { ($0.id, $0) })
+        Dictionary(bundledTalks(now: now).map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
     }
 
     /// Overlay the real library onto stored talks. Library IDs always keep MD titles.

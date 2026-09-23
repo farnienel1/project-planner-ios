@@ -495,7 +495,7 @@ struct ContentView: View {
                 NavigationStack { SettingsView() }
             case 6:
                 if !userStore.isOperativeMode() {
-                    NavigationStack { HelpView() }
+                    NavigationStack { HelpView(showsTabBackButton: true) }
                 } else {
                     NavigationStack { HomeView() }
                 }
