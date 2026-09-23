@@ -8,7 +8,7 @@
 import Foundation
 
 /// Future working-hours change queued on the organisation document.
-struct OrgPayrollTimePolicyScheduledChange: Codable, Hashable {
+nonisolated struct OrgPayrollTimePolicyScheduledChange: Codable, Hashable, Sendable {
     var policy: OrgPayrollTimePolicy
     /// Start of calendar day (local) when `policy` becomes live.
     var effectiveFrom: Date

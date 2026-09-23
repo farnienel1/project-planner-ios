@@ -250,23 +250,13 @@ class FirebaseBackend: ObservableObject {
             clearLocalOrganizationCache()
             return
         }
-        let resolvedName = (orgData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let orgSettings = Self.organizationSettingsFromOrgDocument(orgData)
         organizationHasFirestoreMyScheduleOptions = Self.organizationHasMyScheduleOptionsInDocument(orgData)
-        let organization = Organization(
-            id: UUID(uuidString: orgId) ?? UUID(),
-            firestoreDocumentId: orgId,
-            name: (resolvedName?.isEmpty == false) ? resolvedName! : "Recovered Organization",
+        let organization = Organization.make(
+            fromFirestoreId: orgId,
+            data: orgData,
             settings: orgSettings,
-            officeAddressLine1: orgData["officeAddressLine1"] as? String,
-            officeCity: orgData["officeCity"] as? String,
-            officePostcode: orgData["officePostcode"] as? String,
-            countryCode: (orgData["countryCode"] as? String)?.uppercased() ?? "GB",
-            defaultLatitude: orgData["defaultLatitude"] as? Double,
-            defaultLongitude: orgData["defaultLongitude"] as? Double,
-            companyLogoURL: orgData["companyLogoURL"] as? String,
-            documentAbbreviation: OrganizationDocumentAbbreviation.normalized(orgData["documentAbbreviation"] as? String),
-            creatorUserId: orgData["creatorUserId"] as? String
+            fallbackName: "Recovered Organization"
         )
         currentOrganization = organization
         userRole = UserRole(rawValue: fallbackRole) ?? .basic
@@ -1179,30 +1169,15 @@ class FirebaseBackend: ObservableObject {
             
             let organizationName = data["name"] as? String ?? "Unknown Organization"
             let creatorUserId = data["creatorUserId"] as? String
-            let officeAddressLine1 = data["officeAddressLine1"] as? String
-            let officeCity = data["officeCity"] as? String
-            let officePostcode = data["officePostcode"] as? String
-            let countryCode = (data["countryCode"] as? String)?.uppercased() ?? "GB"
-            let defaultLatitude = data["defaultLatitude"] as? Double
-            let defaultLongitude = data["defaultLongitude"] as? Double
             print("🔥🔥🔥 DEBUG: ✅ Organization name: \(organizationName), creatorUserId: \(creatorUserId ?? "nil")")
             
             let orgSettings = Self.organizationSettingsFromOrgDocument(data)
             organizationHasFirestoreMyScheduleOptions = Self.organizationHasMyScheduleOptionsInDocument(data)
-            var organization = Organization(
-                id: UUID(uuidString: organizationId) ?? UUID(),
-                firestoreDocumentId: organizationId,
-                name: organizationName,
+            var organization = Organization.make(
+                fromFirestoreId: organizationId,
+                data: data,
                 settings: orgSettings,
-                officeAddressLine1: officeAddressLine1,
-                officeCity: officeCity,
-                officePostcode: officePostcode,
-                countryCode: countryCode,
-                defaultLatitude: defaultLatitude,
-                defaultLongitude: defaultLongitude,
-                companyLogoURL: data["companyLogoURL"] as? String,
-                documentAbbreviation: OrganizationDocumentAbbreviation.normalized(data["documentAbbreviation"] as? String),
-                creatorUserId: creatorUserId
+                fallbackName: "Unknown Organization"
             )
             Self.applyPayrollPolicyFields(from: data, to: &organization)
             

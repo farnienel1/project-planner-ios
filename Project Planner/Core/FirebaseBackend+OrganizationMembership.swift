@@ -169,24 +169,9 @@ extension FirebaseBackend {
 
     @MainActor
     func buildOrganizationFromDocument(orgId: String, data: [String: Any]) -> Organization {
-        let resolvedName = (data["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let orgSettings = Self.organizationSettingsFromOrgDocument(data)
         organizationHasFirestoreMyScheduleOptions = Self.organizationHasMyScheduleOptionsInDocument(data)
-        var organization = Organization(
-            id: UUID(uuidString: orgId) ?? UUID(),
-            firestoreDocumentId: orgId,
-            name: (resolvedName?.isEmpty == false) ? resolvedName! : "Organisation",
-            settings: orgSettings,
-            officeAddressLine1: data["officeAddressLine1"] as? String,
-            officeCity: data["officeCity"] as? String,
-            officePostcode: data["officePostcode"] as? String,
-            countryCode: (data["countryCode"] as? String)?.uppercased() ?? "GB",
-            defaultLatitude: data["defaultLatitude"] as? Double,
-            defaultLongitude: data["defaultLongitude"] as? Double,
-            companyLogoURL: data["companyLogoURL"] as? String,
-            documentAbbreviation: OrganizationDocumentAbbreviation.normalized(data["documentAbbreviation"] as? String),
-            creatorUserId: data["creatorUserId"] as? String
-        )
+        var organization = Organization.make(fromFirestoreId: orgId, data: data, settings: orgSettings)
         Self.applyPayrollPolicyFields(from: data, to: &organization)
         return organization
     }
