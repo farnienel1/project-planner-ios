@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum WarningClashLookaheadMode: String, Codable, CaseIterable, Identifiable, Sendable {
+nonisolated enum WarningClashLookaheadMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case endOfInvoicingPeriod
     case numberOfDays
     case endOfWorkingWeek
@@ -23,7 +23,7 @@ enum WarningClashLookaheadMode: String, Codable, CaseIterable, Identifiable, Sen
     }
 }
 
-struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
+nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     var detectClashes: Bool
     var clashLookaheadMode: WarningClashLookaheadMode
     /// Used when `clashLookaheadMode == .numberOfDays`.
@@ -41,7 +41,7 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         excludedUserIdsFromUnbookedWarnings: []
     )
 
-    enum CodingKeys: String, CodingKey {
+    nonisolated enum CodingKeys: String, CodingKey {
         case detectClashes
         case clashLookaheadMode
         case clashLookaheadDays

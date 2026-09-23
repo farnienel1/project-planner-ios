@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct BankHolidayRegion: Identifiable, Hashable, Codable, Sendable {
+nonisolated struct BankHolidayRegion: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let title: String
     /// ISO 3166-1 alpha-2 country code for Nager.Date.

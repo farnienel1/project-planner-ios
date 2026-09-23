@@ -53,7 +53,7 @@ enum AppColorScheme: String, CaseIterable, Codable, Sendable {
     }
 }
 
-enum UserRole: String, CaseIterable, Codable {
+nonisolated enum UserRole: String, CaseIterable, Codable, Sendable {
     case basic = "basic"
     case admin = "admin"
     case manager = "manager"
@@ -102,7 +102,7 @@ enum EmploymentType: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-enum Permission: String, CaseIterable {
+nonisolated enum Permission: String, CaseIterable, Sendable {
     case viewProjects = "view_projects"
     case editProjects = "edit_projects"
     case deleteProjects = "delete_projects"
@@ -136,7 +136,7 @@ enum Permission: String, CaseIterable {
     }
 }
 
-struct UserPermissions: Codable, Hashable {
+nonisolated struct UserPermissions: Codable, Hashable, Sendable {
     var adminAccess: Bool  // Can add/manage users
     var manager: Bool      // Manager - can schedule operatives, create clients, view warnings, manage tasks
     var operatives: Bool   // Can see operatives list and details on home screen (Operative Management)
@@ -710,7 +710,7 @@ nonisolated struct OrganizationSettings: Codable, Hashable, Sendable {
         self.currencyCode = currencyCode
     }
 
-    enum CodingKeys: String, CodingKey {
+    nonisolated enum CodingKeys: String, CodingKey {
         case allowSelfRegistration, requireEmailVerification, defaultUserRole, workingHours, holidayCalendar
         case uiLabels
         case payrollTimePolicy
@@ -722,7 +722,7 @@ nonisolated struct OrganizationSettings: Codable, Hashable, Sendable {
         case currencyCode
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         allowSelfRegistration = try c.decodeIfPresent(Bool.self, forKey: .allowSelfRegistration) ?? true
         requireEmailVerification = try c.decodeIfPresent(Bool.self, forKey: .requireEmailVerification) ?? true
@@ -739,7 +739,7 @@ nonisolated struct OrganizationSettings: Codable, Hashable, Sendable {
         currencyCode = try c.decodeIfPresent(String.self, forKey: .currencyCode)
     }
 
-    func encode(to encoder: Encoder) throws {
+    nonisolated func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(allowSelfRegistration, forKey: .allowSelfRegistration)
         try c.encode(requireEmailVerification, forKey: .requireEmailVerification)
@@ -757,7 +757,7 @@ nonisolated struct OrganizationSettings: Codable, Hashable, Sendable {
     }
 }
 
-struct OrganizationAnnualLeaveDefaults: Codable, Hashable {
+nonisolated struct OrganizationAnnualLeaveDefaults: Codable, Hashable, Sendable {
     var daysPerYear: Double
     var startMonth: Int
     var endMonth: Int
@@ -778,21 +778,21 @@ struct OrganizationAnnualLeaveDefaults: Codable, Hashable {
     }
 }
 
-enum PaymentRunConfigurationMode: String, CaseIterable, Codable, Identifiable {
+nonisolated enum PaymentRunConfigurationMode: String, CaseIterable, Codable, Identifiable, Sendable {
     case dateRanges = "date_ranges"
     case recurringTimeframe = "recurring_timeframe"
 
     var id: String { rawValue }
 }
 
-enum PaymentDateConfigurationMode: String, CaseIterable, Codable, Identifiable {
+nonisolated enum PaymentDateConfigurationMode: String, CaseIterable, Codable, Identifiable, Sendable {
     case specificDates = "specific_dates"
     case recurringDate = "recurring_date"
 
     var id: String { rawValue }
 }
 
-enum RecurringPaymentDay: String, CaseIterable, Codable, Identifiable {
+nonisolated enum RecurringPaymentDay: String, CaseIterable, Codable, Identifiable, Sendable {
     case monday
     case tuesday
     case wednesday
@@ -808,7 +808,7 @@ enum RecurringPaymentDay: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-struct PaymentRunDateRange: Identifiable, Codable, Hashable {
+nonisolated struct PaymentRunDateRange: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var startDay: Int
     var endDay: Int
@@ -837,7 +837,7 @@ struct PaymentRunDateRange: Identifiable, Codable, Hashable {
     }
 }
 
-struct OrganizationInvoicingSettings: Codable, Hashable {
+nonisolated struct OrganizationInvoicingSettings: Codable, Hashable, Sendable {
     var paymentRunMode: PaymentRunConfigurationMode
     var paymentDateMode: PaymentDateConfigurationMode
     var paymentRunDateRanges: [PaymentRunDateRange]
@@ -913,7 +913,7 @@ struct OrganizationInvoicingSettings: Codable, Hashable {
     }
 }
 
-struct OrganizationUILabels: Codable, Hashable {
+nonisolated struct OrganizationUILabels: Codable, Hashable, Sendable {
     /// Key/value map shared with web for navigation labels.
     var navigationLabels: [String: String]
 
@@ -944,7 +944,7 @@ struct OrganizationUILabels: Codable, Hashable {
 // MARK: - Organisation payroll / working time (hours & OT)
 
 /// Per-weekend-day policy. Sat and Sun are configured independently in org settings.
-struct OrgWeekendDayPayrollSettings: Codable, Hashable {
+nonisolated struct OrgWeekendDayPayrollSettings: Codable, Hashable, Sendable {
     /// When `true`, every paid hour that day uses `allHoursMultiplier` (no break deduction).
     var allHoursAtMultiplierMode: Bool
     /// Multiplier for all paid hours when `allHoursAtMultiplierMode` is `true`.
@@ -996,7 +996,7 @@ struct OrgWeekendDayPayrollSettings: Codable, Hashable {
     )
 }
 
-struct OrgPayrollTimePolicy: Codable, Hashable {
+nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
     /// Standard day clock start (e.g. 07:30). Mon–Fri reference window for “outside standard” OT.
     var standardDayStart: String
     var standardDayEnd: String
@@ -1115,7 +1115,7 @@ private extension OrgWeekendDayPayrollSettings {
     }
 }
 
-nonisolated struct WorkingHours: Codable, Hashable {
+nonisolated struct WorkingHours: Codable, Hashable, Sendable {
     var startTime: String // "08:00"
     var endTime: String   // "17:00"
     var lunchBreak: Int   // minutes
@@ -1134,7 +1134,7 @@ nonisolated struct WorkingHours: Codable, Hashable {
     }
 }
 
-enum Weekday: String, CaseIterable, Codable, Hashable {
+nonisolated enum Weekday: String, CaseIterable, Codable, Hashable, Sendable {
     case monday = "Monday"
     case tuesday = "Tuesday"
     case wednesday = "Wednesday"
@@ -1156,7 +1156,7 @@ enum Weekday: String, CaseIterable, Codable, Hashable {
     }
 }
 
-struct HolidayCalendar: Codable, Hashable {
+nonisolated struct HolidayCalendar: Codable, Hashable, Sendable {
     var holidays: [Holiday]
     var bankHolidays: Set<Date>
     
@@ -1166,7 +1166,7 @@ struct HolidayCalendar: Codable, Hashable {
     }
 }
 
-struct Holiday: Identifiable, Codable, Hashable {
+nonisolated struct Holiday: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var name: String
     var date: Date
@@ -1220,7 +1220,7 @@ struct VerificationCode: Identifiable, Codable, Hashable {
 
 // MARK: - App State Models
 
-struct AppSettings: Codable, Sendable {
+nonisolated struct AppSettings: Codable, Sendable {
     var theme: ThemePreference
     var colorScheme: AppColorScheme
     var organizationId: UUID?
@@ -1275,7 +1275,7 @@ struct AppSettings: Codable, Sendable {
     }
 }
 
-struct MyScheduleOptions: Codable, Sendable, Hashable {
+nonisolated struct MyScheduleOptions: Codable, Sendable, Hashable {
     var showOffice: Bool
     var showWorkingFromHome: Bool
     var showSiteSurvey: Bool
@@ -1330,7 +1330,7 @@ struct MyScheduleOptions: Codable, Sendable, Hashable {
     }
 }
 
-struct NotificationSettings: Codable, Sendable {
+nonisolated struct NotificationSettings: Codable, Sendable {
     var bookingConflicts: Bool
     var projectDeadlines: Bool
     var operativeAvailability: Bool
@@ -1517,7 +1517,7 @@ struct NotificationSettings: Codable, Sendable {
     }
 }
 
-enum UserNotificationToggle: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sendable {
     case materialOrderCutOff
     case annualLeaveRequests
     case annualLeaveDecisions
