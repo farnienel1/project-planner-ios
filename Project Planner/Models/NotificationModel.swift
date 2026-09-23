@@ -27,6 +27,9 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case lineManagerPeerUpdate = "line_manager_peer_update"
         case materialAdded = "material_added"
         case toolboxTalkIssued = "toolbox_talk_issued"
+        case deadlineAssigned = "deadline_assigned"
+        case deadlineReminder = "deadline_reminder"
+        case deadlineDue = "deadline_due"
     }
     
     let id: UUID

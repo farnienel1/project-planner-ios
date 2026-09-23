@@ -561,6 +561,18 @@ class UserStore: ObservableObject {
         return true
     }
 
+    func canManageWorkCatalogue(_ catalogue: WorkAccess.JobCatalogue) -> Bool {
+        if isOperativeMode() { return false }
+        guard let u = displayUser else { return false }
+        if u.isSuperAdmin || u.permissions.adminAccess || u.role == .admin { return true }
+        guard u.permissions.manager else { return false }
+        switch catalogue {
+        case .projects: return u.permissions.projects
+        case .smallWorks: return u.permissions.smallWorks
+        case .all: return u.permissions.projects && u.permissions.smallWorks
+        }
+    }
+
     func organizationAnnualLeaveDefaults() -> OrganizationAnnualLeaveDefaults {
         firebaseBackend?.currentOrganization?.settings.annualLeaveDefaults ?? .default
     }

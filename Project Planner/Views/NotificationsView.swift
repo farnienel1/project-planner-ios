@@ -179,6 +179,7 @@ struct NotificationRowView: View {
         case .lineManagerPeerUpdate: return "person.2.fill"
         case .materialAdded: return "shippingbox.fill"
         case .toolboxTalkIssued: return "list.clipboard.fill"
+        case .deadlineAssigned, .deadlineReminder, .deadlineDue: return "calendar.badge.clock"
         }
     }
 
@@ -202,6 +203,7 @@ struct NotificationRowView: View {
         case .lineManagerPeerUpdate: return .blue
         case .materialAdded: return .teal
         case .toolboxTalkIssued: return .indigo
+        case .deadlineAssigned, .deadlineReminder, .deadlineDue: return .blue
         }
     }
 }

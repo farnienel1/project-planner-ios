@@ -104,6 +104,7 @@ struct ProjectDetailView: View {
         case tasks = "My Tasks"
         case materials = "Materials"
         case healthSafety = "H&S"
+        case deadlines = "Deadlines"
         case siteAudit = "Site Audit"
         case location = "Location"
         case activeUsers = "Active users"
@@ -116,6 +117,7 @@ struct ProjectDetailView: View {
             case .tasks: return "checklist"
             case .materials: return "shippingbox"
             case .healthSafety: return "cross.case.fill"
+            case .deadlines: return "calendar.badge.clock"
             case .siteAudit: return "clipboard.fill"
             case .location: return "mappin.and.ellipse"
             case .activeUsers: return "person.3.fill"
@@ -510,15 +512,15 @@ struct ProjectDetailView: View {
         let availableTiles: [DetailTile] = {
             if userStore.isOperativeMode() {
                 if userStore.canViewMaterials() {
-                    return userStore.canViewSiteAudit() ? [.tasks, .materials, .healthSafety, .siteAudit, .location] : [.tasks, .materials, .healthSafety, .location]
+                    return userStore.canViewSiteAudit() ? [.tasks, .materials, .healthSafety, .deadlines, .siteAudit, .location] : [.tasks, .materials, .healthSafety, .deadlines, .location]
                 }
-                return userStore.canViewSiteAudit() ? [.tasks, .healthSafety, .siteAudit, .location] : [.tasks, .healthSafety, .location]
+                return userStore.canViewSiteAudit() ? [.tasks, .healthSafety, .deadlines, .siteAudit, .location] : [.tasks, .healthSafety, .deadlines, .location]
             }
             var tiles: [DetailTile] = [.scheduling]
             if canConfigureProjectVisibility {
                 tiles.append(.visibility)
             }
-            tiles.append(contentsOf: [.tasks, .materials, .healthSafety, .siteAudit, .location])
+            tiles.append(contentsOf: [.tasks, .materials, .healthSafety, .deadlines, .siteAudit, .location])
             if canViewActiveOperatives {
                 tiles.append(.activeUsers)
             }
@@ -623,6 +625,7 @@ struct ProjectDetailView: View {
         case .tasks: return Color(red: 0.882, green: 0.961, blue: 0.933)
         case .materials: return Color(red: 0.98, green: 0.933, blue: 0.855)
         case .healthSafety: return Color(red: 0.89, green: 0.98, blue: 0.95)
+        case .deadlines: return ProjectWorksRevampColors.blueTint
         case .siteAudit: return Color(red: 0.98, green: 0.925, blue: 0.906)
         case .location: return Color(red: 0.984, green: 0.918, blue: 0.941)
         case .activeUsers: return Color(red: 0.902, green: 0.945, blue: 0.984)
@@ -636,6 +639,7 @@ struct ProjectDetailView: View {
         case .tasks: return ProjectWorksRevampColors.activeGreen
         case .materials: return ProjectWorksRevampColors.upcomingAmber
         case .healthSafety: return Color(red: 0.07, green: 0.62, blue: 0.47)
+        case .deadlines: return ProjectWorksRevampColors.blue
         case .siteAudit: return Color(red: 0.6, green: 0.235, blue: 0.114)
         case .location: return Color(red: 0.6, green: 0.208, blue: 0.337)
         case .activeUsers: return ProjectWorksRevampColors.blue
@@ -667,6 +671,8 @@ struct ProjectDetailView: View {
         case .healthSafety:
             ProjectHealthSafetyView(project: project)
                 .environmentObject(userStore)
+        case .deadlines:
+            ProjectDeadlinesView(project: project)
         case .activeUsers:
             ProjectActiveOperativesView(project: project)
                 .environmentObject(bookingStore)

@@ -79,6 +79,71 @@ class NotificationService: ObservableObject {
         self.holidayStore = store
     }
 
+    func notifyDeadlineAssigned(
+        deadlineId: UUID,
+        title: String,
+        projectName: String,
+        assignedUserIds: [String],
+        createdBy: String
+    ) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        for rawId in assignedUserIds {
+            let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(rawId)
+            let dedupeId = syntheticNotificationId(from: "deadlineAssigned|\(deadlineId.uuidString)|\(canonicalUserId)")
+            let notification = AppNotification(
+                id: dedupeId,
+                organizationId: organizationId,
+                type: .deadlineAssigned,
+                title: "Deadline assigned",
+                message: "\(createdBy) assigned you a deadline on \(projectName): \(title)",
+                userId: canonicalUserId,
+                relatedId: deadlineId,
+                requiresPermission: nil
+            )
+            await saveNotification(notification)
+        }
+    }
+
+    func syncDeadlineInboxNotifications(items: [DLDeadline], projectName: String) async {
+        guard firebaseBackend?.currentOrganization?.firestoreDocumentId != nil else { return }
+        for item in items {
+            guard item.status != .complete else { continue }
+            for rawId in item.assigneeUserIds {
+                let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(rawId)
+                guard !canonicalUserId.isEmpty else { continue }
+                if let fireAt = DeadlineLocalNotifications.reminderFireDate(for: item) {
+                    let notification = AppNotification(
+                        id: syntheticNotificationId(from: "deadlineReminder|\(item.id.uuidString)|\(canonicalUserId)"),
+                        organizationId: firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "",
+                        type: .deadlineReminder,
+                        title: DeadlineNotificationCopy.reminderTitle(),
+                        message: DeadlineNotificationCopy.reminderBody(projectName: projectName, item: item),
+                        userId: canonicalUserId,
+                        relatedId: item.id,
+                        createdAt: fireAt,
+                        requiresPermission: nil
+                    )
+                    await saveNotification(notification)
+                }
+                if let dueMorning = DeadlineLocalNotifications.dueFireDate(for: item) {
+                    let notification = AppNotification(
+                        id: syntheticNotificationId(from: "deadlineDue|\(item.id.uuidString)|\(canonicalUserId)"),
+                        organizationId: firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "",
+                        type: .deadlineDue,
+                        title: DeadlineNotificationCopy.dueTitle(),
+                        message: DeadlineNotificationCopy.dueBody(projectName: projectName, item: item),
+                        userId: canonicalUserId,
+                        relatedId: item.id,
+                        createdAt: dueMorning,
+                        requiresPermission: nil
+                    )
+                    await saveNotification(notification)
+                }
+            }
+        }
+    }
+
     func refreshDailyMaterialCutOffReminder() async {
         materialCutoffRefreshTask?.cancel()
         let task = Task { @MainActor in
@@ -1090,6 +1155,10 @@ class NotificationService: ObservableObject {
             let target = resolvedRecipientUserId(userId)
             let me = resolvedRecipientUserId(currentUser.id)
             guard target == me else { return }
+        }
+        if notification.createdAt > Date(),
+           notification.type == .deadlineReminder || notification.type == .deadlineDue {
+            return
         }
         triggerLocalAlertIfNeeded(for: notification)
     }

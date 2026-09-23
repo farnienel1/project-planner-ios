@@ -22,6 +22,7 @@ struct SmallWorksView: View {
     @State private var navigationPath = NavigationPath()
     @State private var searchText = ""
     @State private var showingCreateSmallWorks = false
+    @State private var deadlineAssignedProjectIds: Set<UUID> = []
 
     private var listCounts: WorksListStatusCounts {
         WorksListStatusCounts.from(smallWorksBeforeStatusFilter)
@@ -98,6 +99,9 @@ struct SmallWorksView: View {
                 if selectedStatus == .inactive || selectedStatus == nil {
                     selectedStatus = .active
                 }
+            }
+            .task {
+                await refreshDeadlineAssignedProjectIds()
             }
             .sheet(isPresented: $showingEditProject) {
                 if let project = selectedProject {
@@ -335,7 +339,8 @@ struct SmallWorksView: View {
                 }
                 .map { $0.projectId })
             works = works.filter {
-                assignedProjectIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId)
+                (assignedProjectIds.contains($0.id) || deadlineAssignedProjectIds.contains($0.id))
+                    && !$0.hiddenOperativeUserIds.contains(currentUserId)
             }
         } else if let currentUser = userStore.currentUser,
                   !userStore.hasAdminAccess(),
@@ -344,6 +349,17 @@ struct SmallWorksView: View {
         }
         
         return works
+    }
+
+    private func refreshDeadlineAssignedProjectIds() async {
+        guard userStore.isOperativeMode(),
+              let userId = userStore.currentUser?.id,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId else {
+            await MainActor.run { deadlineAssignedProjectIds = [] }
+            return
+        }
+        let ids = await firebaseBackend.loadDeadlineAssignedProjectIds(userId: userId, organizationId: orgId)
+        await MainActor.run { deadlineAssignedProjectIds = ids }
     }
 
     private var resolvedCurrentOperative: Operative? {
