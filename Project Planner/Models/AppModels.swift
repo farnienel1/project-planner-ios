@@ -943,7 +943,7 @@ nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
     )
 
     /// Firestore `organizations/{id}.payrollTimePolicy` map.
-    func asFirestoreDictionary() -> [String: Any] {
+    nonisolated func asFirestoreDictionary() -> [String: Any] {
         [
             "standardDayStart": standardDayStart,
             "standardDayEnd": standardDayEnd,
@@ -960,7 +960,7 @@ nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
     }
 
     /// Merges Firestore map with defaults (partial documents are OK).
-    static func fromFirestore(_ data: [String: Any]) -> OrgPayrollTimePolicy {
+    nonisolated static func fromFirestore(_ data: [String: Any]) -> OrgPayrollTimePolicy {
         let start = data["standardDayStart"] as? String ?? OrgPayrollTimePolicy.default.standardDayStart
         let end = data["standardDayEnd"] as? String ?? OrgPayrollTimePolicy.default.standardDayEnd
         let breakMins = (data["unpaidBreakMinutes"] as? NSNumber)?.intValue ?? (data["unpaidBreakMinutes"] as? Int) ?? OrgPayrollTimePolicy.default.unpaidBreakMinutes
@@ -989,7 +989,7 @@ nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
 }
 
 private extension OrgWeekendDayPayrollSettings {
-    func asFirestoreDictionary() -> [String: Any] {
+    nonisolated func asFirestoreDictionary() -> [String: Any] {
         var d: [String: Any] = [
             "allHoursAtMultiplierMode": allHoursAtMultiplierMode,
             "allHoursMultiplier": allHoursMultiplier,
@@ -1002,7 +1002,7 @@ private extension OrgWeekendDayPayrollSettings {
         return d
     }
 
-    static func fromFirestore(_ data: [String: Any]) -> OrgWeekendDayPayrollSettings {
+    nonisolated static func fromFirestore(_ data: [String: Any]) -> OrgWeekendDayPayrollSettings {
         let allMode = data["allHoursAtMultiplierMode"] as? Bool ?? true
         let allMult = (data["allHoursMultiplier"] as? NSNumber)?.doubleValue ?? (data["allHoursMultiplier"] as? Double) ?? 2.0
         let custom = data["useCustomStandardDayWindow"] as? Bool ?? false
