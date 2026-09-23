@@ -1062,12 +1062,6 @@ struct OperativeAnnualLeaveCalendarView: View {
         )
     }
 
-    private func leaveDateLabel(_ booking: HolidayBooking) -> String {
-        let start = booking.startDate.formatted(date: .abbreviated, time: .omitted)
-        let end = booking.endDate.formatted(date: .abbreviated, time: .omitted)
-        return start == end ? start : "\(start) – \(end)"
-    }
-
     private func approvedBooking(on day: Date?) -> HolidayBooking? {
         guard let day else { return nil }
         let dayStart = calendar.startOfDay(for: day)

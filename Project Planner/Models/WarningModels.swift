@@ -286,7 +286,7 @@ nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
-enum WarningTimelineMath: Sendable {
+nonisolated enum WarningTimelineMath: Sendable {
     nonisolated static let dayMinutes = 24 * 60
 
     nonisolated static func overlapMinutes(_ a: (Int, Int), _ b: (Int, Int)) -> Int {
@@ -342,19 +342,19 @@ enum WarningTimelineMath: Sendable {
         }
     }
 
-    struct ClashWindow: Sendable {
+    nonisolated struct ClashWindow: Sendable {
         var startMinutes: Int
         var endMinutes: Int
-        var span: Int { max(1, endMinutes - startMinutes) }
+        nonisolated var span: Int { max(1, endMinutes - startMinutes) }
     }
 
-    struct ClashRegion: Sendable {
+    nonisolated struct ClashRegion: Sendable {
         var startMinutes: Int
         var endMinutes: Int
         var concurrency: Int
     }
 
-    struct ClashAnalysis: Sendable {
+    nonisolated struct ClashAnalysis: Sendable {
         var regions: [ClashRegion]
         var minutes: Int
         var peak: Int
