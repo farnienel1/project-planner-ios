@@ -8,11 +8,11 @@
 import SwiftUI
 
 private enum WarningsUI {
-    static let screenBg = Color(red: 0.949, green: 0.949, blue: 0.969) // #F2F2F7
+    static let screenBg = ProjectWorksRevampColors.canvas
     static let doneBlue = Color(red: 0.231, green: 0.373, blue: 0.639) // #3B5FA3
-    static let textPrimary = Color(red: 0.110, green: 0.110, blue: 0.118)
-    static let textBody = Color(red: 0.216, green: 0.255, blue: 0.318)
-    static let textMuted = Color(red: 0.612, green: 0.639, blue: 0.686)
+    static let textPrimary = ProjectWorksRevampColors.ink
+    static let textBody = ProjectWorksRevampColors.ink
+    static let textMuted = ProjectWorksRevampColors.muted
     static let blue = Color(red: 0.145, green: 0.388, blue: 0.922)
     static let blueFrom = Color(red: 0.114, green: 0.306, blue: 0.847)
     static let red = Color(red: 0.863, green: 0.149, blue: 0.149)
@@ -172,7 +172,7 @@ struct WarningsDetailView: View {
                 .foregroundStyle(WarningsUI.doneBlue)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 7)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(Capsule())
                 .overlay(Capsule().stroke(Color.black.opacity(0.10), lineWidth: 0.5))
                 .shadow(color: Color.black.opacity(0.07), radius: 3, x: 0, y: 1)
@@ -204,7 +204,7 @@ struct WarningsDetailView: View {
                         }
                     }
                     .frame(width: 34, height: 34)
-                    .background(Color.white)
+                    .background(ProjectWorksRevampColors.surface)
                     .clipShape(Circle())
                     .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 0.5))
                     .shadow(color: Color.black.opacity(0.07), radius: 3, x: 0, y: 1)
@@ -220,7 +220,7 @@ struct WarningsDetailView: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(Color(red: 0.333, green: 0.333, blue: 0.333))
                             .frame(width: 34, height: 34)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.surface)
                             .clipShape(Circle())
                             .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 0.5))
                             .shadow(color: Color.black.opacity(0.07), radius: 3, x: 0, y: 1)
@@ -483,7 +483,7 @@ struct WarningsDetailView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -498,7 +498,7 @@ struct WarningsDetailView: View {
                 Rectangle().fill(Color.black.opacity(0.07)).frame(height: 0.5)
             }
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -558,7 +558,7 @@ struct WarningsDetailView: View {
             .padding(.bottom, 14)
             .background(Color(red: 0.980, green: 0.980, blue: 0.980))
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -606,7 +606,7 @@ struct WarningsDetailView: View {
             .padding(.bottom, 14)
             .background(Color(red: 0.980, green: 0.980, blue: 0.980))
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -814,7 +814,7 @@ private struct WarningDismissConfirmationSheet: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 28)
         }
-        .background(Color.white.ignoresSafeArea())
+        .background(ProjectWorksRevampColors.surface.ignoresSafeArea())
     }
 }
 

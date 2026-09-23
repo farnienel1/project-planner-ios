@@ -237,8 +237,8 @@ struct ProjectPlannerRootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .background(isSessionLoading ? Color.white : Color(.systemGroupedBackground))
-        .preferredColorScheme(.light)
+        .background(isSessionLoading ? ProjectWorksRevampColors.canvas : Color(.systemGroupedBackground))
+        .preferredColorScheme(appSettings.settings.theme.colorScheme)
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
             guard !signedIn else { return }
             guard FirebaseApp.app() != nil else { return }

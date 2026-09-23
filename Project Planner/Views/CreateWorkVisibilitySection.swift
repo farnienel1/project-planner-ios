@@ -29,8 +29,11 @@ struct CreateWorkVisibilitySection: View {
         var ink: Color { ProjectWorksRevampColors.ink }
         var eyeBg: Color {
             switch self {
-            case .projects: return Color(red: 0.902, green: 0.945, blue: 0.984)
-            case .smallWorks: return Color(red: 1.0, green: 0.94, blue: 0.88)
+            case .projects: return AppAdaptiveColor.dynamic(
+                light: AppAdaptiveColor.rgb(0.902, 0.945, 0.984),
+                dark: AppAdaptiveColor.rgb(0.110, 0.173, 0.247)
+            )
+            case .smallWorks: return ProjectWorksRevampColors.endDateBg
             }
         }
 
@@ -110,7 +113,7 @@ struct CreateWorkVisibilitySection: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(palette.border, lineWidth: 0.5))
     }

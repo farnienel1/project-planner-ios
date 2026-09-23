@@ -579,7 +579,7 @@ struct OperativeCustomHoursSheet: View {
                 Spacer(minLength: 0)
             }
             .padding(10)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -606,7 +606,7 @@ struct OperativeCustomHoursSheet: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .shadow(color: Color.black.opacity(0.08), radius: 8, y: 2)
     }
@@ -644,7 +644,7 @@ struct OperativeCustomHoursSheet: View {
             }
         }
         .padding(12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -788,7 +788,7 @@ struct OperativeCustomHoursSheet: View {
             }
         }
         .padding(12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -852,7 +852,7 @@ struct OperativeCustomHoursSheet: View {
             }
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)

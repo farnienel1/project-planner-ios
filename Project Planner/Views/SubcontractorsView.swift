@@ -158,7 +158,7 @@ struct SubcontractorsView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -259,7 +259,7 @@ struct SubcontractorsView: View {
             }
         }
         .padding(12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -483,7 +483,7 @@ private struct SubcontractorFirmDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -533,7 +533,7 @@ private struct SubcontractorFirmDetailView: View {
                 }
             }
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -547,7 +547,7 @@ private struct SubcontractorFirmDetailView: View {
             Divider().padding(.leading, 12)
             contactRow(icon: "location.fill", title: "Address", value: subcontractor.address ?? "Not set")
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -732,7 +732,7 @@ private struct SubcontractorFirmEditorView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -793,7 +793,7 @@ private struct SubcontractorFirmEditorView: View {
                 }
             }
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1002,7 +1002,7 @@ private struct SubcontractorOperativeEditorSheet: View {
             Spacer()
         }
         .padding(10)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1022,7 +1022,7 @@ private struct SubcontractorOperativeEditorSheet: View {
         VStack(spacing: 0) { content() }
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)

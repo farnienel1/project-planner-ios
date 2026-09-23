@@ -299,7 +299,7 @@ struct BookLabourFlowView: View {
                             }
                         }
                         .padding(.horizontal, 14)
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -410,7 +410,7 @@ struct BookLabourFlowView: View {
                             }
                         }
                         .padding(.horizontal, 14)
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -511,7 +511,7 @@ struct BookLabourFlowView: View {
                             }
                         }
                         .padding(.horizontal, 14)
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -697,7 +697,7 @@ struct BookLabourFlowView: View {
                             }
                         }
                         .padding(10)
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -732,7 +732,7 @@ struct BookLabourFlowView: View {
                                 .foregroundStyle(ProjectWorksRevampColors.blue)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 10)
-                                .background(Color.white)
+                                .background(ProjectWorksRevampColors.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -889,7 +889,7 @@ struct BookLabourFlowView: View {
             .clipped()
         }
         .padding(8)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -950,7 +950,7 @@ struct BookLabourFlowView: View {
         }
         .padding(12)
         .padding(.horizontal, 2)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1580,7 +1580,7 @@ private struct BookLabourRectifyTimeline: View {
             }
         }
         .padding(10)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)

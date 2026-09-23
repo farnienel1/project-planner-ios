@@ -95,8 +95,8 @@ enum MainMenuCatalog {
                 title: "Edit main menu bar",
                 detail: "Icons jiggle — drag onto a slot in the bar below to reorder.",
                 icon: "arrow.down.to.line.compact",
-                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
-                iconTint: Color(red: 0.09, green: 0.373, blue: 0.647),
+                iconBackground: ProjectWorksRevampColors.blueTint,
+                iconTint: ProjectWorksRevampColors.blue,
                 isEligible: { u, _, _ in !u.isOperativeMode() },
                 action: .editTabBar
             ),
@@ -107,7 +107,7 @@ enum MainMenuCatalog {
                 title: "Clients",
                 detail: nil,
                 icon: "briefcase.fill",
-                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
+                iconBackground: ProjectWorksRevampColors.blueTint,
                 iconTint: ProjectWorksRevampColors.blue,
                 isEligible: { u, _, _ in !u.isOperativeMode() },
                 action: .openSurface(.clients)
@@ -118,7 +118,7 @@ enum MainMenuCatalog {
                 title: "Projects",
                 detail: nil,
                 icon: "folder.fill",
-                iconBackground: Color(red: 0.882, green: 0.961, blue: 0.933),
+                iconBackground: ProjectWorksRevampColors.greenTint,
                 iconTint: ProjectWorksRevampColors.activeGreen,
                 isEligible: { u, _, _ in u.canViewProjects() },
                 action: .selectTab(1)
@@ -129,7 +129,7 @@ enum MainMenuCatalog {
                 title: "Small works",
                 detail: nil,
                 icon: "hammer.fill",
-                iconBackground: Color(red: 0.98, green: 0.933, blue: 0.855),
+                iconBackground: ProjectWorksRevampColors.amberTint,
                 iconTint: ProjectWorksRevampColors.upcomingAmber,
                 isEligible: { u, _, _ in u.canViewProjects() },
                 action: .selectTab(2)
@@ -141,7 +141,7 @@ enum MainMenuCatalog {
                 detail: nil,
                 icon: "person.3.fill",
                 iconBackground: ProjectWorksRevampColors.jobTypePillBg,
-                iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
+                iconTint: ProjectWorksRevampColors.jobTypePillInk,
                 isEligible: { u, _, _ in u.canViewOperatives() },
                 action: .selectTab(3)
             ),
@@ -151,8 +151,8 @@ enum MainMenuCatalog {
                 title: "Managers",
                 detail: nil,
                 icon: "person.badge.shield.checkmark.fill",
-                iconBackground: Color(red: 0.984, green: 0.918, blue: 0.941),
-                iconTint: Color(red: 0.6, green: 0.208, blue: 0.337),
+                iconBackground: ProjectWorksRevampColors.pinRoseBg,
+                iconTint: ProjectWorksRevampColors.pinRoseFg,
                 isEligible: { u, _, _ in u.canViewManagers() },
                 action: .selectTab(4)
             ),
@@ -162,8 +162,8 @@ enum MainMenuCatalog {
                 title: "Annual Leave",
                 detail: nil,
                 icon: "sun.max.fill",
-                iconBackground: Color(red: 0.98, green: 0.93, blue: 0.91),
-                iconTint: Color(red: 0.6, green: 0.24, blue: 0.11),
+                iconBackground: ProjectWorksRevampColors.endDateBg,
+                iconTint: ProjectWorksRevampColors.endDateFg,
                 isEligible: { u, _, _ in u.isAnnualLeaveFeatureEnabled() },
                 action: .selectTab(8)
             ),
@@ -173,8 +173,8 @@ enum MainMenuCatalog {
                 title: "Site map",
                 detail: nil,
                 icon: "map.fill",
-                iconBackground: Color(red: 0.98, green: 0.92, blue: 0.94),
-                iconTint: Color(red: 0.6, green: 0.21, blue: 0.34),
+                iconBackground: ProjectWorksRevampColors.pinRoseBg,
+                iconTint: ProjectWorksRevampColors.pinRoseFg,
                 isEligible: { u, _, _ in u.hasAdminAccess() },
                 action: .openSurface(.orgSitesMap)
             ),
@@ -184,8 +184,8 @@ enum MainMenuCatalog {
                 title: "Site audit",
                 detail: nil,
                 icon: "doc.text.viewfinder",
-                iconBackground: Color(red: 0.98, green: 0.93, blue: 0.91),
-                iconTint: Color(red: 0.6, green: 0.24, blue: 0.11),
+                iconBackground: ProjectWorksRevampColors.endDateBg,
+                iconTint: ProjectWorksRevampColors.endDateFg,
                 isEligible: { u, _, _ in u.canViewSiteAudit() || u.isHomeProfileLoading },
                 action: .openSurface(.siteAudit)
             ),
@@ -195,7 +195,7 @@ enum MainMenuCatalog {
                 title: "Timesheets",
                 detail: "My timesheets and operative sign-off",
                 icon: "doc.text.fill",
-                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
+                iconBackground: ProjectWorksRevampColors.blueTint,
                 iconTint: ProjectWorksRevampColors.blue,
                 isEligible: { u, _, _ in u.canAccessTimesheetsSurface() },
                 action: .openSurface(.invoicing)
@@ -207,7 +207,7 @@ enum MainMenuCatalog {
                 title: "Qualifications",
                 detail: nil,
                 icon: "graduationcap.fill",
-                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
+                iconBackground: ProjectWorksRevampColors.blueTint,
                 iconTint: ProjectWorksRevampColors.blue,
                 isEligible: { u, _, _ in u.canAccessQualificationsHub() },
                 action: .openSurface(.qualifications)
@@ -218,7 +218,7 @@ enum MainMenuCatalog {
                 title: "My qualifications",
                 detail: nil,
                 icon: "graduationcap.fill",
-                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
+                iconBackground: ProjectWorksRevampColors.blueTint,
                 iconTint: ProjectWorksRevampColors.blue,
                 isEligible: { u, _, _ in u.isOperativeMode() },
                 action: .openSurface(.myQualifications)
@@ -229,7 +229,7 @@ enum MainMenuCatalog {
                 title: "Job types",
                 detail: nil,
                 icon: "square.grid.2x2.fill",
-                iconBackground: Color(red: 0.882, green: 0.961, blue: 0.933),
+                iconBackground: ProjectWorksRevampColors.greenTint,
                 iconTint: ProjectWorksRevampColors.activeGreen,
                 isEligible: { u, _, _ in u.hasAdminAccess() },
                 action: .openSurface(.jobTypes)
@@ -240,7 +240,7 @@ enum MainMenuCatalog {
                 title: "Wholesalers",
                 detail: nil,
                 icon: "building.2.fill",
-                iconBackground: Color(red: 0.98, green: 0.933, blue: 0.855),
+                iconBackground: ProjectWorksRevampColors.amberTint,
                 iconTint: ProjectWorksRevampColors.upcomingAmber,
                 isEligible: { u, _, _ in u.canAccessWholesalers() },
                 action: .openSurface(.wholesalers)
@@ -251,7 +251,7 @@ enum MainMenuCatalog {
                 title: "Material catalogue",
                 detail: "Organisation materials library",
                 icon: "shippingbox.fill",
-                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
+                iconBackground: ProjectWorksRevampColors.blueTint,
                 iconTint: MaterialsOrderingTheme.primary,
                 isEligible: { u, _, _ in u.canManageMaterialCatalogue() },
                 action: .openSurface(.materialCatalogue)
@@ -263,7 +263,7 @@ enum MainMenuCatalog {
                 detail: nil,
                 icon: "person.2.badge.gearshape.fill",
                 iconBackground: ProjectWorksRevampColors.jobTypePillBg,
-                iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
+                iconTint: ProjectWorksRevampColors.jobTypePillInk,
                 isEligible: { u, _, _ in u.canManageSubcontractors() },
                 action: .selectTab(9)
             ),
@@ -275,7 +275,7 @@ enum MainMenuCatalog {
                 detail: nil,
                 icon: "person.badge.plus.fill",
                 iconBackground: ProjectWorksRevampColors.jobTypePillBg,
-                iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
+                iconTint: ProjectWorksRevampColors.jobTypePillInk,
                 isEligible: { u, _, _ in
                     u.canManageUsers()
                 },
@@ -287,7 +287,7 @@ enum MainMenuCatalog {
                 title: "Manage users",
                 detail: nil,
                 icon: "person.2.fill",
-                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984),
+                iconBackground: ProjectWorksRevampColors.blueTint,
                 iconTint: ProjectWorksRevampColors.blue,
                 isEligible: { u, _, _ in
                     u.canManageUsers()
@@ -304,7 +304,7 @@ enum MainMenuCatalog {
                 title: "Settings",
                 detail: nil,
                 icon: "gearshape.fill",
-                iconBackground: Color(red: 0.949, green: 0.953, blue: 0.961),
+                iconBackground: ProjectWorksRevampColors.grayTint,
                 iconTint: ProjectWorksRevampColors.muted,
                 isEligible: { _, _, _ in true },
                 action: .selectTab(5)
@@ -315,7 +315,7 @@ enum MainMenuCatalog {
                 title: "Help & support",
                 detail: nil,
                 icon: "questionmark.circle.fill",
-                iconBackground: Color(red: 0.882, green: 0.961, blue: 0.933),
+                iconBackground: ProjectWorksRevampColors.greenTint,
                 iconTint: ProjectWorksRevampColors.activeGreen,
                 isEligible: { u, _, _ in !u.isOperativeMode() },
                 action: .selectTab(6)
@@ -327,7 +327,7 @@ enum MainMenuCatalog {
                 detail: nil,
                 icon: "key.fill",
                 iconBackground: ProjectWorksRevampColors.jobTypePillBg,
-                iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
+                iconTint: ProjectWorksRevampColors.jobTypePillInk,
                 isEligible: { _, _, _ in true },
                 action: .resetPassword
             ),
@@ -337,8 +337,8 @@ enum MainMenuCatalog {
                 title: "Sign out",
                 detail: nil,
                 icon: "rectangle.portrait.and.arrow.right",
-                iconBackground: Color(red: 0.988, green: 0.922, blue: 0.922),
-                iconTint: Color(red: 0.639, green: 0.176, blue: 0.176),
+                iconBackground: ProjectWorksRevampColors.requiredPillBg,
+                iconTint: ProjectWorksRevampColors.requiredPillFg,
                 isEligible: { _, _, _ in true },
                 action: .signOut
             ),

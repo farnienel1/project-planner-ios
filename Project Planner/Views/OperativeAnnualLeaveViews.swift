@@ -9,11 +9,11 @@ import SwiftUI
 import FirebaseAuth
 
 private enum HolidayChrome {
-    static let canvas = Color(red: 0.97, green: 0.973, blue: 0.98)
-    static let ink = Color(red: 0.043, green: 0.063, blue: 0.125)
-    static let muted = Color(red: 0.42, green: 0.447, blue: 0.502)
-    static let border = Color(red: 0.933, green: 0.941, blue: 0.953)
-    static let accent = Color(red: 0.094, green: 0.373, blue: 0.647)
+    static let canvas = ProjectWorksRevampColors.canvas
+    static let ink = ProjectWorksRevampColors.ink
+    static let muted = ProjectWorksRevampColors.muted
+    static let border = ProjectWorksRevampColors.border
+    static let accent = ProjectWorksRevampColors.blue
     static let taken = Color(red: 0.133, green: 0.545, blue: 0.318)
     static let pending = Color(red: 0.89, green: 0.22, blue: 0.22)
     static let halfDayBooked = Color(red: 0.95, green: 0.52, blue: 0.12)
@@ -552,7 +552,7 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
@@ -598,7 +598,7 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
@@ -695,7 +695,7 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -767,7 +767,7 @@ struct OperativeAnnualLeaveCalendarView: View {
             .id(bankHolidayCalendarTick)
         }
         .padding(12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)

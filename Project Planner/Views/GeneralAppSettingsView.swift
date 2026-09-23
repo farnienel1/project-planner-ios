@@ -16,6 +16,9 @@ struct GeneralAppSettingsView: View {
         }
         .navigationTitle("General")
         .navigationBarTitleDisplayMode(.inline)
+        .scrollContentBackground(.hidden)
+        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .appChromeNavigationBarSurface()
     }
 }
 
@@ -67,6 +70,9 @@ struct MyScheduleGeneralOptionsView: View {
         }
         .navigationTitle("My Schedule")
         .navigationBarTitleDisplayMode(.inline)
+        .scrollContentBackground(.hidden)
+        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .appChromeNavigationBarSurface()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {

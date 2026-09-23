@@ -225,7 +225,7 @@ fileprivate struct MyScheduleBookingStripeRow: View {
             }
             .padding(12)
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -265,7 +265,7 @@ fileprivate struct MyScheduleDayNavigatorCard: View {
             .buttonStyle(.plain)
         }
         .padding(12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -370,7 +370,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                 }
             }
             .padding(14)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -433,7 +433,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                 }
             }
             .padding(14)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1463,7 +1463,7 @@ struct ManagerScheduleContentView: View {
                 .foregroundStyle(ProjectWorksRevampColors.blue)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1619,7 +1619,7 @@ struct ManagerScheduleContentView: View {
             }
             .padding(.vertical, 12)
             .padding(.horizontal, 14)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1668,7 +1668,7 @@ struct ManagerScheduleContentView: View {
                 }
                 .padding(.vertical, 12)
                 .padding(.horizontal, 14)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1970,7 +1970,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .background(Color.white)
+                    .background(ProjectWorksRevampColors.surface)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2073,7 +2073,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
                 }
             }
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2090,7 +2090,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
         }
         .padding(.vertical, 11)
         .padding(.horizontal, 12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2115,7 +2115,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
         }
         .padding(.vertical, 11)
         .padding(.horizontal, 12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2179,7 +2179,7 @@ fileprivate struct ManagerSelfBookingEntryView: View {
                 }
                 .font(.system(size: 14, weight: .medium))
                 .padding(12)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2242,7 +2242,7 @@ fileprivate struct ManagerSelfBookingEntryView: View {
             }
         }
         .padding(12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2356,7 +2356,7 @@ fileprivate struct ManagerSelfBookingJobListView: View {
                         }
                         .padding(.vertical, 11)
                         .padding(.horizontal, 12)
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)

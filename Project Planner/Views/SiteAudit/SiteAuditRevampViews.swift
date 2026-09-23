@@ -412,7 +412,7 @@ struct SiteAuditItemsStepView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
                             .foregroundStyle(isProcessingPhotos ? SiteAuditColors.textDisabled : SiteAuditColors.primary)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.surface)
                             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -682,7 +682,7 @@ struct SiteAuditPreviewStepView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
             }
         }
         .siteAuditScreenBackground()

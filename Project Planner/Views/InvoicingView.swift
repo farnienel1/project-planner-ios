@@ -1252,7 +1252,7 @@ private struct MyTimesheetView: View {
                         TextEditor(text: $draft.managerNote)
                             .frame(minHeight: 74)
                             .padding(8)
-                            .background(Color(red: 0.969, green: 0.976, blue: 0.988))
+                            .background(ProjectWorksRevampColors.canvas)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .onChange(of: draft.managerNote) { _, _ in saveDraft() }
                     }
@@ -4164,7 +4164,7 @@ private struct GenerateInvoiceView: View {
                 summaryRow(chip: "Every \(settings.recurringPaymentDay.title)", text: "Recurring payout day")
             }
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(color: Color.black.opacity(0.07), radius: 8, y: 2)
     }
@@ -4225,7 +4225,7 @@ private struct GenerateInvoiceView: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 16)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: Color.black.opacity(0.06), radius: 8, y: 2)
             }
@@ -4251,7 +4251,7 @@ private struct GenerateInvoiceView: View {
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 16)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .shadow(color: Color.black.opacity(0.06), radius: 8, y: 2)
         } else {
@@ -4277,7 +4277,7 @@ private struct GenerateInvoiceView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .shadow(color: Color.black.opacity(0.06), radius: 8, y: 2)
     }

@@ -142,7 +142,7 @@ struct EditProjectView: View {
                     TextEditor(text: $projectDescription)
                         .frame(minHeight: 100)
                         .padding(12)
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -178,7 +178,7 @@ struct EditProjectView: View {
                         .foregroundStyle(ProjectWorksRevampColors.ink)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 7)
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(Capsule())
                         .overlay(Capsule().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                 }
@@ -291,7 +291,7 @@ struct EditProjectView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(18)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -322,7 +322,7 @@ struct EditProjectView: View {
                 .font(.system(size: 13, weight: .medium))
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -340,7 +340,7 @@ struct EditProjectView: View {
         }
         .textFieldStyle(.roundedBorder)
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -396,7 +396,7 @@ struct EditProjectView: View {
             .buttonStyle(.plain)
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -428,7 +428,7 @@ struct EditProjectView: View {
             .padding(.vertical, 12)
             .padding(.horizontal, 14)
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -459,7 +459,7 @@ struct EditProjectView: View {
             Divider().overlay(ProjectWorksRevampColors.border)
             jobTypeMenuRow
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -581,7 +581,7 @@ struct EditProjectView: View {
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)

@@ -287,7 +287,7 @@ struct ManageUsersView: View {
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(selected ? ManageUserProfilePalette.listBlue : Color(red: 0xE5 / 255, green: 0xE7 / 255, blue: 0xEB / 255), lineWidth: 1)
+                            .stroke(selected ? ManageUserProfilePalette.listBlue : ProjectWorksRevampColors.searchBorder, lineWidth: 1)
                     )
                     .shadow(color: selected ? ManageUserProfilePalette.listBlue.opacity(0.25) : .clear, radius: 4, y: 2)
                 }
@@ -320,7 +320,7 @@ struct ManageUsersView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -385,7 +385,7 @@ struct ManageUsersView: View {
     private var manageUsersEmptyCard: some View {
         VStack(spacing: 16) {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.white)
+                .fill(ProjectWorksRevampColors.surface)
                 .frame(width: 64, height: 64)
                 .overlay {
                     Image(systemName: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "person.3.fill" : "magnifyingglass")
@@ -822,7 +822,7 @@ struct ManageUserRowView: View {
                 }
             }
             .padding(15)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -898,7 +898,7 @@ struct ManageUserRowView: View {
             items.append(.init(label: "Operative", foreground: Color(red: 0x15 / 255, green: 0xA3 / 255, blue: 0x4A / 255), background: Color(red: 0xE9 / 255, green: 0xF9 / 255, blue: 0xEF / 255), border: nil))
         }
         if let trade = tradeBadgeLabel {
-            items.append(.init(label: trade, foreground: ManageUserProfilePalette.textSecondary, background: Color(red: 0xF9 / 255, green: 0xF9 / 255, blue: 0xFB / 255), border: Color(red: 0xE5 / 255, green: 0xE7 / 255, blue: 0xEB / 255)))
+            items.append(.init(label: trade, foreground: ManageUserProfilePalette.textSecondary, background: ProjectWorksRevampColors.grayTint, border: ProjectWorksRevampColors.searchBorder))
         }
         if !user.isActive && user.passwordSet {
             items.append(.init(label: "Inactive", foreground: ManageUserProfilePalette.textSecondary, background: Color(red: 0xEC / 255, green: 0xEC / 255, blue: 0xEF / 255), border: nil))
@@ -1886,10 +1886,10 @@ struct EditUserView: View {
                 .foregroundStyle(ManageUserProfilePalette.textPrimary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
-                .background(Capsule(style: .continuous).fill(Color.white))
+                .background(Capsule(style: .continuous).fill(ProjectWorksRevampColors.surface))
                 .overlay(
                     Capsule(style: .continuous)
-                        .stroke(Color(red: 0xE5 / 255, green: 0xE7 / 255, blue: 0xEB / 255), lineWidth: 0.5)
+                        .stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5)
                 )
         }
         ToolbarItem(placement: .navigationBarTrailing) {
@@ -2025,11 +2025,11 @@ struct EditUserView: View {
                                 isOn: $managerTransitionSmallWorks
                             )
                         }
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(Color(red: 0xE5 / 255, green: 0xE7 / 255, blue: 0xEB / 255), lineWidth: 0.5)
+                                .stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5)
                         )
 
                         Text("If Annual Leave Management is turned on, pending approval requests are cleared.")
@@ -2082,11 +2082,11 @@ struct EditUserView: View {
                                 isOn: $operativeTransitionSiteAudit
                             )
                         }
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(Color(red: 0xE5 / 255, green: 0xE7 / 255, blue: 0xEB / 255), lineWidth: 0.5)
+                                .stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5)
                         )
 
                         Text("These match the optional extras when adding an operative. Line manager and day rate can be set after the type change on the main edit screen.")
