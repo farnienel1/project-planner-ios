@@ -5,8 +5,8 @@
 
 import Foundation
 
-struct Warning: Identifiable, Hashable, Codable {
-    var id: String { resolutionKey }
+nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
+    nonisolated var id: String { resolutionKey }
     let resolutionKey: String
     let type: WarningType
     let title: String
@@ -98,7 +98,7 @@ struct Warning: Identifiable, Hashable, Codable {
         return entry.locationLabel
     }
 
-    struct ClashTimelineEntry: Hashable, Codable {
+    struct ClashTimelineEntry: Hashable, Codable, Sendable {
         var bookingId: UUID
         var managerBookingId: UUID?
         var jobNumber: String?
@@ -109,9 +109,11 @@ struct Warning: Identifiable, Hashable, Codable {
         var startMinutes: Int
         var endMinutes: Int
         var hoursLabel: String
+
+        nonisolated var span: (Int, Int) { (startMinutes, endMinutes) }
     }
 
-    struct OperativeClashWarningDetails: Hashable, Codable {
+    struct OperativeClashWarningDetails: Hashable, Codable, Sendable {
         var operativeId: UUID
         var operativeName: String
         var date: Date
@@ -124,7 +126,7 @@ struct Warning: Identifiable, Hashable, Codable {
         var overlapDetail: String
     }
 
-    struct ManagerClashWarningDetails: Hashable, Codable {
+    struct ManagerClashWarningDetails: Hashable, Codable, Sendable {
         var userId: String
         var personName: String
         var date: Date
@@ -138,12 +140,13 @@ struct Warning: Identifiable, Hashable, Codable {
         var isLocationClash: Bool
     }
 
-    struct UnbookedLabourWarningDetails: Hashable, Codable {
+    struct UnbookedLabourWarningDetails: Hashable, Codable, Sendable {
         var date: Date
         var names: [String]
+        var personKeys: [String] = []
     }
 
-    struct MaterialsCutoffWarningDetails: Hashable, Codable {
+    struct MaterialsCutoffWarningDetails: Hashable, Codable, Sendable {
         var projectId: UUID
         var jobNumber: String
         var siteName: String
@@ -151,7 +154,7 @@ struct Warning: Identifiable, Hashable, Codable {
         var itemCount: Int?
     }
 
-    struct BookingClashDetails: Hashable, Codable {
+    struct BookingClashDetails: Hashable, Codable, Sendable {
         var user1Name: String
         var user2Name: String
         var project1Number: String?
@@ -182,7 +185,7 @@ struct Warning: Identifiable, Hashable, Codable {
     }
 }
 
-enum WarningTimelineMath {
+enum WarningTimelineMath: Sendable {
     static let dayMinutes = 24 * 60
 
     static func overlapMinutes(_ a: (Int, Int), _ b: (Int, Int)) -> Int {

@@ -39,6 +39,13 @@ struct HSToolboxTalk: Identifiable, Codable, Hashable {
     var version: Int
     var updatedAt: Date
     var fileURL: String?
+
+    var displayTitle: String {
+        if ToolboxTalkLibrary.isPlaceholderTitle(title) {
+            return ToolboxTalkLibrary.resolvedTitle(talkId: id, storedTalks: [self])
+        }
+        return title
+    }
 }
 
 struct HSToolboxIssue: Identifiable, Codable, Hashable {

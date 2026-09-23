@@ -49,10 +49,14 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             var loaded = try await firebaseBackend.loadHealthSafetyData(project: project, organizationId: orgId)
-            if loaded.talks.isEmpty {
-                loaded.talks = Self.defaultLibraryTalks
+            let platform = (try? await firebaseBackend.loadPlatformToolboxLibrary()) ?? []
+            let mergedTalks = ToolboxTalkLibrary.merge(stored: loaded.talks, platform: platform)
+            let storedWereBroken = loaded.talks.contains { ToolboxTalkLibrary.isPlaceholderTitle($0.title) }
+                || loaded.talks.isEmpty
+            loaded.talks = mergedTalks
+            if storedWereBroken {
                 loaded.updatedAt = Date()
-                try await firebaseBackend.saveHealthSafetyData(loaded, project: project, organizationId: orgId)
+                try? await firebaseBackend.saveHealthSafetyData(loaded, project: project, organizationId: orgId)
             }
             data = loaded
         } catch {
@@ -222,7 +226,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         }
         await persist(firebaseBackend: firebaseBackend, userStore: userStore)
         guard let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) else { return pendingUserIds.count }
-        let talkTitle = data.talks.first(where: { $0.id == issue.talkId })?.title ?? "Toolbox Talk"
+        let talkTitle = ToolboxTalkLibrary.resolvedTitle(talkId: issue.talkId, storedTalks: data.talks)
         for userId in pendingUserIds {
             let notification = AppNotification(
                 organizationId: orgId,
@@ -403,10 +407,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
     }
 
     func talkTitle(for issue: HSToolboxIssue) -> String {
-        if let talk = data.talks.first(where: { $0.id == issue.talkId }), !talk.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return talk.title
-        }
-        return "Toolbox talk"
+        ToolboxTalkLibrary.resolvedTitle(talkId: issue.talkId, storedTalks: data.talks)
     }
 
     private func uploadScopedHealthSafetyFile(
@@ -463,131 +464,6 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         let trimmed = orgId.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
-
-    private static let defaultLibraryTalks: [HSToolboxTalk] = {
-        let now = Date()
-
-        func parseExternalLibrary(from path: String) -> [HSToolboxTalk] {
-            guard let markdown = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
-            let regexPattern = #"\*\*(TBT-[A-Z]+-[0-9]{3}) · ([^\*]+)\*\*"#
-            guard let regex = try? NSRegularExpression(pattern: regexPattern) else { return [] }
-            let ns = markdown as NSString
-            let matches = regex.matches(in: markdown, range: NSRange(location: 0, length: ns.length))
-            guard !matches.isEmpty else { return [] }
-
-            func tradeMeta(for id: String) -> (isGeneral: Bool, trades: [String]) {
-                if id.hasPrefix("TBT-GEN-") { return (true, []) }
-                if id.hasPrefix("TBT-ELE-") { return (false, ["Electrical"]) }
-                if id.hasPrefix("TBT-MEC-") { return (false, ["Mechanical / HVAC"]) }
-                if id.hasPrefix("TBT-PLG-") { return (false, ["Plumbing & Gas"]) }
-                if id.hasPrefix("TBT-GRD-") { return (false, ["Groundworks"]) }
-                if id.hasPrefix("TBT-SCA-") { return (false, ["Scaffolding"]) }
-                if id.hasPrefix("TBT-BRK-") { return (false, ["Brick & Block"]) }
-                if id.hasPrefix("TBT-JOI-") { return (false, ["Joinery"]) }
-                if id.hasPrefix("TBT-DRY-") { return (false, ["Drylining"]) }
-                if id.hasPrefix("TBT-PNT-") { return (false, ["Painting"]) }
-                if id.hasPrefix("TBT-ROO-") { return (false, ["Roofing"]) }
-                if id.hasPrefix("TBT-DEM-") { return (false, ["Demolition"]) }
-                if id.hasPrefix("TBT-STL-") { return (false, ["Steel Fixing"]) }
-                if id.hasPrefix("TBT-PLA-") { return (false, ["Plant"]) }
-                return (false, ["General"])
-            }
-
-            return matches.compactMap { match in
-                guard match.numberOfRanges >= 3 else { return nil }
-                let id = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                let title = ns.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
-                let meta = tradeMeta(for: id)
-                return HSToolboxTalk(
-                    id: id,
-                    title: title,
-                    category: meta.isGeneral ? .general : .trade,
-                    isGeneral: meta.isGeneral,
-                    trades: meta.trades,
-                    purpose: "Review controls and safe method of work for \(title.lowercased()) before starting the task.",
-                    keyPoints: [
-                        "Brief the team on hazards and controls for this task.",
-                        "Confirm competence, permits, and PPE requirements before work starts.",
-                        "Stop work and escalate if site conditions change or controls fail."
-                    ],
-                    source: .library,
-                    ownerOrganizationId: nil,
-                    status: .approved,
-                    version: 1,
-                    updatedAt: now,
-                    fileURL: nil
-                )
-            }
-        }
-
-        let externalPaths = [
-            "/Users/farnienel/Downloads/TBT and Dash/TOOLBOX-TALK-LIBRARY.md",
-            "/Users/farnienel/Downloads/Toolbox t/TOOLBOX-TALK-LIBRARY.md"
-        ]
-        for path in externalPaths {
-            let parsed = parseExternalLibrary(from: path)
-            if !parsed.isEmpty {
-                return parsed
-            }
-        }
-
-        let general = [
-            "Working at Height", "Manual Handling", "PPE Selection and Use", "Slips Trips and Falls", "Fire Prevention and Emergency Routes",
-            "Housekeeping and Waste Segregation", "Working Around Mobile Plant", "Noise and Vibration Awareness", "Site Induction and Welfare Rules", "Accident and Near-Miss Reporting"
-        ]
-        let electrical = [
-            "Safe Isolation Procedure", "Temporary Electrical Installations", "Cable Management and Trip Prevention", "Testing and Verification Records",
-            "Live Services Avoidance", "Portable Appliance Safety", "RCD and Circuit Protection", "Lockout Tagout for Electrical Works"
-        ]
-        let groundworks = [
-            "Excavations and Services Avoidance", "Trench Support and Edge Protection", "Ground Stability and Weather Risk", "Plant Banksman Controls",
-            "Manual Handling in Groundworks", "Confined Spaces Entry Control", "Buried Services Permit to Dig", "Backfilling and Compaction Safety"
-        ]
-        let joinery = [
-            "Wood Dust and Extraction", "Bench and Portable Saw Safety", "Hand Tool Maintenance", "Ladder and Podium Use for Joiners",
-            "Adhesives and Solvent Ventilation", "Fire Door Installation Controls", "Manual Handling of Sheet Materials", "Workshop Housekeeping Standards"
-        ]
-        let mechanical = [
-            "Hot Works Permit Controls", "Lifting and Rigging Awareness", "Ductwork Installation Safety", "Pressurised Systems Isolation",
-            "Plant Room Access Controls", "Working at Height for Mechanical Install", "Hand Arm Vibration in Mechanical Works", "Temporary Supports and Bracing"
-        ]
-        let plumbing = [
-            "Gas Safe Working and Purging", "Legionella and Water Hygiene", "Pressure Testing Water Systems", "Soldering and Fire Watch",
-            "Working in Service Voids", "Asbestos Awareness for Plumbing Works", "Safe Use of Pipe Press Tools", "Draining Down and Refill Controls"
-        ]
-
-        func makeTalk(id: String, title: String, trade: String?) -> HSToolboxTalk {
-            let isGeneral = trade == nil
-            return HSToolboxTalk(
-                id: id,
-                title: title,
-                category: isGeneral ? .general : .trade,
-                isGeneral: isGeneral,
-                trades: trade.map { [$0] } ?? [],
-                purpose: "Ensure safe planning, communication, and execution for \(title.lowercased()).",
-                keyPoints: [
-                    "Review hazards and controls before work starts.",
-                    "Confirm competence, permits, and required PPE for the task.",
-                    "Stop and report immediately if site conditions change."
-                ],
-                source: .library,
-                ownerOrganizationId: nil,
-                status: .approved,
-                version: 1,
-                updatedAt: now,
-                fileURL: nil
-            )
-        }
-
-        var output: [HSToolboxTalk] = []
-        output += general.enumerated().map { makeTalk(id: String(format: "TBT-GEN-%03d", $0.offset + 1), title: $0.element, trade: nil) }
-        output += electrical.enumerated().map { makeTalk(id: String(format: "TBT-ELE-%03d", $0.offset + 1), title: $0.element, trade: "Electrical") }
-        output += groundworks.enumerated().map { makeTalk(id: String(format: "TBT-GRD-%03d", $0.offset + 1), title: $0.element, trade: "Groundworks") }
-        output += joinery.enumerated().map { makeTalk(id: String(format: "TBT-JOI-%03d", $0.offset + 1), title: $0.element, trade: "Joinery") }
-        output += mechanical.enumerated().map { makeTalk(id: String(format: "TBT-MEC-%03d", $0.offset + 1), title: $0.element, trade: "Mechanical / HVAC") }
-        output += plumbing.enumerated().map { makeTalk(id: String(format: "TBT-PLG-%03d", $0.offset + 1), title: $0.element, trade: "Plumbing & Gas") }
-        return output
-    }()
 }
 
 struct ProjectHealthSafetyView: View {
@@ -1078,7 +954,7 @@ struct ProjectHealthSafetyView: View {
                     }
                     VStack(spacing: 8) {
                         ForEach(visibleMine, id: \.issue.id) { entry in
-                            let talkTitle = vm.data.talks.first(where: { $0.id == entry.issue.talkId })?.title ?? "Toolbox talk"
+                            let talkTitle = vm.talkTitle(for: entry.issue)
                             let isPending = entry.signature.status != .signed
                             HStack(spacing: 10) {
                                 Image(systemName: isPending ? "doc.text.fill" : "checkmark.circle.fill")
@@ -1189,7 +1065,7 @@ struct ProjectHealthSafetyView: View {
                         ForEach(group.talks, id: \.id) { talk in
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack {
-                                    Text(talk.title)
+                                    Text(talk.displayTitle)
                                         .font(.system(size: 14, weight: .semibold))
                                     Spacer()
                                     HSStatusBadge(text: talk.source == .uploaded ? "Uploaded" : "Library", tone: talk.source == .uploaded ? .info : .ok)
@@ -1449,7 +1325,7 @@ struct ProjectHealthSafetyView: View {
                 let mySignature = vm.signatures(for: issue.id).first(where: { $0.userId == myId })
                 let isPending = mySignature?.status != .signed
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(vm.data.talks.first(where: { $0.id == issue.talkId })?.title ?? "Toolbox talk")
+                    Text(vm.talkTitle(for: issue))
                         .font(.system(size: 14, weight: .semibold))
                     Text("W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
                         .font(.system(size: 11))
@@ -1638,7 +1514,7 @@ private struct HSIssueTalkSheet: View {
                                         } label: {
                                             HStack(alignment: .top, spacing: 10) {
                                                 VStack(alignment: .leading, spacing: 4) {
-                                                    Text(talk.title)
+                                                    Text(talk.displayTitle)
                                                         .font(.system(size: 14, weight: .semibold))
                                                         .foregroundStyle(HS.ink)
                                                         .multilineTextAlignment(.leading)
@@ -1934,7 +1810,7 @@ private struct HSScheduledTalksView: View {
                             )
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(talksById[issue.talkId]?.title ?? "Toolbox talk")
+                                Text(talksById[issue.talkId]?.displayTitle ?? "Toolbox talk")
                                     .font(.system(size: 14, weight: .semibold))
                                 if let publishAt = issue.publishAt {
                                     Text("Scheduled for \(publishAt.formatted(date: .abbreviated, time: .shortened))")
@@ -1998,7 +1874,7 @@ private struct HSScheduledTalkDetailView: View {
     var body: some View {
         List {
             Section("Summary") {
-                Text(talk?.title ?? "Toolbox talk")
+                Text(talk?.displayTitle ?? "Toolbox talk")
                 Text(talk?.purpose ?? "No summary available.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
@@ -2243,7 +2119,7 @@ private struct HSTrackIssueView: View {
         NavigationStack {
             List {
                 Section {
-                    Text(talk?.title ?? "Toolbox talk")
+                    Text(talk?.displayTitle ?? "Toolbox talk")
                     let signedCount = signatures.filter { $0.status == .signed }.count
                     ProgressView(value: Double(signedCount), total: Double(max(signatures.count, 1)))
                     Text("\(signedCount) of \(max(signatures.count, 1)) signed")
@@ -2328,7 +2204,7 @@ private struct HSSignTalkView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(talk?.title ?? "Toolbox talk")
+                    Text(talk?.displayTitle ?? "Toolbox talk")
                         .font(.system(size: 20, weight: .bold))
                     Text("Date \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
                         .font(.system(size: 12))
@@ -2402,7 +2278,7 @@ private struct HSSignedTalkView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(talk?.title ?? "Toolbox talk")
+                    Text(talk?.displayTitle ?? "Toolbox talk")
                         .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(HS.ink)
                     Text("W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")

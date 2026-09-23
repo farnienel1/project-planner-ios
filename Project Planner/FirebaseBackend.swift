@@ -7964,7 +7964,10 @@ extension FirebaseBackend {
         let fileURL = (map["fileURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return HSToolboxTalk(
             id: id,
-            title: (map["title"] as? String) ?? "Untitled talk",
+            title: {
+                let raw = (map["title"] as? String) ?? ""
+                return ToolboxTalkLibrary.isPlaceholderTitle(raw) ? "" : raw
+            }(),
             category: HSToolboxTalkCategory(rawValue: categoryRaw) ?? .general,
             isGeneral: map["isGeneral"] as? Bool ?? false,
             trades: map["trades"] as? [String] ?? [],
@@ -8087,6 +8090,32 @@ extension FirebaseBackend {
         output.ramsDocuments.sort { $0.uploadedAt > $1.uploadedAt }
         output.otherDocuments.sort { $0.uploadedAt > $1.uploadedAt }
         return output
+    }
+
+    func loadPlatformToolboxLibrary() async throws -> [HSToolboxTalk] {
+        let docIds = ["toolboxTalkLibrary", "toolboxLibrary", "healthSafetyLibrary"]
+        for docId in docIds {
+            let snapshot: DocumentSnapshot
+            do {
+                snapshot = try await db.collection("platformConfig").document(docId).getDocument(source: .server)
+            } catch {
+                do {
+                    snapshot = try await db.collection("platformConfig").document(docId).getDocument(source: .cache)
+                } catch {
+                    continue
+                }
+            }
+            guard let data = snapshot.data() else { continue }
+            let raw = (data["talks"] as? [[String: Any]])
+                ?? (data["toolboxTalks"] as? [[String: Any]])
+                ?? (data["items"] as? [[String: Any]])
+                ?? []
+            let talks = raw.compactMap(parseHSTalk).filter { !ToolboxTalkLibrary.isPlaceholderTitle($0.title) }
+            if !talks.isEmpty {
+                return talks
+            }
+        }
+        return []
     }
 
     func saveHealthSafetyData(_ safetyData: HSProjectSafetyData, project: Project, organizationId: String) async throws {

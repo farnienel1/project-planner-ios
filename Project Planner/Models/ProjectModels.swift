@@ -195,15 +195,19 @@ struct Project: Identifiable, Codable, Hashable {
     }
     
     var isActive: Bool {
-        let now = Date()
-        return isLive && startDate <= now && endDate >= now
+        status == .active
     }
     
+    /// Calendar-day status. A job whose end date is today stays Active until tomorrow —
+    /// matching web (`completes today` is still live work).
     var status: ProjectStatus {
-        let now = Date()
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let start = cal.startOfDay(for: startDate)
+        let end = cal.startOfDay(for: endDate)
         if !isLive { return .inactive }
-        if now < startDate { return .upcoming }
-        if now > endDate { return .completed }
+        if today < start { return .upcoming }
+        if today > end { return .completed }
         return .active
     }
     

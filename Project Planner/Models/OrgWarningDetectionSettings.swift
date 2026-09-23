@@ -33,7 +33,7 @@ struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     /// Org user ids omitted from unbooked-labour warnings (e.g. PAYE staff).
     var excludedUserIdsFromUnbookedWarnings: [String]
 
-    static let `default` = OrgWarningDetectionSettings(
+    nonisolated static let `default` = OrgWarningDetectionSettings(
         detectClashes: true,
         clashLookaheadMode: .numberOfDays,
         clashLookaheadDays: 7,
