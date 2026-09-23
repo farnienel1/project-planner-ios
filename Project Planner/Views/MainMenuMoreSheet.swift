@@ -13,11 +13,11 @@ struct MainMenuMoreSheet: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @Environment(\.dismiss) private var dismiss
 
-    private let sheetBg = Color(red: 0.97, green: 0.973, blue: 0.98)
-    private let cardBg = Color(red: 0.97, green: 0.973, blue: 0.98)
-    private let ink = Color(red: 0.043, green: 0.063, blue: 0.125)
-    private let muted = Color(red: 0.42, green: 0.447, blue: 0.502)
-    private let border = Color(red: 0.933, green: 0.941, blue: 0.953)
+    private let sheetBg = ProjectWorksRevampColors.canvas
+    private let cardBg = ProjectWorksRevampColors.surface
+    private let ink = ProjectWorksRevampColors.ink
+    private let muted = ProjectWorksRevampColors.muted
+    private let border = ProjectWorksRevampColors.border
 
     private var grouped: [(section: MainMenuShellSection, rows: [MainMenuRowSpec])] {
         MainMenuCatalog.groupedVisibleRows(
@@ -112,7 +112,7 @@ struct MainMenuMoreSheet: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(border, lineWidth: 0.5))
     }
@@ -187,7 +187,7 @@ struct MainMenuMoreSheet: View {
             }
             .padding(.vertical, 12)
             .padding(.horizontal, 12)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(border, lineWidth: 0.5))
         }
@@ -251,7 +251,7 @@ struct MainMenuMoreSheet: View {
             .foregroundStyle(spec.iconTint)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 13)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)

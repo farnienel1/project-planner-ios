@@ -17,6 +17,8 @@ struct SubcontractorContact: Identifiable, Codable, Hashable {
     var email: String
     var contactNumber: String
     var position: SubcontractorContactPosition
+    /// Display trade. Custom values are stored here and override the role picker.
+    var tradeType: String
     var createdAt: Date
     
     init(
@@ -25,6 +27,7 @@ struct SubcontractorContact: Identifiable, Codable, Hashable {
         email: String,
         contactNumber: String,
         position: SubcontractorContactPosition,
+        tradeType: String? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -32,7 +35,14 @@ struct SubcontractorContact: Identifiable, Codable, Hashable {
         self.email = email
         self.contactNumber = contactNumber
         self.position = position
+        let trimmed = tradeType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.tradeType = trimmed.isEmpty ? position.rawValue : trimmed
         self.createdAt = createdAt
+    }
+
+    var displayTrade: String {
+        let trimmed = tradeType.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? position.rawValue : trimmed
     }
 }
 

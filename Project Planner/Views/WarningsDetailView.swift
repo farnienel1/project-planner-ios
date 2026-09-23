@@ -8,11 +8,11 @@
 import SwiftUI
 
 private enum WarningsUI {
-    static let screenBg = Color(red: 0.949, green: 0.949, blue: 0.969) // #F2F2F7
+    static let screenBg = ProjectWorksRevampColors.canvas
     static let doneBlue = Color(red: 0.231, green: 0.373, blue: 0.639) // #3B5FA3
-    static let textPrimary = Color(red: 0.110, green: 0.110, blue: 0.118)
-    static let textBody = Color(red: 0.216, green: 0.255, blue: 0.318)
-    static let textMuted = Color(red: 0.612, green: 0.639, blue: 0.686)
+    static let textPrimary = ProjectWorksRevampColors.ink
+    static let textBody = ProjectWorksRevampColors.ink
+    static let textMuted = ProjectWorksRevampColors.muted
     static let blue = Color(red: 0.145, green: 0.388, blue: 0.922)
     static let blueFrom = Color(red: 0.114, green: 0.306, blue: 0.847)
     static let red = Color(red: 0.863, green: 0.149, blue: 0.149)
@@ -172,7 +172,7 @@ struct WarningsDetailView: View {
                 .foregroundStyle(WarningsUI.doneBlue)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 7)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(Capsule())
                 .overlay(Capsule().stroke(Color.black.opacity(0.10), lineWidth: 0.5))
                 .shadow(color: Color.black.opacity(0.07), radius: 3, x: 0, y: 1)
@@ -191,9 +191,7 @@ struct WarningsDetailView: View {
             Spacer(minLength: 0)
 
             HStack(spacing: 8) {
-                Button {
-                    Task { await refreshWarningsTodayOnly() }
-                } label: {
+                Button(action: startManualRefresh) {
                     Group {
                         if isRefreshingWarnings {
                             ProgressView()
@@ -204,7 +202,7 @@ struct WarningsDetailView: View {
                         }
                     }
                     .frame(width: 34, height: 34)
-                    .background(Color.white)
+                    .background(ProjectWorksRevampColors.surface)
                     .clipShape(Circle())
                     .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 0.5))
                     .shadow(color: Color.black.opacity(0.07), radius: 3, x: 0, y: 1)
@@ -220,7 +218,7 @@ struct WarningsDetailView: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(Color(red: 0.333, green: 0.333, blue: 0.333))
                             .frame(width: 34, height: 34)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.surface)
                             .clipShape(Circle())
                             .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 0.5))
                             .shadow(color: Color.black.opacity(0.07), radius: 3, x: 0, y: 1)
@@ -235,37 +233,83 @@ struct WarningsDetailView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 16) {
-            if warningsService.hasCompletedLiveDetection {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 56))
-                    .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                Text("No active warnings")
-                    .font(.title3.weight(.semibold))
-                Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
-                    .font(.subheadline)
-                    .foregroundStyle(WarningsUI.textMuted)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-            } else {
-                Image(systemName: "arrow.clockwise.circle")
-                    .font(.system(size: 56))
-                    .foregroundStyle(WarningsUI.textMuted)
-                Text("Check for warnings")
-                    .font(.title3.weight(.semibold))
-                Text("Tap Refresh to scan today and tomorrow. Results are saved so Home and Weekly Report stay fast.")
-                    .font(.subheadline)
-                    .foregroundStyle(WarningsUI.textMuted)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-                Button("Refresh now") {
-                    Task { await refreshWarningsTodayOnly() }
+        ScrollView {
+            VStack(spacing: 16) {
+                if isRefreshingWarnings {
+                    ProgressView()
+                        .controlSize(.large)
+                        .padding(.top, 32)
+                    Text("Scanning for warnings…")
+                        .font(.title3.weight(.semibold))
+                    Text("Keep this screen open until results appear.")
+                        .font(.subheadline)
+                        .foregroundStyle(WarningsUI.textMuted)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                } else if warningsService.hasCompletedLiveDetection {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 56))
+                        .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                    Text("No active warnings")
+                        .font(.title3.weight(.semibold))
+                    Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
+                        .font(.subheadline)
+                        .foregroundStyle(WarningsUI.textMuted)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                } else {
+                    Button(action: startManualRefresh) {
+                        Image(systemName: "arrow.clockwise.circle")
+                            .font(.system(size: 56))
+                            .foregroundStyle(WarningsUI.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHidden(true)
+                    Text("Check for warnings")
+                        .font(.title3.weight(.semibold))
+                    Text("Tap Refresh now, or the refresh icon at the top right. Results are saved so Home and Weekly Report stay fast.")
+                        .font(.subheadline)
+                        .foregroundStyle(WarningsUI.textMuted)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                    if let refreshMessage {
+                        Text(refreshMessage)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(WarningsUI.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                    }
+                    // Device/TestFlight: `.borderedProminent` in this sheet does not receive taps
+                    // (the top-right plain refresh icon does). Use the same plain control.
+                    Button(action: startManualRefresh) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 16, weight: .semibold))
+                            Text("Refresh now")
+                                .font(.system(size: 17, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                        .background(WarningsUI.blue)
+                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 8)
+                    .disabled(isRefreshingWarnings)
+                    .accessibilityLabel("Refresh now")
+                    .highPriorityGesture(TapGesture().onEnded {
+                        startManualRefresh()
+                    })
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(WarningsUI.blue)
-                .padding(.top, 4)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 48)
+            .padding(.bottom, 32)
         }
+        .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -318,16 +362,15 @@ struct WarningsDetailView: View {
         case .operativeBookingClash:
             OperativeClashWarningCard(
                 warning: warning,
-                onRemoveA: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingAId) },
-                onRemoveB: { removeOperativeBooking(warning, bookingId: warning.operativeClash?.bookingBId) },
+                onRemove: { removeClashEntry(warning, entry: $0) },
+                onApprove: { warningsService.approveWarning(warning) },
                 onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
             )
         case .managerLocationClash:
             ManagerClashWarningCard(
                 warning: warning,
-                onRemoveA: { removeManagerBooking(warning, entry: warning.managerClash?.entryA) },
-                onRemoveB: { removeManagerBooking(warning, entry: warning.managerClash?.entryB) },
+                onRemove: { removeClashEntry(warning, entry: $0) },
                 onApprove: { warningsService.approveWarning(warning) },
                 onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
@@ -483,7 +526,7 @@ struct WarningsDetailView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -498,7 +541,7 @@ struct WarningsDetailView: View {
                 Rectangle().fill(Color.black.opacity(0.07)).frame(height: 0.5)
             }
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -558,7 +601,7 @@ struct WarningsDetailView: View {
             .padding(.bottom, 14)
             .background(Color(red: 0.980, green: 0.980, blue: 0.980))
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -606,7 +649,7 @@ struct WarningsDetailView: View {
             .padding(.bottom, 14)
             .background(Color(red: 0.980, green: 0.980, blue: 0.980))
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -627,6 +670,14 @@ struct WarningsDetailView: View {
         warningsService.dismissWarning(warning)
         Task {
             await notificationService.notifyWarningRemoved(warning: warning, removedBy: removedBy)
+        }
+    }
+
+    private func removeClashEntry(_ warning: Warning, entry: Warning.ClashTimelineEntry) {
+        if entry.managerBookingId != nil {
+            removeManagerBooking(warning, entry: entry)
+        } else {
+            removeOperativeBooking(warning, bookingId: entry.bookingId)
         }
     }
 
@@ -658,6 +709,12 @@ struct WarningsDetailView: View {
                 warningsService.dismissWarning(warning)
                 NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
             }
+        }
+    }
+
+    private func startManualRefresh() {
+        Task { @MainActor in
+            await refreshWarningsTodayOnly()
         }
     }
 
@@ -814,7 +871,7 @@ private struct WarningDismissConfirmationSheet: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 28)
         }
-        .background(Color.white.ignoresSafeArea())
+        .background(ProjectWorksRevampColors.surface.ignoresSafeArea())
     }
 }
 

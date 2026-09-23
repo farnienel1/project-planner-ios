@@ -83,6 +83,9 @@ enum PayrollHoursEngine {
     // MARK: - Weekday
 
     private static func computeWeekday(booking: Booking, policy: OrgPayrollTimePolicy) -> PayrollHoursResult {
+        if isHalfDayPaidSlot(booking: booking, policy: policy) {
+            return halfDayPaidResult(booking: booking, policy: policy, weekend: nil)
+        }
         guard let interval = OperativeBookingInterval.clashInterval(for: booking, policy: policy) else {
             return legacySlotResult(booking: booking, policy: policy)
         }
@@ -167,6 +170,9 @@ enum PayrollHoursEngine {
         }
 
         if weekend.allHoursAtMultiplierMode {
+            if isNamedHalfDaySlot(booking.timeSlot) {
+                return halfDayPaidResult(booking: booking, policy: policy, weekend: weekend)
+            }
             let wall = Double(interval.1 - interval.0) / 60.0
             let mult = booking.effectiveOutsideMultiplier(policy: policy, weekend: weekend)
             let segment = PayrollHoursSegment(
@@ -187,6 +193,9 @@ enum PayrollHoursEngine {
 
         let sm = interval.0
         let em = interval.1
+        if isHalfDayPaidSlot(booking: booking, policy: policy) {
+            return halfDayPaidResult(booking: booking, policy: policy, weekend: weekend)
+        }
         let countsAs = weekend.resolvedCountsAsHours(fallback: policy.standardPaidHours)
         let outsideMult = booking.effectiveOutsideMultiplier(policy: policy, weekend: weekend)
 
@@ -247,6 +256,54 @@ enum PayrollHoursEngine {
     }
 
     // MARK: - Helpers
+
+    /// AM/PM (and custom hours that match those half-windows) pay half the standard day rate, not wall-clock minus break.
+    static func isHalfDayPaidSlot(booking: Booking, policy: OrgPayrollTimePolicy) -> Bool {
+        if isNamedHalfDaySlot(booking.timeSlot) { return true }
+        guard booking.timeSlot == .customHours else { return false }
+        return matchesStandardHalfWindow(booking: booking, policy: policy)
+    }
+
+    private static func isNamedHalfDaySlot(_ slot: TimeSlot) -> Bool {
+        slot == .morning || slot == .afternoon
+    }
+
+    private static func matchesStandardHalfWindow(booking: Booking, policy: OrgPayrollTimePolicy) -> Bool {
+        guard let interval = OperativeBookingInterval.clashInterval(for: booking, policy: policy) else { return false }
+        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy)
+        guard !timeline.allHoursAtMultiplier,
+              let ds = timeline.standardWindowStartMinutes,
+              let de = timeline.standardWindowEndMinutes,
+              de > ds else { return false }
+        let mid = ds + ((de - ds) / 2)
+        let tolerance = 20
+        func near(_ a: Int, _ b: Int) -> Bool { abs(a - b) <= tolerance }
+        let isMorningHalf = near(interval.0, ds) && near(interval.1, mid)
+        let isAfternoonHalf = near(interval.0, mid) && near(interval.1, de)
+        return isMorningHalf || isAfternoonHalf
+    }
+
+    private static func halfDayPaidResult(
+        booking: Booking,
+        policy: OrgPayrollTimePolicy,
+        weekend: OrgWeekendDayPayrollSettings?
+    ) -> PayrollHoursResult {
+        let paid: Double
+        if let weekend, !weekend.allHoursAtMultiplierMode {
+            paid = max(weekend.resolvedCountsAsHours(fallback: policy.standardPaidHours), 0) / 2
+        } else {
+            paid = max(policy.standardPaidHours, 0) / 2
+        }
+        let interval = OperativeBookingInterval.clashInterval(for: booking, policy: policy)
+        let segment = PayrollHoursSegment(
+            kind: .standardWindow,
+            clockStart: interval.map { ManagerScheduleInterval.formatMinutes($0.0) },
+            clockEnd: interval.map { ManagerScheduleInterval.formatMinutes($0.1) },
+            baseHours: paid,
+            multiplier: 1
+        )
+        return PayrollHoursResult(totalPaidHours: paid, segments: [segment])
+    }
 
     private static func breakDeductionMinutes(booking: Booking, policy: OrgPayrollTimePolicy, interval: (Int, Int)) -> Double {
         guard let bws = ManagerScheduleInterval.parseMinutes(policy.breakWindowStart),

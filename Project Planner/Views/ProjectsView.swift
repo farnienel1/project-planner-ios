@@ -20,6 +20,7 @@ struct ProjectsView: View {
     @State private var navigationPath = NavigationPath()
     @State private var searchText = ""
     @State private var showingCreateProject = false
+    @State private var deadlineAssignedProjectIds: Set<UUID> = []
 
     private var listCounts: WorksListStatusCounts {
         WorksListStatusCounts.from(projectsBeforeStatusFilter)
@@ -49,7 +50,7 @@ struct ProjectsView: View {
                             .foregroundStyle(ProjectWorksRevampColors.ink)
                             .font(.system(size: 17, weight: .semibold))
                             .frame(width: 36, height: 36)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.surface)
                             .clipShape(Circle())
                             .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                     }
@@ -98,6 +99,9 @@ struct ProjectsView: View {
                 if selectedStatus == .inactive || selectedStatus == nil {
                     selectedStatus = .active
                 }
+            }
+            .task {
+                await refreshDeadlineAssignedProjectIds()
             }
             .sheet(isPresented: $showingCreateProject) {
                 CreateProjectView()
@@ -324,7 +328,8 @@ struct ProjectsView: View {
                 }
                 .map { $0.projectId })
             projects = projects.filter {
-                assignedProjectIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(currentUserId)
+                (assignedProjectIds.contains($0.id) || deadlineAssignedProjectIds.contains($0.id))
+                    && !$0.hiddenOperativeUserIds.contains(currentUserId)
             }
         } else if let currentUser = userStore.currentUser,
                   !userStore.hasAdminAccess(),
@@ -333,6 +338,17 @@ struct ProjectsView: View {
         }
         
         return projects
+    }
+
+    private func refreshDeadlineAssignedProjectIds() async {
+        guard userStore.isOperativeMode(),
+              let userId = userStore.currentUser?.id,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId else {
+            await MainActor.run { deadlineAssignedProjectIds = [] }
+            return
+        }
+        let ids = await firebaseBackend.loadDeadlineAssignedProjectIds(userId: userId, organizationId: orgId)
+        await MainActor.run { deadlineAssignedProjectIds = ids }
     }
 
     private var resolvedCurrentOperative: Operative? {
@@ -400,7 +416,7 @@ struct ProjectDetailRowView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -437,7 +453,7 @@ struct ProjectDetailRowView: View {
             listProgressSection
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)

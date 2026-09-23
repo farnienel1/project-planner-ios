@@ -161,6 +161,18 @@ struct ContentView: View {
                     NotificationCenter.default.post(name: .mainMenuOpenSurface, object: nil, userInfo: payload)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .openNotificationDeepLink)) { notification in
+                let info = NotificationDeepLink.userInfo(from: notification.userInfo ?? [:])
+                showMoreMenuSheet = false
+                showingHolidaySheet = false
+                selectTab(0)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NotificationDeepLink.route(
+                        userInfo: info,
+                        isOperativeMode: userStore.isOperativeMode()
+                    )
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToTimesheetReview"))) { notification in
                 let payload = notification.userInfo
                 selectTab(0)
@@ -186,6 +198,23 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .mainMenuSignOut)) { _ in
                 showMoreMenuSheet = false
                 AppSignOut.perform(firebaseBackend: firebaseBackend, userStore: userStore)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openWorkCatalogueDetail)) { notification in
+                guard let projectId = notification.userInfo?["projectId"] as? UUID else { return }
+                let isSmallWorks = notification.userInfo?["isSmallWorks"] as? Bool ?? false
+                let tab = isSmallWorks ? 2 : 1
+                showMoreMenuSheet = false
+                showingHolidaySheet = false
+                WorkCatalogueDeepLink.set(projectId: projectId, isSmallWorks: isSmallWorks)
+                if selectedTab != tab {
+                    previousTab = selectedTab
+                    selectedTab = tab
+                }
+                let payload: [String: Any] = ["projectId": projectId, "isSmallWorks": isSmallWorks]
+                NotificationCenter.default.post(name: .pushWorkCatalogueDetail, object: nil, userInfo: payload)
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .pushWorkCatalogueDetail, object: nil, userInfo: payload)
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .qualificationExpiryScheduleRefresh)) { _ in
                 Task { await notificationService.refreshQualificationExpiryReminders() }
@@ -315,6 +344,11 @@ struct ContentView: View {
                     // toggles (e.g. Annual Leave Management) applied by an admin take effect
                     // without requiring sign-out.
                     await userStore.loadCurrentUser()
+                    if firebaseBackend.hasBootstrappedOrgDataLoad {
+                        bookingStore.loadData()
+                        managerScheduleStore.loadData(force: true)
+                    }
+                    notificationService.promoteScheduledDeadlineNotifications()
                     // Do not reload the full notifications inbox on every foreground —
                     // that alone can jetsam Simulator orgs with 100+ notification docs.
                 }
@@ -438,7 +472,7 @@ struct ContentView: View {
                 }
             case 2:
                 if userStore.canViewProjects() {
-                    NavigationStack { SmallWorksView() }
+                    SmallWorksView()
                 } else {
                     NavigationStack { HomeView() }
                 }
@@ -461,7 +495,7 @@ struct ContentView: View {
                 NavigationStack { SettingsView() }
             case 6:
                 if !userStore.isOperativeMode() {
-                    NavigationStack { HelpView() }
+                    NavigationStack { HelpView(showsTabBackButton: true) }
                 } else {
                     NavigationStack { HomeView() }
                 }
@@ -474,16 +508,13 @@ struct ContentView: View {
                     NavigationStack { HomeView() }
                 }
             case 8:
-                NavigationStack {
-                    HolidayView(showRequests: false)
-                        .environmentObject(holidayStore)
-                        .environmentObject(userStore)
-                        .environmentObject(operativeStore)
-                        .environmentObject(firebaseBackend)
-                        .environmentObject(notificationService)
-                        .environmentObject(appSettings)
-                        .toolbar(.hidden, for: .navigationBar)
-                }
+                HolidayView(showRequests: false)
+                    .environmentObject(holidayStore)
+                    .environmentObject(userStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(notificationService)
+                    .environmentObject(appSettings)
             case 9:
                 if userStore.canManageSubcontractors() {
                     NavigationStack {
@@ -734,6 +765,9 @@ extension ContentView {
     }
 
     private func swapMovableTabs(_ sourceTag: Int, _ destinationTag: Int) {
+        if orderedMovableTabTags.isEmpty {
+            orderedMovableTabTags = defaultMovableTabItems.map(\.tag)
+        }
         guard sourceTag != destinationTag,
               let sourceIndex = orderedMovableTabTags.firstIndex(of: sourceTag),
               let destinationIndex = orderedMovableTabTags.firstIndex(of: destinationTag) else {
@@ -886,38 +920,37 @@ extension ContentView {
         return orderedMovableTabTags.compactMap { map[$0] }
     }
     
-    private var movableTabOrderStorageKey: String {
-        let uid = firebaseBackend.currentUser?.uid ?? "anonymous"
-        return "bottomBarMovableTabOrder.\(uid)"
-    }
-    
     private func loadPersistedMovableTabOrder() -> [Int] {
-        let raw = UserDefaults.standard.string(forKey: movableTabOrderStorageKey) ?? ""
-        return raw.split(separator: ",").compactMap { Int($0) }
+        guard let uid = LocalLayoutPreferences.signedInUserId ?? firebaseBackend.currentUser?.uid else {
+            return []
+        }
+        return LocalLayoutPreferences.loadTabOrder(userId: uid)
     }
     
     private func persistMovableTabOrder(_ tags: [Int]) {
-        let raw = tags.map(String.init).joined(separator: ",")
-        UserDefaults.standard.set(raw, forKey: movableTabOrderStorageKey)
+        guard let uid = LocalLayoutPreferences.signedInUserId ?? firebaseBackend.currentUser?.uid else { return }
+        LocalLayoutPreferences.saveTabOrder(tags, userId: uid)
     }
     
     private func syncMovableTabOrderWithCurrentPermissions() {
         let defaults = defaultMovableTabItems.map(\.tag)
-        guard !defaults.isEmpty else {
-            orderedMovableTabTags = []
-            UserDefaults.standard.removeObject(forKey: movableTabOrderStorageKey)
-            return
-        }
-        
+        // Permissions can be empty for a moment at launch. Never wipe stored order in that window.
+        guard !defaults.isEmpty else { return }
+        guard (LocalLayoutPreferences.signedInUserId ?? firebaseBackend.currentUser?.uid) != nil else { return }
+
         let stored = loadPersistedMovableTabOrder()
-        
-        var filtered: [Int] = stored.filter { defaults.contains($0) }
-        for tag in defaults where !filtered.contains(tag) {
-            filtered.append(tag)
+        var merged: [Int] = []
+        var seen = Set<Int>()
+        // Keep the user's order, including tabs that are temporarily hidden by permissions.
+        for tag in stored where seen.insert(tag).inserted {
+            merged.append(tag)
         }
-        
-        orderedMovableTabTags = filtered
-        persistMovableTabOrder(filtered)
+        for tag in defaults where seen.insert(tag).inserted {
+            merged.append(tag)
+        }
+
+        orderedMovableTabTags = merged
+        persistMovableTabOrder(merged)
     }
     
 }

@@ -291,7 +291,7 @@ struct CreateSmallWorksView: View {
             Spacer(minLength: 0)
         }
         .padding(16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
     }
@@ -319,7 +319,7 @@ struct CreateSmallWorksView: View {
         }
         .padding(10)
         .padding(.horizontal, 4)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
     }
@@ -404,7 +404,7 @@ struct CreateSmallWorksView: View {
             )
         }
         .padding(.horizontal, 14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
     }
@@ -435,7 +435,7 @@ struct CreateSmallWorksView: View {
                 Spacer()
             }
             .padding(12)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
         }
@@ -490,7 +490,7 @@ struct CreateSmallWorksView: View {
             )
         }
         .padding(.horizontal, 14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
     }
@@ -518,7 +518,7 @@ struct CreateSmallWorksView: View {
                     .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
             }
             .padding(12)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
         }
@@ -532,7 +532,7 @@ struct CreateSmallWorksView: View {
             dateRow(icon: "flag.fill", iconBg: ProjectWorksRevampColors.endDateBg, iconTint: ProjectWorksRevampColors.endDateFg, label: "End date", date: $projectEndDate)
         }
         .padding(.horizontal, 14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
     }
@@ -585,7 +585,7 @@ struct CreateSmallWorksView: View {
             jobTypeMenuRow
         }
         .padding(.horizontal, 14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
     }
@@ -713,7 +713,7 @@ struct CreateSmallWorksView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
     }
@@ -734,7 +734,7 @@ struct CreateSmallWorksView: View {
                     .allowsHitTesting(false)
             }
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
     }
@@ -840,6 +840,10 @@ struct CreateSmallWorksView: View {
             guard let u = userStore.organizationUsers.first(where: { $0.id == uid }) else { return false }
             return !u.isExcludedFromManagerVisibilityHiding
         })
+        let resolvedManagers = await ProjectManagerPickerSupport.resolveManagersForSave(
+            selectedManagers,
+            operativeStore: operativeStore
+        )
         let project = Project(
             jobNumber: projectJobNumber.trimmingCharacters(in: .whitespacesAndNewlines),
             siteName: projectSiteName.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -853,8 +857,8 @@ struct CreateSmallWorksView: View {
             jobType: .smallWorks,
             customJobType: selectedJobType.isEmpty ? nil : selectedJobType,
             manager: .custom,
-            managerId: selectedManagers.first?.id,
-            managerIds: selectedManagers.map(\.id),
+            managerId: resolvedManagers.first?.id,
+            managerIds: resolvedManagers.map(\.id),
             isLive: true,
             description: projectDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : projectDescription,
             hiddenManagerUserIds: sanitizedHidden,

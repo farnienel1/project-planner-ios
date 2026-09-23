@@ -212,6 +212,7 @@ class ResendEmailService: ObservableObject {
                 [
                     "filename": attachment.fileName,
                     "content": attachment.data.base64EncodedString(),
+                    "content_type": "application/pdf",
                 ]
             }
         }
@@ -270,6 +271,8 @@ class ResendEmailService: ObservableObject {
                 [
                     "filename": attachment.fileName,
                     "content": attachment.data.base64EncodedString(),
+                    "type": "application/pdf",
+                    "content_type": "application/pdf",
                 ]
             }
         }

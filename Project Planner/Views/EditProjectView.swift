@@ -53,6 +53,7 @@ struct EditProjectView: View {
     @State private var showingCreateClient = false
     @State private var showingCreateJobType = false
     @State private var showingCreateManager = false
+    @State private var managersHydratedFromRoster = false
 
     private var screenTitle: String {
         project.jobType == .smallWorks ? "Edit small work" : "Edit project"
@@ -142,7 +143,7 @@ struct EditProjectView: View {
                     TextEditor(text: $projectDescription)
                         .frame(minHeight: 100)
                         .padding(12)
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -178,7 +179,7 @@ struct EditProjectView: View {
                         .foregroundStyle(ProjectWorksRevampColors.ink)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 7)
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(Capsule())
                         .overlay(Capsule().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                 }
@@ -194,8 +195,10 @@ struct EditProjectView: View {
                 }
             }
             .onAppear {
-                let ids = Set(project.allAssignedManagerIds)
-                selectedManagers = operativeStore.allManagers.filter { ids.contains($0.id) }
+                hydrateManagersIfNeeded()
+            }
+            .onChange(of: operativeStore.allManagers.map(\.id)) { _, _ in
+                hydrateManagersIfNeeded()
             }
             .sheet(isPresented: $showingCreateClient) {
                 CreateClientView()
@@ -291,7 +294,7 @@ struct EditProjectView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(18)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -322,7 +325,7 @@ struct EditProjectView: View {
                 .font(.system(size: 13, weight: .medium))
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -340,7 +343,7 @@ struct EditProjectView: View {
         }
         .textFieldStyle(.roundedBorder)
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -396,7 +399,7 @@ struct EditProjectView: View {
             .buttonStyle(.plain)
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -428,7 +431,7 @@ struct EditProjectView: View {
             .padding(.vertical, 12)
             .padding(.horizontal, 14)
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -459,7 +462,7 @@ struct EditProjectView: View {
             Divider().overlay(ProjectWorksRevampColors.border)
             jobTypeMenuRow
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -581,7 +584,7 @@ struct EditProjectView: View {
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -678,40 +681,69 @@ struct EditProjectView: View {
             return mappedWorksType == .smallWorks ? .catA : mappedWorksType
         }()
 
-        var updatedProject = Project(
-            id: project.id,
-            jobNumber: projectJobNumber,
-            siteName: projectSiteName,
-            addressLine1: usesPin ? (projectAddressLine1.isEmpty ? "" : projectAddressLine1) : projectAddressLine1,
-            addressLine2: projectAddressLine2.isEmpty ? nil : projectAddressLine2,
-            townCity: projectTownCity,
-            postcode: projectPostcode,
-            client: client,
-            startDate: projectStartDate,
-            endDate: projectEndDate,
-            jobType: finalJobType,
-            customJobType: projectWorksType.isEmpty ? nil : projectWorksType,
-            manager: selectedManagers.isEmpty ? project.manager : .custom,
-            managerId: selectedManagers.first?.id,
-            managerIds: selectedManagers.map(\.id),
-            isLive: project.isLive,
-            description: projectDescription.isEmpty ? nil : projectDescription,
-            notes: project.notes,
-            hiddenManagerUserIds: project.hiddenManagerUserIds,
-            hiddenOperativeUserIds: project.hiddenOperativeUserIds,
-            usesMapPinForLocation: usesPin,
-            latitude: finalLat,
-            longitude: finalLon
-        )
-        updatedProject.createdAt = project.createdAt
-        updatedProject.updatedAt = Date()
-
         Task {
+            let resolvedManagers = await ProjectManagerPickerSupport.resolveManagersForSave(
+                selectedManagers,
+                operativeStore: operativeStore
+            )
+            var updatedProject = Project(
+                id: project.id,
+                jobNumber: projectJobNumber,
+                siteName: projectSiteName,
+                addressLine1: usesPin ? (projectAddressLine1.isEmpty ? "" : projectAddressLine1) : projectAddressLine1,
+                addressLine2: projectAddressLine2.isEmpty ? nil : projectAddressLine2,
+                townCity: projectTownCity,
+                postcode: projectPostcode,
+                client: client,
+                startDate: projectStartDate,
+                endDate: projectEndDate,
+                jobType: finalJobType,
+                customJobType: projectWorksType.isEmpty ? nil : projectWorksType,
+                manager: resolvedManagers.isEmpty ? project.manager : .custom,
+                managerId: resolvedManagers.first?.id,
+                managerIds: resolvedManagers.map(\.id),
+                isLive: project.isLive,
+                description: projectDescription.isEmpty ? nil : projectDescription,
+                notes: project.notes,
+                hiddenManagerUserIds: project.hiddenManagerUserIds,
+                hiddenOperativeUserIds: project.hiddenOperativeUserIds,
+                usesMapPinForLocation: usesPin,
+                latitude: finalLat,
+                longitude: finalLon
+            )
+            updatedProject.createdAt = project.createdAt
+            updatedProject.updatedAt = Date()
             await projectStore.updateProject(updatedProject)
             await MainActor.run {
                 isLoading = false
                 dismiss()
             }
         }
+    }
+
+    private func hydrateManagersIfNeeded() {
+        guard !managersHydratedFromRoster else { return }
+        let expected = project.allAssignedManagerIds
+        if expected.isEmpty {
+            managersHydratedFromRoster = true
+            return
+        }
+        let hydrated = hydrateAssignedManagers(from: project)
+        if hydrated.count == expected.count || !operativeStore.allManagers.isEmpty {
+            selectedManagers = hydrated
+            managersHydratedFromRoster = true
+        }
+    }
+
+    private func hydrateAssignedManagers(from project: Project) -> [Manager] {
+        let ids = project.allAssignedManagerIds
+        var selected: [Manager] = []
+        var seen = Set<UUID>()
+        for id in ids {
+            if let match = operativeStore.allManagers.first(where: { $0.id == id }), seen.insert(match.id).inserted {
+                selected.append(match)
+            }
+        }
+        return selected
     }
 }

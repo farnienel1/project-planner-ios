@@ -104,6 +104,7 @@ struct ProjectDetailView: View {
         case tasks = "My Tasks"
         case materials = "Materials"
         case healthSafety = "H&S"
+        case deadlines = "Deadlines"
         case siteAudit = "Site Audit"
         case location = "Location"
         case activeUsers = "Active users"
@@ -116,6 +117,7 @@ struct ProjectDetailView: View {
             case .tasks: return "checklist"
             case .materials: return "shippingbox"
             case .healthSafety: return "cross.case.fill"
+            case .deadlines: return "calendar.badge.clock"
             case .siteAudit: return "clipboard.fill"
             case .location: return "mappin.and.ellipse"
             case .activeUsers: return "person.3.fill"
@@ -170,7 +172,7 @@ struct ProjectDetailView: View {
                         .foregroundStyle(ProjectWorksRevampColors.ink)
                         .font(.system(size: 17, weight: .semibold))
                         .frame(width: 36, height: 36)
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(Circle())
                         .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                 }
@@ -184,7 +186,7 @@ struct ProjectDetailView: View {
                             .foregroundStyle(ProjectWorksRevampColors.ink)
                             .font(.system(size: 18, weight: .medium))
                             .frame(width: 36, height: 36)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.surface)
                             .clipShape(Circle())
                             .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                     }
@@ -438,7 +440,7 @@ struct ProjectDetailView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 4)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -510,15 +512,15 @@ struct ProjectDetailView: View {
         let availableTiles: [DetailTile] = {
             if userStore.isOperativeMode() {
                 if userStore.canViewMaterials() {
-                    return userStore.canViewSiteAudit() ? [.tasks, .materials, .healthSafety, .siteAudit, .location] : [.tasks, .materials, .healthSafety, .location]
+                    return userStore.canViewSiteAudit() ? [.tasks, .materials, .healthSafety, .deadlines, .siteAudit, .location] : [.tasks, .materials, .healthSafety, .deadlines, .location]
                 }
-                return userStore.canViewSiteAudit() ? [.tasks, .healthSafety, .siteAudit, .location] : [.tasks, .healthSafety, .location]
+                return userStore.canViewSiteAudit() ? [.tasks, .healthSafety, .deadlines, .siteAudit, .location] : [.tasks, .healthSafety, .deadlines, .location]
             }
             var tiles: [DetailTile] = [.scheduling]
             if canConfigureProjectVisibility {
                 tiles.append(.visibility)
             }
-            tiles.append(contentsOf: [.tasks, .materials, .healthSafety, .siteAudit, .location])
+            tiles.append(contentsOf: [.tasks, .materials, .healthSafety, .deadlines, .siteAudit, .location])
             if canViewActiveOperatives {
                 tiles.append(.activeUsers)
             }
@@ -567,7 +569,7 @@ struct ProjectDetailView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)
         .padding(.horizontal, 6)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -623,6 +625,7 @@ struct ProjectDetailView: View {
         case .tasks: return Color(red: 0.882, green: 0.961, blue: 0.933)
         case .materials: return Color(red: 0.98, green: 0.933, blue: 0.855)
         case .healthSafety: return Color(red: 0.89, green: 0.98, blue: 0.95)
+        case .deadlines: return ProjectWorksRevampColors.blueTint
         case .siteAudit: return Color(red: 0.98, green: 0.925, blue: 0.906)
         case .location: return Color(red: 0.984, green: 0.918, blue: 0.941)
         case .activeUsers: return Color(red: 0.902, green: 0.945, blue: 0.984)
@@ -636,6 +639,7 @@ struct ProjectDetailView: View {
         case .tasks: return ProjectWorksRevampColors.activeGreen
         case .materials: return ProjectWorksRevampColors.upcomingAmber
         case .healthSafety: return Color(red: 0.07, green: 0.62, blue: 0.47)
+        case .deadlines: return ProjectWorksRevampColors.blue
         case .siteAudit: return Color(red: 0.6, green: 0.235, blue: 0.114)
         case .location: return Color(red: 0.6, green: 0.208, blue: 0.337)
         case .activeUsers: return ProjectWorksRevampColors.blue
@@ -667,6 +671,8 @@ struct ProjectDetailView: View {
         case .healthSafety:
             ProjectHealthSafetyView(project: project)
                 .environmentObject(userStore)
+        case .deadlines:
+            ProjectDeadlinesView(project: project)
         case .activeUsers:
             ProjectActiveOperativesView(project: project)
                 .environmentObject(bookingStore)
@@ -763,7 +769,7 @@ struct ProjectDetailView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1200,7 +1206,7 @@ struct ProjectDetailView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1517,7 +1523,7 @@ struct ProjectDetailView: View {
         }
         .padding(EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1723,7 +1729,7 @@ struct ProjectDetailView: View {
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -1842,7 +1848,7 @@ struct ProjectDetailView: View {
             }
         }
         .padding()
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .cornerRadius(12)
         .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
     }
@@ -2028,7 +2034,7 @@ struct ProjectDetailView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
         .padding(.horizontal, 6)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(ProjectMyTasksPalette.border, lineWidth: 0.5))
     }
@@ -2288,15 +2294,15 @@ struct ProjectDetailView: View {
     // MARK: - Tasks (project “My tasks” — aligned with my-tasks redesign)
     
     private enum ProjectMyTasksPalette {
-        static let canvas = Color(red: 247 / 255, green: 248 / 255, blue: 250 / 255)
-        static let ink = Color(red: 11 / 255, green: 16 / 255, blue: 32 / 255)
-        static let muted = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255)
-        static let border = Color(red: 238 / 255, green: 240 / 255, blue: 243 / 255)
-        static let blue = Color(red: 24 / 255, green: 95 / 255, blue: 165 / 255)
-        static let todoCount = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255)
-        static let inProgressCount = Color(red: 133 / 255, green: 79 / 255, blue: 11 / 255)
-        static let overdueCount = Color(red: 163 / 255, green: 45 / 255, blue: 45 / 255)
-        static let doneCount = Color(red: 15 / 255, green: 110 / 255, blue: 86 / 255)
+        static let canvas = ProjectWorksRevampColors.canvas
+        static let ink = ProjectWorksRevampColors.ink
+        static let muted = ProjectWorksRevampColors.muted
+        static let border = ProjectWorksRevampColors.border
+        static let blue = ProjectWorksRevampColors.blue
+        static let todoCount = ProjectWorksRevampColors.muted
+        static let inProgressCount = ProjectWorksRevampColors.upcomingAmber
+        static let overdueCount = ProjectWorksRevampColors.requiredPillFg
+        static let doneCount = ProjectWorksRevampColors.activeGreen
     }
     
     private var tasksContent: some View {
@@ -2350,7 +2356,7 @@ struct ProjectDetailView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: 0.5))
             
@@ -2407,7 +2413,7 @@ struct ProjectDetailView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(32)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(ProjectMyTasksPalette.border, lineWidth: 0.5))
             } else {
@@ -2984,28 +2990,40 @@ private enum TaskPeoplePickRoute: String, Identifiable {
 
 /// Colours aligned with `project_planner_new_task_redesign.html`.
 private enum NewTaskScreenPalette {
-    static let canvas = Color(red: 247 / 255, green: 248 / 255, blue: 250 / 255)
-    static let ink = Color(red: 11 / 255, green: 16 / 255, blue: 32 / 255)
-    static let muted = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255)
-    static let placeholder = Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255)
-    static let border = Color(red: 238 / 255, green: 240 / 255, blue: 243 / 255)
-    static let requiredBg = Color(red: 252 / 255, green: 235 / 255, blue: 235 / 255)
-    static let requiredFg = Color(red: 163 / 255, green: 45 / 255, blue: 45 / 255)
-    static let blue = Color(red: 24 / 255, green: 95 / 255, blue: 165 / 255)
-    static let blueLight = Color(red: 55 / 255, green: 138 / 255, blue: 221 / 255)
-    static let managerIconBg = Color(red: 251 / 255, green: 234 / 255, blue: 240 / 255)
-    static let managerIconFg = Color(red: 153 / 255, green: 53 / 255, blue: 86 / 255)
-    static let operativeSelectedFill = Color(red: 230 / 255, green: 241 / 255, blue: 251 / 255)
-    static let scheduleIconBg = Color(red: 250 / 255, green: 236 / 255, blue: 231 / 255)
-    static let scheduleIconFg = Color(red: 153 / 255, green: 60 / 255, blue: 29 / 255)
-    static let photoIconBg = Color(red: 225 / 255, green: 245 / 255, blue: 238 / 255)
-    static let photoIconFg = Color(red: 15 / 255, green: 110 / 255, blue: 86 / 255)
-    static let cameraIconBg = Color(red: 238 / 255, green: 237 / 255, blue: 254 / 255)
-    static let cameraIconFg = Color(red: 83 / 255, green: 74 / 255, blue: 183 / 255)
-    static let fileIconBg = Color(red: 230 / 255, green: 241 / 255, blue: 251 / 255)
-    static let priorityMediumBg = Color(red: 250 / 255, green: 238 / 255, blue: 218 / 255)
-    static let priorityMediumInk = Color(red: 133 / 255, green: 79 / 255, blue: 11 / 255)
-    static let disabledButton = Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255)
+    static let canvas = ProjectWorksRevampColors.canvas
+    static let ink = ProjectWorksRevampColors.ink
+    static let muted = ProjectWorksRevampColors.muted
+    static let placeholder = ProjectWorksRevampColors.placeholderInk
+    static let border = ProjectWorksRevampColors.border
+    static let requiredBg = ProjectWorksRevampColors.requiredPillBg
+    static let requiredFg = ProjectWorksRevampColors.requiredPillFg
+    static let blue = ProjectWorksRevampColors.blue
+    static let blueLight = ProjectWorksRevampColors.blueLight
+    static let managerIconBg = ProjectWorksRevampColors.pinRoseBg
+    static let managerIconFg = ProjectWorksRevampColors.pinRoseFg
+    static let operativeSelectedFill = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(230 / 255, 241 / 255, 251 / 255),
+        dark: AppAdaptiveColor.rgb(0.110, 0.173, 0.247)
+    )
+    static let scheduleIconBg = ProjectWorksRevampColors.endDateBg
+    static let scheduleIconFg = ProjectWorksRevampColors.endDateFg
+    static let photoIconBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(225 / 255, 245 / 255, 238 / 255),
+        dark: AppAdaptiveColor.rgb(0.090, 0.220, 0.165)
+    )
+    static let photoIconFg = ProjectWorksRevampColors.activeGreen
+    static let cameraIconBg = ProjectWorksRevampColors.jobTypePillBg
+    static let cameraIconFg = ProjectWorksRevampColors.jobTypePillInk
+    static let fileIconBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(230 / 255, 241 / 255, 251 / 255),
+        dark: AppAdaptiveColor.rgb(0.110, 0.173, 0.247)
+    )
+    static let priorityMediumBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(250 / 255, 238 / 255, 218 / 255),
+        dark: AppAdaptiveColor.rgb(0.239, 0.180, 0.090)
+    )
+    static let priorityMediumInk = ProjectWorksRevampColors.upcomingAmber
+    static let disabledButton = ProjectWorksRevampColors.placeholderInk
 }
 
 private struct TaskPeoplePickerSheet: View {
@@ -3123,7 +3141,7 @@ private struct TaskPeoplePickerSheet: View {
                                 managerRow(manager)
                             }
                         }
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
                     }
@@ -3134,7 +3152,7 @@ private struct TaskPeoplePickerSheet: View {
                                 operativeRow(operative)
                             }
                         }
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
                     }
@@ -3179,7 +3197,7 @@ private struct TaskPeoplePickerSheet: View {
                 .foregroundStyle(NewTaskScreenPalette.muted)
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
         } else {
@@ -3198,7 +3216,7 @@ private struct TaskPeoplePickerSheet: View {
                 }
             }
             .padding(12)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
         }
@@ -3246,7 +3264,7 @@ private struct TaskPeoplePickerSheet: View {
             }
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
     }
@@ -3289,7 +3307,7 @@ private struct TaskPeoplePickerSheet: View {
             Spacer(minLength: 0)
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
     }
@@ -3452,7 +3470,7 @@ private struct AddProjectTaskView: View {
                             }
                             .padding(14)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.surface)
                             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
                         }
@@ -3476,7 +3494,7 @@ private struct AddProjectTaskView: View {
                     .foregroundStyle(NewTaskScreenPalette.ink)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
-                    .background(Color.white)
+                    .background(ProjectWorksRevampColors.surface)
                     .clipShape(Capsule())
                     .overlay(Capsule().stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
                 }
@@ -3560,7 +3578,7 @@ private struct AddProjectTaskView: View {
             Spacer(minLength: 0)
         }
         .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
     }
@@ -3602,7 +3620,7 @@ private struct AddProjectTaskView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
     }
@@ -3674,7 +3692,7 @@ private struct AddProjectTaskView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 4)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
     }
@@ -3767,7 +3785,7 @@ private struct AddProjectTaskView: View {
                         .foregroundStyle(NewTaskScreenPalette.placeholder)
                 }
                 .padding(14)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
             }
@@ -3952,7 +3970,7 @@ private struct AddProjectTaskView: View {
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
     }
@@ -4014,7 +4032,7 @@ private struct AddProjectTaskView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
             .padding(.horizontal, 8)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -4068,7 +4086,7 @@ private struct AddProjectTaskView: View {
                     .foregroundStyle(NewTaskScreenPalette.requiredFg)
                 }
                 .padding(14)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
             }
@@ -4566,20 +4584,23 @@ private struct EditProjectTaskView: View {
 // MARK: - Task Completion Popup
 
 private enum CompleteTaskUXPalette {
-    static let canvas = Color(red: 247 / 255, green: 248 / 255, blue: 250 / 255)
-    static let ink = Color(red: 11 / 255, green: 16 / 255, blue: 32 / 255)
-    static let muted = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255)
-    static let border = Color(red: 238 / 255, green: 240 / 255, blue: 243 / 255)
-    static let blue = Color(red: 24 / 255, green: 95 / 255, blue: 165 / 255)
-    static let blueLight = Color(red: 55 / 255, green: 138 / 255, blue: 221 / 255)
-    static let green = Color(red: 15 / 255, green: 110 / 255, blue: 86 / 255)
+    static let canvas = ProjectWorksRevampColors.canvas
+    static let ink = ProjectWorksRevampColors.ink
+    static let muted = ProjectWorksRevampColors.muted
+    static let border = ProjectWorksRevampColors.border
+    static let blue = ProjectWorksRevampColors.blue
+    static let blueLight = ProjectWorksRevampColors.blueLight
+    static let green = ProjectWorksRevampColors.activeGreen
     static let greenLight = Color(red: 45 / 255, green: 163 / 255, blue: 125 / 255)
-    static let requiredBg = Color(red: 252 / 255, green: 235 / 255, blue: 235 / 255)
-    static let requiredFg = Color(red: 163 / 255, green: 45 / 255, blue: 45 / 255)
-    static let photoIconBg = Color(red: 238 / 255, green: 237 / 255, blue: 254 / 255)
-    static let photoIconFg = Color(red: 83 / 255, green: 74 / 255, blue: 183 / 255)
-    static let libraryIconBg = Color(red: 225 / 255, green: 245 / 255, blue: 238 / 255)
-    static let disabledBar = Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255)
+    static let requiredBg = ProjectWorksRevampColors.requiredPillBg
+    static let requiredFg = ProjectWorksRevampColors.requiredPillFg
+    static let photoIconBg = ProjectWorksRevampColors.jobTypePillBg
+    static let photoIconFg = ProjectWorksRevampColors.jobTypePillInk
+    static let libraryIconBg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(225 / 255, 245 / 255, 238 / 255),
+        dark: AppAdaptiveColor.rgb(0.090, 0.220, 0.165)
+    )
+    static let disabledBar = ProjectWorksRevampColors.placeholderInk
 }
 
 struct TaskCompletionPopupView: View {
@@ -4679,7 +4700,7 @@ struct TaskCompletionPopupView: View {
                     .foregroundStyle(CompleteTaskUXPalette.ink)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    .background(Color.white)
+                    .background(ProjectWorksRevampColors.surface)
                     .clipShape(Capsule())
                     .overlay(Capsule().stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: 0.5))
                 }
@@ -4712,7 +4733,7 @@ struct TaskCompletionPopupView: View {
                 .padding(.horizontal, 22)
                 .padding(.top, 14)
                 .padding(.bottom, 18)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .overlay(Rectangle().frame(height: 0.5).foregroundStyle(CompleteTaskUXPalette.border), alignment: .top)
             }
             .sheet(isPresented: $showingCameraPicker) {
@@ -4773,7 +4794,7 @@ struct TaskCompletionPopupView: View {
             Spacer(minLength: 0)
         }
         .padding(18)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(CompleteTaskUXPalette.border, lineWidth: 0.5))
     }
@@ -4874,7 +4895,7 @@ struct TaskCompletionPopupView: View {
                 }
             }
             .padding(16)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(CompleteTaskUXPalette.border, lineWidth: 0.5))
             
@@ -4959,7 +4980,7 @@ struct TaskCompletionPopupView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
             .padding(.horizontal, 8)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -4986,7 +5007,7 @@ struct TaskCompletionPopupView: View {
                 .font(.system(size: 13))
                 .lineLimit(4...8)
                 .padding(16)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(CompleteTaskUXPalette.border, lineWidth: 0.5))
         }
@@ -5551,7 +5572,7 @@ struct CompletedTaskDetailView: View {
                             .font(.system(size: 17, weight: .semibold))
                             .foregroundStyle(CompleteTaskUXPalette.ink)
                             .frame(width: 36, height: 36)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.surface)
                             .clipShape(Circle())
                             .overlay(Circle().stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: 0.5))
                     }
@@ -5565,7 +5586,7 @@ struct CompletedTaskDetailView: View {
                                 .font(.system(size: 17, weight: .medium))
                                 .foregroundStyle(CompleteTaskUXPalette.ink)
                                 .frame(width: 36, height: 36)
-                                .background(Color.white)
+                                .background(ProjectWorksRevampColors.surface)
                                 .clipShape(Circle())
                                 .overlay(Circle().stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: 0.5))
                         }
@@ -5577,7 +5598,7 @@ struct CompletedTaskDetailView: View {
                     carryOutLabelButton
                         .padding(.horizontal, 18)
                         .padding(.vertical, 12)
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .overlay(Rectangle().frame(height: 0.5).foregroundStyle(CompleteTaskUXPalette.border), alignment: .top)
                 }
             }
@@ -5644,7 +5665,7 @@ struct CompletedTaskDetailView: View {
             }
         }
         .padding(16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(CompleteTaskUXPalette.border, lineWidth: 0.5))
     }
@@ -5712,7 +5733,7 @@ struct CompletedTaskDetailView: View {
             assignedRow
         }
         .padding(.horizontal, 14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(CompleteTaskUXPalette.border, lineWidth: 0.5))
     }
@@ -5912,7 +5933,7 @@ struct CompletedTaskDetailView: View {
             }
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(CompleteTaskUXPalette.border, lineWidth: 0.5))
     }
@@ -5960,7 +5981,7 @@ struct CompletedTaskDetailView: View {
                         }
                     }
                     .padding(.horizontal, 14)
-                    .background(Color.white)
+                    .background(ProjectWorksRevampColors.surface)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(CompleteTaskUXPalette.border, lineWidth: 0.5))
                 }
@@ -6019,7 +6040,7 @@ struct CompletedTaskDetailView: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(CompleteTaskUXPalette.border, lineWidth: 0.5))
         }
@@ -6033,7 +6054,7 @@ struct CompletedTaskDetailView: View {
             }
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(CompleteTaskUXPalette.border, lineWidth: 0.5))
     }

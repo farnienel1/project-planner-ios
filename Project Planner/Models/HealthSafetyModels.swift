@@ -39,7 +39,9 @@ struct HSToolboxTalk: Identifiable, Codable, Hashable {
     var version: Int
     var updatedAt: Date
     var fileURL: String?
+}
 
+extension HSToolboxTalk {
     var displayTitle: String {
         ToolboxTalkLibrary.resolvedTitle(talkId: id, storedTalks: [self])
     }
@@ -56,6 +58,8 @@ struct HSToolboxIssue: Identifiable, Codable, Hashable {
     var publishAt: Date?
     var recipientUserIds: [String]
     var status: HSToolboxIssueStatus
+    /// When set, this issue is a RAMS send-for-signature rather than a toolbox talk.
+    var ramsDocumentId: String? = nil
 }
 
 struct HSToolboxSignature: Identifiable, Codable, Hashable {
@@ -96,6 +100,44 @@ struct HSOtherDocument: Identifiable, Codable, Hashable {
     var fileURL: String?
     var fileName: String?
     var issuableToClient: Bool
+}
+
+extension HSToolboxTalk {
+    var isCustomUpload: Bool { source == .uploaded }
+
+    var storedFileURL: URL? {
+        guard let fileURL, let url = URL(string: fileURL), !fileURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return url
+    }
+
+    var tradeLabel: String {
+        if isGeneral { return "General" }
+        let joined = trades
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
+        return joined.isEmpty ? "General" : joined
+    }
+}
+
+extension HSRamsDocument {
+    var storedFileURL: URL? {
+        guard let fileURL, let url = URL(string: fileURL), !fileURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return url
+    }
+}
+
+extension HSOtherDocument {
+    var storedFileURL: URL? {
+        guard let fileURL, let url = URL(string: fileURL), !fileURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return url
+    }
 }
 
 struct HSProjectSafetyData: Codable, Hashable {

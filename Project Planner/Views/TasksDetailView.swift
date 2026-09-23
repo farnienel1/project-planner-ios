@@ -8,16 +8,16 @@
 import SwiftUI
 
 private enum MyTasksScreenPalette {
-    static let canvas = Color(red: 247 / 255, green: 248 / 255, blue: 250 / 255)
-    static let ink = Color(red: 11 / 255, green: 16 / 255, blue: 32 / 255)
-    static let muted = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255)
-    static let border = Color(red: 238 / 255, green: 240 / 255, blue: 243 / 255)
-    static let blue = Color(red: 24 / 255, green: 95 / 255, blue: 165 / 255)
-    static let blueLight = Color(red: 55 / 255, green: 138 / 255, blue: 221 / 255)
-    static let todoCount = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255)
-    static let inProgressCount = Color(red: 133 / 255, green: 79 / 255, blue: 11 / 255)
-    static let overdueCount = Color(red: 163 / 255, green: 45 / 255, blue: 45 / 255)
-    static let doneCount = Color(red: 15 / 255, green: 110 / 255, blue: 86 / 255)
+    static let canvas = ProjectWorksRevampColors.canvas
+    static let ink = ProjectWorksRevampColors.ink
+    static let muted = ProjectWorksRevampColors.muted
+    static let border = ProjectWorksRevampColors.border
+    static let blue = ProjectWorksRevampColors.blue
+    static let blueLight = ProjectWorksRevampColors.blueLight
+    static let todoCount = ProjectWorksRevampColors.muted
+    static let inProgressCount = ProjectWorksRevampColors.upcomingAmber
+    static let overdueCount = ProjectWorksRevampColors.requiredPillFg
+    static let doneCount = ProjectWorksRevampColors.activeGreen
     static let stripTodo = Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255)
 }
 
@@ -30,6 +30,7 @@ struct TasksDetailView: View {
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var bookingStore: BookingStore
 
     @State private var searchText = ""
     @State private var listSegment: GlobalMyTasksSegment = .assignedToMe
@@ -76,7 +77,9 @@ struct TasksDetailView: View {
         return rows.sorted(by: { $0.1 < $1.1 })
     }
 
-    /// Home “Tasks” hub: job tasks only when assigned to the current user (all roles). Holiday items use separate banners.
+    /// Home Tasks hub: assigned-to-me is always personal. Admins see every job's tasks in Active / Overdue / Completed.
+    private var isAdminTaskHub: Bool { userStore.hasAdminAccess() }
+
     private func taskBelongsInMyList(_ task: ProjectTask) -> Bool {
         task.isAssignedToUser(
             userEmail: userStore.currentUser?.email,
@@ -90,8 +93,12 @@ struct TasksDetailView: View {
         taskStore.tasks.filter { taskBelongsInMyList($0) }
     }
 
+    private var hubScopeTasks: [ProjectTask] {
+        isAdminTaskHub ? taskStore.tasks : userRelevantTasks
+    }
+
     private var myTasksStats: (todo: Int, inProgress: Int, overdue: Int, done: Int) {
-        let base = userRelevantTasks
+        let base = hubScopeTasks
         let cal = Calendar.current
         let startOfToday = cal.startOfDay(for: Date())
         let incomplete = base.filter { !$0.isCompleted }
@@ -106,45 +113,36 @@ struct TasksDetailView: View {
     }
 
     private var activeRelevantCount: Int {
-        userRelevantTasks.filter { !$0.isCompleted }.count
+        hubScopeTasks.filter { !$0.isCompleted }.count
     }
 
     private var completedRelevantCount: Int {
-        userRelevantTasks.filter { $0.isCompleted }.count
+        hubScopeTasks.filter { $0.isCompleted }.count
     }
 
     private var overdueRelevantCount: Int {
         let cal = Calendar.current
         let startOfToday = cal.startOfDay(for: Date())
-        return userRelevantTasks.filter { task in
+        return hubScopeTasks.filter { task in
             guard !task.isCompleted, let due = task.dueDate else { return false }
             return cal.startOfDay(for: due) < startOfToday
         }.count
     }
 
     private var displayedTasks: [ProjectTask] {
-        var list = userRelevantTasks
+        var list: [ProjectTask]
         let cal = Calendar.current
         let startOfToday = cal.startOfDay(for: Date())
         switch listSegment {
-        case .active:
-            list = list.filter { !$0.isCompleted }
-        case .completed:
-            list = list.filter { $0.isCompleted }
         case .assignedToMe:
-            list = list.filter { !$0.isCompleted }
-            list = list.filter {
-                $0.isAssignedToUser(
-                    userEmail: userStore.currentUser?.email,
-                    operatives: operativeStore.allOperatives,
-                    managers: operativeStore.allManagers,
-                    isOperativeMode: userStore.isOperativeMode()
-                )
-            }
+            list = userRelevantTasks.filter { !$0.isCompleted }
+        case .active:
+            list = hubScopeTasks.filter { !$0.isCompleted }
+        case .completed:
+            list = hubScopeTasks.filter { $0.isCompleted }
         case .overdue:
-            list = list.filter { !$0.isCompleted }
-            list = list.filter { task in
-                guard let due = task.dueDate else { return false }
+            list = hubScopeTasks.filter { task in
+                guard !task.isCompleted, let due = task.dueDate else { return false }
                 return cal.startOfDay(for: due) < startOfToday
             }
         }
@@ -208,7 +206,7 @@ struct TasksDetailView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Color.white)
+                    .background(ProjectWorksRevampColors.surface)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -232,11 +230,11 @@ struct TasksDetailView: View {
                         }
                     }
 
-                    if taskStore.isLoading && userRelevantTasks.isEmpty {
+                    if taskStore.isLoading && hubScopeTasks.isEmpty && userRelevantTasks.isEmpty {
                         ProgressView()
                             .frame(maxWidth: .infinity)
                             .padding(40)
-                    } else if let err = taskStore.errorMessage, userRelevantTasks.isEmpty {
+                    } else if let err = taskStore.errorMessage, hubScopeTasks.isEmpty && userRelevantTasks.isEmpty {
                         errorState(err)
                     } else if displayedTasks.isEmpty {
                         emptyStateCard
@@ -250,6 +248,7 @@ struct TasksDetailView: View {
                                     .environmentObject(userStore)
                                     .environmentObject(firebaseBackend)
                                     .environmentObject(notificationService)
+                                    .environmentObject(bookingStore)
                             }
                         }
                     }
@@ -290,7 +289,7 @@ struct TasksDetailView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
         .padding(.horizontal, 6)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(MyTasksScreenPalette.border, lineWidth: 0.5))
     }
@@ -332,7 +331,7 @@ struct TasksDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(32)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MyTasksScreenPalette.border, lineWidth: 0.5))
     }
@@ -349,13 +348,19 @@ struct TasksDetailView: View {
     private var emptySubtitle: String {
         switch listSegment {
         case .active:
-            return "When you are assigned to tasks on a job, they will appear here."
+            return isAdminTaskHub
+                ? "Active tasks from every project and small work appear here."
+                : "When you are assigned to tasks on a job, they will appear here."
         case .completed:
-            return "Completed tasks will appear here."
+            return isAdminTaskHub
+                ? "Completed tasks from every project and small work appear here."
+                : "Completed tasks assigned to you will appear here."
         case .assignedToMe:
             return "When someone assigns you on a task, it will show here."
         case .overdue:
-            return "Overdue tasks still appear under Active. This filter shows only tasks past their due date."
+            return isAdminTaskHub
+                ? "Every overdue task across the organisation appears here. They also remain under Active."
+                : "Overdue tasks still appear under Active. This filter shows only tasks past their due date."
         }
     }
 
@@ -376,7 +381,7 @@ struct TasksDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(24)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
@@ -572,6 +577,7 @@ private struct MyTasksRedesignTaskCard: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var bookingStore: BookingStore
 
     @State private var showingTaskDetail = false
     @State private var showingCarryOut = false
@@ -658,7 +664,7 @@ private struct MyTasksRedesignTaskCard: View {
             }
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -672,6 +678,7 @@ private struct MyTasksRedesignTaskCard: View {
                 .environmentObject(projectStore)
                 .environmentObject(firebaseBackend)
                 .environmentObject(notificationService)
+                .environmentObject(bookingStore)
         }
         .sheet(isPresented: $showingCarryOut) {
             TaskCompletionPopupView(

@@ -153,7 +153,7 @@ struct ClientCardView: View {
             }
         }
         .padding(16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .cornerRadius(12)
         .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
     }
@@ -163,11 +163,24 @@ struct ClientCardView: View {
 struct ClientDetailsView: View {
     let client: Client
     @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject var taskStore: ProjectTaskStore
     @Environment(\.dismiss) private var dismiss
     @State private var showingEditClient = false
     
     private var clientProjects: [Project] {
-        projectStore.projects.filter { $0.client.id == client.id }
+        WorkAccess.visibleWorks(
+            from: projectStore.projects.filter { $0.client.id == client.id },
+            catalogue: .all,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            taskStore: taskStore
+        )
     }
     
     var body: some View {

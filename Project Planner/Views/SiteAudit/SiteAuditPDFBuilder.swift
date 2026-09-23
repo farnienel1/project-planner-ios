@@ -12,6 +12,7 @@ enum SiteAuditPDFBuilder {
         let audit: SiteAudit
         let localItems: [SiteAuditDraftItem]
         let organizationName: String?
+        var organizationAbbreviation: String? = nil
         let logoImage: UIImage?
         let clientName: String?
         let siteAddress: String?
@@ -22,6 +23,7 @@ enum SiteAuditPDFBuilder {
         audit: SiteAudit,
         localItems: [SiteAuditDraftItem],
         organizationName: String?,
+        organizationAbbreviation: String? = nil,
         logoImage: UIImage?,
         clientName: String? = nil,
         siteAddress: String? = nil
@@ -29,6 +31,10 @@ enum SiteAuditPDFBuilder {
         let auditCopy = audit
         let itemsCopy = localItems
         let orgName = organizationName
+        let badgeText = OrganizationDocumentAbbreviation.display(
+            abbreviation: organizationAbbreviation,
+            organizationName: organizationName
+        )
         let logo = logoImage
         let client = clientName
         let address = siteAddress
@@ -37,6 +43,7 @@ enum SiteAuditPDFBuilder {
                 audit: auditCopy,
                 localItems: itemsCopy,
                 organizationName: orgName,
+                organizationAbbreviation: badgeText,
                 logoImage: logo,
                 clientName: client,
                 siteAddress: address
@@ -48,6 +55,7 @@ enum SiteAuditPDFBuilder {
         audit: SiteAudit,
         localItems: [SiteAuditDraftItem],
         organizationName: String?,
+        organizationAbbreviation: String? = nil,
         logoImage: UIImage?,
         clientName: String? = nil,
         siteAddress: String? = nil
@@ -78,7 +86,7 @@ enum SiteAuditPDFBuilder {
                 var y: CGFloat = 0
                 var pageNumber = 1
                 context.beginPage()
-                y = drawHeader(ctx: context, pageWidth: pageRect.width, y: 0, audit: audit, orgName: organizationName, logo: preparedLogo, siteAddress: siteAddress)
+                y = drawHeader(ctx: context, pageWidth: pageRect.width, y: 0, audit: audit, orgName: organizationName, organizationAbbreviation: organizationAbbreviation, logo: preparedLogo, siteAddress: siteAddress)
                 y = drawMetaGrid(ctx: context, x: margin, y: y, width: contentWidth, audit: audit, clientName: clientName, reference: ref)
                 y = drawSectionHeading(ctx: context, x: margin, y: y + 8, width: contentWidth, itemCount: audit.items.count)
 
@@ -126,6 +134,7 @@ enum SiteAuditPDFBuilder {
         y: CGFloat,
         audit: SiteAudit,
         orgName: String?,
+        organizationAbbreviation: String?,
         logo: UIImage?,
         siteAddress: String?
     ) -> CGFloat {
@@ -193,11 +202,11 @@ enum SiteAuditPDFBuilder {
             (audit.customTitle as NSString).draw(in: customRect, withAttributes: customAttrs)
         }
 
-        let logoBox = CGRect(x: pageWidth - 96, y: y + 24, width: 64, height: 64)
+        let logoBox = CGRect(x: pageWidth - 104, y: y + 24, width: 72, height: 64)
         if let logo, let prepared = compressedImage(logo, maxWidth: 200) {
             prepared.draw(in: aspectFitRect(for: prepared.size, in: logoBox))
         } else {
-            drawLogoPlaceholder(in: logoBox, orgName: orgName)
+            drawLogoPlaceholder(in: logoBox, orgName: orgName, organizationAbbreviation: organizationAbbreviation)
         }
         if let orgName, !orgName.isEmpty {
             let orgAttrs: [NSAttributedString.Key: Any] = [
@@ -506,7 +515,7 @@ enum SiteAuditPDFBuilder {
 
     // MARK: - Helpers
 
-    nonisolated private static func drawLogoPlaceholder(in rect: CGRect, orgName: String?) {
+    nonisolated private static func drawLogoPlaceholder(in rect: CGRect, orgName: String?, organizationAbbreviation: String?) {
         let path = UIBezierPath(roundedRect: rect, cornerRadius: 12)
         let colors = [UIColor(red: 0.094, green: 0.373, blue: 0.647, alpha: 1).cgColor,
                       UIColor(red: 0.216, green: 0.541, blue: 0.867, alpha: 1).cgColor] as CFArray
@@ -521,9 +530,13 @@ enum SiteAuditPDFBuilder {
             )
             UIGraphicsGetCurrentContext()?.restoreGState()
         }
-        let initials = organizationInitials(orgName)
+        let initials = OrganizationDocumentAbbreviation.display(
+            abbreviation: organizationAbbreviation,
+            organizationName: orgName
+        )
+        let fontSize: CGFloat = initials.count >= 3 ? 16 : 18
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: 18, weight: .bold),
+            .font: UIFont.systemFont(ofSize: fontSize, weight: .bold),
             .foregroundColor: UIColor.white
         ]
         let size = initials.size(withAttributes: attrs)
@@ -537,13 +550,6 @@ enum SiteAuditPDFBuilder {
         let job = audit.projectJobNumber.replacingOccurrences(of: " ", with: "")
         let ts = Int(audit.createdAt.timeIntervalSince1970)
         return "SA-\(job)-\(ts)"
-    }
-
-    nonisolated private static func organizationInitials(_ name: String?) -> String {
-        guard let name, !name.isEmpty else { return "PP" }
-        let parts = name.split(separator: " ").prefix(2)
-        if parts.isEmpty { return String(name.prefix(2)).uppercased() }
-        return parts.map { String($0.prefix(1)).uppercased() }.joined()
     }
 
     nonisolated private static func authorSignatureShort(_ name: String) -> String {

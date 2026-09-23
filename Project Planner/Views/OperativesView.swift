@@ -299,7 +299,7 @@ struct OperativesView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -551,7 +551,7 @@ struct OperativeDetailRowView: View {
                             .foregroundColor(.secondary)
                     }
                     
-                    if let dayRate = (operative.dayRate ?? operative.hourlyRate), dayRate > 0 {
+                    if let dayRate = operative.dayRate ?? operative.hourlyRate {
                         let currencySymbol = operative.currencySymbol ?? defaultCurrencySymbol()
                         Text("\(currencySymbol)\(String(format: "%.0f", dayRate))/day")
                             .font(.caption)

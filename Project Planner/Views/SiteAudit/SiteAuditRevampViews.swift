@@ -412,7 +412,7 @@ struct SiteAuditItemsStepView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
                             .foregroundStyle(isProcessingPhotos ? SiteAuditColors.textDisabled : SiteAuditColors.primary)
-                            .background(Color.white)
+                            .background(ProjectWorksRevampColors.surface)
                             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -611,6 +611,7 @@ struct SiteAuditPreviewStepView: View {
     let clientName: String?
     let items: [SiteAuditDraftItem]
     let organizationName: String?
+    var organizationAbbreviation: String? = nil
     let onEdit: () -> Void
     let onSubmit: () -> Void
     let isSubmitting: Bool
@@ -682,7 +683,7 @@ struct SiteAuditPreviewStepView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
             }
         }
         .siteAuditScreenBackground()
@@ -731,11 +732,16 @@ struct SiteAuditPreviewStepView: View {
     }
 
     private var orgBadge: some View {
-        let initials = organizationInitials(organizationName)
+        let initials = OrganizationDocumentAbbreviation.display(
+            abbreviation: organizationAbbreviation,
+            organizationName: organizationName
+        )
         return Text(initials)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.system(size: initials.count >= 3 ? 10 : 11, weight: .semibold))
+            .minimumScaleFactor(0.65)
+            .lineLimit(1)
             .foregroundStyle(.white)
-            .frame(width: 40, height: 40)
+            .frame(width: 46, height: 40)
             .background(
                 LinearGradient(colors: [SiteAuditColors.heroGradientStart, SiteAuditColors.heroGradientEnd], startPoint: .topLeading, endPoint: .bottomTrailing)
             )
@@ -784,11 +790,5 @@ struct SiteAuditPreviewStepView: View {
             }
         }
         .padding(.vertical, 11)
-    }
-
-    private func organizationInitials(_ name: String?) -> String {
-        guard let name, !name.isEmpty else { return "PP" }
-        let parts = name.split(separator: " ").prefix(2)
-        return parts.map { String($0.prefix(1)).uppercased() }.joined()
     }
 }

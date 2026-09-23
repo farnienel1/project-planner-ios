@@ -50,6 +50,7 @@ struct OfflineOutboxEntry: Identifiable, Codable, Equatable {
         case saveMaterialItem
         case deleteMaterialItem
         case sendMaterialRequest
+        case saveDeadlines
     }
 
     let id: UUID
@@ -61,6 +62,26 @@ struct OfflineOutboxEntry: Identifiable, Codable, Equatable {
     let createdAt: Date
     var attemptCount: Int
     var lastError: String?
+
+    var displayTitle: String {
+        switch operation {
+        case .saveBooking: return "Labour booking"
+        case .deleteBooking: return "Remove labour booking"
+        case .saveManagerSiteBooking: return "Schedule booking"
+        case .deleteManagerSiteBooking: return "Remove schedule booking"
+        case .saveMaterialItem: return "Material catalogue / job item"
+        case .deleteMaterialItem: return "Remove material item"
+        case .sendMaterialRequest: return "Material order"
+        case .saveDeadlines: return "Deadlines"
+        }
+    }
+
+    var displayDetail: String {
+        if let lastError, !lastError.isEmpty {
+            return lastError
+        }
+        return createdAt.formatted(date: .abbreviated, time: .shortened)
+    }
 
     init(
         id: UUID = UUID(),
@@ -202,6 +223,37 @@ final class OfflineOutboxStore: ObservableObject {
                 payload: payload
             ),
             dedupeSameEntity: false
+        )
+    }
+
+    func enqueueSaveDeadlines(
+        projectId: UUID,
+        isSmallWorks: Bool,
+        items: [DLDeadline],
+        baseUpdatedAt: Date?,
+        organizationId: String
+    ) {
+        let entityId = "deadlines_\(projectId.uuidString)"
+        var preservedBase = baseUpdatedAt
+        if let existing = entries.first(where: { $0.entityId == entityId && $0.operation == .saveDeadlines }),
+           let old = try? JSONDecoder().decode(OfflineSaveDeadlinesPayload.self, from: existing.payload) {
+            preservedBase = old.baseUpdatedAt ?? baseUpdatedAt
+        }
+        let payloadModel = OfflineSaveDeadlinesPayload(
+            projectId: projectId,
+            isSmallWorks: isSmallWorks,
+            baseUpdatedAt: preservedBase,
+            items: OfflineDeadlineCodec.records(from: items)
+        )
+        guard let payload = try? encoder.encode(payloadModel) else { return }
+        enqueue(
+            OfflineOutboxEntry(
+                organizationId: organizationId,
+                operation: .saveDeadlines,
+                entityId: entityId,
+                payload: payload
+            ),
+            dedupeSameEntity: true
         )
     }
 

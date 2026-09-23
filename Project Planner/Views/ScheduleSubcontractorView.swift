@@ -112,7 +112,7 @@ struct ScheduleSubcontractorView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(Color(.systemGray5), lineWidth: 0.8)
@@ -182,7 +182,7 @@ struct ScheduleSubcontractorView: View {
             }
         }
         .padding(16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .cornerRadius(14)
     }
 
@@ -198,7 +198,7 @@ struct ScheduleSubcontractorView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .cornerRadius(12)
     }
 
@@ -230,7 +230,7 @@ struct ScheduleSubcontractorView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(contact.name)
                                         .foregroundStyle(.primary)
-                                    Text(contact.position.rawValue)
+                                    Text(contact.displayTrade)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -248,7 +248,7 @@ struct ScheduleSubcontractorView: View {
             }
         }
         .padding(16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .cornerRadius(14)
     }
     
@@ -278,7 +278,7 @@ struct ScheduleSubcontractorView: View {
             calendarGrid
         }
         .padding(16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .cornerRadius(14)
     }
     
@@ -346,7 +346,7 @@ struct ScheduleSubcontractorView: View {
             }
         }
         .padding(16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .cornerRadius(14)
     }
     
@@ -390,7 +390,7 @@ struct ScheduleSubcontractorView: View {
             .cornerRadius(10)
         }
         .padding(16)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .cornerRadius(14)
     }
 
@@ -422,7 +422,7 @@ struct ScheduleSubcontractorView: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 10)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
     }
 
     private var summaryLine: String {

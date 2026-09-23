@@ -48,6 +48,8 @@ class NotificationService: ObservableObject {
     private var dismissedSyntheticNotificationIds: Set<UUID> = []
     private var dismissedSyntheticStableKeys: Set<String> = []
     private var dismissedSyntheticLoadedForUserId: String?
+    /// Deadline reminder/due docs whose `createdAt` is still in the future (inbox hides them until fire time).
+    private var pendingScheduledDeadlineNotifications: [AppNotification] = []
     /// True after a launch-time badge warm or an explicit inbox load.
     private var hasLoadedNotificationsThisSession = false
     private static let dismissedSyntheticKeyPrefix = "NotificationService.dismissedSyntheticKey."
@@ -493,7 +495,7 @@ class NotificationService: ObservableObject {
         let typeLabel: String = {
             switch warning.type {
             case .operativeBookingClash: return "Operative booking clash"
-            case .managerLocationClash: return "Manager / admin location clash"
+            case .managerLocationClash: return warning.clashPersonKind?.bookingClashTitle ?? "Manager booking clash"
             case .unbookedLabour: return "Unbooked labour"
             case .materialsCutoff: return "Materials cut-off"
             case .qualificationExpiry: return "Qualification expiry"
@@ -592,6 +594,77 @@ class NotificationService: ObservableObject {
                         requiresPermission: nil
                     )
                     await saveNotification(notification)
+                }
+            }
+        }
+    }
+
+    func notifyDeadlineAssigned(
+        deadlineId: UUID,
+        title: String,
+        projectName: String,
+        assignedUserIds: [String],
+        createdBy: String
+    ) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        for rawId in assignedUserIds {
+            let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(rawId)
+            let dedupeId = syntheticNotificationId(from: "deadlineAssigned|\(deadlineId.uuidString)|\(canonicalUserId)")
+            let notification = AppNotification(
+                id: dedupeId,
+                organizationId: organizationId,
+                type: .deadlineAssigned,
+                title: "Deadline assigned",
+                message: "\(createdBy) assigned you a deadline on \(projectName): \(title)",
+                userId: canonicalUserId,
+                relatedId: deadlineId,
+                requiresPermission: nil
+            )
+            await saveNotification(notification)
+        }
+    }
+
+    /// Writes reminder + due-today inbox rows for every assignee so they appear in Notification Center,
+    /// not only as OS banners. `createdAt` is the fire time; future rows stay hidden until then.
+    func syncDeadlineInboxNotifications(items: [DLDeadline], projectName: String) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+
+        for item in items {
+            guard item.status != .complete else { continue }
+            for rawId in item.assigneeUserIds {
+                let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(rawId)
+                guard !canonicalUserId.isEmpty else { continue }
+
+                if let fireAt = DeadlineLocalNotifications.reminderFireDate(for: item) {
+                    let notification = AppNotification(
+                        id: syntheticNotificationId(from: "deadlineReminder|\(item.id.uuidString)|\(canonicalUserId)"),
+                        organizationId: organizationId,
+                        type: .deadlineReminder,
+                        title: DeadlineNotificationCopy.reminderTitle(),
+                        message: DeadlineNotificationCopy.reminderBody(projectName: projectName, item: item),
+                        userId: canonicalUserId,
+                        relatedId: item.id,
+                        createdAt: fireAt,
+                        requiresPermission: nil
+                    )
+                    await saveNotification(notification, deliverLocalPush: false, preserveExistingReadState: true)
+                }
+
+                if let dueMorning = DeadlineLocalNotifications.dueFireDate(for: item) {
+                    let notification = AppNotification(
+                        id: syntheticNotificationId(from: "deadlineDue|\(item.id.uuidString)|\(canonicalUserId)"),
+                        organizationId: organizationId,
+                        type: .deadlineDue,
+                        title: DeadlineNotificationCopy.dueTitle(),
+                        message: DeadlineNotificationCopy.dueBody(projectName: projectName, item: item),
+                        userId: canonicalUserId,
+                        relatedId: item.id,
+                        createdAt: dueMorning,
+                        requiresPermission: nil
+                    )
+                    await saveNotification(notification, deliverLocalPush: false, preserveExistingReadState: true)
                 }
             }
         }
@@ -755,7 +828,8 @@ class NotificationService: ObservableObject {
         scheduleLocalInAppMirrorAlert(
             title: "Annual leave update",
             message: "Please check your annual leave and request any annual leave days moving forward.",
-            dedupeIdentifier: dedupeId.uuidString
+            dedupeIdentifier: dedupeId.uuidString,
+            userInfo: NotificationDeepLink.userInfo(for: notification)
         )
     }
 
@@ -913,17 +987,19 @@ class NotificationService: ObservableObject {
 
         hasLoadedNotificationsThisSession = true
         let fetched = try? await firebaseBackend.loadNotifications(organizationId: organizationId, limit: 150)
-        let fallbackExisting = notifications.filter { $0.requiresPermission != "syntheticAnnualLeave" }
+        let fallbackExisting = notifications.filter { !isSyntheticInboxItem($0) }
         let allNotifications = fetched ?? fallbackExisting
         print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] currentUser=\(currentUser.id) totalLoaded=\(allNotifications.count)")
-        
+        capturePendingDeadlineNotifications(from: allNotifications, currentUser: currentUser)
+
         // Filter notifications based on user permissions
         let filteredNotifications = allNotifications.filter { notification in
             shouldShowNotification(notification, for: currentUser)
         }
         let synthetic = syntheticAnnualLeaveNotifications(for: currentUser, organizationId: organizationId)
+        let delivered = await deliveredLocalInboxNotifications(organizationId: organizationId, userId: currentUser.id)
         let merged = dedupeVisibleNotifications(
-            dedupeHolidayNotificationRows((filteredNotifications + synthetic).sorted { $0.createdAt > $1.createdAt })
+            dedupeHolidayNotificationRows((filteredNotifications + synthetic + delivered).sorted { $0.createdAt > $1.createdAt })
         )
         let targetedToCurrent = allNotifications.filter { $0.userId == currentUser.id }.count
         let broadcastCount = allNotifications.filter { $0.userId == nil }.count
@@ -944,6 +1020,18 @@ class NotificationService: ObservableObject {
             self.advanceLastProcessedNotificationDate(using: self.notifications)
         }
         startNotificationsListenerIfNeeded(organizationId: organizationId, userId: currentUser.id)
+        await scheduleOsAlertsForPendingDeadlines()
+    }
+
+    /// Moves due/reminder rows into the visible inbox once their fire time has passed. In-memory only.
+    func promoteScheduledDeadlineNotifications() {
+        let now = Date()
+        let newlyVisible = pendingScheduledDeadlineNotifications.filter { $0.createdAt <= now }
+        guard !newlyVisible.isEmpty else { return }
+        pendingScheduledDeadlineNotifications.removeAll { $0.createdAt <= now }
+        let merged = dedupeVisibleNotifications(notifications + newlyVisible)
+        notifications = applyLocalReadState(to: merged)
+        setUnreadCount(from: notifications)
     }
     
     func markAsRead(_ notification: AppNotification) async {
@@ -952,7 +1040,7 @@ class NotificationService: ObservableObject {
             notifications[index].isRead = true
             setUnreadCount(from: notifications)
         }
-        if notification.requiresPermission == "syntheticAnnualLeave" {
+        if isSyntheticInboxItem(notification) {
             dismissSyntheticNotification(notification.id)
             if let stableKey = syntheticStableKey(for: notification) {
                 dismissSyntheticStableKey(stableKey)
@@ -984,7 +1072,7 @@ class NotificationService: ObservableObject {
         notifications = notifications.map { notification in
             var updated = notification
             updated.isRead = true
-            if notification.requiresPermission == "syntheticAnnualLeave" {
+            if isSyntheticInboxItem(notification) {
                 dismissedSyntheticNotificationIds.insert(notification.id)
                 if let stableKey = syntheticStableKey(for: notification) {
                     dismissSyntheticStableKey(stableKey)
@@ -1004,7 +1092,7 @@ class NotificationService: ObservableObject {
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
             return
         }
-        for notification in notifications where notification.requiresPermission != "syntheticAnnualLeave" {
+        for notification in notifications where !isSyntheticInboxItem(notification) {
             var updated = notification
             updated.isRead = true
             do {
@@ -1020,6 +1108,9 @@ class NotificationService: ObservableObject {
     }
     
     private func shouldShowNotification(_ notification: AppNotification, for user: AppUser) -> Bool {
+        if isFutureScheduledDeadline(notification) {
+            return false
+        }
         // If notification is targeted to a specific user, only show if it's for them
         if let userId = notification.userId {
             let targetCanonical = resolvedRecipientUserId(userId)
@@ -1056,26 +1147,45 @@ class NotificationService: ObservableObject {
     private func dedupeVisibleNotifications(_ notifications: [AppNotification]) -> [AppNotification] {
         var seen = Set<String>()
         var out: [AppNotification] = []
-        for notification in notifications.sorted(by: { $0.createdAt > $1.createdAt }) {
+        let preferred = notifications.filter { !isSyntheticInboxItem($0) }.sorted { $0.createdAt > $1.createdAt }
+        let rest = notifications.filter { isSyntheticInboxItem($0) }.sorted { $0.createdAt > $1.createdAt }
+        for notification in preferred + rest {
             let target = notification.userId.map(resolvedRecipientUserId) ?? "broadcast"
             let related = notification.relatedId?.uuidString ?? "none"
-            let normalizedMessage = notification.message.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            let key = "\(notification.type.rawValue)|\(target)|\(related)|\(normalizedMessage)"
+            let key: String
+            switch notification.type {
+            case .deadlineReminder, .deadlineDue:
+                // Prefer the persisted inbox row over a delivered OS banner with stale wording.
+                key = "\(notification.type.rawValue)|\(target)|\(related)"
+            default:
+                let normalizedMessage = notification.message.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                key = "\(notification.type.rawValue)|\(target)|\(related)|\(normalizedMessage)"
+            }
             if seen.contains(key) { continue }
             seen.insert(key)
             out.append(notification)
         }
-        return out
+        return out.sorted { $0.createdAt > $1.createdAt }
     }
     
-    private func saveNotification(_ notification: AppNotification) async {
+    private func saveNotification(
+        _ notification: AppNotification,
+        deliverLocalPush: Bool = true,
+        preserveExistingReadState: Bool = false
+    ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         
         do {
-            try await firebaseBackend.saveNotification(notification, organizationId: organizationId)
+            try await firebaseBackend.saveNotification(
+                notification,
+                organizationId: organizationId,
+                preserveExistingReadState: preserveExistingReadState
+            )
             print("🔥🔥🔥 DEBUG: [NOTIFY SAVE OK] id=\(notification.id.uuidString) type=\(notification.type.rawValue) target=\(notification.userId ?? "broadcast") related=\(notification.relatedId?.uuidString ?? "none")")
-            deliverLocalPushIfNeeded(for: notification)
+            if deliverLocalPush, !isFutureScheduledDeadline(notification) {
+                deliverLocalPushIfNeeded(for: notification)
+            }
         } catch {
             print("🔥🔥🔥 DEBUG: Error saving notification: \(error)")
             print("🔥🔥🔥 DEBUG: Notification target userId: \(notification.userId ?? "broadcast"), type: \(notification.type.rawValue), relatedId: \(notification.relatedId?.uuidString ?? "none")")
@@ -1090,6 +1200,10 @@ class NotificationService: ObservableObject {
             let target = resolvedRecipientUserId(userId)
             let me = resolvedRecipientUserId(currentUser.id)
             guard target == me else { return }
+        }
+        if notification.createdAt > Date(),
+           notification.type == .deadlineReminder || notification.type == .deadlineDue {
+            return
         }
         triggerLocalAlertIfNeeded(for: notification)
     }
@@ -1119,12 +1233,10 @@ class NotificationService: ObservableObject {
                       let currentUser = self.userStore?.currentUser else { return }
 
                 let parsed = docs.compactMap { self.parseNotificationDocument($0) }
+                self.capturePendingDeadlineNotifications(from: parsed, currentUser: currentUser)
                 let filtered = parsed.filter { self.shouldShowNotification($0, for: currentUser) }
                 let sorted = filtered.sorted { $0.createdAt > $1.createdAt }
                 let synthetic = self.syntheticAnnualLeaveNotifications(for: currentUser, organizationId: organizationId)
-                let merged = self.dedupeVisibleNotifications(
-                    self.dedupeHolidayNotificationRows((sorted + synthetic).sorted { $0.createdAt > $1.createdAt })
-                )
                 let changedParsed = (snapshot?.documentChanges ?? [])
                     .compactMap { change -> AppNotification? in
                         // Alert only for newly added notifications after the stream is primed.
@@ -1134,6 +1246,10 @@ class NotificationService: ObservableObject {
                     .filter { self.shouldShowNotification($0, for: currentUser) }
 
                 Task { @MainActor in
+                    let delivered = await self.deliveredLocalInboxNotifications(organizationId: organizationId, userId: currentUser.id)
+                    let merged = self.dedupeVisibleNotifications(
+                        self.dedupeHolidayNotificationRows((sorted + synthetic + delivered).sorted { $0.createdAt > $1.createdAt })
+                    )
                     let reconciled = self.applyLocalReadState(to: merged)
                     self.notifications = reconciled
                     self.setUnreadCount(from: reconciled)
@@ -1141,6 +1257,7 @@ class NotificationService: ObservableObject {
                         self.primeLocalAlertDedup(with: merged)
                         self.didPrimeNotificationStream = true
                         self.advanceLastProcessedNotificationDate(using: merged)
+                        await self.scheduleOsAlertsForPendingDeadlines()
                         return
                     }
                     self.processBookingToasts(from: changedParsed)
@@ -1148,6 +1265,7 @@ class NotificationService: ObservableObject {
                     self.processHolidayDecisionAlerts(from: changedParsed)
                     self.processGeneralLocalAlerts(from: changedParsed)
                     self.advanceLastProcessedNotificationDate(using: merged)
+                    await self.scheduleOsAlertsForPendingDeadlines()
                 }
             }
     }
@@ -1180,7 +1298,9 @@ class NotificationService: ObservableObject {
             relatedId: relatedId,
             isRead: isRead,
             createdAt: createdAt,
-            requiresPermission: requiresPermission
+            requiresPermission: requiresPermission,
+            deepLinkUserId: data["deepLinkUserId"] as? String,
+            deepLinkWeekStart: (data["deepLinkWeekStart"] as? Timestamp)?.dateValue()
         )
     }
 
@@ -1197,7 +1317,12 @@ class NotificationService: ObservableObject {
                 let key = notificationDedupKey(for: n)
                 guard !seenLocalAlertNotificationKeys.contains(key) else { break }
                 recordLocalAlertDedupKey(key)
-                scheduleLocalInAppMirrorAlert(title: n.title, message: n.message, dedupeIdentifier: key)
+                scheduleLocalInAppMirrorAlert(
+                    title: n.title,
+                    message: n.message,
+                    dedupeIdentifier: key,
+                    userInfo: NotificationDeepLink.userInfo(for: n)
+                )
             }
             break
         }
@@ -1238,13 +1363,16 @@ class NotificationService: ObservableObject {
                 continue
             case .holidayRequestSubmitted, .holidayRequestApproved, .holidayRequestDeclined:
                 continue
+            case .deadlineReminder, .deadlineDue:
+                // OS banners are scheduled for the fire time; don't also mirror immediately.
+                continue
             default:
                 triggerLocalAlertIfNeeded(for: notification)
             }
         }
     }
 
-    private func scheduleLocalInAppMirrorAlert(title: String, message: String, dedupeIdentifier: String) {
+    private func scheduleLocalInAppMirrorAlert(title: String, message: String, dedupeIdentifier: String, userInfo: [AnyHashable: Any] = [:]) {
         Task {
             let granted = await LocalNotificationService.shared.requestAuthorization()
             guard granted else {
@@ -1265,6 +1393,10 @@ class NotificationService: ObservableObject {
             content.title = title
             content.body = message
             content.sound = .default
+            content.userInfo = userInfo
+            // OS banners are scheduled 1 second out so they appear while the app is in the
+            // foreground (immediate triggers are delivered silently). Firestore itself is
+            // realtime; any extra delay is network / APNs, not a polling interval.
             let request = UNNotificationRequest(
                 identifier: identifier,
                 content: content,
@@ -1414,8 +1546,8 @@ class NotificationService: ObservableObject {
 
     /// Prefer persisted Firestore notifications over derived synthetic rows for the same holiday event + user.
     private func dedupeHolidayNotificationRows(_ items: [AppNotification]) -> [AppNotification] {
-        let nonSynthetic = items.filter { $0.requiresPermission != "syntheticAnnualLeave" }
-        let synthetic = items.filter { $0.requiresPermission == "syntheticAnnualLeave" }
+        let nonSynthetic = items.filter { !isSyntheticInboxItem($0) }
+        let synthetic = items.filter { isSyntheticInboxItem($0) }
         var keys = Set(nonSynthetic.compactMap { holidayEventDedupeKey($0) })
         var kept = nonSynthetic
         for s in synthetic {
@@ -1528,7 +1660,7 @@ class NotificationService: ObservableObject {
         guard !notification.isRead else { return }
         // Synthetic approve/decline is in-app fallback only (derived from holiday bookings). OS banners for
         // those come from real Firestore notification docs; otherwise operatives get repeat foreground banners.
-        if notification.requiresPermission == "syntheticAnnualLeave" {
+        if isSyntheticInboxItem(notification) {
             switch notification.type {
             case .holidayRequestSubmitted:
                 break
@@ -1541,7 +1673,12 @@ class NotificationService: ObservableObject {
         let key = notificationDedupKey(for: notification)
         guard !seenLocalAlertNotificationKeys.contains(key) else { return }
         recordLocalAlertDedupKey(key)
-        scheduleLocalInAppMirrorAlert(title: notification.title, message: notification.message, dedupeIdentifier: key)
+        scheduleLocalInAppMirrorAlert(
+            title: notification.title,
+            message: notification.message,
+            dedupeIdentifier: key,
+            userInfo: NotificationDeepLink.userInfo(for: notification)
+        )
     }
 
     private func loadPersistedLocalAlertDedupKeysIfNeeded() {
@@ -1698,7 +1835,7 @@ class NotificationService: ObservableObject {
             if pendingReadNotificationIds.contains(notification.id) {
                 updated.isRead = true
             }
-            if notification.requiresPermission == "syntheticAnnualLeave" {
+            if isSyntheticInboxItem(notification) {
                 if isSyntheticDismissed(notification.id) {
                     updated.isRead = true
                 } else if let stableKey = syntheticStableKey(for: notification),
@@ -1732,6 +1869,103 @@ class NotificationService: ObservableObject {
             }
             #endif
         }
+    }
+
+    private func isSyntheticInboxItem(_ notification: AppNotification) -> Bool {
+        switch notification.requiresPermission {
+        case "syntheticAnnualLeave", "syntheticLocalDelivered":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isDeadlineLifecycle(_ type: AppNotification.NotificationType) -> Bool {
+        switch type {
+        case .deadlineReminder, .deadlineDue:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isFutureScheduledDeadline(_ notification: AppNotification) -> Bool {
+        isDeadlineLifecycle(notification.type) && notification.createdAt > Date().addingTimeInterval(15)
+    }
+
+    private func capturePendingDeadlineNotifications(from items: [AppNotification], currentUser: AppUser) {
+        pendingScheduledDeadlineNotifications = items.filter { notification in
+            isFutureScheduledDeadline(notification) && shouldShowIgnoringSchedule(notification, for: currentUser)
+        }
+    }
+
+    private func shouldShowIgnoringSchedule(_ notification: AppNotification, for user: AppUser) -> Bool {
+        if let userId = notification.userId {
+            let targetCanonical = resolvedRecipientUserId(userId)
+            let currentCanonical = resolvedRecipientUserId(user.id)
+            return targetCanonical == currentCanonical
+        }
+        return true
+    }
+
+    private func scheduleOsAlertsForPendingDeadlines() async {
+        guard let currentUser = userStore?.currentUser else { return }
+        for notification in pendingScheduledDeadlineNotifications {
+            guard shouldShowIgnoringSchedule(notification, for: currentUser) else { continue }
+            guard notification.createdAt > Date() else { continue }
+            guard let relatedId = notification.relatedId else { continue }
+            let identifier = notification.type == .deadlineDue
+                ? DeadlineLocalNotifications.dueIdentifier(deadlineId: relatedId)
+                : DeadlineLocalNotifications.reminderIdentifier(deadlineId: relatedId)
+            await LocalNotificationService.shared.scheduleQualificationExpiryOneShot(
+                identifier: identifier,
+                title: notification.title,
+                body: notification.message,
+                fireAt: notification.createdAt,
+                userInfo: NotificationDeepLink.userInfo(for: notification)
+            )
+        }
+    }
+
+    private func deliveredLocalInboxNotifications(organizationId: String, userId: String) async -> [AppNotification] {
+        let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
+        var result: [AppNotification] = []
+        for note in delivered {
+            let ident = note.request.identifier
+            if ident.hasPrefix("inapp-local-") || ident.hasPrefix("test_notification_") {
+                continue
+            }
+            let type: AppNotification.NotificationType
+            var relatedId: UUID?
+            if let parsed = DeadlineLocalNotifications.parsedIdentifier(ident) {
+                type = parsed.isDue ? .deadlineDue : .deadlineReminder
+                relatedId = parsed.deadlineId
+            } else if ident.hasPrefix(LocalNotificationService.qualificationExpiryIdentifierPrefix)
+                        || ident.hasPrefix("hs-toolbox-scheduled-") {
+                type = .qualificationExpiry
+            } else if ident.hasPrefix(LocalNotificationService.dailyMaterialCutoffIdentifierPrefix) {
+                type = .materialOrderCutOff
+            } else {
+                continue
+            }
+            let key = "delivered|\(ident)|\(userId)"
+            let syntheticId = syntheticNotificationId(from: key)
+            result.append(
+                AppNotification(
+                    id: syntheticId,
+                    organizationId: organizationId,
+                    type: type,
+                    title: note.request.content.title,
+                    message: note.request.content.body,
+                    userId: userId,
+                    relatedId: relatedId,
+                    isRead: isSyntheticMarkedRead(id: syntheticId, stableKey: key),
+                    createdAt: note.date,
+                    requiresPermission: "syntheticLocalDelivered"
+                )
+            )
+        }
+        return result
     }
 
     private func syntheticStableKey(for notification: AppNotification) -> String? {

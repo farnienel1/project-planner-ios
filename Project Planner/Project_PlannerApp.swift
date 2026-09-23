@@ -94,6 +94,22 @@ final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationC
         completionHandler([.banner, .sound, .badge, .list])
     }
 
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let info = response.notification.request.content.userInfo
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .openNotificationDeepLink,
+                object: nil,
+                userInfo: NotificationDeepLink.userInfo(from: info)
+            )
+        }
+        completionHandler()
+    }
+
     func application(
         _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
@@ -197,10 +213,15 @@ struct Project_PlannerApp: App {
                     .environmentObject(notificationService)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .preferredColorScheme(appSettings.settings.theme.colorScheme)
             .onAppear {
+                appSettings.settings.theme.applyToKeyWindows()
                 if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
                     windowScene.windows.forEach { $0.makeKeyAndVisible() }
                 }
+            }
+            .onChange(of: appSettings.settings.theme) { _, theme in
+                theme.applyToKeyWindows()
             }
         }
     }

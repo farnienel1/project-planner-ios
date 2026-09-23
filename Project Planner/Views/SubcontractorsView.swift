@@ -3,6 +3,7 @@ import SwiftUI
 struct SubcontractorsView: View {
     @EnvironmentObject var subcontractorStore: SubcontractorStore
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @State private var showingAdd = false
     @State private var searchText = ""
     @State private var selectedTradeFilter: String?
@@ -33,6 +34,7 @@ struct SubcontractorsView: View {
                         NavigationLink {
                             SubcontractorFirmDetailView(subcontractorId: subcontractor.id)
                                 .environmentObject(subcontractorStore)
+                                .environmentObject(firebaseBackend)
                         } label: {
                             subcontractorCard(subcontractor)
                         }
@@ -73,9 +75,14 @@ struct SubcontractorsView: View {
         }) {
             SubcontractorFirmEditorView(existingSubcontractor: nil)
                 .environmentObject(subcontractorStore)
+                .environmentObject(firebaseBackend)
         }
         .task {
             await subcontractorStore.loadData()
+            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                let orgTrades = await firebaseBackend.loadOrganizationTradeTypes(organizationId: orgId)
+                TradeTypeInventory.register(trades: orgTrades)
+            }
         }
     }
 
@@ -158,7 +165,7 @@ struct SubcontractorsView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -259,7 +266,7 @@ struct SubcontractorsView: View {
             }
         }
         .padding(12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -483,7 +490,7 @@ private struct SubcontractorFirmDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -514,7 +521,7 @@ private struct SubcontractorFirmDetailView: View {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(contact.name)
                                     .font(.system(size: 12, weight: .semibold))
-                                Text(contact.position.rawValue)
+                                Text(contact.displayTrade)
                                     .font(.system(size: 10))
                                     .foregroundStyle(.secondary)
                             }
@@ -533,7 +540,7 @@ private struct SubcontractorFirmDetailView: View {
                 }
             }
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -547,7 +554,7 @@ private struct SubcontractorFirmDetailView: View {
             Divider().padding(.leading, 12)
             contactRow(icon: "location.fill", title: "Address", value: subcontractor.address ?? "Not set")
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -586,6 +593,7 @@ private struct SubcontractorFirmDetailView: View {
 private struct SubcontractorFirmEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var subcontractorStore: SubcontractorStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     let existingSubcontractor: Subcontractor?
 
     @State private var name = ""
@@ -677,6 +685,7 @@ private struct SubcontractorFirmEditorView: View {
                 SubcontractorOperativeEditorSheet(firmName: name) { newContact in
                     contacts.append(newContact)
                 }
+                .environmentObject(firebaseBackend)
             }
             .onAppear {
                 guard let existingSubcontractor else { return }
@@ -732,7 +741,7 @@ private struct SubcontractorFirmEditorView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -773,7 +782,7 @@ private struct SubcontractorFirmEditorView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(contact.name)
                                 .font(.system(size: 12, weight: .semibold))
-                            Text(contact.position.rawValue)
+                            Text(contact.displayTrade)
                                 .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
                         }
@@ -793,7 +802,7 @@ private struct SubcontractorFirmEditorView: View {
                 }
             }
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -836,6 +845,7 @@ private struct SubcontractorFirmEditorView: View {
 
 private struct SubcontractorOperativeEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     let firmName: String
     var existingContact: SubcontractorContact? = nil
     let onSave: (SubcontractorContact) -> Void
@@ -899,12 +909,7 @@ private struct SubcontractorOperativeEditorSheet: View {
                                     HStack(spacing: 6) {
                                         ForEach(tradeSuggestions, id: \.self) { suggestion in
                                             Button {
-                                                tradeSearchText = suggestion
-                                                if let matched = SubcontractorContactPosition.allCases.first(where: {
-                                                    $0.rawValue.compare(suggestion, options: .caseInsensitive) == .orderedSame
-                                                }) {
-                                                    position = matched
-                                                }
+                                                applyTradeSelection(suggestion)
                                             } label: {
                                                 Text(suggestion)
                                                     .font(.system(size: 11, weight: .medium))
@@ -918,15 +923,6 @@ private struct SubcontractorOperativeEditorSheet: View {
                                         }
                                     }
                                 }
-                            }
-                            Picker("Role", selection: $position) {
-                                ForEach(SubcontractorContactPosition.allCases) { item in
-                                    Text(item.rawValue).tag(item)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .onChange(of: position) { _, newValue in
-                                tradeSearchText = newValue.rawValue
                             }
                         }
                         .padding(.vertical, 8)
@@ -943,24 +939,7 @@ private struct SubcontractorOperativeEditorSheet: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") {
-                        let resolvedPosition = SubcontractorContactPosition.allCases.first(where: {
-                            $0.rawValue.compare(
-                                tradeSearchText.trimmingCharacters(in: .whitespacesAndNewlines),
-                                options: .caseInsensitive
-                            ) == .orderedSame
-                        }) ?? position
-                        let fullName = "\(firstName.trimmingCharacters(in: .whitespacesAndNewlines)) \(lastName.trimmingCharacters(in: .whitespacesAndNewlines))".trimmingCharacters(in: .whitespacesAndNewlines)
-                        let contact = SubcontractorContact(
-                            id: existingContact?.id ?? UUID(),
-                            name: fullName,
-                            email: email.trimmingCharacters(in: .whitespacesAndNewlines),
-                            contactNumber: phone.trimmingCharacters(in: .whitespacesAndNewlines),
-                            position: resolvedPosition,
-                            createdAt: existingContact?.createdAt ?? Date()
-                        )
-                        TradeTypeInventory.register(tradeSearchText)
-                        onSave(contact)
-                        dismiss()
+                        saveOperative()
                     }
                     .disabled(!canSave)
                 }
@@ -973,9 +952,45 @@ private struct SubcontractorOperativeEditorSheet: View {
                 email = existingContact.email
                 phone = existingContact.contactNumber
                 position = existingContact.position
-                tradeSearchText = existingContact.position.rawValue
+                tradeSearchText = existingContact.displayTrade
             }
         }
+    }
+
+    private func applyTradeSelection(_ suggestion: String) {
+        tradeSearchText = suggestion
+        if let matched = SubcontractorContactPosition.allCases.first(where: {
+            $0.rawValue.compare(suggestion, options: .caseInsensitive) == .orderedSame
+        }) {
+            position = matched
+        }
+    }
+
+    private func saveOperative() {
+        let typedTrade = tradeSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matchedPosition = SubcontractorContactPosition.allCases.first(where: {
+            $0.rawValue.compare(typedTrade, options: .caseInsensitive) == .orderedSame
+        })
+        let resolvedPosition = matchedPosition ?? position
+        let resolvedTrade = typedTrade.isEmpty ? resolvedPosition.rawValue : typedTrade
+        let fullName = "\(firstName.trimmingCharacters(in: .whitespacesAndNewlines)) \(lastName.trimmingCharacters(in: .whitespacesAndNewlines))".trimmingCharacters(in: .whitespacesAndNewlines)
+        let contact = SubcontractorContact(
+            id: existingContact?.id ?? UUID(),
+            name: fullName,
+            email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+            contactNumber: phone.trimmingCharacters(in: .whitespacesAndNewlines),
+            position: resolvedPosition,
+            tradeType: resolvedTrade,
+            createdAt: existingContact?.createdAt ?? Date()
+        )
+        TradeTypeInventory.register(resolvedTrade)
+        if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+            Task {
+                try? await firebaseBackend.mergeOrganizationTradeTypes([resolvedTrade], organizationId: orgId)
+            }
+        }
+        onSave(contact)
+        dismiss()
     }
 
     private var firmContextCard: some View {
@@ -1002,7 +1017,7 @@ private struct SubcontractorOperativeEditorSheet: View {
             Spacer()
         }
         .padding(10)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1022,7 +1037,7 @@ private struct SubcontractorOperativeEditorSheet: View {
         VStack(spacing: 0) { content() }
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)

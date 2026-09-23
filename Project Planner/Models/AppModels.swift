@@ -22,6 +22,25 @@ enum ThemePreference: String, CaseIterable, Codable, Sendable {
         case .system: return nil
         }
     }
+
+    var displayName: String {
+        switch self {
+        case .light: return "Light mode"
+        case .dark: return "Dark mode"
+        case .system: return "System"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .light: return "sun.max.fill"
+        case .dark: return "moon.fill"
+        case .system: return "circle.lefthalf.filled"
+        }
+    }
+
+    /// Light / Dark only — the modes offered in Settings.
+    static var appearanceModes: [ThemePreference] { [.dark, .light] }
 }
 
 enum AppColorScheme: String, CaseIterable, Codable, Sendable {
@@ -1253,7 +1272,7 @@ nonisolated struct AppSettings: Codable, Sendable {
     
     nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        theme = try container.decode(ThemePreference.self, forKey: .theme)
+        theme = try container.decodeIfPresent(ThemePreference.self, forKey: .theme) ?? .light
         // Default to blue if colorScheme is missing (for backward compatibility)
         colorScheme = try container.decodeIfPresent(AppColorScheme.self, forKey: .colorScheme) ?? .blue
         organizationId = try container.decodeIfPresent(UUID.self, forKey: .organizationId)
@@ -1664,6 +1683,7 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .lineManagerPeerUpdate: return .lineManagerPeerUpdate
         case .materialAdded: return .materialAdded
         case .toolboxTalkIssued: return .toolboxTalkIssued
+        case .deadlineAssigned, .deadlineReminder, .deadlineDue: return nil
         }
     }
 }

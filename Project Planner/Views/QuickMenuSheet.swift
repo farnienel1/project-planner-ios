@@ -202,7 +202,7 @@ struct QuickMenuSheet: View {
             }
             .padding(.vertical, 12)
             .padding(.horizontal, 14)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -274,7 +274,7 @@ struct QuickMenuSheet: View {
                     .foregroundStyle(spec.iconTint)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
-                    .background(Color.white)
+                    .background(ProjectWorksRevampColors.surface)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -305,7 +305,7 @@ struct QuickMenuSheet: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 4)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)

@@ -102,7 +102,6 @@ struct SettingsProfileDetailView: View {
     @State private var manualLinkOrganizationId = ""
     @State private var isLinking = false
     @State private var linkError: String?
-    @State private var isUpdatingUser = false
     @State private var showingProfilePhotoSourcePicker = false
     @State private var profilePhotoPickerSource: UIImagePickerController.SourceType = .photoLibrary
     @State private var showingProfileImagePicker = false
@@ -126,9 +125,7 @@ struct SettingsProfileDetailView: View {
     }
 
     var body: some View {
-        profileList
-            .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
+        profileScroll
             .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
             .navigationTitle("My profile")
             .navigationBarTitleDisplayMode(.inline)
@@ -161,146 +158,122 @@ struct SettingsProfileDetailView: View {
             }
     }
 
-    private var profileList: some View {
-        List {
-            profileImageSection
-            profileInfoSection
-            billingDetailsSection
-            manualLinkSection
-            debugNameSection
-        }
-    }
-
-    private var profileImageSection: some View {
-        Section("Profile image") {
-            HStack(spacing: 12) {
-                profileAvatar
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Profile photo")
-                        .font(.body.weight(.semibold))
-                    Text("Used across Home and Settings")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+    private var profileScroll: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsHubChrome.sectionTitle("Profile image")
+                SettingsHubChrome.card {
+                    HStack(spacing: 12) {
+                        profileAvatar
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Profile photo")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                            Text("Used across Home and Settings")
+                                .font(.system(size: 11))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                        }
+                        Spacer()
+                        if isUploadingProfilePhoto {
+                            ProgressView()
+                        } else {
+                            Button("Change") {
+                                showingProfilePhotoSourcePicker = true
+                            }
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                        }
+                    }
+                    .padding(.vertical, 12)
                 }
-                Spacer()
-                if isUploadingProfilePhoto {
-                    ProgressView()
-                } else {
-                    Button("Change") {
-                        showingProfilePhotoSourcePicker = true
+
+                SettingsHubChrome.card {
+                    profileValueRow("Name", displayName)
+                    SettingsHubChrome.divider()
+                    if let email = firebaseBackend.currentUser?.email {
+                        profileValueRow("Email", email)
+                        SettingsHubChrome.divider()
+                    }
+                    if let org = firebaseBackend.currentOrganization {
+                        profileValueRow("Organisation", org.name)
+                    } else {
+                        profileValueRow("Organisation", "Not linked", valueColor: ProjectWorksRevampColors.requiredPillFg)
+                    }
+                    if let dayRate = userStore.currentUser?.dayRate {
+                        SettingsHubChrome.divider()
+                        profileValueRow("Day rate", String(format: "£%.2f", dayRate))
+                    } else if let hourly = userStore.currentUser?.hourlyRate {
+                        SettingsHubChrome.divider()
+                        profileValueRow("Hourly rate", String(format: "£%.2f", hourly))
                     }
                 }
-            }
-        }
-    }
 
-    private var profileInfoSection: some View {
-        Section {
-            HStack {
-                Text("Name")
-                Spacer()
-                Text(displayName)
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-            }
-            if let email = firebaseBackend.currentUser?.email {
-                HStack {
-                    Text("Email")
-                    Spacer()
-                    Text(email)
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                }
-            }
-            if let org = firebaseBackend.currentOrganization {
-                HStack {
-                    Text("Organisation")
-                    Spacer()
-                    Text(org.name)
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                }
-            } else {
-                HStack {
-                    Text("Organisation")
-                    Spacer()
-                    Text("Not linked")
-                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                }
-            }
-            if let dayRate = userStore.currentUser?.dayRate, dayRate > 0 {
-                HStack {
-                    Text("Day rate")
-                    Spacer()
-                    Text(String(format: "£%.2f", dayRate))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                }
-            } else if let hourly = userStore.currentUser?.hourlyRate, hourly > 0 {
-                HStack {
-                    Text("Hourly rate")
-                    Spacer()
-                    Text(String(format: "£%.2f", hourly))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                }
-            }
-        }
-    }
-
-    private var billingDetailsSection: some View {
-        Section {
-            TextField("VAT number (if registered)", text: $vatNumberDraft)
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-            TextField("UTR number", text: $utrNumberDraft)
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-            Button {
-                Task { await saveBillingDetails() }
-            } label: {
-                HStack {
-                    if isSavingBillingDetails { ProgressView().scaleEffect(0.85) }
-                    Text(isSavingBillingDetails ? "Saving…" : "Save billing details")
-                }
-            }
-            .disabled(isSavingBillingDetails)
-            if let billingSaveMessage {
-                Text(billingSaveMessage)
-                    .font(.caption)
-                    .foregroundStyle(billingSaveMessage.contains("saved") ? .green : .red)
-            }
-        } header: {
-            Text("Billing details")
-        } footer: {
-            Text("VAT and UTR appear on generated invoices. UTR is recommended before you generate an invoice.")
-        }
-    }
-
-    @ViewBuilder
-    private var manualLinkSection: some View {
-        if firebaseBackend.currentOrganization == nil {
-            Section {
-                Button("Link organisation manually") {
-                    showingManualLinkSheet = true
-                }
-                .foregroundStyle(ProjectWorksRevampColors.blue)
-            } footer: {
-                Text("Use only if automatic linking failed.")
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var debugNameSection: some View {
-        if let appUser = userStore.currentUser, appUser.email == "farnienelyt@gmail.com" {
-            Section {
-                Button {
-                    updateUserName()
-                } label: {
-                    HStack {
-                        if isUpdatingUser { ProgressView().scaleEffect(0.85) }
-                        Text(isUpdatingUser ? "Updating…" : "Set display name to Farnie Nel")
+                SettingsHubChrome.sectionTitle("Billing details")
+                SettingsHubChrome.card {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("VAT number (if registered)", text: $vatNumberDraft)
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                            .font(.system(size: 13, weight: .medium))
+                            .padding(.top, 12)
+                        SettingsHubChrome.divider()
+                        TextField("UTR number", text: $utrNumberDraft)
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                            .font(.system(size: 13, weight: .medium))
+                        SettingsHubChrome.divider()
+                        Button {
+                            Task { await saveBillingDetails() }
+                        } label: {
+                            HStack {
+                                if isSavingBillingDetails { ProgressView().scaleEffect(0.85) }
+                                Text(isSavingBillingDetails ? "Saving…" : "Save billing details")
+                                    .font(.system(size: 13, weight: .semibold))
+                            }
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                            .padding(.vertical, 12)
+                        }
+                        .disabled(isSavingBillingDetails)
+                        .buttonStyle(.plain)
+                        if let billingSaveMessage {
+                            Text(billingSaveMessage)
+                                .font(.system(size: 11))
+                                .foregroundStyle(billingSaveMessage.contains("saved") ? ProjectWorksRevampColors.activeGreen : ProjectWorksRevampColors.requiredPillFg)
+                                .padding(.bottom, 8)
+                        }
                     }
                 }
-                .disabled(isUpdatingUser)
+                SettingsHubChrome.footer("VAT and UTR appear on generated invoices. UTR is recommended before you generate an invoice.")
+
+                if firebaseBackend.currentOrganization == nil {
+                    SettingsHubChrome.card {
+                        Button("Link organisation manually") {
+                            showingManualLinkSheet = true
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .padding(.vertical, 12)
+                        .buttonStyle(.plain)
+                    }
+                    SettingsHubChrome.footer("Use only if automatic linking failed.")
+                }
             }
+            .padding(16)
         }
+    }
+
+    private func profileValueRow(_ title: String, _ value: String, valueColor: Color = ProjectWorksRevampColors.muted) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
+            Spacer()
+            Text(value)
+                .font(.system(size: 13))
+                .foregroundStyle(valueColor)
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(.vertical, 12)
     }
 
     private func syncBillingDraftsFromUser() {
@@ -373,18 +346,6 @@ struct SettingsProfileDetailView: View {
         }
     }
 
-    private func updateUserName() {
-        Task {
-            isUpdatingUser = true
-            defer { isUpdatingUser = false }
-            guard var u = userStore.currentUser, u.email == "farnienelyt@gmail.com" else { return }
-            u.firstName = "Farnie"
-            u.surname = "Nel"
-            try? await firebaseBackend.saveUser(u)
-            await userStore.loadCurrentUser()
-        }
-    }
-
     private func uploadPickedProfilePhoto(_ image: UIImage) async {
         guard let appUser = userStore.currentUser else { return }
         await MainActor.run { isUploadingProfilePhoto = true }
@@ -416,29 +377,50 @@ struct SettingsNotificationsHubView: View {
     }
 
     var body: some View {
-        List {
-            Section {
-                ForEach(visibleToggles) { key in
-                    Toggle(isOn: Binding(
-                        get: { appSettings.settings.notifications.isEnabled(key) },
-                        set: { enabled in
-                            Task { await updateToggle(key, enabled: enabled) }
-                        }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(key.title)
-                            Text(key.subtitle)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsHubChrome.sectionTitle("Notifications")
+                if visibleToggles.isEmpty {
+                    SettingsHubChrome.card {
+                        Text("Notification options for this account are managed by your organisation.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .padding(.vertical, 12)
+                    }
+                } else {
+                    SettingsHubChrome.card {
+                        ForEach(Array(visibleToggles.enumerated()), id: \.element.id) { index, key in
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(key.title)
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                                    Text(key.subtitle)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer(minLength: 8)
+                                Toggle("", isOn: Binding(
+                                    get: { appSettings.settings.notifications.isEnabled(key) },
+                                    set: { enabled in
+                                        Task { await updateToggle(key, enabled: enabled) }
+                                    }
+                                ))
+                                .labelsHidden()
+                                .tint(ProjectWorksRevampColors.blue)
+                            }
+                            .padding(.vertical, 11)
+                            if index < visibleToggles.count - 1 {
+                                SettingsHubChrome.divider()
+                            }
                         }
                     }
+                    SettingsHubChrome.footer("Turn off any reminder you do not want. Organisation cut-off time is set in organisation settings. My Schedule extra locations are managed in Organisation Settings Hub → Schedule options.")
                 }
-            } footer: {
-                Text("Turn off any reminder you do not want. Organisation cut-off time is set in organisation settings.")
             }
+            .padding(16)
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
         .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
         .navigationTitle("My notifications")
         .navigationBarTitleDisplayMode(.inline)

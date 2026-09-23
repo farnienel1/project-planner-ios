@@ -11,6 +11,9 @@ import FirebaseAuth
 import FirebaseFirestore
 
 struct SettingsView: View {
+    /// Profile → Settings is pushed on a stack, so Back should pop. The Settings tab uses the previous-tab action instead.
+    var popsNavigationOnBack: Bool = false
+
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -43,7 +46,6 @@ struct SettingsView: View {
     @State private var isRunningPushDiagnostic = false
     @State private var deleteTestMessage = ""
     @State private var isTestingDelete = false
-    @State private var isUpdatingUser = false
     @State private var isSeedingPlayground = false
     @State private var playgroundSeedMessage: String?
     private var canConfigureMaterialCutOffNotifications: Bool {
@@ -92,9 +94,7 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button(action: {
-                    NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
-                }) {
+                Button(action: goBackFromSettings) {
                     Image(systemName: "chevron.left")
                         .foregroundStyle(ProjectWorksRevampColors.blue)
                         .font(.system(size: 17, weight: .semibold))
@@ -110,6 +110,14 @@ struct SettingsView: View {
             }
         } message: {
             Text("Are you sure you want to sign out?")
+        }
+    }
+
+    private func goBackFromSettings() {
+        if popsNavigationOnBack {
+            dismiss()
+        } else {
+            NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
         }
     }
 
@@ -143,7 +151,10 @@ struct SettingsView: View {
             return ("Manager", ProjectWorksRevampColors.jobTypePillInk, ProjectWorksRevampColors.jobTypePillBg)
         }
         if u?.permissions.operativeMode == true {
-            return ("Operative", ProjectWorksRevampColors.activeGreen, Color(red: 0.93, green: 0.98, blue: 0.95))
+            return ("Operative", ProjectWorksRevampColors.activeGreen, AppAdaptiveColor.dynamic(
+                light: AppAdaptiveColor.rgb(0.93, 0.98, 0.95),
+                dark: AppAdaptiveColor.rgb(0.090, 0.220, 0.165)
+            ))
         }
         return nil
     }
@@ -234,6 +245,20 @@ struct SettingsView: View {
             .buttonStyle(.plain)
             Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
             NavigationLink {
+                AppearanceSettingsView()
+                    .environmentObject(appSettings)
+            } label: {
+                settingsHubRow(
+                    icon: "circle.lefthalf.filled",
+                    iconBg: Color.primary.opacity(0.08),
+                    iconFg: ProjectWorksRevampColors.ink,
+                    title: "Appearance",
+                    subtitle: appSettings.settings.theme.displayName
+                )
+            }
+            .buttonStyle(.plain)
+            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            NavigationLink {
                 ChangePasswordView()
                     .environmentObject(firebaseBackend)
             } label: {
@@ -252,13 +277,14 @@ struct SettingsView: View {
                     SettingsNotificationsHubView(canConfigureMaterialCutOff: canConfigureMaterialCutOffNotifications)
                         .environmentObject(appSettings)
                         .environmentObject(notificationService)
+                        .environmentObject(userStore)
                 } label: {
                     settingsHubRow(
                         icon: "bell.fill",
                         iconBg: ProjectWorksRevampColors.pinRoseBg,
                         iconFg: ProjectWorksRevampColors.pinRoseFg,
                         title: "My notifications",
-                        subtitle: "What you get pinged about"
+                        subtitle: "Choose which reminders you receive"
                     )
                 }
                 .buttonStyle(.plain)
@@ -352,7 +378,6 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             NavigationLink {
                 HelpView()
-                    .environmentObject(appSettings)
             } label: {
                 settingsHubRow(
                     icon: "questionmark.circle.fill",
@@ -369,7 +394,10 @@ struct SettingsView: View {
             } label: {
                 settingsHubRow(
                     icon: "doc.text.fill",
-                    iconBg: Color(red: 0.95, green: 0.95, blue: 0.96),
+                    iconBg: AppAdaptiveColor.dynamic(
+                        light: AppAdaptiveColor.rgb(0.95, 0.95, 0.96),
+                        dark: AppAdaptiveColor.rgb(0.145, 0.157, 0.196)
+                    ),
                     iconFg: ProjectWorksRevampColors.muted,
                     title: "Privacy & terms",
                     subtitle: "Legal information"
@@ -395,7 +423,7 @@ struct SettingsView: View {
             .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 13)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -906,38 +934,6 @@ struct SettingsView: View {
         }
         
         print("🔥🔥🔥 DEBUG: ========== DELETE TEST COMPLETE ==========")
-    }
-    
-    private func updateUserName() {
-        Task {
-            await MainActor.run {
-                isUpdatingUser = true
-            }
-            
-            guard let currentUser = userStore.currentUser,
-                  currentUser.email == "farnienelyt@gmail.com" else {
-                await MainActor.run {
-                    isUpdatingUser = false
-                }
-                return
-            }
-            
-            var updatedUser = currentUser
-            updatedUser.firstName = "Farnie"
-            updatedUser.surname = "Nel"
-            
-            do {
-                try await firebaseBackend.saveUser(updatedUser)
-                await userStore.loadCurrentUser() // Reload to refresh UI
-                print("🔥🔥🔥 DEBUG: ✅ Updated user name to Farnie Nel")
-            } catch {
-                print("🔥🔥🔥 DEBUG: ❌ Failed to update user name: \(error.localizedDescription)")
-            }
-            
-            await MainActor.run {
-                isUpdatingUser = false
-            }
-        }
     }
 }
 

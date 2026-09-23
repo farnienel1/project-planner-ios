@@ -9,6 +9,7 @@ import SwiftUI
 
 struct NotificationsView: View {
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var userStore: UserStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var filterOption: FilterOption = .newest
@@ -42,30 +43,33 @@ struct NotificationsView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 HStack {
+                    Text(filterOption.displayName)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
                     Spacer()
                     Button {
                         showingFilterOptions = true
                     } label: {
                         Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
-                            .font(.subheadline)
-                            .foregroundStyle(.blue)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .background(Color(.systemGroupedBackground))
 
                 if filteredNotifications.isEmpty {
                     ScrollView {
                         VStack(spacing: 16) {
                             Image(systemName: "bell.slash")
-                                .font(.system(size: 60))
-                                .foregroundStyle(.secondary)
+                                .font(.system(size: 52))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
                             Text("No Notifications")
-                                .font(.title2.weight(.semibold))
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(ProjectWorksRevampColors.ink)
                             Text("You're all caught up!")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .font(.system(size: 13))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
                         }
                         .frame(maxWidth: .infinity, minHeight: 320)
                         .padding(.top, 80)
@@ -74,20 +78,29 @@ struct NotificationsView: View {
                         await notificationService.loadNotifications()
                     }
                 } else {
-                    List {
-                        ForEach(filteredNotifications) { notification in
-                            NotificationRowView(notification: notification)
-                                .listRowSeparator(.visible)
+                    ScrollView {
+                        LazyVStack(spacing: 10) {
+                            ForEach(filteredNotifications) { notification in
+                                Button {
+                                    open(notification)
+                                } label: {
+                                    NotificationRowView(notification: notification)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
                     }
-                    .listStyle(.plain)
                     .refreshable {
                         await notificationService.loadNotifications()
                     }
                 }
             }
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
             .navigationTitle("Notifications")
             .navigationBarTitleDisplayMode(.inline)
+            .appChromeNavigationBarSurface()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -109,6 +122,14 @@ struct NotificationsView: View {
             }
         }
     }
+
+    private func open(_ notification: AppNotification) {
+        dismiss()
+        let info = NotificationDeepLink.userInfo(for: notification)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            NotificationCenter.default.post(name: .openNotificationDeepLink, object: nil, userInfo: info)
+        }
+    }
 }
 
 struct NotificationRowView: View {
@@ -124,18 +145,21 @@ struct NotificationRowView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: iconForType(notification.type))
-                .font(.title3)
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(colorForType(notification.type))
-                .frame(width: 30)
+                .frame(width: 36, height: 36)
+                .background(colorForType(notification.type).opacity(0.14))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(notification.title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .multilineTextAlignment(.leading)
 
                 Text(notification.message)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .lineLimit(isMessageExpanded ? nil : 6)
@@ -146,17 +170,24 @@ struct NotificationRowView: View {
                             isMessageExpanded.toggle()
                         }
                     }
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.blue)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.blue)
                     .buttonStyle(.plain)
                 }
 
                 Text(notification.createdAt.formatted(date: .abbreviated, time: .shortened))
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
             }
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, 8)
+        .padding(14)
+        .background(ProjectWorksRevampColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        )
     }
 
     private func iconForType(_ type: AppNotification.NotificationType) -> String {
@@ -171,37 +202,39 @@ struct NotificationRowView: View {
         case .warningRemoved: return "xmark.octagon"
         case .taskCompleted: return "checkmark.circle"
         case .taskCreated: return "list.bullet.rectangle"
+        case .deadlineAssigned, .deadlineReminder, .deadlineDue: return "calendar.badge.clock"
+        case .materialAdded: return "shippingbox.fill"
+        case .toolboxTalkIssued: return "list.clipboard.fill"
         case .holidayRequestSubmitted: return "sun.max"
         case .holidayRequestApproved: return "sun.max.fill"
         case .holidayRequestDeclined: return "xmark.circle.fill"
         case .timesheetPendingManagerSignoff: return "signature"
         case .timesheetSignedByManager: return "checkmark.seal.fill"
         case .lineManagerPeerUpdate: return "person.2.fill"
-        case .materialAdded: return "shippingbox.fill"
-        case .toolboxTalkIssued: return "list.clipboard.fill"
         }
     }
 
     private func colorForType(_ type: AppNotification.NotificationType) -> Color {
         switch type {
-        case .bookingCreated: return .blue
-        case .operativeCreated: return .green
-        case .managerCreated: return .purple
-        case .clientCreated: return .orange
-        case .projectCreated: return .indigo
-        case .smallWorksCreated: return .orange
-        case .bookingClash: return .red
-        case .warningRemoved: return .orange
-        case .taskCompleted: return .green
-        case .taskCreated: return .blue
-        case .holidayRequestSubmitted: return .orange
-        case .holidayRequestApproved: return .green
-        case .holidayRequestDeclined: return .red
-        case .timesheetPendingManagerSignoff: return .orange
-        case .timesheetSignedByManager: return .green
-        case .lineManagerPeerUpdate: return .blue
-        case .materialAdded: return .teal
-        case .toolboxTalkIssued: return .indigo
+        case .bookingCreated: return ProjectWorksRevampColors.blue
+        case .operativeCreated: return ProjectWorksRevampColors.activeGreen
+        case .managerCreated: return ProjectWorksRevampColors.jobTypePillInk
+        case .clientCreated: return ProjectWorksRevampColors.upcomingAmber
+        case .projectCreated: return ProjectWorksRevampColors.blueLight
+        case .smallWorksCreated: return ProjectWorksRevampColors.upcomingAmber
+        case .bookingClash: return ProjectWorksRevampColors.requiredPillFg
+        case .warningRemoved: return ProjectWorksRevampColors.upcomingAmber
+        case .taskCompleted: return ProjectWorksRevampColors.activeGreen
+        case .taskCreated: return ProjectWorksRevampColors.blue
+        case .deadlineAssigned, .deadlineReminder, .deadlineDue: return ProjectWorksRevampColors.upcomingAmber
+        case .materialAdded: return ProjectWorksRevampColors.activeGreen
+        case .toolboxTalkIssued: return ProjectWorksRevampColors.blueLight
+        case .holidayRequestSubmitted: return ProjectWorksRevampColors.upcomingAmber
+        case .holidayRequestApproved: return ProjectWorksRevampColors.activeGreen
+        case .holidayRequestDeclined: return ProjectWorksRevampColors.requiredPillFg
+        case .timesheetPendingManagerSignoff: return ProjectWorksRevampColors.upcomingAmber
+        case .timesheetSignedByManager: return ProjectWorksRevampColors.activeGreen
+        case .lineManagerPeerUpdate: return ProjectWorksRevampColors.blue
         }
     }
 }

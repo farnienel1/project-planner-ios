@@ -99,6 +99,23 @@ enum OfflineSyncCoordinator {
             if let record = payload.sendRecord {
                 try? await firebaseBackend.saveMaterialSendRecord(record, organizationId: entry.organizationId)
             }
+
+        case .saveDeadlines:
+            let payload = try decoder.decode(OfflineSaveDeadlinesPayload.self, from: entry.payload)
+            let items = OfflineDeadlineCodec.items(from: payload.items)
+            let written = try await firebaseBackend.saveDeadlines(
+                items,
+                projectId: payload.projectId,
+                isSmallWorks: payload.isSmallWorks,
+                organizationId: entry.organizationId,
+                baseUpdatedAt: payload.baseUpdatedAt
+            )
+            OfflineDeadlineLocalStore.shared.save(
+                items: written,
+                projectId: payload.projectId,
+                organizationId: entry.organizationId,
+                updatedAt: Date()
+            )
         }
     }
 }

@@ -29,11 +29,12 @@ enum WarningsRefreshHelper {
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore,
         force: Bool = false,
-        manualUserInitiated: Bool = false
+        manualUserInitiated: Bool = false,
+        allowWhileSheetVisible: Bool = false
     ) async -> Bool {
         guard userStore.hasAdminAccess() else { return false }
 
-        if isWarningsSheetVisible && !manualUserInitiated {
+        if isWarningsSheetVisible && !manualUserInitiated && !allowWhileSheetVisible {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (Warnings sheet visible)")
             return false
         }

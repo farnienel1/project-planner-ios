@@ -7,7 +7,6 @@
 //
 
 import SwiftUI
-import EventKit
 import FirebaseAuth
 
 // MARK: - Manager schedule booking helpers (fileprivate)
@@ -225,7 +224,7 @@ fileprivate struct MyScheduleBookingStripeRow: View {
             }
             .padding(12)
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -265,7 +264,7 @@ fileprivate struct MyScheduleDayNavigatorCard: View {
             .buttonStyle(.plain)
         }
         .padding(12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -370,7 +369,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                 }
             }
             .padding(14)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -433,7 +432,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                 }
             }
             .padding(14)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -618,6 +617,7 @@ struct ManagerScheduleContentView: View {
     @State private var expandedSearchItemId: String?
     @State private var showAddBookingSheet = false
     @State private var addToCalendarMessage: String?
+    @State private var showingCalendarDestinationPicker = false
     @State private var showingAnnualLeavePage = false
 
     private struct LocationSearchItem: Identifiable {
@@ -634,11 +634,29 @@ struct ManagerScheduleContentView: View {
     }
 
     private var liveProjects: [Project] {
-        projectStore.projects.filter { $0.isLive && $0.jobType != .smallWorks }
+        WorkAccess.visibleWorks(
+            from: projectStore.projects,
+            catalogue: .projects,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            taskStore: nil,
+            deadlineAssignedProjectIds: []
+        ).filter(\.isLive)
     }
 
     private var liveSmallWorks: [Project] {
-        projectStore.projects.filter { $0.isLive && $0.jobType == .smallWorks }
+        WorkAccess.visibleWorks(
+            from: projectStore.projects,
+            catalogue: .smallWorks,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            taskStore: nil,
+            deadlineAssignedProjectIds: []
+        ).filter(\.isLive)
     }
 
     private var myManagerId: UUID? {
@@ -937,6 +955,13 @@ struct ManagerScheduleContentView: View {
             Button("OK") { addToCalendarMessage = nil }
         } message: {
             if let msg = addToCalendarMessage { Text(msg) }
+        }
+        .sheet(isPresented: $showingCalendarDestinationPicker) {
+            ScheduleCalendarDestinationPicker(
+                events: weekExportEvents,
+                onResult: { addToCalendarMessage = $0 },
+                onDismiss: { showingCalendarDestinationPicker = false }
+            )
         }
     }
 
@@ -1368,25 +1393,13 @@ struct ManagerScheduleContentView: View {
     }
 
     private var dayStrip: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(weekDates, id: \.self) { date in
-                        dayButton(date: date)
-                    }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(weekDates, id: \.self) { date in
+                    dayButton(date: date)
                 }
-                .padding(.horizontal, 16)
             }
-            if let selected = selectedDate {
-                HStack {
-                    Text("Selected: \(fullDateLabel(selected))")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
-                    Spacer()
-                }
-                .padding(.horizontal, 18)
-                .padding(.top, 4)
-            }
+            .padding(.horizontal, 16)
         }
         .padding(.vertical, 10)
     }
@@ -1463,7 +1476,7 @@ struct ManagerScheduleContentView: View {
                 .foregroundStyle(ProjectWorksRevampColors.blue)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1619,7 +1632,7 @@ struct ManagerScheduleContentView: View {
             }
             .padding(.vertical, 12)
             .padding(.horizontal, 14)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1668,7 +1681,7 @@ struct ManagerScheduleContentView: View {
                 }
                 .padding(.vertical, 12)
                 .padding(.horizontal, 14)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1773,8 +1786,39 @@ struct ManagerScheduleContentView: View {
         weekDates.flatMap { myOperativeBookings(on: $0) }
     }
 
+    private var weekExportEvents: [ScheduleCalendarEvent] {
+        var events: [ScheduleCalendarEvent] = []
+        for b in myManagerBookingsThisWeek {
+            let policy = payrollPolicy(for: b.date)
+            let block = b.calendarBlock(on: b.date, policy: policy)
+            events.append(ScheduleCalendarEvent(
+                title: "\(locationNameString(for: b)) – \(b.scheduleLabel(policy: policy))",
+                start: block.start,
+                end: block.end
+            ))
+        }
+        for b in myOperativeBookingsThisWeek {
+            guard let project = projectStore.projects.first(where: { $0.id == b.projectId }) ??
+                    projectStore.smallWorks.first(where: { $0.id == b.projectId }) else { continue }
+            let policy = payrollPolicy(for: b.date)
+            let block = b.calendarBlock(on: b.date, policy: policy)
+            events.append(ScheduleCalendarEvent(
+                title: "\(project.jobNumber) \(project.siteName) – \(b.scheduleLabel(policy: policy))",
+                start: block.start,
+                end: block.end
+            ))
+        }
+        return events
+    }
+
     private var addManagerWeekToCalendarButton: some View {
-        Button(action: addCurrentWeekToCalendar) {
+        Button {
+            if weekExportEvents.isEmpty {
+                addToCalendarMessage = "No bookings this week to add."
+            } else {
+                showingCalendarDestinationPicker = true
+            }
+        } label: {
             Label("Add this week to Calendar", systemImage: "calendar.badge.plus")
                 .font(.system(size: 15, weight: .semibold))
                 .frame(maxWidth: .infinity)
@@ -1783,80 +1827,6 @@ struct ManagerScheduleContentView: View {
         .buttonStyle(.borderedProminent)
         .tint(ProjectWorksRevampColors.blue)
         .padding(.top, 4)
-    }
-
-    private func addCurrentWeekToCalendar() {
-        let eventStore = EKEventStore()
-        let status = EKEventStore.authorizationStatus(for: .event)
-        if status == .denied || status == .restricted {
-            addToCalendarMessage = "Calendar access is off for Project Planner on this iPhone. Turn it on in iOS Settings > Privacy & Security > Calendars."
-            return
-        }
-        if status == .notDetermined {
-            if #available(iOS 17.0, *) {
-                Task {
-                    let granted = (try? await eventStore.requestWriteOnlyAccessToEvents()) ?? false
-                    await MainActor.run {
-                        if granted {
-                            performAddToCalendar(eventStore: eventStore)
-                        } else {
-                            addToCalendarMessage = "Calendar access is needed to add events."
-                        }
-                    }
-                }
-            } else {
-                eventStore.requestAccess(to: .event) { granted, _ in
-                    DispatchQueue.main.async {
-                        if granted {
-                            performAddToCalendar(eventStore: eventStore)
-                        } else {
-                            addToCalendarMessage = "Calendar access is needed to add events."
-                        }
-                    }
-                }
-            }
-            return
-        }
-        performAddToCalendar(eventStore: eventStore)
-    }
-
-    private func performAddToCalendar(eventStore: EKEventStore) {
-        var added = 0
-        for b in myManagerBookingsThisWeek {
-            let policy = payrollPolicy(for: b.date)
-            let event = EKEvent(eventStore: eventStore)
-            event.title = "\(locationNameString(for: b)) – \(b.scheduleLabel(policy: policy))"
-            let block = b.calendarBlock(on: b.date, policy: policy)
-            event.startDate = block.start
-            event.endDate = block.end
-            event.calendar = eventStore.defaultCalendarForNewEvents
-            do {
-                try eventStore.save(event, span: .thisEvent)
-                added += 1
-            } catch {
-                addToCalendarMessage = "Could not add some events: \(error.localizedDescription)"
-                return
-            }
-        }
-        for b in myOperativeBookingsThisWeek {
-            guard let project = projectStore.projects.first(where: { $0.id == b.projectId }) ??
-                    projectStore.smallWorks.first(where: { $0.id == b.projectId }) else { continue }
-            let policy = payrollPolicy(for: b.date)
-            let event = EKEvent(eventStore: eventStore)
-            event.title = "\(project.jobNumber) \(project.siteName) – \(b.scheduleLabel(policy: policy))"
-            let block = b.calendarBlock(on: b.date, policy: policy)
-            event.startDate = block.start
-            event.endDate = block.end
-            event.calendar = eventStore.defaultCalendarForNewEvents
-            do {
-                try eventStore.save(event, span: .thisEvent)
-                added += 1
-            } catch {
-                addToCalendarMessage = "Could not add some events: \(error.localizedDescription)"
-                return
-            }
-        }
-        addToCalendarMessage = added > 0 ? "Added \(added) event(s) to your calendar." : "No bookings this week to add."
     }
 }
 
@@ -1970,7 +1940,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .background(Color.white)
+                    .background(ProjectWorksRevampColors.surface)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2073,7 +2043,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
                 }
             }
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2090,7 +2060,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
         }
         .padding(.vertical, 11)
         .padding(.horizontal, 12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2115,7 +2085,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
         }
         .padding(.vertical, 11)
         .padding(.horizontal, 12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2179,7 +2149,7 @@ fileprivate struct ManagerSelfBookingEntryView: View {
                 }
                 .font(.system(size: 14, weight: .medium))
                 .padding(12)
-                .background(Color.white)
+                .background(ProjectWorksRevampColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2242,7 +2212,7 @@ fileprivate struct ManagerSelfBookingEntryView: View {
             }
         }
         .padding(12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2299,15 +2269,16 @@ fileprivate struct ManagerSelfBookingEntryView: View {
         let base = calendar.startOfDay(for: day)
         let dayStart = ManagerScheduleInterval.parseMinutes(policy.standardDayStart) ?? (7 * 60 + 30)
         let dayEnd = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd) ?? (16 * 60)
+        let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy)
         let mid = dayStart + max(1, (dayEnd - dayStart) / 2)
         let range: (Int, Int)
         switch slot {
         case .fullDay:
             range = (dayStart, dayEnd)
         case .morning:
-            range = (dayStart, mid)
+            range = (windows?.morningStart ?? dayStart, windows?.morningEnd ?? mid)
         case .afternoon:
-            range = (mid, dayEnd)
+            range = (windows?.afternoonStart ?? mid, windows?.afternoonEnd ?? dayEnd)
         case .customHours:
             range = (dayStart, dayEnd)
         }
@@ -2356,7 +2327,7 @@ fileprivate struct ManagerSelfBookingJobListView: View {
                         }
                         .padding(.vertical, 11)
                         .padding(.horizontal, 12)
-                        .background(Color.white)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2452,6 +2423,7 @@ struct OperativeScheduleContentView: View {
     private let calendar = Calendar.current
     @State private var weekStart: Date = Date()
     @State private var addToCalendarMessage: String?
+    @State private var showingCalendarDestinationPicker = false
 
     private var currentOperative: Operative? {
         guard let email = userStore.currentUser?.email else { return nil }
@@ -2550,6 +2522,13 @@ struct OperativeScheduleContentView: View {
             Button("OK") { addToCalendarMessage = nil }
         } message: {
             if let msg = addToCalendarMessage { Text(msg) }
+        }
+        .sheet(isPresented: $showingCalendarDestinationPicker) {
+            ScheduleCalendarDestinationPicker(
+                events: weekExportEvents,
+                onResult: { addToCalendarMessage = $0 },
+                onDismiss: { showingCalendarDestinationPicker = false }
+            )
         }
     }
 
@@ -2692,8 +2671,39 @@ struct OperativeScheduleContentView: View {
         .appChromeCardContainer()
     }
 
+    private var weekExportEvents: [ScheduleCalendarEvent] {
+        var events: [ScheduleCalendarEvent] = []
+        for b in myBookingsThisWeek {
+            guard let project = projectStore.projects.first(where: { $0.id == b.projectId }) ??
+                    projectStore.smallWorks.first(where: { $0.id == b.projectId }) else { continue }
+            let policy = payrollPolicy(for: b.date)
+            let block = b.calendarBlock(on: b.date, policy: policy)
+            events.append(ScheduleCalendarEvent(
+                title: "\(project.jobNumber) \(project.siteName) – \(b.scheduleLabel(policy: policy))",
+                start: block.start,
+                end: block.end
+            ))
+        }
+        for b in myManagerAttendanceThisWeek {
+            let policy = payrollPolicy(for: b.date)
+            let block = b.calendarBlock(on: b.date, policy: policy)
+            events.append(ScheduleCalendarEvent(
+                title: "\(managerSelfBookingTitle(b)) – \(b.scheduleLabel(policy: policy))",
+                start: block.start,
+                end: block.end
+            ))
+        }
+        return events
+    }
+
     private var addToCalendarButton: some View {
-        Button(action: addCurrentWeekToCalendar) {
+        Button {
+            if weekExportEvents.isEmpty {
+                addToCalendarMessage = "No bookings this week to add."
+            } else {
+                showingCalendarDestinationPicker = true
+            }
+        } label: {
             Label("Add this week to Calendar", systemImage: "calendar.badge.plus")
                 .font(.system(size: 15, weight: .semibold))
                 .frame(maxWidth: .infinity)
@@ -2703,84 +2713,6 @@ struct OperativeScheduleContentView: View {
         .tint(ProjectWorksRevampColors.blue)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-    }
-
-    private func addCurrentWeekToCalendar() {
-        let eventStore = EKEventStore()
-        let status = EKEventStore.authorizationStatus(for: .event)
-        if status == .denied || status == .restricted {
-            addToCalendarMessage = "Calendar access is off for Project Planner on this iPhone. Turn it on in iOS Settings > Privacy & Security > Calendars."
-            return
-        }
-        if status == .notDetermined {
-            if #available(iOS 17.0, *) {
-                Task {
-                    let granted = (try? await eventStore.requestWriteOnlyAccessToEvents()) ?? false
-                    await MainActor.run {
-                        if granted {
-                            performAddToCalendar(eventStore: eventStore)
-                        } else {
-                            addToCalendarMessage = "Calendar access is required to add events. Please allow Calendar access when prompted."
-                        }
-                    }
-                }
-            } else {
-                eventStore.requestAccess(to: .event) { [self] granted, _ in
-                    DispatchQueue.main.async {
-                        if granted {
-                            performAddToCalendar(eventStore: eventStore)
-                        } else {
-                            addToCalendarMessage = "Calendar access is required to add events. Please allow Calendar access when prompted."
-                        }
-                    }
-                }
-            }
-            return
-        }
-        performAddToCalendar(eventStore: eventStore)
-    }
-
-    private func performAddToCalendar(eventStore: EKEventStore) {
-        guard currentOperative != nil else {
-            addToCalendarMessage = "Could not find your operative profile."
-            return
-        }
-        guard !weekDates.isEmpty else { return }
-        var added = 0
-        for b in myBookingsThisWeek {
-            guard let project = projectStore.projects.first(where: { $0.id == b.projectId }) else { continue }
-            let policy = payrollPolicy(for: b.date)
-            let event = EKEvent(eventStore: eventStore)
-            event.title = "\(project.jobNumber) \(project.siteName) – \(b.scheduleLabel(policy: policy))"
-            let block = b.calendarBlock(on: b.date, policy: policy)
-            event.startDate = block.start
-            event.endDate = block.end
-            event.calendar = eventStore.defaultCalendarForNewEvents
-            do {
-                try eventStore.save(event, span: .thisEvent)
-                added += 1
-            } catch {
-                addToCalendarMessage = "Could not add some events: \(error.localizedDescription)"
-                return
-            }
-        }
-        for b in myManagerAttendanceThisWeek {
-            let policy = payrollPolicy(for: b.date)
-            let event = EKEvent(eventStore: eventStore)
-            event.title = "\(managerSelfBookingTitle(b)) – \(b.scheduleLabel(policy: policy))"
-            let block = b.calendarBlock(on: b.date, policy: policy)
-            event.startDate = block.start
-            event.endDate = block.end
-            event.calendar = eventStore.defaultCalendarForNewEvents
-            do {
-                try eventStore.save(event, span: .thisEvent)
-                added += 1
-            } catch {
-                addToCalendarMessage = "Could not add some events: \(error.localizedDescription)"
-                return
-            }
-        }
-        addToCalendarMessage = added > 0 ? "Added \(added) event(s) to your calendar." : "No bookings this week to add."
     }
 }
 
