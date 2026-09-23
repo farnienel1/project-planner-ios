@@ -263,10 +263,8 @@ struct HSStatusBadge: View {
     }
 }
 
-/// Fallback company mark for H&S PDFs. The settings-layer
-/// `OrganizationDocumentAbbreviation` type may be restored separately.
 enum HSDocumentOrgBadge {
-    nonisolated static var currentDisplay: String { "PP" }
+    nonisolated static var currentDisplay: String { OrganizationDocumentAbbreviation.currentDisplay }
 }
 
 nonisolated func drawOrganizationDocumentBadgePDF(text: String, in rect: CGRect) {
