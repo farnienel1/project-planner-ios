@@ -282,3 +282,40 @@ nonisolated func drawOrganizationDocumentBadgePDF(text: String, in rect: CGRect)
         withAttributes: attrs
     )
 }
+
+/// Date and time for toolbox-talk signature PDFs. A single `abbreviated + shortened`
+/// line is too wide for the date column and the time was clipped on download.
+nonisolated enum HSTalkSignatureTimestamp {
+    private static let gb = Locale(identifier: "en_GB")
+
+    static func dateLine(_ date: Date) -> String {
+        date.formatted(.dateTime.day().month(.abbreviated).year().locale(gb))
+    }
+
+    static func timeLine(_ date: Date) -> String {
+        date.formatted(.dateTime.hour().minute().locale(gb))
+    }
+
+    static func combinedLines(_ date: Date) -> String {
+        "\(dateLine(date))\n\(timeLine(date))"
+    }
+
+    static func draw(
+        _ date: Date?,
+        awaiting: String = "Awaiting",
+        in rect: CGRect,
+        color: UIColor,
+        font: UIFont
+    ) {
+        let text = date.map(combinedLines) ?? awaiting
+        (text as NSString).draw(
+            with: rect,
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [
+                .font: font,
+                .foregroundColor: color
+            ],
+            context: nil
+        )
+    }
+}
