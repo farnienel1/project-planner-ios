@@ -121,7 +121,6 @@ fileprivate func managerBookingOtChipText(_ b: ManagerSiteBooking, policy: OrgPa
     let ot = b.overtimeHoursBeyondPaidStandard(policy: policy)
     guard ot > 0.05 else { return nil }
     let m = PayrollTimePolicyCatalog.effectiveMultiplier(for: b, policy: policy)
-    let s = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
     return "OT \(ScheduleCoverageFormat.overtimeEquation(rawHours: ot, multiplier: m))"
 }
 
@@ -146,7 +145,6 @@ fileprivate func operativeBookingOtChipText(_ b: Booking, policy: OrgPayrollTime
     let ot = b.overtimeHoursBeyondPaidStandard(policy: policy)
     guard ot > 0.05 else { return nil }
     let m = b.effectiveWeekdayOtMultiplier(policy: policy)
-    let s = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
     return "OT \(ScheduleCoverageFormat.overtimeEquation(rawHours: ot, multiplier: m))"
 }
 

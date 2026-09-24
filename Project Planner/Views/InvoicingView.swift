@@ -1523,7 +1523,7 @@ private struct MyTimesheetView: View {
             await loadDayRateHistory()
         }
 
-        let pdfURL = await InvoicePDFGenerationSupport.generatePDF(
+        let pdfURL = InvoicePDFGenerationSupport.generatePDF(
             period: weekInvoicePeriod,
             settings: settings,
             firebaseBackend: firebaseBackend,
@@ -1974,7 +1974,7 @@ private struct PreviousTimesheetsView: View {
         invoiceErrorMessage = nil
         defer { isGeneratingInvoice = false }
 
-        let pdfURL = await InvoicePDFGenerationSupport.generatePDF(
+        let pdfURL = InvoicePDFGenerationSupport.generatePDF(
             period: period,
             settings: settings,
             firebaseBackend: firebaseBackend,
@@ -3964,7 +3964,7 @@ private enum InvoicePDFGenerationSupport {
     @MainActor
     static func generatePDF(
         period: InvoicePeriodOption,
-        settings: OrganizationInvoicingSettings,
+        settings _: OrganizationInvoicingSettings,
         firebaseBackend: FirebaseBackend,
         userStore: UserStore,
         bookingStore: BookingStore,
@@ -3972,9 +3972,8 @@ private enum InvoicePDFGenerationSupport {
         projectStore: ProjectStore,
         managerScheduleStore: ManagerScheduleStore,
         dayRateHistoryCollection: OperativeDayRateHistoryCollection
-    ) async -> URL? {
+    ) -> URL? {
         guard let currentUser = userStore.displayUser else { return nil }
-        let userCopy = currentUser
         let bookings = bookingStore.bookings
         let managerBookings = managerScheduleStore.managerSiteBookings
         let operatives = operativeStore.allOperatives
@@ -3986,47 +3985,44 @@ private enum InvoicePDFGenerationSupport {
         let orgName = organization?.name ?? "Organization"
         let userName = currentUser.fullName.isEmpty ? currentUser.email : currentUser.fullName
         let history = dayRateHistoryCollection
-        let periodCopy = period
 
-        return await Task.detached(priority: .userInitiated) {
-            let rows = invoiceLineItems(
-                for: periodCopy,
-                currentUser: userCopy,
-                policy: policy,
-                scheduleOptions: scheduleOptions,
-                organization: organization,
-                bookings: bookings,
-                managerBookings: managerBookings,
-                operatives: operatives,
-                projects: projects,
-                smallWorks: smallWorks,
-                history: history
+        let rows = invoiceLineItems(
+            for: period,
+            currentUser: currentUser,
+            policy: policy,
+            scheduleOptions: scheduleOptions,
+            organization: organization,
+            bookings: bookings,
+            managerBookings: managerBookings,
+            operatives: operatives,
+            projects: projects,
+            smallWorks: smallWorks,
+            history: history
+        )
+        let total = rows.reduce(0) { $0 + $1.amount }
+        let notes = rateChangeNotes(
+            for: period,
+            currentUser: currentUser,
+            operatives: operatives,
+            dayRateHistoryCollection: history
+        )
+        return InvoicePDFBuilder.makePDF(
+            context: InvoicePDFBuilder.Context(
+                organizationName: orgName,
+                userName: userName,
+                vatNumber: currentUser.trimmedVATNumber,
+                utrNumber: currentUser.trimmedUTRNumber,
+                generatedAt: Date(),
+                periodTitle: period.title,
+                periodDateRange: period.dateRangeText,
+                lineItems: rows,
+                totalAmount: total,
+                rateChangeNotes: notes
             )
-            let total = rows.reduce(0) { $0 + $1.amount }
-            let notes = rateChangeNotes(
-                for: periodCopy,
-                currentUser: userCopy,
-                operatives: operatives,
-                dayRateHistoryCollection: history
-            )
-            return InvoicePDFBuilder.makePDF(
-                context: InvoicePDFBuilder.Context(
-                    organizationName: orgName,
-                    userName: userName,
-                    vatNumber: userCopy.trimmedVATNumber,
-                    utrNumber: userCopy.trimmedUTRNumber,
-                    generatedAt: Date(),
-                    periodTitle: periodCopy.title,
-                    periodDateRange: periodCopy.dateRangeText,
-                    lineItems: rows,
-                    totalAmount: total,
-                    rateChangeNotes: notes
-                )
-            )
-        }.value
+        )
     }
 
-    nonisolated private static func invoiceLineItems(
+    private static func invoiceLineItems(
         for period: InvoicePeriodOption,
         currentUser: AppUser,
         policy: OrgPayrollTimePolicy,
@@ -4101,7 +4097,7 @@ private enum InvoicePDFGenerationSupport {
         }
     }
 
-    nonisolated private static func rateChangeNotes(
+    private static func rateChangeNotes(
         for period: InvoicePeriodOption,
         currentUser: AppUser,
         operatives: [Operative],
@@ -4140,7 +4136,7 @@ private enum InvoicePDFGenerationSupport {
         return Array(Set(notes)).sorted()
     }
 
-    nonisolated private static func formatCurrency(_ value: Double) -> String {
+    private static func formatCurrency(_ value: Double) -> String {
         String(format: "£%.2f", value)
     }
 }
@@ -4459,7 +4455,7 @@ private struct GenerateInvoiceView: View {
             await loadRateHistory()
         }
 
-        let pdfURL = await InvoicePDFGenerationSupport.generatePDF(
+        let pdfURL = InvoicePDFGenerationSupport.generatePDF(
             period: period,
             settings: settings,
             firebaseBackend: firebaseBackend,
