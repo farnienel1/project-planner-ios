@@ -130,6 +130,8 @@ class FirebaseBackend: ObservableObject {
     private var suppressOrganizationReadPermissionRecovery = false
     /// Prevents parallel org load/recovery storms from multiple stores/views.
     private var organizationLoadInProgress = false
+    /// Recover is kicked from org load, stores, and the root shell. Never allow those to stack a full scan.
+    var isRecoveringOrganizationLink = false
     /// Avoids repeatedly patching org access on every single booking save.
     private var lastRepairAttemptAtByOrgId: [String: Date] = [:]
     /// De-duplicates `organizationDidLoad` broadcasts for the same org within a short window.
@@ -1262,20 +1264,9 @@ class FirebaseBackend: ObservableObject {
     // Helper function to attempt fixing missing organization
     @MainActor
     private func attemptToFixMissingOrganization(userId: String, userData: [String: Any]) async {
-        print("🔥🔥🔥 DEBUG: Attempting to fix missing organization...")
-        
-        // Check if there are any organizations that this user might belong to
-        // by checking if user email matches any organization members
-        do {
-            let orgsSnapshot = try await db.collection("organizations").getDocuments()
-            print("🔥🔥🔥 DEBUG: Found \(orgsSnapshot.documents.count) organizations in Firestore")
-            
-            // For now, we can't automatically fix this without more context
-            // User would need to contact support or recreate account
-            print("🔥🔥🔥 DEBUG: Cannot automatically fix - user needs to contact support or recreate account")
-        } catch {
-            print("🔥🔥🔥 DEBUG: Error checking organizations: \(error.localizedDescription)")
-        }
+        let email = currentUser?.email ?? (userData["email"] as? String) ?? ""
+        guard !email.isEmpty else { return }
+        _ = await recoverMissingOrganizationLink(userId: userId, userEmail: email)
     }
     
     func getOrganizationData(organizationId: String) async throws -> OrganizationData? {
@@ -3008,50 +2999,44 @@ class FirebaseBackend: ObservableObject {
     }
     
     func debugOrganizations() async {
-        print("🔥🔥🔥 DEBUG: === Listing All Organizations ===")
-        print("🔥🔥🔥 DEBUG: Function called successfully!")
-        
+        print("🔥🔥🔥 DEBUG: === Listing Organisations for current user ===")
+        guard let userId = currentUser?.uid else {
+            print("🔥🔥🔥 DEBUG: No signed-in user")
+            return
+        }
         do {
-            print("🔥🔥🔥 DEBUG: Attempting to fetch organizations...")
-            let snapshot = try await db.collection("organizations").getDocuments()
-            print("🔥🔥🔥 DEBUG: Found \(snapshot.documents.count) organizations")
-            
-            for document in snapshot.documents {
-                let data = document.data()
-                print("🔥🔥🔥 DEBUG: Organization ID: \(document.documentID)")
-                print("🔥🔥🔥 DEBUG: Organization Name: \(data["name"] ?? "N/A")")
-                print("🔥🔥🔥 DEBUG: Members: \(data["members"] ?? "N/A")")
-                print("🔥🔥🔥 DEBUG: Created At: \(data["createdAt"] ?? "N/A")")
-                print("---")
+            let memberships = try await loadOrganizationMembershipDocuments(userId: userId)
+            print("🔥🔥🔥 DEBUG: Found \(memberships.count) organisations for this user")
+            for item in memberships {
+                print("🔥🔥🔥 DEBUG: Organization ID: \(item.id)")
+                print("🔥🔥🔥 DEBUG: Organization Name: \(item.data["name"] ?? "N/A")")
+                print("🔥🔥🔥 DEBUG: Role: \(item.role)")
             }
         } catch {
             print("🔥🔥🔥 DEBUG: Error fetching organizations: \(error.localizedDescription)")
         }
-        
         print("🔥🔥🔥 DEBUG: === End Organizations List ===")
     }
     
     func debugUsers() async {
-        print("🔥🔥🔥 DEBUG: === Listing All Users ===")
-        print("🔥🔥🔥 DEBUG: Function called successfully!")
-        
+        print("🔥🔥🔥 DEBUG: === Listing Users in current organisation ===")
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            print("🔥🔥🔥 DEBUG: No current organisation")
+            return
+        }
         do {
-            print("🔥🔥🔥 DEBUG: Attempting to fetch users...")
-            let snapshot = try await db.collection("users").getDocuments()
+            let snapshot = try await db.collection("users")
+                .whereField("organizationId", isEqualTo: orgId)
+                .limit(to: 100)
+                .getDocuments()
             print("🔥🔥🔥 DEBUG: Found \(snapshot.documents.count) users")
-            
             for document in snapshot.documents {
                 let data = document.data()
-                print("🔥🔥🔥 DEBUG: User ID: \(document.documentID)")
-                print("🔥🔥🔥 DEBUG: Email: \(data["email"] ?? "N/A")")
-                print("🔥🔥🔥 DEBUG: Organization ID: \(data["organizationId"] ?? "N/A")")
-                print("🔥🔥🔥 DEBUG: Role: \(data["role"] ?? "N/A")")
-                print("---")
+                print("🔥🔥🔥 DEBUG: User ID: \(document.documentID) email: \(data["email"] ?? "N/A")")
             }
         } catch {
             print("🔥🔥🔥 DEBUG: Error fetching users: \(error.localizedDescription)")
         }
-        
         print("🔥🔥🔥 DEBUG: === End Users List ===")
     }
     
@@ -5215,7 +5200,11 @@ class FirebaseBackend: ObservableObject {
     // MARK: - Admin Functions
     
     func getAllUsers() async throws -> [UserData] {
-        let snapshot = try await db.collection("users").getDocuments()
+        guard let orgId = currentOrganization?.firestoreDocumentId else { return [] }
+        let snapshot = try await db.collection("users")
+            .whereField("organizationId", isEqualTo: orgId)
+            .limit(to: 200)
+            .getDocuments()
         
         return snapshot.documents.compactMap { doc in
             let data = doc.data()
@@ -5815,120 +5804,78 @@ class FirebaseBackend: ObservableObject {
     
     func recoverMissingOrganizationLink(userId: String, userEmail: String) async -> Bool {
         print("🔥🔥🔥 DEBUG: 🔧 Attempting to recover missing organization link for user: \(userId), email: \(userEmail)")
-        
+        if isRecoveringOrganizationLink {
+            print("🔥🔥🔥 DEBUG: Organization recovery already in progress, skipping duplicate")
+            return currentOrganization != nil
+        }
+        if let msg = errorMessage?.lowercased(), msg.contains("offline") {
+            print("🔥🔥🔥 DEBUG: Skipping organization recovery while offline")
+            return false
+        }
+        isRecoveringOrganizationLink = true
+        defer { isRecoveringOrganizationLink = false }
+
         do {
-            // Strategy 1: Check if user is admin of any organization
-            let orgsSnapshot = try await db.collection("organizations").getDocuments()
-            print("🔥🔥🔥 DEBUG: Found \(orgsSnapshot.documents.count) organizations to check")
-            
-            for orgDoc in orgsSnapshot.documents {
-                let orgData = orgDoc.data()
-                if let members = orgData["members"] as? [String: String] {
-                    // Check if user is admin
-                    if members[userId] == "admin" {
-                        let organizationId = orgDoc.documentID
-                        print("🔥🔥🔥 DEBUG: ✅ Found organization where user is admin: \(organizationId)")
-                        
-                        // Check if user document exists, if not CREATE it, otherwise UPDATE it
-                        let userDocRef = db.collection("users").document(userId)
-                        let userDoc = try await userDocRef.getDocument()
-                        
-                        if userDoc.exists {
-                            // Document exists - update it
-                            print("🔥🔥🔥 DEBUG: User document exists - updating organizationId")
-                            try await userDocRef.updateData([
-                                "organizationId": organizationId,
-                                "updatedAt": Timestamp(date: Date())
-                            ])
-                        } else {
-                            // Document doesn't exist - create it
-                            print("🔥🔥🔥 DEBUG: User document does NOT exist - creating it with organizationId")
-                            try await userDocRef.setData([
-                                "email": userEmail,
-                                "organizationId": organizationId,
-                                "role": "admin",
-                                "isSuperAdmin": true,
-                                "isActive": true,
-                                "createdAt": Timestamp(date: Date()),
-                                "updatedAt": Timestamp(date: Date())
-                            ])
-                        }
-                        
-                        // Store organizationId locally for offline access
-                        storeOrganizationIdLocally(organizationId)
-                        
-                        // Reload organization (rules may deny org root read; fall back to snapshot data).
-                        await loadUserOrganization(userId: userId)
-                        if currentOrganization == nil {
-                            setCurrentOrganizationFromRecovery(orgId: organizationId, orgData: orgDoc.data(), fallbackRole: "admin")
-                        }
-                        return currentOrganization != nil
+            // Strategy 1/2: only orgs this uid belongs to — never scan the full collection (jetsam).
+            let memberships = try await loadOrganizationMembershipDocuments(userId: userId)
+            print("🔥🔥🔥 DEBUG: Found \(memberships.count) organisations for this user")
+            if let preferred = memberships.first(where: { $0.role == "admin" }) ?? memberships.first {
+                let organizationId = preferred.id
+                let userRole = preferred.role
+                let orgData = preferred.data
+                print("🔥🔥🔥 DEBUG: ✅ Found organisation via membership: \(organizationId) (role: \(userRole))")
+
+                let userDocRef = db.collection("users").document(userId)
+                let userDoc = try await userDocRef.getDocument()
+
+                if userDoc.exists {
+                    print("🔥🔥🔥 DEBUG: User document exists - updating organizationId")
+                    try await userDocRef.updateData([
+                        "organizationId": organizationId,
+                        "role": userRole,
+                        "updatedAt": Timestamp(date: Date())
+                    ])
+                } else {
+                    print("🔥🔥🔥 DEBUG: User document does NOT exist - creating it with organizationId")
+                    var newUserData: [String: Any] = [
+                        "email": userEmail,
+                        "organizationId": organizationId,
+                        "role": userRole,
+                        "isActive": true,
+                        "isSuperAdmin": userRole == "admin",
+                        "createdAt": Timestamp(date: Date()),
+                        "updatedAt": Timestamp(date: Date())
+                    ]
+                    if let existing = await existingOrgUserDataByEmail(organizationId: organizationId, userEmail: userEmail) {
+                        newUserData["role"] = existing["role"] ?? userRole
+                        newUserData["adminAccess"] = existing["adminAccess"] ?? false
+                        newUserData["manager"] = existing["manager"] ?? false
+                        newUserData["operatives"] = existing["operatives"] ?? false
+                        newUserData["skills"] = existing["skills"] ?? false
+                        newUserData["qualifications"] = existing["qualifications"] ?? false
+                        newUserData["materials"] = existing["materials"] ?? false
+                        newUserData["operativeMode"] = existing["operativeMode"] ?? false
+                        newUserData["annualLeaveSelfBook"] = existing["annualLeaveSelfBook"] ?? false
+                        newUserData["weeklyReports"] = existing["weeklyReports"] ?? false
+                        newUserData["dailyOverview"] = existing["dailyOverview"] ?? true
+                        newUserData["subContractors"] = existing["subContractors"] ?? false
+                        newUserData["projects"] = existing["projects"] ?? true
+                        newUserData["smallWorks"] = existing["smallWorks"] ?? false
+                        newUserData["isSuperAdmin"] = existing["isSuperAdmin"] ?? (userRole == "admin")
+                        if let fn = existing["firstName"] { newUserData["firstName"] = fn }
+                        if let sn = existing["surname"] { newUserData["surname"] = sn }
+                        if let mobile = existing["mobileNumber"] { newUserData["mobileNumber"] = mobile }
+                        print("🔥🔥🔥 DEBUG: Preserved permissions from existing org user (e.g. operativeMode)")
                     }
-                    
-                    // Strategy 2: Check if user is a member (any role)
-                    if members[userId] != nil {
-                        let organizationId = orgDoc.documentID
-                        let userRole = members[userId] ?? "member"
-                        print("🔥🔥🔥 DEBUG: ✅ Found organization where user is a member: \(organizationId) (role: \(userRole))")
-                        
-                        // Check if user document exists, if not CREATE it, otherwise UPDATE it
-                        let userDocRef = db.collection("users").document(userId)
-                        let userDoc = try await userDocRef.getDocument()
-                        
-                        if userDoc.exists {
-                            // Document exists - update it
-                            print("🔥🔥🔥 DEBUG: User document exists - updating organizationId")
-                            try await userDocRef.updateData([
-                                "organizationId": organizationId,
-                                "role": userRole,
-                                "updatedAt": Timestamp(date: Date())
-                            ])
-                        } else {
-                            // Document doesn't exist - create it, preserving permissions from existing org user (e.g. invited operative)
-                            print("🔥🔥🔥 DEBUG: User document does NOT exist - creating it with organizationId")
-                            var newUserData: [String: Any] = [
-                                "email": userEmail,
-                                "organizationId": organizationId,
-                                "role": userRole,
-                                "isActive": true,
-                                "createdAt": Timestamp(date: Date()),
-                                "updatedAt": Timestamp(date: Date())
-                            ]
-                            if let existing = await existingOrgUserDataByEmail(organizationId: organizationId, userEmail: userEmail) {
-                                newUserData["role"] = existing["role"] ?? userRole
-                                newUserData["adminAccess"] = existing["adminAccess"] ?? false
-                                newUserData["manager"] = existing["manager"] ?? false
-                                newUserData["operatives"] = existing["operatives"] ?? false
-                                newUserData["skills"] = existing["skills"] ?? false
-                                newUserData["qualifications"] = existing["qualifications"] ?? false
-                                newUserData["materials"] = existing["materials"] ?? false
-                                newUserData["operativeMode"] = existing["operativeMode"] ?? false
-                                newUserData["annualLeaveSelfBook"] = existing["annualLeaveSelfBook"] ?? false
-                                newUserData["weeklyReports"] = existing["weeklyReports"] ?? false
-                                newUserData["dailyOverview"] = existing["dailyOverview"] ?? true
-                                newUserData["subContractors"] = existing["subContractors"] ?? false
-                                newUserData["projects"] = existing["projects"] ?? true
-                                newUserData["smallWorks"] = existing["smallWorks"] ?? false
-                                newUserData["isSuperAdmin"] = existing["isSuperAdmin"] ?? false
-                                if let fn = existing["firstName"] { newUserData["firstName"] = fn }
-                                if let sn = existing["surname"] { newUserData["surname"] = sn }
-                                if let mobile = existing["mobileNumber"] { newUserData["mobileNumber"] = mobile }
-                                print("🔥🔥🔥 DEBUG: Preserved permissions from existing org user (e.g. operativeMode)")
-                            }
-                            try await userDocRef.setData(newUserData)
-                        }
-                        
-                        // Store organizationId locally for offline access
-                        storeOrganizationIdLocally(organizationId)
-                        
-                        // Reload organization (rules may deny org root read; fall back to snapshot data).
-                        await loadUserOrganization(userId: userId)
-                        if currentOrganization == nil {
-                            setCurrentOrganizationFromRecovery(orgId: organizationId, orgData: orgDoc.data(), fallbackRole: userRole)
-                        }
-                        return currentOrganization != nil
-                    }
+                    try await userDocRef.setData(newUserData)
                 }
+
+                storeOrganizationIdLocally(organizationId)
+                await loadUserOrganization(userId: userId)
+                if currentOrganization == nil {
+                    setCurrentOrganizationFromRecovery(orgId: organizationId, orgData: orgData, fallbackRole: userRole)
+                }
+                return currentOrganization != nil
             }
             
             // Strategy 3: Check user document for any organizationId that might exist

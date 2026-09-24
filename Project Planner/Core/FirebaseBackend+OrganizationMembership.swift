@@ -10,6 +10,32 @@ import FirebaseAuth
 import FirebaseFirestore
 
 extension FirebaseBackend {
+    /// Organisations this uid belongs to (members map or creator). Never scans the full collection.
+    @MainActor
+    func loadOrganizationMembershipDocuments(userId: String) async throws -> [(id: String, data: [String: Any], role: String)] {
+        var byId: [String: (data: [String: Any], role: String)] = [:]
+
+        let memberField = FieldPath(["members", userId])
+        let memberSnapshot = try await db.collection("organizations")
+            .whereField(memberField, isNotEqualTo: "")
+            .getDocuments(source: FirestoreSource.server)
+        for doc in memberSnapshot.documents {
+            let data = doc.data()
+            let members = data["members"] as? [String: String] ?? [:]
+            byId[doc.documentID] = (data, members[userId] ?? "member")
+        }
+
+        let creatorSnapshot = try await db.collection("organizations")
+            .whereField("creatorUserId", isEqualTo: userId)
+            .getDocuments(source: FirestoreSource.server)
+        for doc in creatorSnapshot.documents {
+            if byId[doc.documentID] != nil { continue }
+            byId[doc.documentID] = (doc.data(), "admin")
+        }
+
+        return byId.map { (id: $0.key, data: $0.value.data, role: $0.value.role) }
+    }
+
     /// Loads only organisations the signed-in user belongs to.
     /// Must never scan the full `organizations` collection — that jetsams the Simulator
     /// once the project has more than a handful of orgs.
@@ -18,35 +44,12 @@ extension FirebaseBackend {
         guard let userId = currentUser?.uid else { return [] }
 
         do {
-            var byId: [String: (data: [String: Any], role: String)] = [:]
-
-            // Orgs where this uid is present in the members map.
-            let memberField = FieldPath(["members", userId])
-            let memberSnapshot = try await db.collection("organizations")
-                .whereField(memberField, isNotEqualTo: "")
-                .getDocuments(source: FirestoreSource.server)
-            for doc in memberSnapshot.documents {
-                let data = doc.data()
-                let members = data["members"] as? [String: String] ?? [:]
-                let role = members[userId] ?? "member"
-                byId[doc.documentID] = (data, role)
-            }
-
-            // Orgs this user created (may not yet be listed under members).
-            let creatorSnapshot = try await db.collection("organizations")
-                .whereField("creatorUserId", isEqualTo: userId)
-                .getDocuments(source: FirestoreSource.server)
-            for doc in creatorSnapshot.documents {
-                if byId[doc.documentID] != nil { continue }
-                let data = doc.data()
-                byId[doc.documentID] = (data, "admin")
-            }
-
-            let results: [OrgMembershipSummary] = byId.map { orgId, value in
+            let memberships = try await loadOrganizationMembershipDocuments(userId: userId)
+            let results: [OrgMembershipSummary] = memberships.map { item in
                 OrganizationTrialPolicy.membershipSummary(
-                    organizationId: orgId,
-                    orgData: value.data,
-                    roleInOrg: value.role
+                    organizationId: item.id,
+                    orgData: item.data,
+                    roleInOrg: item.role
                 )
             }
 
