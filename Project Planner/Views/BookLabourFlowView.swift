@@ -48,6 +48,9 @@ struct BookLabourCandidate: Identifiable {
 
 struct BookLabourFlowView: View {
     let bookDate: Date
+    /// User ids from an unbooked-labour warning — always listed first so the flow
+    /// opened from Warnings is never empty for the people on that card.
+    var focusedUserIds: [String] = []
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var appSettings: AppSettingsStore
@@ -314,7 +317,7 @@ struct BookLabourFlowView: View {
                 ContentUnavailableView(
                     "Everyone is booked",
                     systemImage: "checkmark.circle",
-                    description: Text("No unbooked team members for this day, or only weekdays show unbooked labour.")
+                    description: Text("No unbooked team members for this day.")
                 )
                 .padding()
             } else {
@@ -857,7 +860,7 @@ struct BookLabourFlowView: View {
             let existingPaidHours = existingPaidHoursForOperative(op.id)
             let newPaidHours = paidHours(startMinutes: draft.startMinutes, endMinutes: draft.endMinutes, breakRemoved: draft.breakRemoved)
             let combinedPaidHours = existingPaidHours + newPaidHours
-            let remainingHours = max(0, max(payrollTimePolicy.standardPaidHours, 0) - combinedPaidHours)
+            let remainingHours = max(0, max(dayPayrollPolicy.standardPaidHours, 0) - combinedPaidHours)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     bookLabourPersonSummaryCard(people: activeParty(fallback: person))
@@ -1799,9 +1802,23 @@ struct BookLabourFlowView: View {
 
     // MARK: - Candidate building (aligned with DailyOverviewView)
 
-    private func buildCandidates() -> [BookLabourCandidate] {
+    private var includeWeekendsForUnbookedLabour: Bool {
+        firebaseBackend.currentOrganization?.settings.warningDetection.includeWeekendsForUnbookedLabour == true
+    }
+
+    private var canBookLabourOnThisDay: Bool {
         let weekday = calendar.component(.weekday, from: day)
-        guard weekday >= 2 && weekday <= 6 else { return [] }
+        if weekday >= 2 && weekday <= 6 { return true }
+        if !focusedUserIds.isEmpty { return true }
+        return includeWeekendsForUnbookedLabour
+    }
+
+    private func buildCandidates() -> [BookLabourCandidate] {
+        guard canBookLabourOnThisDay else { return [] }
+
+        let policy = dayPayrollPolicy
+        let required = max(policy.standardPaidHours, 0)
+        let focused = Set(focusedUserIds)
 
         let operativeUsers = userStore.organizationUsers.filter { $0.permissions.operativeMode && $0.isActive }
         let managerUsers = userStore.organizationUsers.filter {
@@ -1818,26 +1835,41 @@ struct BookLabourFlowView: View {
         var out: [BookLabourCandidate] = []
         var seenUserIds: Set<String> = []
 
+        func appendCandidate(_ candidate: BookLabourCandidate, paid: Double) {
+            guard seenUserIds.insert(candidate.user.id).inserted else { return }
+            let isFocused = focused.contains(candidate.user.id)
+            // Always keep people named on the warning. Otherwise skip a full paid day.
+            if !isFocused, paid + 0.08 >= required { return }
+            out.append(candidate)
+        }
+
         for user in operativeOnlyUsers {
             let linked = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
             if hasApprovedHoliday(userId: user.id, operativeId: linked?.id) { continue }
             guard let linked else { continue }
-            let paid = operativePaidHours(operativeId: linked.id) + managerProjectPaidHours(userId: user.id)
-            if paid >= max(payrollTimePolicy.standardPaidHours, 0) { continue }
-            seenUserIds.insert(user.id)
-            out.append(BookLabourCandidate(user: user, linkedOperative: linked, usesOperativeProjectBookings: true))
+            let paid = operativePaidHours(operativeId: linked.id) + managerScheduledPaidHours(userId: user.id)
+            appendCandidate(
+                BookLabourCandidate(user: user, linkedOperative: linked, usesOperativeProjectBookings: true),
+                paid: paid
+            )
         }
 
         for user in managerUsers {
             let linked = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
             if hasApprovedHoliday(userId: user.id, operativeId: linked?.id) { continue }
-            if seenUserIds.contains(user.id) { continue }
-            let paid = managerProjectPaidHours(userId: user.id) + (linked.map { operativePaidHours(operativeId: $0.id) } ?? 0)
-            if paid >= max(payrollTimePolicy.standardPaidHours, 0) { continue }
-            out.append(BookLabourCandidate(user: user, linkedOperative: linked, usesOperativeProjectBookings: false))
+            let paid = managerScheduledPaidHours(userId: user.id) + (linked.map { operativePaidHours(operativeId: $0.id) } ?? 0)
+            appendCandidate(
+                BookLabourCandidate(user: user, linkedOperative: linked, usesOperativeProjectBookings: false),
+                paid: paid
+            )
         }
 
-        return out.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        return out.sorted { a, b in
+            let aFocus = focused.contains(a.user.id)
+            let bFocus = focused.contains(b.user.id)
+            if aFocus != bFocus { return aFocus }
+            return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+        }
     }
 
     private func hasApprovedHoliday(userId: String, operativeId: UUID?) -> Bool {
@@ -1851,7 +1883,7 @@ struct BookLabourFlowView: View {
     }
 
     private func operativePaidHours(operativeId: UUID) -> Double {
-        let policy = payrollTimePolicy
+        let policy = dayPayrollPolicy
         let bookings = bookingStore.bookings.filter {
             $0.operativeId == operativeId &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
@@ -1860,15 +1892,12 @@ struct BookLabourFlowView: View {
         return bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
     }
 
-    private func managerProjectPaidHours(userId: String) -> Double {
-        let policy = payrollTimePolicy
+    private func managerScheduledPaidHours(userId: String) -> Double {
+        let policy = dayPayrollPolicy
         let bookings = managerScheduleStore.managerSiteBookings.filter { booking in
-            let sameDay = calendar.isDate(booking.date, inSameDayAs: day)
-            let sameUser = booking.userId == userId
-            let isProject = booking.locationType == .project || booking.locationType == .smallWork
-            return sameDay && sameUser && isProject
+            calendar.isDate(booking.date, inSameDayAs: day) && booking.userId == userId
         }
-        return bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
+        return ManagerScheduleInterval.combinedPaidBookedHours(for: bookings, policy: policy)
     }
 }
 

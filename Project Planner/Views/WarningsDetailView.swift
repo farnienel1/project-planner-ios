@@ -60,14 +60,17 @@ struct WarningsDetailView: View {
 
     @State private var filterChip: WarningsFilterChip = .all
     @State private var openDayDate: IdentifiableDay?
-    @State private var openBookLabourDate: IdentifiableDay?
+    @State private var presentedFullScreen: WarningsFullScreenCover?
     @State private var warningPendingDismiss: Warning?
-    @State private var showingWarningsSettings = false
     @State private var isRefreshingWarnings = false
     @State private var refreshMessage: String?
 
     private var organisationSubtitle: String {
         firebaseBackend.currentOrganization?.name ?? "Organisation"
+    }
+
+    private var canBookLabourFromWarning: Bool {
+        userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true
     }
 
     var body: some View {
@@ -101,27 +104,41 @@ struct WarningsDetailView: View {
             .onDisappear {
                 WarningsRefreshHelper.isWarningsSheetVisible = false
             }
-            // fullScreenCover avoids nested-sheet bug that dismissed Warnings back to Home.
-            .fullScreenCover(isPresented: $showingWarningsSettings) {
-                NavigationStack {
-                    OrganisationWarningsSettingsView(
-                        exitsToHomeOnBack: true,
-                        onExitToHome: {
-                            showingWarningsSettings = false
-                        },
-                        onSaved: {
-                            // Save already forced a refresh — only close settings here.
-                            showingWarningsSettings = false
-                        }
-                    )
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(operativeStore)
-                    .environmentObject(bookingStore)
-                    .environmentObject(projectStore)
-                    .environmentObject(userStore)
-                    .environmentObject(managerScheduleStore)
-                    .environmentObject(holidayStore)
-                    .environmentObject(appSettings)
+            // One fullScreenCover only — a second cover on the same view swallowed
+            // "Book labour for this day" and looked like a dead button.
+            .fullScreenCover(item: $presentedFullScreen) { cover in
+                switch cover {
+                case .settings:
+                    NavigationStack {
+                        OrganisationWarningsSettingsView(
+                            exitsToHomeOnBack: true,
+                            onExitToHome: {
+                                presentedFullScreen = nil
+                            },
+                            onSaved: {
+                                presentedFullScreen = nil
+                            }
+                        )
+                        .environmentObject(firebaseBackend)
+                        .environmentObject(operativeStore)
+                        .environmentObject(bookingStore)
+                        .environmentObject(projectStore)
+                        .environmentObject(userStore)
+                        .environmentObject(managerScheduleStore)
+                        .environmentObject(holidayStore)
+                        .environmentObject(appSettings)
+                    }
+                case .bookLabour(let date, let focusedUserIds):
+                    BookLabourFlowView(bookDate: date, focusedUserIds: focusedUserIds)
+                        .environmentObject(appSettings)
+                        .environmentObject(bookingStore)
+                        .environmentObject(projectStore)
+                        .environmentObject(operativeStore)
+                        .environmentObject(userStore)
+                        .environmentObject(holidayStore)
+                        .environmentObject(managerScheduleStore)
+                        .environmentObject(firebaseBackend)
+                        .environmentObject(notificationService)
                 }
             }
             .sheet(item: $openDayDate) { day in
@@ -139,18 +156,6 @@ struct WarningsDetailView: View {
                         .environmentObject(taskStore)
                         .environmentObject(notificationService)
                 }
-            }
-            .fullScreenCover(item: $openBookLabourDate) { day in
-                BookLabourFlowView(bookDate: day.date)
-                    .environmentObject(appSettings)
-                    .environmentObject(bookingStore)
-                    .environmentObject(projectStore)
-                    .environmentObject(operativeStore)
-                    .environmentObject(userStore)
-                    .environmentObject(holidayStore)
-                    .environmentObject(managerScheduleStore)
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(notificationService)
             }
             .sheet(item: $warningPendingDismiss) { warning in
                 WarningDismissConfirmationSheet(
@@ -212,7 +217,7 @@ struct WarningsDetailView: View {
 
                 if userStore.hasAdminAccess() {
                     Button {
-                        showingWarningsSettings = true
+                        presentedFullScreen = .settings
                     } label: {
                         Image(systemName: "gearshape")
                             .font(.system(size: 15, weight: .semibold))
@@ -422,9 +427,9 @@ struct WarningsDetailView: View {
                             .foregroundStyle(WarningsUI.textBody)
                     } else {
                         (
-                            Text("\(people.count) \(people.count == 1 ? "person is" : "people are") missing hours on ")
+                            Text("\(people.count) \(people.count == 1 ? "person is" : "people are") not booked on ")
                             + Text(dateText.isEmpty ? "this day" : dateText).fontWeight(.bold)
-                            + Text(" and are below the standard paid day.")
+                            + Text(".")
                         )
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(WarningsUI.textBody)
@@ -472,9 +477,12 @@ struct WarningsDetailView: View {
             .padding(.bottom, 4)
 
             VStack(spacing: 9) {
-                if userStore.hasAdminAccess(), let warningDay = warning.occurrenceDate {
+                if canBookLabourFromWarning, let warningDay = warning.occurrenceDate ?? warning.unbookedLabour?.date {
                     Button {
-                        openBookLabourDate = IdentifiableDay(warningDay)
+                        presentedFullScreen = .bookLabour(
+                            date: warningDay,
+                            focusedUserIds: warning.unbookedLabour?.personKeys ?? []
+                        )
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "calendar.badge.plus")
@@ -882,6 +890,22 @@ nonisolated private struct IdentifiableDay: Identifiable, Hashable, Sendable {
 
     nonisolated init(_ date: Date) {
         self.date = Calendar.current.startOfDay(for: date)
+    }
+}
+
+/// Single full-screen destination. Two `.fullScreenCover` modifiers on the same
+/// view fight each other on iOS, so settings and book-labour share this enum.
+private enum WarningsFullScreenCover: Identifiable {
+    case settings
+    case bookLabour(date: Date, focusedUserIds: [String])
+
+    var id: String {
+        switch self {
+        case .settings:
+            return "settings"
+        case .bookLabour(let date, _):
+            return "book-\(Calendar.current.startOfDay(for: date).timeIntervalSince1970)"
+        }
     }
 }
 

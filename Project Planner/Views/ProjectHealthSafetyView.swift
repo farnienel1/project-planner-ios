@@ -2405,7 +2405,7 @@ private struct HSTrackIssueView: View {
                                 HSOperativeRow(
                                     name: user?.fullName.isEmpty == false ? (user?.fullName ?? signature.userId) : (user?.email ?? signature.userId),
                                     trade: user?.displayTradeType ?? "",
-                                    detail: signature.signedAt.map { "Signed \($0.formatted(date: .abbreviated, time: .shortened))" },
+                                    detail: signature.signedAt.map { "Signed \(HSTalkSignatureTimestamp.dateLine($0)) \(HSTalkSignatureTimestamp.timeLine($0))" },
                                     state: .signed
                                 )
                                 if index < signed.count - 1 { HSDivider() }
@@ -2691,7 +2691,7 @@ private struct HSSignedTalkView: View {
                     if let signedAt = signature?.signedAt {
                         let signer = userStore.organizationUsers.first(where: { $0.id == signature?.userId })
                         let signerName = signer?.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? signer?.fullName : signer?.email
-                        Text("Signed by \(signerName ?? "User") at \(signedAt.formatted(date: .abbreviated, time: .shortened))")
+                        Text("Signed by \(signerName ?? "User") at \(HSTalkSignatureTimestamp.dateLine(signedAt)) \(HSTalkSignatureTimestamp.timeLine(signedAt))")
                             .font(.system(size: 11))
                             .foregroundStyle(HS.slate2)
                     }
@@ -3252,25 +3252,44 @@ private enum HSTalkPDFBuilder {
 
                 let tableX = margin
                 let tableW = pageRect.width - margin * 2
-                let rowH: CGFloat = 32
-                let colW: [CGFloat] = [tableW * 0.26, tableW * 0.20, tableW * 0.34, tableW * 0.20]
-
-                navy.setFill()
-                UIBezierPath(roundedRect: CGRect(x: tableX, y: y, width: tableW, height: rowH), byRoundingCorners: [.topLeft, .topRight], cornerRadii: CGSize(width: 8, height: 8)).fill()
+                let rowH: CGFloat = 44
+                // Wider date column + two-line timestamp so time is never clipped.
+                let colW: [CGFloat] = [tableW * 0.24, tableW * 0.16, tableW * 0.32, tableW * 0.28]
                 let headers = ["Name", "Trade", "Signature", "Date & time"]
-                var hx = tableX + 12
-                for i in 0..<headers.count {
-                    (headers[i].uppercased() as NSString).draw(at: CGPoint(x: hx, y: y + 10), withAttributes: [
-                        .font: UIFont.systemFont(ofSize: 9.5, weight: .bold),
-                        .foregroundColor: UIColor.white
-                    ])
-                    hx += colW[i]
+                let footerReserve: CGFloat = 40
+
+                func drawTableHeader(roundedTop: Bool) {
+                    navy.setFill()
+                    if roundedTop {
+                        UIBezierPath(
+                            roundedRect: CGRect(x: tableX, y: y, width: tableW, height: 32),
+                            byRoundingCorners: [.topLeft, .topRight],
+                            cornerRadii: CGSize(width: 8, height: 8)
+                        ).fill()
+                    } else {
+                        UIRectFill(CGRect(x: tableX, y: y, width: tableW, height: 32))
+                    }
+                    var hx = tableX + 12
+                    for i in 0..<headers.count {
+                        (headers[i].uppercased() as NSString).draw(at: CGPoint(x: hx, y: y + 10), withAttributes: [
+                            .font: UIFont.systemFont(ofSize: 9.5, weight: .bold),
+                            .foregroundColor: UIColor.white
+                        ])
+                        hx += colW[i]
+                    }
+                    y += 32
                 }
-                y += rowH
+
+                drawTableHeader(roundedTop: true)
 
                 let sorted = signatures.sorted { ($0.signedAt ?? .distantPast) > ($1.signedAt ?? .distantPast) }
                 let rows = max(sorted.count, 2)
                 for idx in 0..<rows {
+                    if y + rowH > pageRect.height - footerReserve {
+                        pdf.beginPage()
+                        y = 32
+                        drawTableHeader(roundedTop: false)
+                    }
                     let rowRect = CGRect(x: tableX, y: y, width: tableW, height: rowH)
                     if idx % 2 == 1 {
                         UIColor(red: 0.98, green: 0.988, blue: 0.996, alpha: 1).setFill()
@@ -3290,13 +3309,12 @@ private enum HSTalkPDFBuilder {
                         let user = userLookup.first(where: { $0.id == sig.userId })
                         let name = (user?.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? user?.fullName : user?.email) ?? sig.userId
                         let trade = user?.displayTradeType == "—" ? "" : (user?.displayTradeType ?? "")
-                        let signedAt = sig.signedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Awaiting"
 
-                        (name as NSString).draw(in: CGRect(x: tableX + 12, y: y + 9, width: colW[0] - 14, height: 16), withAttributes: [
+                        (name as NSString).draw(in: CGRect(x: tableX + 12, y: y + 8, width: colW[0] - 14, height: 28), withAttributes: [
                             .font: UIFont.systemFont(ofSize: 11.5, weight: .semibold),
                             .foregroundColor: ink
                         ])
-                        (trade as NSString).draw(in: CGRect(x: tableX + colW[0] + 12, y: y + 9, width: colW[1] - 14, height: 16), withAttributes: [
+                        (trade as NSString).draw(in: CGRect(x: tableX + colW[0] + 12, y: y + 8, width: colW[1] - 14, height: 28), withAttributes: [
                             .font: UIFont.systemFont(ofSize: 11),
                             .foregroundColor: slate
                         ])
@@ -3312,10 +3330,12 @@ private enum HSTalkPDFBuilder {
                         }
 
                         let dateColor = sig.status == .signed ? slate : UIColor(red: 0.79, green: 0.635, blue: 0.29, alpha: 1)
-                        (signedAt as NSString).draw(in: CGRect(x: tableX + colW[0] + colW[1] + colW[2] + 12, y: y + 9, width: colW[3] - 16, height: 16), withAttributes: [
-                            .font: UIFont.systemFont(ofSize: 10.5, weight: .medium),
-                            .foregroundColor: dateColor
-                        ])
+                        HSTalkSignatureTimestamp.draw(
+                            sig.status == .signed ? sig.signedAt : nil,
+                            in: CGRect(x: tableX + colW[0] + colW[1] + colW[2] + 10, y: y + 6, width: colW[3] - 14, height: rowH - 10),
+                            color: dateColor,
+                            font: UIFont.systemFont(ofSize: 10.5, weight: .medium)
+                        )
                     }
                     y += rowH
                 }

@@ -425,7 +425,7 @@ struct HSCustomSignedTalkView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
             if let signedAt = signature.signedAt {
-                Text(signedAt.formatted(date: .abbreviated, time: .shortened))
+                Text("\(HSTalkSignatureTimestamp.dateLine(signedAt))  ·  \(HSTalkSignatureTimestamp.timeLine(signedAt))")
                     .font(HSFont.meta)
                     .foregroundStyle(HS.slate2)
             }
@@ -587,8 +587,6 @@ enum HSCustomSignedTalkPDFBuilder {
                     let user = userLookup.first(where: { $0.id == signature.userId })
                     let name = (user?.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? user?.fullName : user?.email) ?? signature.userId
                     let trade = user?.displayTradeType == "—" ? "" : (user?.displayTradeType ?? "")
-                    let signedAt = signature.signedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Awaiting signature"
-
                     let rowH: CGFloat = 92
                     let rowRect = CGRect(x: margin, y: y, width: pageRect.width - margin * 2, height: rowH)
                     UIColor(red: 0.965, green: 0.976, blue: 0.988, alpha: 1).setFill()
@@ -606,10 +604,13 @@ enum HSCustomSignedTalkPDFBuilder {
                             .foregroundColor: slate
                         ])
                     }
-                    (signedAt as NSString).draw(at: CGPoint(x: margin + 12, y: y + 64), withAttributes: [
-                        .font: UIFont.systemFont(ofSize: 10.5, weight: .medium),
-                        .foregroundColor: signature.status == .signed ? slate : amber
-                    ])
+                    HSTalkSignatureTimestamp.draw(
+                        signature.status == .signed ? signature.signedAt : nil,
+                        awaiting: "Awaiting signature",
+                        in: CGRect(x: margin + 12, y: y + 46, width: pageRect.width - margin * 2 - 230, height: 36),
+                        color: signature.status == .signed ? slate : amber,
+                        font: UIFont.systemFont(ofSize: 10.5, weight: .medium)
+                    )
 
                     let sigRect = CGRect(x: pageRect.width - margin - 210, y: y + 10, width: 198, height: 72)
                     UIColor.white.setFill()
