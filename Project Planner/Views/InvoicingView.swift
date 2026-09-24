@@ -18,12 +18,12 @@ struct InvoicingView: View {
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var notificationService: NotificationService
     @State private var landingVersion = 0
-    @State private var deepLinkTargetUser: AppUser?
-    @State private var deepLinkWeek: WeekRange?
-    @State private var showDeepLinkReview = false
+    @State private var pendingReviewUserId: String?
+    @State private var pendingReviewWeek: WeekRange?
+    @State private var didConsumeDeepLink = false
 
-    let initialReviewUserId: String?
-    let initialReviewWeekStart: Date?
+    @Binding var initialReviewUserId: String?
+    @Binding var initialReviewWeekStart: Date?
 
     private var settings: OrganizationInvoicingSettings {
         firebaseBackend.currentOrganization?.settings.invoicing ?? .default
@@ -66,31 +66,18 @@ struct InvoicingView: View {
             .navigationTitle("Timesheets")
             .navigationBarTitleDisplayMode(.inline)
             .task {
+                captureTimesheetDeepLink()
                 await syncLandingDraftsFromCloud()
-                await handleInitialTimesheetDeepLinkIfNeeded()
-            }
-            .navigationDestination(isPresented: $showDeepLinkReview) {
-                if let deepLinkTargetUser, let deepLinkWeek {
-                    OperativeTimesheetReviewView(
-                        operative: deepLinkTargetUser,
-                        settings: settings,
-                        week: deepLinkWeek
-                    )
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(userStore)
-                    .environmentObject(bookingStore)
-                    .environmentObject(operativeStore)
-                    .environmentObject(notificationService)
-                } else {
-                    EmptyView()
-                }
             }
         }
     }
 
-    init(initialReviewUserId: String? = nil, initialReviewWeekStart: Date? = nil) {
-        self.initialReviewUserId = initialReviewUserId
-        self.initialReviewWeekStart = initialReviewWeekStart
+    init(
+        initialReviewUserId: Binding<String?> = .constant(nil),
+        initialReviewWeekStart: Binding<Date?> = .constant(nil)
+    ) {
+        _initialReviewUserId = initialReviewUserId
+        _initialReviewWeekStart = initialReviewWeekStart
     }
 
     private var paymentSummaryCard: some View {
@@ -265,17 +252,14 @@ struct InvoicingView: View {
     @ViewBuilder
     private var managerLandingCards: some View {
         let _ = landingVersion
-        let directReports = usersForManagerReview
-        let openWeek = WeekRange.current(settings: settings)
-        let awaiting = directReports.filter {
-            let draft = TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start)
-            return TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: $0)
-        }.count
-        let signed = directReports.filter {
+        let reviewUsers = managerReviewUsersIncludingPending()
+        let openWeek = pendingReviewWeek ?? WeekRange.current(settings: settings)
+        let awaiting = landingAwaitingTimesheetCount(users: reviewUsers, preferredWeek: openWeek)
+        let signed = reviewUsers.filter {
             let draft = TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start)
             return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: $0) && draft.exportedAt == nil
         }.count
-        let exported = directReports.filter { TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start).exportedAt != nil }.count
+        let exported = reviewUsers.filter { TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start).exportedAt != nil }.count
 
         VStack(spacing: 12) {
             if canShowMyTimesheets {
@@ -294,7 +278,11 @@ struct InvoicingView: View {
                 .buttonStyle(.plain)
             }
             NavigationLink {
-                OperativeTimesheetsView(settings: settings)
+                OperativeTimesheetsView(
+                    settings: settings,
+                    week: pendingReviewWeek,
+                    initialReviewUserId: pendingReviewUserId
+                )
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
                     .environmentObject(bookingStore)
@@ -376,46 +364,104 @@ struct InvoicingView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private var usersForManagerReview: [AppUser] {
+    private var usersForManagerTimesheetScope: [AppUser] {
         guard let currentUser = userStore.displayUser else { return [] }
         if isAdminViewer {
             return userStore.organizationUsers.filter {
                 $0.isActive &&
-                TimesheetPayrollPolicy.shouldAppearInOperativeTimesheetRoster(user: $0, week: WeekRange.current(settings: settings), settings: settings) &&
                 ($0.permissions.operativeMode || $0.permissions.manager || $0.permissions.adminAccess || $0.role == .manager || $0.role == .admin)
             }
         }
         return userStore.organizationUsers.filter {
-            $0.isActive &&
-            TimesheetPayrollPolicy.shouldAppearInOperativeTimesheetRoster(user: $0, week: WeekRange.current(settings: settings), settings: settings) &&
-            $0.isLineManager(currentUser.id)
+            $0.isActive && $0.isLineManager(currentUser.id)
         }
+    }
+
+    private var usersForManagerReview: [AppUser] {
+        let week = pendingReviewWeek ?? WeekRange.current(settings: settings)
+        return usersForManagerTimesheetScope.filter {
+            TimesheetPayrollPolicy.shouldAppearInOperativeTimesheetRoster(user: $0, week: week, settings: settings)
+        }
+    }
+
+    private func managerReviewUsersIncludingPending() -> [AppUser] {
+        var users = usersForManagerTimesheetScope
+        if let extraId = pendingReviewUserId,
+           let extra = userStore.organizationUsers.first(where: { $0.id == extraId }),
+           !users.contains(where: { $0.id == extra.id }) {
+            users.append(extra)
+        }
+        return users
+    }
+
+    private func landingAwaitingTimesheetCount(users: [AppUser], preferredWeek: WeekRange) -> Int {
+        var seen = Set<String>()
+        for user in users {
+            var starts = Set(TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id))
+            starts.insert(preferredWeek.start)
+            starts.insert(WeekRange.current(settings: settings).start)
+            starts.insert(TimesheetPayrollPolicy.timesheetWeekRange(for: settings).start)
+            for start in starts {
+                let draft = TimesheetDraftStore.load(userId: user.id, weekStart: start)
+                guard TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user) else { continue }
+                let period = TimesheetPayrollPolicy.periodMatchingStoredStart(start, settings: settings)
+                seen.insert("\(user.id)|\(Int(period.start.timeIntervalSince1970))")
+            }
+        }
+        return seen.count
     }
 
     private func syncLandingDraftsFromCloud() async {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let weekStart = WeekRange.current(settings: settings).start
-        let ids = Set(usersForManagerReview.map(\.id) + (userStore.displayUser.map { [$0.id] } ?? []))
+        var ids = Set(usersForManagerTimesheetScope.map(\.id) + (userStore.displayUser.map { [$0.id] } ?? []))
+        if let pendingReviewUserId, !pendingReviewUserId.isEmpty {
+            ids.insert(pendingReviewUserId)
+        }
+        let weekStarts = TimesheetDraftStore.weeksToPrefetchForManagerReview(
+            settings: settings,
+            extraWeekStart: pendingReviewWeek?.start
+        )
         for userId in ids {
-            _ = await TimesheetDraftStore.refreshFromCloud(
+            for weekStart in weekStarts {
+                _ = await TimesheetDraftStore.refreshFromCloud(
+                    userId: userId,
+                    weekStart: weekStart,
+                    firebaseBackend: firebaseBackend,
+                    organizationId: orgId
+                )
+            }
+        }
+        let listIds: Set<String>
+        if isAdminViewer && ids.count > 25 {
+            listIds = pendingReviewUserId.map { Set([$0]) } ?? []
+        } else {
+            listIds = ids
+        }
+        for userId in listIds {
+            if let rows = try? await firebaseBackend.listTimesheetStates(
+                organizationId: orgId,
                 userId: userId,
-                weekStart: weekStart,
-                firebaseBackend: firebaseBackend,
-                organizationId: orgId
-            )
+                limit: 200
+            ) {
+                for row in rows {
+                    _ = TimesheetDraftStore.ingestCloudRow(row, userId: userId)
+                }
+            }
         }
         await MainActor.run { landingVersion += 1 }
     }
 
-    private func handleInitialTimesheetDeepLinkIfNeeded() async {
-        guard let targetUserId = initialReviewUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !targetUserId.isEmpty else { return }
-        guard let target = userStore.organizationUsers.first(where: { $0.id == targetUserId }) else { return }
-        let week = WeekRange.from(start: initialReviewWeekStart ?? Date())
-        await MainActor.run {
-            deepLinkTargetUser = target
-            deepLinkWeek = week
-            showDeepLinkReview = true
+    private func captureTimesheetDeepLink() {
+        guard !didConsumeDeepLink else { return }
+        didConsumeDeepLink = true
+        let rawId = initialReviewUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let weekStart = initialReviewWeekStart
+        initialReviewUserId = nil
+        initialReviewWeekStart = nil
+        guard !rawId.isEmpty else { return }
+        pendingReviewUserId = rawId
+        if let weekStart {
+            pendingReviewWeek = TimesheetPayrollPolicy.periodMatchingStoredStart(weekStart, settings: settings)
         }
     }
 }
@@ -759,6 +805,28 @@ enum TimesheetDraftStore {
             return Calendar.current.startOfDay(for: Date(timeIntervalSince1970: TimeInterval(stamp)))
         }
         return stamps.sorted(by: >)
+    }
+
+    static func ingestCloudRow(_ row: [String: Any], userId: String) -> Date? {
+        guard let weekStart = (row["weekStart"] as? Timestamp)?.dateValue() else { return nil }
+        let storedStart = Calendar.current.startOfDay(for: weekStart)
+        guard let draft = decodeFirestoreMap(row) else { return nil }
+        save(draft, userId: userId, weekStart: storedStart)
+        return storedStart
+    }
+
+    /// Current pay run plus the previous completed run (timesheets are often signed in arrears).
+    static func weeksToPrefetchForManagerReview(
+        settings: OrganizationInvoicingSettings,
+        extraWeekStart: Date? = nil
+    ) -> [Date] {
+        var starts = Set<Date>()
+        starts.insert(WeekRange.current(settings: settings).start)
+        starts.insert(TimesheetPayrollPolicy.timesheetWeekRange(for: settings).start)
+        if let extraWeekStart {
+            starts.insert(Calendar.current.startOfDay(for: extraWeekStart))
+        }
+        return Array(starts)
     }
 }
 
@@ -2267,6 +2335,31 @@ private struct PreviousTimesheetsView: View {
     }
 }
 
+private struct TimesheetAutoOpenTarget: Identifiable, Hashable {
+    let userId: String
+    let weekStart: Date
+
+    var id: String {
+        "\(userId)|\(Int(Calendar.current.startOfDay(for: weekStart).timeIntervalSince1970))"
+    }
+}
+
+/// Survives SwiftUI view recreation so backing out of a deep-linked review cannot re-push it.
+private enum TimesheetSignoffDeepLinkGate {
+    static var consumedKeys = Set<String>()
+
+    static func consume(userId: String, weekStart: Date) -> Bool {
+        let key = "\(userId)|\(Int(Calendar.current.startOfDay(for: weekStart).timeIntervalSince1970))"
+        return consumedKeys.insert(key).inserted
+    }
+}
+
+private struct ManagerTimesheetRow: Identifiable, Hashable {
+    let id: String
+    let user: AppUser
+    let week: WeekRange
+}
+
 private struct PreviousTimesheetRun: Identifiable {
     let id: String
     let week: WeekRange
@@ -2287,6 +2380,7 @@ private struct OperativeTimesheetsView: View {
     @EnvironmentObject var notificationService: NotificationService
     let settings: OrganizationInvoicingSettings
     let week: WeekRange
+    let initialReviewUserId: String?
     @State private var selectedTab: ManagerTimesheetListTab = .awaiting
     @State private var refreshVersion = 0
     @State private var isExporting = false
@@ -2294,35 +2388,71 @@ private struct OperativeTimesheetsView: View {
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
     @State private var exportedHistory: [ExportedTimesheetHistoryRow] = []
     @State private var isLoadingExportedHistory = false
+    @State private var awaitingRows: [ManagerTimesheetRow] = []
+    @State private var autoOpenReview: TimesheetAutoOpenTarget?
+    @State private var didAutoOpenReview = false
 
     private var isAdminViewer: Bool {
         guard let u = userStore.displayUser else { return false }
         return u.isSuperAdmin || u.permissions.adminAccess || u.role == .admin
     }
 
-    init(settings: OrganizationInvoicingSettings, week: WeekRange? = nil) {
+    init(
+        settings: OrganizationInvoicingSettings,
+        week: WeekRange? = nil,
+        initialReviewUserId: String? = nil
+    ) {
         self.settings = settings
         self.week = week ?? TimesheetPayrollPolicy.payPeriodContaining(settings: settings)
+        self.initialReviewUserId = initialReviewUserId
+    }
+
+    private var extraReviewUser: AppUser? {
+        guard let id = initialReviewUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else { return nil }
+        return userStore.organizationUsers.first(where: { $0.id == id })
+    }
+
+    private var managerScopeUsers: [AppUser] {
+        guard let currentUser = userStore.displayUser else { return [] }
+        var users: [AppUser]
+        if isAdminViewer {
+            users = userStore.organizationUsers.filter { user in
+                user.isActive
+                && (user.permissions.operativeMode || user.permissions.manager || user.permissions.adminAccess || user.role == .manager || user.role == .admin)
+            }
+        } else {
+            users = userStore.organizationUsers.filter { user in
+                user.isActive && user.isLineManager(currentUser.id)
+            }
+        }
+        if let extra = extraReviewUser, !users.contains(where: { $0.id == extra.id }) {
+            users.append(extra)
+        }
+        return users.sorted(by: { $0.fullName < $1.fullName })
     }
 
     private var directReports: [AppUser] {
         guard let currentUser = userStore.displayUser else { return [] }
+        var users: [AppUser]
         if isAdminViewer {
-            return userStore.organizationUsers
+            users = userStore.organizationUsers
                 .filter { user in
                     user.isActive
                     && TimesheetPayrollPolicy.shouldAppearInOperativeTimesheetRoster(user: user, week: week, settings: settings)
                     && (user.permissions.operativeMode || user.permissions.manager || user.permissions.adminAccess || user.role == .manager || user.role == .admin)
                 }
-                .sorted(by: { $0.fullName < $1.fullName })
+        } else {
+            users = userStore.organizationUsers
+                .filter { user in
+                    user.isActive
+                    && TimesheetPayrollPolicy.shouldAppearInOperativeTimesheetRoster(user: user, week: week, settings: settings)
+                    && user.isLineManager(currentUser.id)
+                }
         }
-        return userStore.organizationUsers
-            .filter { user in
-                user.isActive
-                && TimesheetPayrollPolicy.shouldAppearInOperativeTimesheetRoster(user: user, week: week, settings: settings)
-                && (user.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == currentUser.id
-            }
-            .sorted(by: { $0.fullName < $1.fullName })
+        if let extra = extraReviewUser, !users.contains(where: { $0.id == extra.id }) {
+            users.append(extra)
+        }
+        return users.sorted(by: { $0.fullName < $1.fullName })
     }
 
     private var filteredReports: [AppUser] {
@@ -2421,6 +2551,68 @@ private struct OperativeTimesheetsView: View {
                                 }
                             }
                         }
+                    } else if selectedTab == .awaiting {
+                    if awaitingRows.isEmpty {
+                        ContentUnavailableView(
+                            "No timesheets awaiting sign-off",
+                            systemImage: "checkmark.circle",
+                            description: Text("When someone signs a timesheet that needs your counter-signature, it appears here.")
+                        )
+                        .padding()
+                    } else {
+                    ForEach(awaitingRows) { row in
+                        NavigationLink {
+                            OperativeTimesheetReviewView(operative: row.user, settings: settings, week: row.week)
+                                .environmentObject(firebaseBackend)
+                                .environmentObject(userStore)
+                                .environmentObject(bookingStore)
+                                .environmentObject(operativeStore)
+                                .environmentObject(projectStore)
+                                .environmentObject(managerScheduleStore)
+                                .environmentObject(notificationService)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Circle()
+                                    .fill(Color.blue.opacity(0.85))
+                                    .frame(width: 38, height: 38)
+                                    .overlay(
+                                        Text(initials(for: row.user))
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(.white)
+                                    )
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(row.user.fullName.isEmpty ? row.user.email : row.user.fullName)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                    let draft = TimesheetDraftStore.load(userId: row.user.id, weekStart: row.week.start)
+                                    let summary = operativeSummary(for: row.user, draft: draft, week: row.week)
+                                    Text("\(row.week.title) · Hrs \(formatHours(summary.hours)) · OT \(formatHours(summary.overtimeHours)) · PW \(String(format: "£%.2f", summary.priceWork)) · Exp \(String(format: "£%.2f", summary.expenses))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    if isAdminViewer {
+                                        Text("Line manager: \(lineManagerName(for: row.user))")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                statusPill(
+                                    for: TimesheetDraftStore.load(userId: row.user.id, weekStart: row.week.start),
+                                    user: row.user
+                                )
+                                Image(systemName: "chevron.right")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                        }
+                        .buttonStyle(.plain)
+                        if row.id != awaitingRows.last?.id {
+                            Divider().padding(.leading, 60)
+                        }
+                    }
+                    }
                     } else {
                     ForEach(filteredReports, id: \.id) { operative in
                         NavigationLink {
@@ -2447,7 +2639,7 @@ private struct OperativeTimesheetsView: View {
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.primary)
                                     let draft = TimesheetDraftStore.load(userId: operative.id, weekStart: week.start)
-                                    let summary = operativeSummary(for: operative, draft: draft)
+                                    let summary = operativeSummary(for: operative, draft: draft, week: week)
                                     Text("\(week.title) · Hrs \(formatHours(summary.hours)) · OT \(formatHours(summary.overtimeHours)) · PW \(String(format: "£%.2f", summary.priceWork)) · Exp \(String(format: "£%.2f", summary.expenses))")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -2503,10 +2695,32 @@ private struct OperativeTimesheetsView: View {
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle(isAdminViewer ? "User Timesheets" : "Operative Timesheets")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $autoOpenReview) { target in
+            if let operative = userStore.organizationUsers.first(where: { $0.id == target.userId }) {
+                let reviewWeek = TimesheetPayrollPolicy.periodMatchingStoredStart(target.weekStart, settings: settings)
+                OperativeTimesheetReviewView(operative: operative, settings: settings, week: reviewWeek)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(userStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(notificationService)
+            }
+        }
         .task {
             await refreshFromCloud()
             await loadDayRateHistory()
             await loadExportedHistory()
+            openDeepLinkedTimesheetIfNeeded()
+        }
+        .onAppear {
+            rebuildAwaitingRows()
+        }
+        .onChange(of: autoOpenReview) { _, newValue in
+            if newValue == nil {
+                didAutoOpenReview = true
+            }
         }
         .onChange(of: selectedTab) { _, tab in
             if tab == .exported {
@@ -2561,15 +2775,74 @@ private struct OperativeTimesheetsView: View {
 
     private func refreshFromCloud() async {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        for user in directReports {
-            _ = await TimesheetDraftStore.refreshFromCloud(
-                userId: user.id,
-                weekStart: week.start,
-                firebaseBackend: firebaseBackend,
-                organizationId: orgId
-            )
+        var users = managerScopeUsers
+        if let extra = extraReviewUser, !users.contains(where: { $0.id == extra.id }) {
+            users.append(extra)
         }
-        await MainActor.run { refreshVersion += 1 }
+        let prefetchWeeks = TimesheetDraftStore.weeksToPrefetchForManagerReview(
+            settings: settings,
+            extraWeekStart: week.start
+        )
+        for user in users {
+            for weekStart in prefetchWeeks {
+                _ = await TimesheetDraftStore.refreshFromCloud(
+                    userId: user.id,
+                    weekStart: weekStart,
+                    firebaseBackend: firebaseBackend,
+                    organizationId: orgId
+                )
+            }
+            if let rows = try? await firebaseBackend.listTimesheetStates(
+                organizationId: orgId,
+                userId: user.id,
+                limit: 200
+            ) {
+                for row in rows {
+                    _ = TimesheetDraftStore.ingestCloudRow(row, userId: user.id)
+                }
+            }
+        }
+        await MainActor.run {
+            rebuildAwaitingRows()
+            refreshVersion += 1
+        }
+    }
+
+    private func rebuildAwaitingRows() {
+        let _ = refreshVersion
+        var rows: [ManagerTimesheetRow] = []
+        var seen = Set<String>()
+        for user in managerScopeUsers {
+            var starts = Set(TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id))
+            starts.insert(week.start)
+            starts.insert(WeekRange.current(settings: settings).start)
+            starts.insert(TimesheetPayrollPolicy.timesheetWeekRange(for: settings).start)
+            for start in starts {
+                let draft = TimesheetDraftStore.load(userId: user.id, weekStart: start)
+                guard TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user) else { continue }
+                let period = TimesheetPayrollPolicy.periodMatchingStoredStart(start, settings: settings)
+                let id = "\(user.id)|\(Int(period.start.timeIntervalSince1970))"
+                guard seen.insert(id).inserted else { continue }
+                rows.append(ManagerTimesheetRow(id: id, user: user, week: period))
+            }
+        }
+        awaitingRows = rows.sorted { lhs, rhs in
+            if lhs.week.start != rhs.week.start { return lhs.week.start > rhs.week.start }
+            return lhs.user.fullName.localizedCaseInsensitiveCompare(rhs.user.fullName) == .orderedAscending
+        }
+    }
+
+    private func openDeepLinkedTimesheetIfNeeded() {
+        guard !didAutoOpenReview else { return }
+        guard let userId = initialReviewUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !userId.isEmpty else { return }
+        guard extraReviewUser != nil || userStore.organizationUsers.contains(where: { $0.id == userId }) else { return }
+        let weekStart = week.start
+        guard TimesheetSignoffDeepLinkGate.consume(userId: userId, weekStart: weekStart) else {
+            didAutoOpenReview = true
+            return
+        }
+        didAutoOpenReview = true
+        autoOpenReview = TimesheetAutoOpenTarget(userId: userId, weekStart: weekStart)
     }
 
     private func loadDayRateHistory() async {
@@ -2658,6 +2931,7 @@ private struct OperativeTimesheetsView: View {
         }
 
         refreshVersion += 1
+        rebuildAwaitingRows()
         await loadExportedHistory()
         selectedTab = .exported
         if result.failed.isEmpty {
@@ -2753,12 +3027,13 @@ private struct OperativeTimesheetsView: View {
             .sorted(by: { $0.fullName < $1.fullName })
     }
 
-    private func operativeSummary(for user: AppUser, draft: TimesheetDraft) -> (hours: Double, overtimeHours: Double, priceWork: Double, expenses: Double) {
+    private func operativeSummary(for user: AppUser, draft: TimesheetDraft, week reviewWeek: WeekRange? = nil) -> (hours: Double, overtimeHours: Double, priceWork: Double, expenses: Double) {
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
+        let range = reviewWeek ?? week
         let summary = TimesheetPayrollCollector.collect(
             for: user,
-            week: week,
+            week: range,
             bookings: bookingStore.bookings,
             managerBookings: managerScheduleStore.managerSiteBookings,
             operatives: operativeStore.allOperatives,
