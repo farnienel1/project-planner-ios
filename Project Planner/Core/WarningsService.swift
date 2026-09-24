@@ -118,18 +118,13 @@ class WarningsService: ObservableObject {
         )
     }
 
-    /// Counts only core priority warnings (operative clashes, unbooked labour, manager clashes, materials).
-    private var corePriorityActiveWarnings: [Warning] {
-        activeWarnings.filter(\.isCorePriorityWarning)
-    }
-
+    /// Dashboard / Home count every active warning, including qualifications.
     private func refreshSeverityCounts() {
-        let core = corePriorityActiveWarnings
-        warningCount = core.count
+        warningCount = activeWarnings.count
         var high = 0
         var medium = 0
         var low = 0
-        for warning in core {
+        for warning in activeWarnings {
             switch warning.severity {
             case .high: high += 1
             case .medium: medium += 1
@@ -158,7 +153,7 @@ class WarningsService: ObservableObject {
         warningsInRange(range, types: [.operativeBookingClash], activeOnly: true, source: source)
     }
 
-    /// HIGH: manager/admin overlaps still awaiting tick for weekly report.
+    /// MEDIUM: manager/admin overlaps still awaiting tick for weekly report.
     func unresolvedManagerClashes(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
         warningsInRange(range, types: [.managerLocationClash], activeOnly: true, source: source)
     }

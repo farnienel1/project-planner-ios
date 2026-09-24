@@ -271,6 +271,7 @@ struct DailyOverviewView: View {
     private var operativeUsers: [AppUser] {
         userStore.organizationUsers.filter {
             $0.isActive &&
+            $0.passwordSet &&
             $0.permissions.operativeMode &&
             !$0.permissions.manager &&
             !$0.permissions.adminAccess &&
@@ -282,6 +283,7 @@ struct DailyOverviewView: View {
     private var managerUsers: [AppUser] {
         userStore.organizationUsers.filter {
             $0.isActive &&
+            $0.passwordSet &&
             ($0.permissions.manager || $0.permissions.adminAccess || $0.isSuperAdmin || $0.role == .admin)
         }
     }
@@ -313,7 +315,7 @@ struct DailyOverviewView: View {
             let linkedOperative = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
             if hasApprovedHoliday(userId: user.id, operativeId: linkedOperative?.id) { return nil }
             if hasLabourBooking(userId: user.id, operativeId: linkedOperative?.id) { return nil }
-            let display = linkedOperative?.name ?? (user.fullName.isEmpty ? user.email : user.fullName)
+            let display = user.fullName.isEmpty ? user.email : user.fullName
             return "\(display) (missing \(ScheduleCoverageFormat.hours(required))h)"
         }
         .sorted()

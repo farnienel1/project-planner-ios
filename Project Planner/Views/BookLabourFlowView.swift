@@ -1820,9 +1820,18 @@ struct BookLabourFlowView: View {
         let required = max(policy.standardPaidHours, 0)
         let focused = Set(focusedUserIds)
 
-        let operativeUsers = userStore.organizationUsers.filter { $0.permissions.operativeMode && $0.isActive }
+        func isWarningFocus(_ candidate: BookLabourCandidate) -> Bool {
+            if focused.contains(candidate.user.id) { return true }
+            if let op = candidate.linkedOperative, focused.contains(op.id.uuidString) { return true }
+            return false
+        }
+
+        let operativeUsers = userStore.organizationUsers.filter {
+            $0.permissions.operativeMode && $0.isActive && ($0.passwordSet || focused.contains($0.id))
+        }
         let managerUsers = userStore.organizationUsers.filter {
             $0.isActive &&
+                ($0.passwordSet || focused.contains($0.id)) &&
                 ($0.permissions.manager || $0.permissions.adminAccess || $0.isSuperAdmin || $0.role == .admin)
         }
         let operativeOnlyUsers = operativeUsers.filter {
@@ -1837,7 +1846,7 @@ struct BookLabourFlowView: View {
 
         func appendCandidate(_ candidate: BookLabourCandidate, paid: Double) {
             guard seenUserIds.insert(candidate.user.id).inserted else { return }
-            let isFocused = focused.contains(candidate.user.id)
+            let isFocused = isWarningFocus(candidate)
             // Always keep people named on the warning. Otherwise skip a full paid day.
             if !isFocused, paid + 0.08 >= required { return }
             out.append(candidate)
@@ -1865,8 +1874,8 @@ struct BookLabourFlowView: View {
         }
 
         return out.sorted { a, b in
-            let aFocus = focused.contains(a.user.id)
-            let bFocus = focused.contains(b.user.id)
+            let aFocus = isWarningFocus(a)
+            let bFocus = isWarningFocus(b)
             if aFocus != bFocus { return aFocus }
             return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
         }
