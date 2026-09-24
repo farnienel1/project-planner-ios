@@ -60,6 +60,7 @@ struct WeeklyReportView: View {
     @State private var periodMediumCount = 0
     @State private var periodLowCount = 0
     @State private var periodSummaryReady = false
+    @State private var timesheetFeed = WeeklyReportTimesheetFeed.empty
 
     init(
         bookingStore: BookingStore,
@@ -152,7 +153,7 @@ struct WeeklyReportView: View {
                     quickSelectCard
                     customRangeCard
                     invoicingPeriodCard
-                    Text("Period warnings and pay breakdown are calculated when you tap Generate — this is separate from Home Warnings (live ops from today forward).")
+                    Text("Period warnings and pay breakdown are calculated when you tap Generate — this is separate from Home Warnings (live ops from today forward). Live bookings from projects, small works and daily overview feed this snapshot until a timesheet is counter-signed (or self-signed when the person has no line manager). Agreed timesheet figures then replace those days, including price work and expenses.")
                         .font(.system(size: 12))
                         .foregroundStyle(WeeklyReportColors.muted)
                         .multilineTextAlignment(.center)
@@ -759,6 +760,20 @@ struct WeeklyReportView: View {
             if logoImage == nil {
                 await loadOrganizationLogo()
             }
+            let feed = await WeeklyReportTimesheetFeed.load(
+                users: userStore.organizationUsers,
+                range: reportDateRange,
+                settings: invoicingSettings,
+                firebaseBackend: firebaseBackend,
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                operativeStore: operativeStore,
+                projectStore: projectStore,
+                dayRateHistory: dayRateHistoryCollection,
+                payrollPolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
+                scheduleOptions: appSettings.settings.myScheduleOptions
+            )
+            timesheetFeed = feed
             do {
                 let sections = buildExportSections()
                 let exports = try WeeklyReportExportBuilder.makeExports(
@@ -884,6 +899,36 @@ struct WeeklyReportView: View {
             )
         )
 
+        let priceWorkRows = timesheetMoneyRows(\.priceWork)
+        var priceWorkTotal = 0.0
+        let priceWorkExportRows = priceWorkRows.map { row -> [String] in
+            priceWorkTotal += row.amount
+            return [row.personName, row.title, row.jobNumber, formatDate(row.date), row.details, formatCurrency(row.amount)]
+        }
+        sections.append(
+            WeeklyReportExportBuilder.Section(
+                title: "🧱  Price Work",
+                headers: ["Person", "Title", "Job No.", "Date", "Details", "Amount"],
+                rows: priceWorkExportRows,
+                totalRow: ["", "", "", "", "Price Work Total", formatCurrency(priceWorkTotal)]
+            )
+        )
+
+        let expenseRows = timesheetMoneyRows(\.expenses)
+        var expenseTotal = 0.0
+        let expenseExportRows = expenseRows.map { row -> [String] in
+            expenseTotal += row.amount
+            return [row.personName, row.title, row.jobNumber, formatDate(row.date), row.details, formatCurrency(row.amount)]
+        }
+        sections.append(
+            WeeklyReportExportBuilder.Section(
+                title: "🧾  Expenses",
+                headers: ["Person", "Title", "Job No.", "Date", "Details", "Amount"],
+                rows: expenseExportRows,
+                totalRow: ["", "", "", "", "Expenses Total", formatCurrency(expenseTotal)]
+            )
+        )
+
         var totalAmount = 0.0
         var payRows: [[String]] = []
         for person in payrollPersonSummaries() {
@@ -1001,6 +1046,26 @@ struct WeeklyReportView: View {
         rows.append(["", "", "Total", "", formatDays(additionalScheduleTotal)])
         rows.append([])
 
+        rows.append(["PRICE WORK"])
+        rows.append(["Person", "Title", "Job Number", "Date", "Details", "Amount"])
+        var priceWorkTotal = 0.0
+        for row in timesheetMoneyRows(\.priceWork) {
+            rows.append([row.personName, row.title, row.jobNumber, formatDate(row.date), row.details, formatCurrency(row.amount)])
+            priceWorkTotal += row.amount
+        }
+        rows.append(["", "", "", "", "Price Work Total", formatCurrency(priceWorkTotal)])
+        rows.append([])
+
+        rows.append(["EXPENSES"])
+        rows.append(["Person", "Title", "Job Number", "Date", "Details", "Amount"])
+        var expenseTotal = 0.0
+        for row in timesheetMoneyRows(\.expenses) {
+            rows.append([row.personName, row.title, row.jobNumber, formatDate(row.date), row.details, formatCurrency(row.amount)])
+            expenseTotal += row.amount
+        }
+        rows.append(["", "", "", "", "Expenses Total", formatCurrency(expenseTotal)])
+        rows.append([])
+
         rows.append(["PAY SUMMARY"])
         rows.append(["Person", "Role", "Rate Type", "Days", "Rate", "Pay"])
         var totalAmount = 0.0
@@ -1050,6 +1115,7 @@ struct WeeklyReportView: View {
         for booking in filtered {
             guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else { continue }
             let linkedUser = linkedAppUser(for: operative)
+            if timesheetFeed.covers(userId: linkedUser?.id, day: booking.date) { continue }
             let project = projectStore.projects.first(where: { $0.id == booking.projectId })
                 ?? projectStore.smallWorks.first(where: { $0.id == booking.projectId })
             let projectName = project?.siteName ?? "Unknown"
@@ -1069,6 +1135,7 @@ struct WeeklyReportView: View {
                 days: totals[key] ?? 0
             )
         }
+        mergeTimesheetProjectRows(into: &rowsMap, totals: &totals)
         return Array(rowsMap.values)
     }
 
@@ -1084,6 +1151,7 @@ struct WeeklyReportView: View {
         var rowsMap: [String: ProjectWorkRow] = [:]
         for booking in filtered {
             guard let user = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { continue }
+            if timesheetFeed.covers(userId: user.id, day: booking.date) { continue }
             let project = projectStore.projects.first(where: { $0.id == booking.locationId })
                 ?? projectStore.smallWorks.first(where: { $0.id == booking.locationId })
             let projectName = project?.siteName ?? "Unknown"
@@ -1149,10 +1217,8 @@ struct WeeklyReportView: View {
         var totals: [String: LabourRateSummary] = [:]
         for booking in operativeBookings {
             guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else { continue }
-            let opEmail = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            let user = userStore.organizationUsers.first(where: {
-                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == opEmail
-            })
+            let user = linkedAppUser(for: operative)
+            if timesheetFeed.covers(userId: user?.id, day: booking.date) { continue }
             let rate = dayRateForOperativeBooking(user: user, operative: operative, on: booking.date)
             let days = bookingDayValue(from: booking)
             let key = labourRateKey(name: operative.name, role: "Operative", rate: rate)
@@ -1164,6 +1230,7 @@ struct WeeklyReportView: View {
         for booking in managerBookings {
             guard appSettings.settings.myScheduleOptions.includesManagerScheduleLocation(booking) else { continue }
             guard let manager = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { continue }
+            if timesheetFeed.covers(userId: manager.id, day: booking.date) { continue }
             let managerName = manager.fullName.isEmpty ? manager.email : manager.fullName
             let rate = dayRateForUserOnDay(userId: manager.id, fallback: manager.dayRate, date: booking.date)
             let days = managerDayValue(from: booking)
@@ -1185,8 +1252,9 @@ struct WeeklyReportView: View {
                 && day <= cal.startOfDay(for: endDate)
                 && ($0.locationType == .office || $0.locationType == .workingFromHome || $0.locationType == .siteSurvey || $0.locationType == .custom)
                 && opts.includesManagerScheduleLocation($0)
+                && !timesheetFeed.covers(userId: $0.userId, day: $0.date)
         }
-        return filtered.compactMap { booking in
+        let liveRows = filtered.compactMap { booking -> ManagerAdditionalScheduleRow? in
             guard let person = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { return nil }
             let personName = person.fullName.isEmpty ? person.email : person.fullName
             let roleLabel = reportRoleLabel(for: person, fallback: "Manager")
@@ -1205,7 +1273,8 @@ struct WeeklyReportView: View {
                 days: managerDayValue(from: booking)
             )
         }
-        .sorted {
+        let timesheetRows = timesheetAdditionalScheduleRows()
+        return (liveRows + timesheetRows).sorted {
             if $0.personName == $1.personName {
                 return $0.location < $1.location
             }
@@ -1364,8 +1433,9 @@ struct WeeklyReportView: View {
         }
         for booking in operativeBookings {
             guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else { continue }
-            let policy = firebaseBackend.payrollPolicy(for: booking.date)
             let linkedUser = linkedAppUser(for: operative)
+            if timesheetFeed.covers(userId: linkedUser?.id, day: booking.date) { continue }
+            let policy = firebaseBackend.payrollPolicy(for: booking.date)
             let role = reportRoleLabel(for: linkedUser, fallback: "Operative")
             let name = (linkedUser?.fullName.isEmpty == false) ? (linkedUser?.fullName ?? operative.name) : operative.name
             let resolved = resolvedPayrollRate(user: linkedUser, operative: operative, on: booking.date)
@@ -1392,6 +1462,7 @@ struct WeeklyReportView: View {
         }
         for booking in managerBookings {
             guard let manager = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { continue }
+            if timesheetFeed.covers(userId: manager.id, day: booking.date) { continue }
             let policy = firebaseBackend.payrollPolicy(for: booking.date)
             let role = reportRoleLabel(for: manager, fallback: "Manager")
             let name = manager.fullName.isEmpty ? manager.email : manager.fullName
@@ -1471,9 +1542,146 @@ struct WeeklyReportView: View {
             }
             summaries.append(PayrollPersonSummary(name: first.name, role: first.role, lines: lines, totalPay: total))
         }
-        return summaries.sorted {
+        return mergeTimesheetPay(into: summaries).sorted {
             if $0.name == $1.name { return $0.role < $1.role }
             return $0.name < $1.name
+        }
+    }
+
+    private func mergeTimesheetProjectRows(into rowsMap: inout [String: ProjectWorkRow], totals: inout [String: Double]) {
+        let projectKinds: Set<String> = [
+            ManagerLocationType.project.rawValue,
+            ManagerLocationType.smallWork.rawValue
+        ]
+        for (week, line) in timesheetFeed.labourLines(in: reportDateRange) {
+            guard !line.isOvertime else { continue }
+            guard projectKinds.contains(line.locationKind) else { continue }
+            guard line.days > 0.0001 else { continue }
+            let projectName = line.projectName.isEmpty ? "Unknown" : line.projectName
+            let jobNumber = line.jobNumber.isEmpty ? "N/A" : line.jobNumber
+            let key = "\(projectName)|\(jobNumber)|\(week.personName)|\(week.role)"
+            totals[key, default: 0] += line.days
+            if var existing = rowsMap[key] {
+                existing.days = totals[key] ?? existing.days
+                rowsMap[key] = existing
+            } else {
+                rowsMap[key] = ProjectWorkRow(
+                    projectName: projectName,
+                    jobNumber: jobNumber,
+                    personName: week.personName,
+                    tradeDisplay: week.tradeDisplay,
+                    tradeSortKey: week.tradeSortKey,
+                    role: week.role,
+                    days: totals[key] ?? line.days
+                )
+            }
+        }
+    }
+
+    private func timesheetAdditionalScheduleRows() -> [ManagerAdditionalScheduleRow] {
+        let additionalKinds: Set<String> = [
+            ManagerLocationType.office.rawValue,
+            ManagerLocationType.workingFromHome.rawValue,
+            ManagerLocationType.siteSurvey.rawValue,
+            ManagerLocationType.custom.rawValue
+        ]
+        return timesheetFeed.labourLines(in: reportDateRange).compactMap { week, line in
+            guard !line.isOvertime else { return nil }
+            guard additionalKinds.contains(line.locationKind) else { return nil }
+            guard line.days > 0.0001 else { return nil }
+            let location: String
+            if line.locationKind == ManagerLocationType.custom.rawValue {
+                let name = line.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+                location = name.isEmpty || name == "—" ? "Custom" : name
+            } else if let kind = ManagerLocationType(rawValue: line.locationKind) {
+                location = kind.displayName
+            } else {
+                location = line.projectName
+            }
+            return ManagerAdditionalScheduleRow(
+                personName: week.personName,
+                role: week.role,
+                location: location,
+                timeSlotLabel: line.details.isEmpty ? "Timesheet" : line.details,
+                days: line.days
+            )
+        }
+    }
+
+    private func timesheetMoneyRows(
+        _ keyPath: KeyPath<TimesheetWeeklyReportOverride, [TimesheetWeeklyReportMoneyLine]>
+    ) -> [TimesheetMoneyExportRow] {
+        timesheetFeed.moneyLines(keyPath, in: reportDateRange).map { week, line in
+            TimesheetMoneyExportRow(
+                personName: week.personName,
+                title: line.title,
+                jobNumber: line.jobNumber,
+                date: line.date,
+                details: line.details,
+                amount: line.amount
+            )
+        }
+        .sorted {
+            if $0.personName == $1.personName {
+                return $0.date < $1.date
+            }
+            return $0.personName < $1.personName
+        }
+    }
+
+    private func mergeTimesheetPay(into summaries: [PayrollPersonSummary]) -> [PayrollPersonSummary] {
+        struct Acc {
+            var name: String
+            var role: String
+            var lines: [PayrollRateLine]
+            var totalPay: Double
+        }
+        var map: [String: Acc] = [:]
+        for summary in summaries {
+            map["\(summary.name)|\(summary.role)"] = Acc(
+                name: summary.name,
+                role: summary.role,
+                lines: summary.lines,
+                totalPay: summary.totalPay
+            )
+        }
+        func add(name: String, role: String, line: PayrollRateLine) {
+            let key = "\(name)|\(role)"
+            var acc = map[key] ?? Acc(name: name, role: role, lines: [], totalPay: 0)
+            acc.lines.append(line)
+            acc.totalPay += line.pay ?? 0
+            map[key] = acc
+        }
+        for (week, line) in timesheetFeed.labourLines(in: reportDateRange) {
+            guard line.amount > 0.0001 else { continue }
+            let rate = line.days > 0.0001 ? line.amount / line.days : nil
+            add(
+                name: week.personName,
+                role: week.role,
+                line: PayrollRateLine(
+                    rateTypeLabel: line.isOvertime ? "Timesheet OT" : "Timesheet",
+                    days: line.days,
+                    rate: rate,
+                    pay: line.amount
+                )
+            )
+        }
+        for (week, line) in timesheetFeed.moneyLines(\.priceWork, in: reportDateRange) {
+            add(
+                name: week.personName,
+                role: week.role,
+                line: PayrollRateLine(rateTypeLabel: "Price work", days: 0, rate: nil, pay: line.amount)
+            )
+        }
+        for (week, line) in timesheetFeed.moneyLines(\.expenses, in: reportDateRange) {
+            add(
+                name: week.personName,
+                role: week.role,
+                line: PayrollRateLine(rateTypeLabel: "Expenses", days: 0, rate: nil, pay: line.amount)
+            )
+        }
+        return map.values.map {
+            PayrollPersonSummary(name: $0.name, role: $0.role, lines: $0.lines, totalPay: $0.totalPay)
         }
     }
 
@@ -1518,6 +1726,15 @@ struct WeeklyReportView: View {
             warning.affectedPersonNames,
         ]
     }
+}
+
+private struct TimesheetMoneyExportRow {
+    let personName: String
+    let title: String
+    let jobNumber: String
+    let date: Date
+    let details: String
+    let amount: Double
 }
 
 private struct ProjectWorkRow {

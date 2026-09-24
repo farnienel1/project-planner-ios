@@ -420,7 +420,7 @@ struct InvoicingView: View {
     }
 }
 
-private enum TimesheetApprovalPolicy {
+enum TimesheetApprovalPolicy {
     static func lineManagerUserIds(for user: AppUser) -> [String] {
         user.lineManagerUserIds
     }
@@ -468,6 +468,7 @@ private enum TimesheetApprovalPolicy {
         draft.managerSignedByUserId = nil
         draft.managerSignatureImageBase64 = nil
         draft.exportedAt = nil
+        draft.weeklyReportOverride = nil
         draft.payrollLineReviews = [:]
         for index in draft.expenseEntries.indices {
             draft.expenseEntries[index].managerDecision = .approved
@@ -484,7 +485,7 @@ private enum TimesheetApprovalPolicy {
     }
 }
 
-private enum TimesheetDraftStore {
+enum TimesheetDraftStore {
     private static let defaults = UserDefaults.standard
 
     static func load(userId: String, weekStart: Date) -> TimesheetDraft {
@@ -549,6 +550,7 @@ private enum TimesheetDraftStore {
             "managerSignedByUserId": draft.managerSignedByUserId ?? "",
             "managerSignatureImageBase64": draft.managerSignatureImageBase64 ?? "",
             "exportedAt": draft.exportedAt.map(Timestamp.init(date:)) as Any,
+            "weeklyReportOverride": draft.weeklyReportOverride.map(weeklyReportOverrideMap) as Any,
             "expenseEntries": draft.expenseEntries.map { e in
                 [
                     "id": e.id.uuidString,
@@ -649,11 +651,98 @@ private enum TimesheetDraftStore {
             output.payrollLineReviews = reviews
         }
 
+        if let overrideMap = map["weeklyReportOverride"] as? [String: Any] {
+            output.weeklyReportOverride = weeklyReportOverride(from: overrideMap)
+        }
+
         return output
     }
 
     static func decodeFirestoreMap(_ map: [String: Any]) -> TimesheetDraft? {
         fromFirestoreMap(map)
+    }
+
+    private static func weeklyReportOverrideMap(_ override: TimesheetWeeklyReportOverride) -> [String: Any] {
+        [
+            "approvedAt": Timestamp(date: override.approvedAt),
+            "approvedByUserId": override.approvedByUserId,
+            "approvedByName": override.approvedByName,
+            "selfSigned": override.selfSigned,
+            "lines": override.lines.map { line in
+                [
+                    "id": line.id,
+                    "date": Timestamp(date: line.date),
+                    "jobNumber": line.jobNumber,
+                    "projectName": line.projectName,
+                    "locationKind": line.locationKind,
+                    "details": line.details,
+                    "paidHours": line.paidHours,
+                    "days": line.days,
+                    "amount": line.amount,
+                    "isOvertime": line.isOvertime,
+                    "decision": line.decision.rawValue,
+                    "bookingId": line.bookingId ?? ""
+                ] as [String: Any]
+            },
+            "priceWork": override.priceWork.map(moneyLineMap),
+            "expenses": override.expenses.map(moneyLineMap)
+        ]
+    }
+
+    private static func moneyLineMap(_ line: TimesheetWeeklyReportMoneyLine) -> [String: Any] {
+        [
+            "id": line.id,
+            "title": line.title,
+            "details": line.details,
+            "jobNumber": line.jobNumber,
+            "date": Timestamp(date: line.date),
+            "amount": line.amount,
+            "decision": line.decision.rawValue
+        ]
+    }
+
+    private static func weeklyReportOverride(from map: [String: Any]) -> TimesheetWeeklyReportOverride? {
+        let lines = ((map["lines"] as? [[String: Any]]) ?? []).compactMap { row -> TimesheetWeeklyReportLabourLine? in
+            guard let id = row["id"] as? String else { return nil }
+            let bookingId = (row["bookingId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return TimesheetWeeklyReportLabourLine(
+                id: id,
+                date: (row["date"] as? Timestamp)?.dateValue() ?? Date(),
+                jobNumber: row["jobNumber"] as? String ?? "",
+                projectName: row["projectName"] as? String ?? "",
+                locationKind: row["locationKind"] as? String ?? ManagerLocationType.project.rawValue,
+                details: row["details"] as? String ?? "",
+                paidHours: row["paidHours"] as? Double ?? 0,
+                days: row["days"] as? Double ?? 0,
+                amount: row["amount"] as? Double ?? 0,
+                isOvertime: row["isOvertime"] as? Bool ?? false,
+                decision: TimesheetManagerDecision(rawValue: row["decision"] as? String ?? "") ?? .approved,
+                bookingId: (bookingId?.isEmpty == false) ? bookingId : nil
+            )
+        }
+        func moneyLines(_ key: String) -> [TimesheetWeeklyReportMoneyLine] {
+            ((map[key] as? [[String: Any]]) ?? []).compactMap { row in
+                guard let id = row["id"] as? String else { return nil }
+                return TimesheetWeeklyReportMoneyLine(
+                    id: id,
+                    title: row["title"] as? String ?? "",
+                    details: row["details"] as? String ?? "",
+                    jobNumber: row["jobNumber"] as? String ?? "",
+                    date: (row["date"] as? Timestamp)?.dateValue() ?? Date(),
+                    amount: row["amount"] as? Double ?? 0,
+                    decision: TimesheetManagerDecision(rawValue: row["decision"] as? String ?? "") ?? .approved
+                )
+            }
+        }
+        return TimesheetWeeklyReportOverride(
+            approvedAt: (map["approvedAt"] as? Timestamp)?.dateValue() ?? Date(),
+            approvedByUserId: map["approvedByUserId"] as? String ?? "",
+            approvedByName: map["approvedByName"] as? String ?? "",
+            selfSigned: map["selfSigned"] as? Bool ?? false,
+            lines: lines,
+            priceWork: moneyLines("priceWork"),
+            expenses: moneyLines("expenses")
+        )
     }
 
     private static func key(userId: String, weekStart: Date) -> String {
@@ -1355,6 +1444,12 @@ private struct MyTimesheetView: View {
 
                 if let currentUser = userStore.displayUser,
                    TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: currentUser) {
+                    if currentUser.hasLineManager {
+                        Text("To edit this timesheet, please go to the signed off timesheets page, export it and then edit within the exported timesheets tab.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     Button {
                         beginInvoiceGeneration(for: currentUser)
                     } label: {
@@ -1729,6 +1824,23 @@ private struct MyTimesheetView: View {
     }
 
     private func saveDraft() {
+        if let current = userStore.displayUser {
+            TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
+                to: &draft,
+                user: current,
+                week: week,
+                bookings: bookingStore.bookings,
+                managerBookings: managerScheduleStore.managerSiteBookings,
+                operatives: operativeStore.allOperatives,
+                projects: projectStore.projects,
+                smallWorks: projectStore.smallWorks,
+                history: dayRateHistoryCollection,
+                policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
+                organization: firebaseBackend.currentOrganization,
+                scheduleOptions: firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions(),
+                viewer: current
+            )
+        }
         TimesheetDraftStore.save(draft, userId: currentUserId, weekStart: week.start)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let snapshot = draft
@@ -2519,6 +2631,21 @@ private struct OperativeTimesheetsView: View {
         for op in targets where result.emailedUserIds.contains(op.id) {
             var d = TimesheetDraftStore.load(userId: op.id, weekStart: week.start)
             d.exportedAt = Date()
+            TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
+                to: &d,
+                user: op,
+                week: week,
+                bookings: bookingStore.bookings,
+                managerBookings: managerScheduleStore.managerSiteBookings,
+                operatives: operativeStore.allOperatives,
+                projects: projectStore.projects,
+                smallWorks: projectStore.smallWorks,
+                history: dayRateHistoryCollection,
+                policy: policy,
+                organization: firebaseBackend.currentOrganization,
+                scheduleOptions: scheduleOptions,
+                viewer: exporter
+            )
             TimesheetDraftStore.save(d, userId: op.id, weekStart: week.start)
             let snapshot = d
             await TimesheetDraftStore.saveToCloud(
@@ -2687,9 +2814,9 @@ private enum ManagerTimesheetListTab {
         case .awaiting:
             return "Operative signed — yellow pending clock until you counter-sign."
         case .signedOff:
-            return "Counter-signed and ready. Email and export sends timesheet PDFs to your email for filing."
+            return "Counter-signed and ready. Email and export sends timesheet PDFs to your email for filing. To edit this timesheet, please go to the signed off timesheets page, export it and then edit within the exported timesheets tab."
         case .exported:
-            return "Exported timesheets stay here for years and remain openable."
+            return "Exported timesheets stay here for years. Open a row to edit agreed days, price work or expenses; those changes feed the weekly report."
         }
     }
 }
@@ -2714,7 +2841,14 @@ private struct OperativeTimesheetReviewView: View {
     @State private var showExtrasReviewRequiredAlert = false
 
     private var canManagerReview: Bool {
-        operative.hasLineManager && draft.managerSignedAt == nil && draft.operativeSignedAt != nil
+        guard let viewer = userStore.displayUser else { return false }
+        let isAdmin = viewer.isSuperAdmin || viewer.permissions.adminAccess || viewer.role == .admin
+        let isLineManager = operative.isLineManager(viewer.id)
+        guard isAdmin || isLineManager else { return false }
+        if draft.exportedAt != nil {
+            return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative)
+        }
+        return operative.hasLineManager && draft.managerSignedAt == nil && draft.operativeSignedAt != nil
     }
 
     private var managerHasSigned: Bool { draft.managerSignedAt != nil }
@@ -2916,12 +3050,17 @@ private struct OperativeTimesheetReviewView: View {
     @ViewBuilder
     private var reviewSignOffSection: some View {
         if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative) {
-            Label("Signed off", systemImage: "checkmark.circle.fill")
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .foregroundStyle(Color.green)
-                .background(Color.green.opacity(0.14))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Signed off", systemImage: "checkmark.circle.fill")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .foregroundStyle(Color.green)
+                    .background(Color.green.opacity(0.14))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Text("To edit this timesheet, please go to the signed off timesheets page, export it and then edit within the exported timesheets tab.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         } else if operative.hasLineManager, draft.managerSignedAt == nil {
             if needsExtrasReviewMessage {
                 Text("Approve, decline or edit every expense and price-work line before signing off.")
@@ -3209,6 +3348,21 @@ private struct OperativeTimesheetReviewView: View {
     }
 
     private func saveDraft() {
+        TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
+            to: &draft,
+            user: operative,
+            week: week,
+            bookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            operatives: operativeStore.allOperatives,
+            projects: projectStore.projects,
+            smallWorks: projectStore.smallWorks,
+            history: dayRateHistoryCollection,
+            policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
+            organization: firebaseBackend.currentOrganization,
+            scheduleOptions: firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions(),
+            viewer: userStore.displayUser
+        )
         TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let snapshot = draft
@@ -5252,7 +5406,7 @@ private enum TimesheetExportHelper {
                 to: recipientEmail,
                 subject: "Signed timesheets for filing — \(paymentRunStamp) — \(organizationName)",
                 htmlContent: html,
-                pdfAttachments: [],
+                pdfAttachments: payload,
                 fromName: organizationName
             )
         }
@@ -5315,45 +5469,161 @@ private enum TimesheetExportHelper {
             organization: organization,
             scheduleOptions: scheduleOptions
         )
-        var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
-
-        for entry in draft.priceWorkEntries {
-            let amount = entry.managerRevisedAmount ?? entry.amount
-            guard entry.managerDecision != .declined else { continue }
-            rows.append(
-                InvoiceLineItem(
-                    lineId: "pw-\(entry.id.uuidString)",
-                    date: entry.startDate,
-                    jobNumber: entry.jobNumber,
-                    projectName: "Price work",
-                    details: entry.title,
-                    paidHours: 0,
-                    payrollBasis: .dayRate,
-                    dayRate: 0,
-                    hourlyRate: nil,
-                    amount: amount,
-                    isPayeDay: user.employmentType(on: entry.startDate) == .paye
+        var rows: [InvoiceLineItem] = []
+        let managerHasSigned = draft.managerSignedAt != nil || TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user)
+        if let override = draft.weeklyReportOverride {
+            let liveById = Dictionary(summary.lineItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for line in override.lines where line.decision != .declined && line.amount > 0.0001 {
+                if let live = liveById[line.id] {
+                    rows.append(
+                        InvoiceLineItem(
+                            lineId: live.id,
+                            date: live.date,
+                            jobNumber: live.jobNumber,
+                            projectName: live.projectName,
+                            details: live.details,
+                            paidHours: live.paidHours,
+                            payrollBasis: live.payrollBasis,
+                            dayRate: live.dayRate,
+                            hourlyRate: live.hourlyRate,
+                            amount: line.amount,
+                            isPayeDay: live.isPayeDay,
+                            isOvertimeLine: live.isOvertimeLine
+                        )
+                    )
+                } else {
+                    rows.append(
+                        InvoiceLineItem(
+                            lineId: line.id,
+                            date: line.date,
+                            jobNumber: line.jobNumber,
+                            projectName: line.projectName,
+                            details: line.details,
+                            paidHours: line.paidHours,
+                            payrollBasis: .dayRate,
+                            dayRate: 0,
+                            hourlyRate: nil,
+                            amount: line.amount,
+                            isPayeDay: user.employmentType(on: line.date) == .paye,
+                            isOvertimeLine: line.isOvertime
+                        )
+                    )
+                }
+            }
+            for line in override.priceWork where line.decision != .declined && line.amount > 0.0001 {
+                rows.append(
+                    InvoiceLineItem(
+                        lineId: "pw-\(line.id)",
+                        date: line.date,
+                        jobNumber: line.jobNumber,
+                        projectName: "Price work",
+                        details: line.title,
+                        paidHours: 0,
+                        payrollBasis: .dayRate,
+                        dayRate: 0,
+                        hourlyRate: nil,
+                        amount: line.amount,
+                        isPayeDay: user.employmentType(on: line.date) == .paye
+                    )
                 )
-            )
-        }
-        for entry in draft.expenseEntries {
-            let amount = entry.managerRevisedAmount ?? entry.amount
-            guard entry.managerDecision != .declined else { continue }
-            rows.append(
-                InvoiceLineItem(
-                    lineId: "exp-\(entry.id.uuidString)",
-                    date: entry.date,
-                    jobNumber: entry.jobNumber.isEmpty ? "—" : entry.jobNumber,
-                    projectName: "Expense",
-                    details: entry.title,
-                    paidHours: 0,
-                    payrollBasis: .dayRate,
-                    dayRate: 0,
-                    hourlyRate: nil,
-                    amount: amount,
-                    isPayeDay: user.employmentType(on: entry.date) == .paye
+            }
+            for line in override.expenses where line.decision != .declined && line.amount > 0.0001 {
+                rows.append(
+                    InvoiceLineItem(
+                        lineId: "exp-\(line.id)",
+                        date: line.date,
+                        jobNumber: line.jobNumber.isEmpty ? "—" : line.jobNumber,
+                        projectName: "Expense",
+                        details: line.title,
+                        paidHours: 0,
+                        payrollBasis: .dayRate,
+                        dayRate: 0,
+                        hourlyRate: nil,
+                        amount: line.amount,
+                        isPayeDay: user.employmentType(on: line.date) == .paye
+                    )
                 )
-            )
+            }
+        } else {
+            for line in summary.lineItems {
+                if TimesheetDraftAdjustments.isPayrollLineRemoved(
+                    line: line,
+                    draft: draft,
+                    managerHasSigned: managerHasSigned,
+                    applyLiveReview: true
+                ) {
+                    continue
+                }
+                let amount = TimesheetDraftAdjustments.effectivePayrollAmount(
+                    line: line,
+                    draft: draft,
+                    managerHasSigned: managerHasSigned,
+                    applyLiveReview: true
+                )
+                guard amount > 0.0001 else { continue }
+                rows.append(
+                    InvoiceLineItem(
+                        lineId: line.id,
+                        date: line.date,
+                        jobNumber: line.jobNumber,
+                        projectName: line.projectName,
+                        details: line.details,
+                        paidHours: line.paidHours,
+                        payrollBasis: line.payrollBasis,
+                        dayRate: line.dayRate,
+                        hourlyRate: line.hourlyRate,
+                        amount: amount,
+                        isPayeDay: line.isPayeDay,
+                        isOvertimeLine: line.isOvertimeLine
+                    )
+                )
+            }
+            for entry in draft.priceWorkEntries {
+                let amount = TimesheetDraftAdjustments.effectivePriceWorkAmount(
+                    entry,
+                    managerHasSigned: managerHasSigned,
+                    applyLiveReview: true
+                )
+                guard amount > 0.0001, entry.managerDecision != .declined else { continue }
+                rows.append(
+                    InvoiceLineItem(
+                        lineId: "pw-\(entry.id.uuidString)",
+                        date: entry.startDate,
+                        jobNumber: entry.jobNumber,
+                        projectName: "Price work",
+                        details: entry.title,
+                        paidHours: 0,
+                        payrollBasis: .dayRate,
+                        dayRate: 0,
+                        hourlyRate: nil,
+                        amount: amount,
+                        isPayeDay: user.employmentType(on: entry.startDate) == .paye
+                    )
+                )
+            }
+            for entry in draft.expenseEntries {
+                let amount = TimesheetDraftAdjustments.effectiveExpenseAmount(
+                    entry,
+                    managerHasSigned: managerHasSigned,
+                    applyLiveReview: true
+                )
+                guard amount > 0.0001, entry.managerDecision != .declined else { continue }
+                rows.append(
+                    InvoiceLineItem(
+                        lineId: "exp-\(entry.id.uuidString)",
+                        date: entry.date,
+                        jobNumber: entry.jobNumber.isEmpty ? "—" : entry.jobNumber,
+                        projectName: "Expense",
+                        details: entry.title,
+                        paidHours: 0,
+                        payrollBasis: .dayRate,
+                        dayRate: 0,
+                        hourlyRate: nil,
+                        amount: amount,
+                        isPayeDay: user.employmentType(on: entry.date) == .paye
+                    )
+                )
+            }
         }
 
         return rows.sorted {

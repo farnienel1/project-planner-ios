@@ -202,6 +202,28 @@ enum TimesheetPayrollPolicy {
         return periods
     }
 
+    /// Pay runs whose calendar window overlaps `range` (weekly report period).
+    static func payPeriodsOverlapping(
+        range: ClosedRange<Date>,
+        settings: OrganizationInvoicingSettings,
+        calendar: Calendar = .current
+    ) -> [WeekRange] {
+        var periods: [WeekRange] = []
+        var cursor = calendar.startOfDay(for: range.lowerBound)
+        let end = calendar.startOfDay(for: range.upperBound)
+        var guardCount = 0
+        while cursor <= end && guardCount < 80 {
+            let period = payPeriodContaining(referenceDate: cursor, settings: settings, calendar: calendar)
+            if !periods.contains(where: { calendar.isDate($0.start, inSameDayAs: period.start) }) {
+                periods.append(period)
+            }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: period.end) else { break }
+            cursor = next
+            guardCount += 1
+        }
+        return periods
+    }
+
     static func calendarDays(from start: Date, to end: Date, calendar: Calendar = .current) -> [Date] {
         var days: [Date] = []
         var cursor = calendar.startOfDay(for: start)

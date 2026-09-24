@@ -57,8 +57,50 @@ struct TimesheetDraft: Codable {
     var managerSignedByUserId: String?
     var managerSignatureImageBase64: String?
     var exportedAt: Date?
+    /// Agreed labour / price-work / expenses snapshot written when the timesheet
+    /// is fully approved (line-manager counter-sign, or the person's own sign when
+    /// they have no line manager). Weekly Report and the web app read this field
+    /// from `organizations/{orgId}/settings/timesheet_{userId}_{weekStartUnix}`.
+    var weeklyReportOverride: TimesheetWeeklyReportOverride?
 
     var additionalTotal: Double {
         expenseEntries.reduce(0) { $0 + $1.amount } + priceWorkEntries.reduce(0) { $0 + $1.amount }
     }
+}
+
+/// Shared iOS + web contract. Field names match Firestore `weeklyReportOverride`.
+struct TimesheetWeeklyReportOverride: Codable, Hashable {
+    var approvedAt: Date
+    var approvedByUserId: String
+    var approvedByName: String
+    var selfSigned: Bool
+    var lines: [TimesheetWeeklyReportLabourLine]
+    var priceWork: [TimesheetWeeklyReportMoneyLine]
+    var expenses: [TimesheetWeeklyReportMoneyLine]
+}
+
+struct TimesheetWeeklyReportLabourLine: Codable, Hashable, Identifiable {
+    var id: String
+    var date: Date
+    var jobNumber: String
+    var projectName: String
+    /// `project` | `small_work` | `office` | `working_from_home` | `site_survey` | `custom`
+    var locationKind: String
+    var details: String
+    var paidHours: Double
+    var days: Double
+    var amount: Double
+    var isOvertime: Bool
+    var decision: TimesheetManagerDecision
+    var bookingId: String?
+}
+
+struct TimesheetWeeklyReportMoneyLine: Codable, Hashable, Identifiable {
+    var id: String
+    var title: String
+    var details: String
+    var jobNumber: String
+    var date: Date
+    var amount: Double
+    var decision: TimesheetManagerDecision
 }
