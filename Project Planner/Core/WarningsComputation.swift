@@ -370,31 +370,39 @@ enum WarningsComputation {
 
         let operativeUsers = input.users.filter {
             $0.isActive &&
+                $0.passwordSet &&
                 $0.isOperativeMode &&
                 !$0.isManager &&
                 !$0.hasAdminAccess &&
                 !$0.isSuperAdmin &&
                 !$0.isAdminRole
         }
-        let managerUsers = managerOrAdminUsers
+        let managerUsers = managerOrAdminUsers.filter(\.passwordSet)
 
         let oneMonthFromNow = cal.date(byAdding: .month, value: 1, to: today) ?? today
-        for operative in input.operatives {
+        for operative in input.operatives where operative.isActive {
             for expiry in operative.qualificationExpiries {
                 let expiryDate = expiry.expiryDate
-                if expiryDate >= today && expiryDate <= oneMonthFromNow {
-                    let daysUntilExpiry = cal.dateComponents([.day], from: today, to: expiryDate).day ?? 0
-                    let severity: Warning.WarningSeverity = daysUntilExpiry <= 7 ? .high : (daysUntilExpiry <= 14 ? .medium : .low)
-                    let key = "qual-\(operative.id.uuidString)-\(expiry.qualificationId.uuidString)"
-                    generated.append(Warning(
-                        resolutionKey: key,
-                        type: .qualificationExpiry,
-                        title: "Qualification expiry",
-                        message: "\(operative.name)'s \(expiry.qualificationName) expires in \(daysUntilExpiry) day\(daysUntilExpiry == 1 ? "" : "s")",
-                        severity: severity,
-                        occurrenceDate: expiryDate
-                    ))
+                guard expiryDate <= oneMonthFromNow else { continue }
+                let daysUntilExpiry = cal.dateComponents([.day], from: today, to: expiryDate).day ?? 0
+                let message: String
+                if daysUntilExpiry < 0 {
+                    let ago = abs(daysUntilExpiry)
+                    message = "\(operative.name)'s \(expiry.qualificationName) expired \(ago) day\(ago == 1 ? "" : "s") ago"
+                } else if daysUntilExpiry == 0 {
+                    message = "\(operative.name)'s \(expiry.qualificationName) expires today"
+                } else {
+                    message = "\(operative.name)'s \(expiry.qualificationName) expires in \(daysUntilExpiry) day\(daysUntilExpiry == 1 ? "" : "s")"
                 }
+                let key = "qual-\(operative.id.uuidString)-\(expiry.qualificationId.uuidString)"
+                generated.append(Warning(
+                    resolutionKey: key,
+                    type: .qualificationExpiry,
+                    title: daysUntilExpiry < 0 ? "Qualification expired" : "Qualification expiry",
+                    message: message,
+                    severity: .low,
+                    occurrenceDate: expiryDate
+                ))
             }
         }
 
@@ -410,7 +418,7 @@ enum WarningsComputation {
                         type: .operativeNotVerified,
                         title: "Unverified operative",
                         message: "\(operative.name) has not verified their account",
-                        severity: .medium,
+                        severity: .low,
                         operativeEmail: operativeUser.emailLowercased
                     ))
                 }
@@ -500,7 +508,7 @@ enum WarningsComputation {
                         type: .managerLocationClash,
                         title: kind.bookingClashTitle,
                         message: "\(person) is booked in \(place) places on \(formatDay(day)). Approve if it's intentional and it'll be noted on the weekly report.",
-                        severity: .high,
+                        severity: .medium,
                         occurrenceDate: day,
                         managerClash: Warning.ManagerClashWarningDetails(
                             userId: sortedCluster[0].userId,
@@ -934,9 +942,16 @@ private struct WarningsScheduleIndex {
         var people: [UnbookedPerson] = []
         people.reserveCapacity(operativeUsers.count + managerUsers.count + rosterOperatives.count)
 
-        // Unbooked labour means no confirmed/tentative (or manager) booking on that
-        // calendar day. Paid-hours-below-standard used to flag people who were already
-        // on the board (half-day, slightly short clock window, break-math remainder).
+        func verifiedUser(for email: String) -> WarningsComputationSnapshot.UserSnapshot? {
+            let matches = usersById.values.filter { $0.emailLowercased == email }
+            return matches.first(where: { $0.passwordSet && $0.isActive })
+                ?? matches.first(where: { $0.passwordSet })
+        }
+
+        // Unbooked labour is for people who have finished signup and are expected
+        // on the board. Pending invitees (`passwordSet == false`) are scheduled from
+        // Daily Overview / Manage Users if needed, and surface as unverified after
+        // 3 working days — not as a daily unbooked-labour warning.
         func appendIfUnbooked(personKey: String, name: String, emailKey: String, hasBooking: Bool) {
             guard seenEmails.insert(emailKey).inserted else { return }
             guard !hasBooking else { return }
@@ -954,8 +969,7 @@ private struct WarningsScheduleIndex {
             let linked = operativesByEmail[user.emailLowercased]
             if hasHoliday(userId: user.id, operativeId: linked?.id) { continue }
             let hasBooking = (linked.map { hasOperativeLabour($0.id) } ?? false) || hasManagerLabour(user.id)
-            let name = linked?.name ?? user.displayName
-            appendIfUnbooked(personKey: user.id, name: name, emailKey: user.emailLowercased, hasBooking: hasBooking)
+            appendIfUnbooked(personKey: user.id, name: user.displayName, emailKey: user.emailLowercased, hasBooking: hasBooking)
         }
 
         for user in managerUsers {
@@ -969,17 +983,22 @@ private struct WarningsScheduleIndex {
         for op in rosterOperatives where op.isActive {
             let email = op.emailLowercased
             guard !operativeUserEmails.contains(email) else { continue }
-            if let matchedUser = usersById.values.first(where: { $0.emailLowercased == email }),
-               managerAdminUserIds.contains(matchedUser.id) {
+            let matchedUser = verifiedUser(for: email)
+            if matchedUser == nil,
+               usersById.values.contains(where: { $0.emailLowercased == email }) {
+                // Invite sent, signup not finished — not unbooked labour.
                 continue
             }
-            let linkedUserId = usersById.values.first(where: { $0.emailLowercased == email })?.id
+            if let matchedUser, managerAdminUserIds.contains(matchedUser.id) {
+                continue
+            }
+            let linkedUserId = matchedUser?.id
             if isExcluded(userId: linkedUserId) { continue }
             if hasHoliday(userId: linkedUserId, operativeId: op.id) { continue }
             let hasBooking = hasOperativeLabour(op.id) || (linkedUserId.map { hasManagerLabour($0) } ?? false)
             appendIfUnbooked(
                 personKey: linkedUserId ?? op.id.uuidString,
-                name: op.name,
+                name: matchedUser?.displayName ?? op.name,
                 emailKey: email,
                 hasBooking: hasBooking
             )

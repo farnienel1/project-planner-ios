@@ -284,7 +284,7 @@ struct OrganisationWarningsSettingsView: View {
 
     private var excludedUsersCard: some View {
         warningsCard {
-            sectionHeader(icon: "person.2.fill", title: "Excluded users", subtitle: "Some staff (e.g. PAYE employees) don't need to appear in unbooked labour warnings. Users added here are silently skipped by the warnings engine.")
+            sectionHeader(icon: "person.2.fill", title: "Excluded users", subtitle: "Some staff (e.g. PAYE employees) don't need to appear in unbooked labour warnings. Users added here are silently skipped. Pending users who have not finished sign-up are never unbooked-labour warnings.")
 
             Button {
                 withAnimation { excludedExpanded.toggle() }
@@ -428,9 +428,9 @@ struct OrganisationWarningsSettingsView: View {
         warningsCard {
             sectionHeader(icon: "exclamationmark.triangle.fill", title: "Warning severity guide", subtitle: "For reference — severity levels are assigned automatically based on warning type.")
 
-            severityRow(title: "High", description: "Operative, manager, and admin booking clashes, plus unbooked labour. Approve a clash to note it on the weekly report.", tint: .red)
-            severityRow(title: "Medium", description: "Less urgent flags that do not block the day immediately.", tint: .orange)
-            severityRow(title: "Low", description: "Materials not ordered by the required cut-off date — useful reminders that won't block site work immediately.", tint: .blue)
+            severityRow(title: "High", description: "Operative booking clashes and unbooked labour. Approve a clash to note it on the weekly report.", tint: .red)
+            severityRow(title: "Medium", description: "Manager and admin booking overlaps. Approve if intentional so they appear on the weekly report.", tint: .orange)
+            severityRow(title: "Low", description: "Materials not ordered by the 16:00 cut-off, qualification expiry (including already expired), and unverified accounts.", tint: .blue)
         }
     }
 

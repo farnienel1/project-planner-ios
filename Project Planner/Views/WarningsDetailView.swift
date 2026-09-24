@@ -257,7 +257,7 @@ struct WarningsDetailView: View {
                         .foregroundStyle(ProjectWorksRevampColors.activeGreen)
                     Text("No active warnings")
                         .font(.title3.weight(.semibold))
-                    Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: material orders not placed by 16:00.")
+                    Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: materials and qualifications.")
                         .font(.subheadline)
                         .foregroundStyle(WarningsUI.textMuted)
                         .multilineTextAlignment(.center)
@@ -344,7 +344,8 @@ struct WarningsDetailView: View {
             .all: all.count,
             .clashes: all.filter { $0.type == .operativeBookingClash || $0.type == .managerLocationClash }.count,
             .unbooked: all.filter { $0.type == .unbookedLabour }.count,
-            .materials: all.filter { $0.type == .materialsCutoff }.count
+            .materials: all.filter { $0.type == .materialsCutoff }.count,
+            .qualifications: all.filter { $0.type == .qualificationExpiry || $0.type == .operativeNotVerified }.count
         ]
     }
 
@@ -358,6 +359,8 @@ struct WarningsDetailView: View {
             return sorted.filter { $0.type == .unbookedLabour }
         case .materials:
             return sorted.filter { $0.type == .materialsCutoff }
+        case .qualifications:
+            return sorted.filter { $0.type == .qualificationExpiry || $0.type == .operativeNotVerified }
         }
     }
 
@@ -625,7 +628,7 @@ struct WarningsDetailView: View {
                     .font(.system(size: 17, weight: .heavy))
                     .foregroundStyle(.white)
                 Spacer(minLength: 8)
-                WarningPriorityBadge(severity: warning.severity)
+                WarningPriorityBadge(severity: .low)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 15)
