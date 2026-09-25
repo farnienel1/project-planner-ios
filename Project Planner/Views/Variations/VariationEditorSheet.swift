@@ -7,6 +7,7 @@ import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
 import UIKit
+import FirebaseAuth
 
 struct VariationEditorSheet: View {
     let project: Project
