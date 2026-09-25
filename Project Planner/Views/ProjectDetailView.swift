@@ -76,6 +76,10 @@ struct ProjectDetailView: View {
 
     private var canViewAllTasksOnThisJob: Bool { canConfigureProjectVisibility }
 
+    private var canAccessVariations: Bool {
+        WorkAccess.canAccessVariations(project: project, userStore: userStore, operativeStore: operativeStore)
+    }
+
     private var payrollTimePolicy: OrgPayrollTimePolicy {
         firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
     }
@@ -106,6 +110,7 @@ struct ProjectDetailView: View {
         case healthSafety = "H&S"
         case deadlines = "Deadlines"
         case siteAudit = "Site Audit"
+        case variations = "Variations"
         case location = "Location"
         case activeUsers = "Active users"
 
@@ -119,6 +124,7 @@ struct ProjectDetailView: View {
             case .healthSafety: return "cross.case.fill"
             case .deadlines: return "calendar.badge.clock"
             case .siteAudit: return "clipboard.fill"
+            case .variations: return "plus.rectangle.on.folder"
             case .location: return "mappin.and.ellipse"
             case .activeUsers: return "person.3.fill"
             }
@@ -148,6 +154,7 @@ struct ProjectDetailView: View {
     @State private var selectedProjectTaskScope: ProjectTaskListScope = .assignedToMe
     @State private var projectTasksSearchText = ""
     @State private var taskFilter = TaskFilter()
+    @State private var openVariationCount = 0
     
     var body: some View {
         ScrollView {
@@ -240,6 +247,7 @@ struct ProjectDetailView: View {
             EditProjectView(project: project)
                 .environmentObject(projectStore)
                 .environmentObject(operativeStore)
+                .environmentObject(userStore)
                 .preference(key: HideBottomMenuKey.self, value: true)
         }
         .onAppear {
@@ -248,7 +256,11 @@ struct ProjectDetailView: View {
             loadWeekViewPreference()
             Task {
                 await taskStore.loadData()
+                await refreshOpenVariationCount()
             }
+        }
+        .onChange(of: navigationDepth) { _, _ in
+            Task { await refreshOpenVariationCount() }
         }
         .onChange(of: showingAddTask) { _, isOpen in
             if !isOpen {
@@ -402,6 +414,16 @@ struct ProjectDetailView: View {
         taskStore.tasks.filter { $0.projectId == project.id && $0.status != .completed }.count
     }
 
+    private func refreshOpenVariationCount() async {
+        guard canAccessVariations,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            await MainActor.run { openVariationCount = 0 }
+            return
+        }
+        let count = await firebaseBackend.countOpenVariations(organizationId: orgId, parentId: project.id.uuidString)
+        await MainActor.run { openVariationCount = count }
+    }
+
     private var detailSummaryCard: some View {
         VStack(spacing: 0) {
             summaryRow(
@@ -437,6 +459,8 @@ struct ProjectDetailView: View {
                 iconTint: ProjectWorksRevampColors.blue,
                 iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984)
             )
+            Divider().overlay(ProjectWorksRevampColors.border)
+            detailsLocationButton
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 4)
@@ -446,6 +470,51 @@ struct ProjectDetailView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
         )
+    }
+
+    /// Tappable Location control inside Details — opens the existing map / Apple Maps / Google Maps page.
+    private var detailsLocationButton: some View {
+        NavigationLink {
+            ScrollView {
+                siteLocationSection
+                    .padding()
+            }
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .navigationTitle("Location")
+            .navigationBarTitleDisplayMode(.inline)
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(red: 0.902, green: 0.945, blue: 0.984))
+                    .frame(width: 30, height: 30)
+                    .overlay(
+                        Image(systemName: "mappin.and.ellipse")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Location")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                    Text(locationDisplayText.isEmpty ? "Address, map and directions" : locationDisplayText)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(ProjectWorksRevampColors.blue)
+            }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 10)
+            .background(Color(red: 0.902, green: 0.945, blue: 0.984).opacity(0.55))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 6)
+        .accessibilityLabel("Location")
+        .accessibilityHint("Opens the site location page with map and directions")
     }
 
     private var timelineDetailSummary: String {
@@ -512,15 +581,18 @@ struct ProjectDetailView: View {
         let availableTiles: [DetailTile] = {
             if userStore.isOperativeMode() {
                 if userStore.canViewMaterials() {
-                    return userStore.canViewSiteAudit() ? [.tasks, .materials, .healthSafety, .deadlines, .siteAudit, .location] : [.tasks, .materials, .healthSafety, .deadlines, .location]
+                    return userStore.canViewSiteAudit() ? [.tasks, .materials, .healthSafety, .deadlines, .siteAudit] : [.tasks, .materials, .healthSafety, .deadlines]
                 }
-                return userStore.canViewSiteAudit() ? [.tasks, .healthSafety, .deadlines, .siteAudit, .location] : [.tasks, .healthSafety, .deadlines, .location]
+                return userStore.canViewSiteAudit() ? [.tasks, .healthSafety, .deadlines, .siteAudit] : [.tasks, .healthSafety, .deadlines]
             }
             var tiles: [DetailTile] = [.scheduling]
             if canConfigureProjectVisibility {
                 tiles.append(.visibility)
             }
-            tiles.append(contentsOf: [.tasks, .materials, .healthSafety, .deadlines, .siteAudit, .location])
+            tiles.append(contentsOf: [.tasks, .materials, .healthSafety, .deadlines, .siteAudit])
+            if canAccessVariations {
+                tiles.append(.variations)
+            }
             if canViewActiveOperatives {
                 tiles.append(.activeUsers)
             }
@@ -581,6 +653,7 @@ struct ProjectDetailView: View {
         switch tile {
         case .scheduling: return schedulingAttentionCount
         case .tasks: return openTasksCount
+        case .variations: return openVariationCount > 0 ? openVariationCount : nil
         case .activeUsers: return activeBookedPeopleCount > 0 ? activeBookedPeopleCount : nil
         default: return nil
         }
@@ -627,6 +700,7 @@ struct ProjectDetailView: View {
         case .healthSafety: return Color(red: 0.89, green: 0.98, blue: 0.95)
         case .deadlines: return ProjectWorksRevampColors.blueTint
         case .siteAudit: return Color(red: 0.98, green: 0.925, blue: 0.906)
+        case .variations: return Color(red: 0.93, green: 0.96, blue: 0.9)
         case .location: return Color(red: 0.984, green: 0.918, blue: 0.941)
         case .activeUsers: return Color(red: 0.902, green: 0.945, blue: 0.984)
         }
@@ -641,6 +715,7 @@ struct ProjectDetailView: View {
         case .healthSafety: return Color(red: 0.07, green: 0.62, blue: 0.47)
         case .deadlines: return ProjectWorksRevampColors.blue
         case .siteAudit: return Color(red: 0.6, green: 0.235, blue: 0.114)
+        case .variations: return Color(red: 0.2, green: 0.55, blue: 0.32)
         case .location: return Color(red: 0.6, green: 0.208, blue: 0.337)
         case .activeUsers: return ProjectWorksRevampColors.blue
         }
@@ -660,6 +735,12 @@ struct ProjectDetailView: View {
                 .environmentObject(projectStore)
                 .environmentObject(bookingStore)
                 .environmentObject(operativeStore)
+        case .variations:
+            VariationsListView(project: project)
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+                .environmentObject(operativeStore)
+                .environmentObject(notificationService)
         case .materials:
             // Materials contains its own `List` and expandable layout; nesting it inside `ScrollView` gives the
             // list an unbounded height and often collapses the rows to zero (looks like “nothing saved”).
@@ -1746,7 +1827,7 @@ struct ProjectDetailView: View {
         let email = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         return operativeStore.allManagers.contains { manager in
             manager.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
-                && project.managerIds.contains(manager.id)
+                && project.allAssignedManagerIds.contains(manager.id)
         }
     }
 
@@ -2088,6 +2169,12 @@ struct ProjectDetailView: View {
     }
     
     private var managerDisplayName: String {
+        let names = project.allAssignedManagerIds.compactMap { id in
+            operativeStore.allManagers.first(where: { $0.id == id })?.fullName
+        }.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if !names.isEmpty {
+            return names.joined(separator: ", ")
+        }
         if let managerId = project.managerId,
            let manager = operativeStore.managers.first(where: { $0.id == managerId }) {
             return manager.fullName

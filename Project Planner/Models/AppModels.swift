@@ -1574,6 +1574,7 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .qualificationExpiry: return .qualificationExpiry
         case .materialOrderCutOff: return .materialOrderCutOff
         case .deadlineAssigned, .deadlineReminder, .deadlineDue: return nil
+        case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return nil
         }
     }
 }

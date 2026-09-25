@@ -108,6 +108,7 @@ struct SmallWorksView: View {
                     EditProjectView(project: project)
                         .environmentObject(projectStore)
                         .environmentObject(operativeStore)
+                        .environmentObject(userStore)
                 }
             }
             .sheet(isPresented: $showingCreateSmallWorks) {

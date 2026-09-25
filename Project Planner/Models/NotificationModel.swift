@@ -32,6 +32,9 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case deadlineDue = "deadline_due"
         case qualificationExpiry = "qualification_expiry"
         case materialOrderCutOff = "material_order_cut_off"
+        case variationAdded = "variation_added"
+        case variationFromTracker = "variation_from_tracker"
+        case variationNumbersUpdated = "variation_numbers_updated"
     }
     
     let id: UUID

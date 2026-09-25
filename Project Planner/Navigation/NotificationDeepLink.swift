@@ -136,6 +136,16 @@ enum NotificationDeepLink {
                 payload["weekStart"] = weekStart
             }
             NotificationCenter.default.post(name: .mainMenuOpenSurface, object: nil, userInfo: payload)
+        case .variationAdded, .variationFromTracker, .variationNumbersUpdated:
+            if let relatedId {
+                let isSmallWorks = (userInfo[userIdKey] as? String) == VariationParentType.smallWork.rawValue
+                    || (userInfo["pp_userId"] as? String) == "smallWork"
+                NotificationCenter.default.post(
+                    name: .openWorkCatalogueDetail,
+                    object: nil,
+                    userInfo: ["projectId": relatedId, "isSmallWorks": isSmallWorks]
+                )
+            }
         case .none:
             break
         }

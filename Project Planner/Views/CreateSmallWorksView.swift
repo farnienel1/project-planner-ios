@@ -79,19 +79,6 @@ struct CreateSmallWorksView: View {
         )
     }
 
-    private var selectedManagersSummary: String {
-        switch selectedManagers.count {
-        case 0:
-            return "Assign manager(s)"
-        case 1:
-            let first = selectedManagers[0]
-            return "\(first.firstName) \(first.lastName)"
-        default:
-            let first = selectedManagers[0]
-            return "\(first.firstName) \(first.lastName) +\(selectedManagers.count - 1) more"
-        }
-    }
-
     private var progressFraction: CGFloat {
         CGFloat(requiredFilledCount) / CGFloat(requiredFieldTotal)
     }
@@ -658,64 +645,11 @@ struct CreateSmallWorksView: View {
     }
 
     private var teamCard: some View {
-        HStack(spacing: 12) {
-            Circle()
-                .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
-                .frame(width: 34, height: 34)
-                .overlay(Image(systemName: "person.badge.plus").font(.system(size: 14)).foregroundStyle(ProjectWorksRevampColors.muted))
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Manager")
-                    .font(.system(size: 11))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                Text(selectedManagersSummary)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(selectedManagers.isEmpty ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.ink)
-            }
-            Spacer()
-            if operativeStore.allManagers.isEmpty {
-                Button("Create…") { showingCreateManager = true }
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(accentRust)
-            } else {
-                HStack(spacing: 8) {
-                    Menu {
-                        ForEach(availableManagersToAdd, id: \.id) { m in
-                            Button("\(m.firstName) \(m.lastName)") { selectedManagers.append(m) }
-                        }
-                        if availableManagersToAdd.isEmpty {
-                            Button("All managers added") {}
-                                .disabled(true)
-                        }
-                        Button("Create manager…") { showingCreateManager = true }
-                    } label: {
-                        Image(systemName: selectedManagers.isEmpty ? "chevron.down" : "plus")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                    }
-                    if !selectedManagers.isEmpty {
-                        Menu {
-                            ForEach(selectedManagers, id: \.id) { manager in
-                                Button(role: .destructive) {
-                                    selectedManagers.removeAll { $0.id == manager.id }
-                                } label: {
-                                    Text("Remove \(manager.firstName) \(manager.lastName)")
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "minus.circle")
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(Color(red: 0.74, green: 0.2, blue: 0.2))
-                        }
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
+        ProjectAssignedManagersEditor(
+            selectedManagers: $selectedManagers,
+            availableManagersToAdd: availableManagersToAdd,
+            onCreateManager: { showingCreateManager = true }
+        )
     }
 
     private var descriptionCard: some View {

@@ -213,6 +213,7 @@ struct NotificationRowView: View {
         case .timesheetPendingManagerSignoff: return "signature"
         case .timesheetSignedByManager: return "checkmark.seal.fill"
         case .lineManagerPeerUpdate: return "person.2.fill"
+        case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return "plus.rectangle.on.folder"
         }
     }
 
@@ -239,6 +240,7 @@ struct NotificationRowView: View {
         case .timesheetPendingManagerSignoff: return ProjectWorksRevampColors.upcomingAmber
         case .timesheetSignedByManager: return ProjectWorksRevampColors.activeGreen
         case .lineManagerPeerUpdate: return ProjectWorksRevampColors.blue
+        case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return ProjectWorksRevampColors.upcomingAmber
         }
     }
 }
