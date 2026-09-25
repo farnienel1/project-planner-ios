@@ -6,7 +6,7 @@
 import Foundation
 import UIKit
 import FirebaseAuth
-import FirebaseFirestore
+@preconcurrency import FirebaseFirestore
 #if canImport(FirebaseStorage)
 import FirebaseStorage
 #endif
@@ -280,7 +280,7 @@ extension FirebaseBackend {
     #endif
 }
 
-private func variationsFromFallbackDocument(_ data: [String: Any]?) -> [Variation] {
+nonisolated private func variationsFromFallbackDocument(_ data: [String: Any]?) -> [Variation] {
     guard let data else { return [] }
     if let items = data["items"] as? [String: Any] {
         return items.compactMap { id, value in
@@ -296,7 +296,7 @@ private func variationsFromFallbackDocument(_ data: [String: Any]?) -> [Variatio
     return []
 }
 
-private func mergeVariationSources(collection: [Variation], fallback: [Variation]) -> [Variation] {
+nonisolated private func mergeVariationSources(collection: [Variation], fallback: [Variation]) -> [Variation] {
     var byId: [String: Variation] = [:]
     for item in fallback {
         byId[item.id] = item
@@ -311,7 +311,7 @@ private func mergeVariationSources(collection: [Variation], fallback: [Variation
     return Array(byId.values)
 }
 
-private final class VariationListenerBag: NSObject, ListenerRegistration {
+nonisolated private final class VariationListenerBag: NSObject, ListenerRegistration, @unchecked Sendable {
     private var listeners: [ListenerRegistration] = []
     var collectionItems: [Variation] = []
     var fallbackItems: [Variation] = []
