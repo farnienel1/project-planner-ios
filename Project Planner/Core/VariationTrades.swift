@@ -8,7 +8,7 @@
 
 import Foundation
 
-enum VariationTrades {
+nonisolated enum VariationTrades {
     static let standard: [String] = [
         "Electrician",
         "Approved electrician",

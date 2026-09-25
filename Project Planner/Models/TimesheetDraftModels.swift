@@ -7,19 +7,19 @@
 
 import Foundation
 
-enum TimesheetManagerDecision: String, Codable, Hashable {
+nonisolated enum TimesheetManagerDecision: String, Codable, Hashable {
     case pending
     case approved
     case declined
     case edited
 }
 
-struct TimesheetPayrollLineReview: Codable, Hashable {
+nonisolated struct TimesheetPayrollLineReview: Codable, Hashable {
     var decision: TimesheetManagerDecision = .pending
     var revisedAmount: Double?
 }
 
-struct TimesheetExpenseEntry: Codable, Identifiable, Hashable {
+nonisolated struct TimesheetExpenseEntry: Codable, Identifiable, Hashable {
     let id: UUID
     var title: String
     var details: String
@@ -31,7 +31,7 @@ struct TimesheetExpenseEntry: Codable, Identifiable, Hashable {
     var managerRevisedAmount: Double?
 }
 
-struct TimesheetPriceWorkEntry: Codable, Identifiable, Hashable {
+nonisolated struct TimesheetPriceWorkEntry: Codable, Identifiable, Hashable {
     let id: UUID
     var title: String
     var details: String
@@ -44,7 +44,7 @@ struct TimesheetPriceWorkEntry: Codable, Identifiable, Hashable {
     var managerRevisedAmount: Double?
 }
 
-struct TimesheetDraft: Codable {
+nonisolated struct TimesheetDraft: Codable {
     var expenseEntries: [TimesheetExpenseEntry] = []
     var priceWorkEntries: [TimesheetPriceWorkEntry] = []
     var payrollLineReviews: [String: TimesheetPayrollLineReview] = [:]
@@ -69,7 +69,7 @@ struct TimesheetDraft: Codable {
 }
 
 /// Shared iOS + web contract. Field names match Firestore `weeklyReportOverride`.
-struct TimesheetWeeklyReportOverride: Codable, Hashable {
+nonisolated struct TimesheetWeeklyReportOverride: Codable, Hashable {
     var approvedAt: Date
     var approvedByUserId: String
     var approvedByName: String
@@ -79,7 +79,7 @@ struct TimesheetWeeklyReportOverride: Codable, Hashable {
     var expenses: [TimesheetWeeklyReportMoneyLine]
 }
 
-struct TimesheetWeeklyReportLabourLine: Codable, Hashable, Identifiable {
+nonisolated struct TimesheetWeeklyReportLabourLine: Codable, Hashable, Identifiable {
     var id: String
     var date: Date
     var jobNumber: String
@@ -95,7 +95,7 @@ struct TimesheetWeeklyReportLabourLine: Codable, Hashable, Identifiable {
     var bookingId: String?
 }
 
-struct TimesheetWeeklyReportMoneyLine: Codable, Hashable, Identifiable {
+nonisolated struct TimesheetWeeklyReportMoneyLine: Codable, Hashable, Identifiable {
     var id: String
     var title: String
     var details: String

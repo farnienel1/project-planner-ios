@@ -6,19 +6,19 @@
 //
 
 import Foundation
-import FirebaseFirestore
+@preconcurrency import FirebaseFirestore
 
-enum VariationParentType: String, Codable, Hashable, Sendable {
+nonisolated enum VariationParentType: String, Codable, Hashable, Sendable {
     case project
     case smallWork
 }
 
-enum VariationOrigin: String, Codable, Hashable, Sendable {
+nonisolated enum VariationOrigin: String, Codable, Hashable, Sendable {
     case app
     case tracker
 }
 
-enum VariationStatus: String, Codable, Hashable, Sendable, CaseIterable {
+nonisolated enum VariationStatus: String, Codable, Hashable, Sendable, CaseIterable {
     case open
     case submitted
     case closed
@@ -52,24 +52,24 @@ enum VariationStatus: String, Codable, Hashable, Sendable, CaseIterable {
     }
 }
 
-enum VariationNumberingMode: String, Codable, Hashable, Sendable {
+nonisolated enum VariationNumberingMode: String, Codable, Hashable, Sendable {
     case lockSubmitted
     case resequenceAll
 }
 
-struct VariationLabourLine: Identifiable, Hashable, Sendable {
+nonisolated struct VariationLabourLine: Identifiable, Hashable, Sendable {
     var id: String
     var trade: String
     var hours: Double
 }
 
-struct VariationMaterialLine: Identifiable, Hashable, Sendable {
+nonisolated struct VariationMaterialLine: Identifiable, Hashable, Sendable {
     var id: String
     var name: String
     var quantity: String
 }
 
-struct VariationEvidenceItem: Identifiable, Hashable, Sendable {
+nonisolated struct VariationEvidenceItem: Identifiable, Hashable, Sendable {
     var id: String
     var fileName: String
     var contentType: String
@@ -82,21 +82,21 @@ struct VariationEvidenceItem: Identifiable, Hashable, Sendable {
     var isPending: Bool
 }
 
-struct VariationNumberHistoryEntry: Hashable, Sendable {
+nonisolated struct VariationNumberHistoryEntry: Hashable, Sendable {
     var from: String
     var to: String
     var at: Date
     var byUid: String
 }
 
-struct VariationStatusHistoryEntry: Hashable, Sendable {
+nonisolated struct VariationStatusHistoryEntry: Hashable, Sendable {
     var status: String
     var byUid: String
     var byName: String
     var at: Date
 }
 
-struct Variation: Identifiable, Hashable, Sendable {
+nonisolated struct Variation: Identifiable, Hashable, Sendable {
     var id: String
     var orgId: String
     var parentType: VariationParentType
@@ -133,7 +133,7 @@ struct Variation: Identifiable, Hashable, Sendable {
     }
 }
 
-struct VariationTracker: Hashable, Sendable {
+nonisolated struct VariationTracker: Hashable, Sendable {
     var parentId: String
     var parentType: VariationParentType
     var enabled: Bool
@@ -165,7 +165,7 @@ struct VariationTracker: Hashable, Sendable {
     }
 }
 
-enum VariationNumbering {
+nonisolated enum VariationNumbering {
     static let defaultPrefix = "VO-"
     static let defaultPadding = 3
 
@@ -195,14 +195,14 @@ enum VariationNumbering {
     }
 }
 
-enum VariationCodec {
+nonisolated enum VariationCodec {
     static func variation(from data: [String: Any], documentId: String) -> Variation? {
         let parentType = VariationParentType(rawValue: data["parentType"] as? String ?? "") ?? .project
         let origin = VariationOrigin(rawValue: data["origin"] as? String ?? "") ?? .app
         let status = VariationStatus(rawValue: data["status"] as? String ?? "") ?? .open
         return Variation(
             id: documentId,
-            orgId: data["orgId"] as? String ?? "",
+            orgId: data["orgId"] as? String ?? data["organizationId"] as? String ?? "",
             parentType: parentType,
             parentId: data["parentId"] as? String ?? "",
             parentName: data["parentName"] as? String ?? "",
@@ -236,6 +236,7 @@ enum VariationCodec {
         var map: [String: Any] = [
             "id": variation.id,
             "orgId": variation.orgId,
+            "organizationId": variation.orgId,
             "parentType": variation.parentType.rawValue,
             "parentId": variation.parentId,
             "parentName": variation.parentName,

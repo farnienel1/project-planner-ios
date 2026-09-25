@@ -5,7 +5,7 @@
 
 import Foundation
 import Combine
-import FirebaseFirestore
+@preconcurrency import FirebaseFirestore
 
 @MainActor
 final class VariationStore: ObservableObject {

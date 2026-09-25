@@ -531,7 +531,7 @@ enum TimesheetApprovalPolicy {
     }
 }
 
-enum TimesheetDraftStore {
+nonisolated enum TimesheetDraftStore {
     private static let defaults = UserDefaults.standard
 
     static func load(userId: String, weekStart: Date) -> TimesheetDraft {
@@ -585,7 +585,7 @@ enum TimesheetDraftStore {
         )
     }
 
-    private static func asFirestoreMap(_ draft: TimesheetDraft) -> [String: Any] {
+    nonisolated private static func asFirestoreMap(_ draft: TimesheetDraft) -> [String: Any] {
         [
             "managerNote": draft.managerNote,
             "operativeSignedAt": draft.operativeSignedAt.map(Timestamp.init(date:)) as Any,
@@ -708,7 +708,7 @@ enum TimesheetDraftStore {
         fromFirestoreMap(map)
     }
 
-    private static func weeklyReportOverrideMap(_ override: TimesheetWeeklyReportOverride) -> [String: Any] {
+    nonisolated private static func weeklyReportOverrideMap(_ override: TimesheetWeeklyReportOverride) -> [String: Any] {
         [
             "approvedAt": Timestamp(date: override.approvedAt),
             "approvedByUserId": override.approvedByUserId,
@@ -735,7 +735,7 @@ enum TimesheetDraftStore {
         ]
     }
 
-    private static func moneyLineMap(_ line: TimesheetWeeklyReportMoneyLine) -> [String: Any] {
+    nonisolated private static func moneyLineMap(_ line: TimesheetWeeklyReportMoneyLine) -> [String: Any] {
         [
             "id": line.id,
             "title": line.title,
