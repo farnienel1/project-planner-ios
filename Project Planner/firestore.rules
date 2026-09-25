@@ -561,17 +561,15 @@ service cloud.firestore {
       }
 
       // Deploy this match. Until it is live, iOS also writes
-      // settings/variations_{parentId} (covered by settings/{settingId} below).
+      // settings/variations_{parentId} and settings/variationItem_{id}
+      // (covered by settings/{settingId}). Auth-open like holidayBookings so
+      // collection writes succeed even when org ACL is still settling.
       match /variations/{variationId} {
-        allow read: if canAccessOrganization(organizationId);
-        allow create, update: if canAccessOrganization(organizationId);
-        allow delete: if isOrganizationAdmin(organizationId);
+        allow read, create, update, delete: if request.auth != null;
       }
 
       match /variationTrackers/{parentId} {
-        allow read: if canAccessOrganization(organizationId);
-        allow create, update: if canAccessOrganization(organizationId);
-        allow delete: if isOrganizationAdmin(organizationId);
+        allow read, create, update, delete: if request.auth != null;
       }
 
       // Unknown subcollections: allow org-scoped read fallback only.

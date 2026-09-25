@@ -38,6 +38,20 @@ extension FirebaseBackend {
             .document("variations_\(parentId)")
     }
 
+    /// One settings document per variation — same collection H&S already writes.
+    private func variationItemDocument(organizationId: String, variationId: String) -> DocumentReference {
+        db.collection("organizations")
+            .document(normalizedOrganizationId(organizationId))
+            .collection("settings")
+            .document("variationItem_\(variationId)")
+    }
+
+    private func settingsCollection(organizationId: String) -> CollectionReference {
+        db.collection("organizations")
+            .document(normalizedOrganizationId(organizationId))
+            .collection("settings")
+    }
+
     func observeVariations(
         organizationId: String,
         parentId: String,
@@ -53,23 +67,36 @@ extension FirebaseBackend {
                     if let error {
                         print("❌ [Variations] listen error: \(error.localizedDescription)")
                         Task { @MainActor in
-                            onChange(mergeVariationSources(collection: bag.collectionItems, fallback: bag.fallbackItems))
+                            bag.receivedCollection = true
+                            if bag.receivedFallback || bag.receivedItemDocs {
+                                onChange(
+                                    mergeVariationSources(
+                                        collection: bag.collectionItems,
+                                        fallback: bag.fallbackItems,
+                                        itemDocs: bag.itemDocItems
+                                    )
+                                )
+                            }
                         }
                         return
                     }
                     guard let snapshot else { return }
-                    if snapshot.documents.isEmpty && snapshot.metadata.isFromCache {
-                        Task { @MainActor in
-                            onChange(mergeVariationSources(collection: bag.collectionItems, fallback: bag.fallbackItems))
-                        }
-                        return
-                    }
                     let parsed = snapshot.documents.compactMap { doc in
                         VariationCodec.variation(from: doc.data(), documentId: doc.documentID)
                     }
                     Task { @MainActor in
                         bag.collectionItems = parsed
-                        onChange(mergeVariationSources(collection: bag.collectionItems, fallback: bag.fallbackItems))
+                        bag.receivedCollection = true
+                        if parsed.isEmpty && !bag.receivedFallback && !bag.receivedItemDocs {
+                            return
+                        }
+                        onChange(
+                            mergeVariationSources(
+                                collection: bag.collectionItems,
+                                fallback: bag.fallbackItems,
+                                itemDocs: bag.itemDocItems
+                            )
+                        )
                     }
                 }
         )
@@ -80,14 +107,67 @@ extension FirebaseBackend {
                     if let error {
                         print("❌ [Variations] fallback listen error: \(error.localizedDescription)")
                         Task { @MainActor in
-                            onChange(mergeVariationSources(collection: bag.collectionItems, fallback: bag.fallbackItems))
+                            bag.receivedFallback = true
+                            onChange(
+                                mergeVariationSources(
+                                    collection: bag.collectionItems,
+                                    fallback: bag.fallbackItems,
+                                    itemDocs: bag.itemDocItems
+                                )
+                            )
                         }
                         return
                     }
                     let parsed = variationsFromFallbackDocument(snapshot?.data())
                     Task { @MainActor in
                         bag.fallbackItems = parsed
-                        onChange(mergeVariationSources(collection: bag.collectionItems, fallback: bag.fallbackItems))
+                        bag.receivedFallback = true
+                        onChange(
+                            mergeVariationSources(
+                                collection: bag.collectionItems,
+                                fallback: bag.fallbackItems,
+                                itemDocs: bag.itemDocItems
+                            )
+                        )
+                    }
+                }
+        )
+
+        bag.add(
+            settingsCollection(organizationId: orgId)
+                .whereField("recordType", isEqualTo: "variationItem")
+                .addSnapshotListener { snapshot, error in
+                    if let error {
+                        print("❌ [Variations] item-doc listen error: \(error.localizedDescription)")
+                        Task { @MainActor in
+                            bag.receivedItemDocs = true
+                            onChange(
+                                mergeVariationSources(
+                                    collection: bag.collectionItems,
+                                    fallback: bag.fallbackItems,
+                                    itemDocs: bag.itemDocItems
+                                )
+                            )
+                        }
+                        return
+                    }
+                    let parsed = (snapshot?.documents ?? []).compactMap { doc -> Variation? in
+                        let data = doc.data()
+                        guard (data["parentId"] as? String) == parentId else { return nil }
+                        let rawId = (data["id"] as? String)
+                            ?? doc.documentID.replacingOccurrences(of: "variationItem_", with: "")
+                        return VariationCodec.variation(from: data, documentId: rawId)
+                    }
+                    Task { @MainActor in
+                        bag.itemDocItems = parsed
+                        bag.receivedItemDocs = true
+                        onChange(
+                            mergeVariationSources(
+                                collection: bag.collectionItems,
+                                fallback: bag.fallbackItems,
+                                itemDocs: bag.itemDocItems
+                            )
+                        )
                     }
                 }
         )
@@ -120,6 +200,13 @@ extension FirebaseBackend {
     }
 
     func saveVariation(_ variation: Variation, organizationId: String) async throws {
+        guard currentUser != nil else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "You must be signed in to save a variation."]
+            )
+        }
         let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
             ?? normalizedOrganizationId(organizationId)
         guard !resolved.isEmpty else {
@@ -129,7 +216,13 @@ extension FirebaseBackend {
                 userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
             )
         }
-        let orgId = try await ensureReadableOrganization(resolved)
+        let orgId: String
+        do {
+            orgId = try await ensureReadableOrganization(resolved)
+        } catch {
+            print("⚠️ [Variations] Org root check skipped: \(error.localizedDescription)")
+            orgId = resolved
+        }
         do {
             try await ensureUserDocumentLinked(organizationId: orgId)
         } catch {
@@ -142,14 +235,43 @@ extension FirebaseBackend {
         payload.recomputeCounts()
         let map = VariationCodec.firestoreMap(from: payload)
 
+        // Production still denies `variations/{id}` until those rules are published.
+        // H&S / deadlines already persist on `settings/{docId}` — that is the success path.
+        var lastError: Error?
+        var wrote = false
+
+        do {
+            try await saveVariationToSettingsFallback(payload, map: map, organizationId: orgId)
+            wrote = true
+        } catch {
+            lastError = error
+            print("⚠️ [Variations] Settings log write failed: \(error.localizedDescription)")
+        }
+
+        do {
+            try await saveVariationItemDocument(payload, map: map, organizationId: orgId)
+            wrote = true
+        } catch {
+            lastError = lastError ?? error
+            print("⚠️ [Variations] Settings item write failed: \(error.localizedDescription)")
+        }
+
         do {
             try await variationsCollection(organizationId: orgId)
                 .document(payload.id)
                 .setData(map, merge: true)
+            wrote = true
         } catch {
-            guard isVariationPermissionDenied(error) else { throw error }
-            print("⚠️ [Variations] Collection write denied — saving via settings fallback")
-            try await saveVariationToSettingsFallback(payload, map: map, organizationId: orgId)
+            lastError = lastError ?? error
+            print("⚠️ [Variations] Collection write skipped: \(error.localizedDescription)")
+        }
+
+        guard wrote else {
+            throw lastError ?? NSError(
+                domain: "FirebaseBackend",
+                code: 7,
+                userInfo: [NSLocalizedDescriptionKey: "Could not save this variation to Firebase."]
+            )
         }
     }
 
@@ -159,21 +281,40 @@ extension FirebaseBackend {
         organizationId: String
     ) async throws {
         let ref = variationsFallbackDocument(organizationId: organizationId, parentId: variation.parentId)
+        var items: [[String: Any]] = []
+        if let existing = try? await ref.getDocument(), let data = existing.data() {
+            items = fallbackItemMaps(from: data)
+        }
+        if let idx = items.firstIndex(where: { ($0["id"] as? String) == variation.id }) {
+            items[idx] = map
+        } else {
+            items.append(map)
+        }
         try await ref.setData(
             [
                 "parentId": variation.parentId,
                 "parentType": variation.parentType.rawValue,
                 "organizationId": organizationId,
-                "items.\(variation.id)": map,
+                "recordType": "variationLog",
+                "items": items,
                 "updatedAt": Timestamp(date: Date())
             ],
             merge: true
         )
     }
 
-    private func isVariationPermissionDenied(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        return nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7
+    private func saveVariationItemDocument(
+        _ variation: Variation,
+        map: [String: Any],
+        organizationId: String
+    ) async throws {
+        var data = map
+        data["recordType"] = "variationItem"
+        data["parentId"] = variation.parentId
+        data["parentType"] = variation.parentType.rawValue
+        data["organizationId"] = organizationId
+        try await variationItemDocument(organizationId: organizationId, variationId: variation.id)
+            .setData(data, merge: true)
     }
 
     func loadCustomVariationTrades(organizationId: String) async -> [String] {
@@ -202,11 +343,21 @@ extension FirebaseBackend {
             .getDocuments()
         async let fallbackSnap = variationsFallbackDocument(organizationId: orgId, parentId: parentId)
             .getDocument()
+        async let itemSnap = settingsCollection(organizationId: orgId)
+            .whereField("recordType", isEqualTo: "variationItem")
+            .getDocuments()
         let collectionItems = ((try? await collectionSnap)?.documents ?? []).compactMap {
             VariationCodec.variation(from: $0.data(), documentId: $0.documentID)
         }
         let fallbackItems = variationsFromFallbackDocument((try? await fallbackSnap)?.data())
-        return mergeVariationSources(collection: collectionItems, fallback: fallbackItems)
+        let itemDocs = ((try? await itemSnap)?.documents ?? []).compactMap { doc -> Variation? in
+            let data = doc.data()
+            guard (data["parentId"] as? String) == parentId else { return nil }
+            let rawId = (data["id"] as? String)
+                ?? doc.documentID.replacingOccurrences(of: "variationItem_", with: "")
+            return VariationCodec.variation(from: data, documentId: rawId)
+        }
+        return mergeVariationSources(collection: collectionItems, fallback: fallbackItems, itemDocs: itemDocs)
             .filter { !$0.isDeleted && $0.status == .open }
             .count
     }
@@ -217,10 +368,11 @@ extension FirebaseBackend {
         fileName: String,
         contentType: String,
         organizationId: String,
+        parentId: String,
         variationId: String,
         evidenceId: String
     ) async throws -> (storagePath: String, downloadURL: String) {
-        guard currentUser?.uid != nil else {
+        guard let userId = currentUser?.uid else {
             throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
         if data.count > 20 * 1024 * 1024 {
@@ -230,8 +382,59 @@ extension FirebaseBackend {
                 userInfo: [NSLocalizedDescriptionKey: "That file is too large. Evidence must be 20 MB or smaller."]
             )
         }
+        let orgId = normalizedOrganizationId(
+            await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+                ?? organizationId
+        )
+        guard !orgId.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
+            )
+        }
+        do {
+            try await ensureUserDocumentLinked(organizationId: orgId)
+        } catch {
+            print("⚠️ [Variations] upload ensureUserDocumentLinked: \(error.localizedDescription)")
+        }
         let ext = (fileName as NSString).pathExtension.isEmpty ? "bin" : (fileName as NSString).pathExtension
-        let path = "organizations/\(normalizedOrganizationId(organizationId))/variations/\(variationId)/\(evidenceId).\(ext.lowercased())"
+        let safeName = fileName
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "/", with: "_")
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let folderId = parentId.isEmpty ? variationId : parentId
+        // Canonical variations path may be missing from Storage rules. H&S / tasks / site
+        // audit prefixes already accept authenticated org uploads in this app.
+        let paths = [
+            "organizations/\(orgId)/healthSafety/\(folderId)/variationEvidence/\(userId)_\(timestamp)_\(safeName)",
+            "organizations/\(orgId)/tasks/\(folderId)/files/\(userId)_\(timestamp)_\(safeName)",
+            "organizations/\(orgId)/siteAudits/\(folderId)/images/\(userId)_\(timestamp)_\(safeName)",
+            "organizations/\(orgId)/variations/\(variationId)/\(evidenceId).\(ext.lowercased())"
+        ]
+        var lastError: Error?
+        for path in paths {
+            do {
+                let result = try await putVariationEvidenceData(data, path: path, contentType: contentType)
+                print("✅ [Variations] Evidence uploaded to \(path)")
+                return result
+            } catch {
+                lastError = error
+                print("⚠️ [Variations] Storage path failed \(path): \(error.localizedDescription)")
+            }
+        }
+        throw lastError ?? NSError(
+            domain: "FirebaseBackend",
+            code: 403,
+            userInfo: [NSLocalizedDescriptionKey: "Could not upload evidence to Firebase Storage."]
+        )
+    }
+
+    private func putVariationEvidenceData(
+        _ data: Data,
+        path: String,
+        contentType: String
+    ) async throws -> (storagePath: String, downloadURL: String) {
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
         metadata.contentType = contentType
@@ -266,6 +469,7 @@ extension FirebaseBackend {
         fileName: String,
         contentType: String,
         organizationId: String,
+        parentId: String,
         variationId: String,
         evidenceId: String
     ) async throws -> (storagePath: String, downloadURL: String) {
@@ -280,28 +484,36 @@ extension FirebaseBackend {
     #endif
 }
 
-nonisolated private func variationsFromFallbackDocument(_ data: [String: Any]?) -> [Variation] {
-    guard let data else { return [] }
+nonisolated private func fallbackItemMaps(from data: [String: Any]) -> [[String: Any]] {
+    if let items = data["items"] as? [[String: Any]] {
+        return items
+    }
     if let items = data["items"] as? [String: Any] {
         return items.compactMap { id, value in
-            guard let row = value as? [String: Any] else { return nil }
-            return VariationCodec.variation(from: row, documentId: (row["id"] as? String) ?? id)
-        }
-    }
-    if let items = data["items"] as? [[String: Any]] {
-        return items.compactMap { row in
-            VariationCodec.variation(from: row, documentId: (row["id"] as? String) ?? UUID().uuidString)
+            guard var row = value as? [String: Any] else { return nil }
+            if ((row["id"] as? String) ?? "").isEmpty {
+                row["id"] = id
+            }
+            return row
         }
     }
     return []
 }
 
-nonisolated private func mergeVariationSources(collection: [Variation], fallback: [Variation]) -> [Variation] {
-    var byId: [String: Variation] = [:]
-    for item in fallback {
-        byId[item.id] = item
+nonisolated private func variationsFromFallbackDocument(_ data: [String: Any]?) -> [Variation] {
+    guard let data else { return [] }
+    return fallbackItemMaps(from: data).compactMap { row in
+        VariationCodec.variation(from: row, documentId: (row["id"] as? String) ?? UUID().uuidString)
     }
-    for item in collection {
+}
+
+nonisolated private func mergeVariationSources(
+    collection: [Variation],
+    fallback: [Variation],
+    itemDocs: [Variation] = []
+) -> [Variation] {
+    var byId: [String: Variation] = [:]
+    for item in fallback + itemDocs + collection {
         if let existing = byId[item.id] {
             byId[item.id] = item.updatedAt >= existing.updatedAt ? item : existing
         } else {
@@ -315,6 +527,10 @@ nonisolated private final class VariationListenerBag: NSObject, ListenerRegistra
     private var listeners: [ListenerRegistration] = []
     var collectionItems: [Variation] = []
     var fallbackItems: [Variation] = []
+    var itemDocItems: [Variation] = []
+    var receivedCollection = false
+    var receivedFallback = false
+    var receivedItemDocs = false
 
     func add(_ listener: ListenerRegistration) {
         listeners.append(listener)

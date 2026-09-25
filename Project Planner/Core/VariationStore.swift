@@ -37,13 +37,29 @@ final class VariationStore: ObservableObject {
     }
 
     func start(firebaseBackend: FirebaseBackend) {
-        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId, !orgId.isEmpty {
+            attachListeners(firebaseBackend: firebaseBackend, orgId: orgId)
+            return
+        }
+        Task {
+            guard let orgId = await firebaseBackend.resolveOrganizationIdForFirebaseWrites(preferredFallback: nil),
+                  !orgId.isEmpty else { return }
+            attachListeners(firebaseBackend: firebaseBackend, orgId: orgId)
+        }
+    }
+
+    private func attachListeners(firebaseBackend: FirebaseBackend, orgId: String) {
         variationListener?.remove()
         trackerListener?.remove()
         isLoading = true
         variationListener = firebaseBackend.observeVariations(organizationId: orgId, parentId: parentId) { [weak self] items in
-            self?.variations = items
-            self?.isLoading = false
+            guard let self else { return }
+            if items.isEmpty && !self.variations.isEmpty {
+                self.isLoading = false
+                return
+            }
+            self.variations = items
+            self.isLoading = false
         }
         trackerListener = firebaseBackend.observeVariationTracker(
             organizationId: orgId,
@@ -55,6 +71,15 @@ final class VariationStore: ObservableObject {
         Task {
             customTrades = await firebaseBackend.loadCustomVariationTrades(organizationId: orgId)
         }
+    }
+
+    func upsert(_ variation: Variation) {
+        if let idx = variations.firstIndex(where: { $0.id == variation.id }) {
+            variations[idx] = variation
+        } else {
+            variations.insert(variation, at: 0)
+        }
+        isLoading = false
     }
 
     func stop() {

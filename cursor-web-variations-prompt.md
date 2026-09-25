@@ -46,8 +46,9 @@ Collections (American spelling):
 - `organizations/{orgId}/variations/{variationId}`
 - `organizations/{orgId}/variationTrackers/{parentId}`  — document id **is** the parent project/small-work UUID string
 - `organizations/{orgId}/settings/variationTrades` — `{ customTrades: string[] }`
-- `organizations/{orgId}/settings/variations_{parentId}` — iOS fallback while `variations` collection writes are denied (undeployed rules). Shape: `{ parentId, parentType, organizationId, items: { [variationId]: VariationMap }, updatedAt }`. Web must **read and merge** this with the collection (newer `updatedAt` wins, identity is `id`). Prefer **writing** to `variations/{id}`.
-- Evidence Storage: `organizations/{orgId}/variations/{variationId}/{evidenceId}.{ext}`
+- `organizations/{orgId}/settings/variations_{parentId}` — iOS fallback while `variations` collection writes are denied (undeployed rules). Shape: `{ parentId, parentType, organizationId, recordType: "variationLog", items: VariationMap[] | { [variationId]: VariationMap }, updatedAt }`. Web must **read and merge** this with the collection (newer `updatedAt` wins, identity is `id`). Prefer **writing** to `variations/{id}`.
+- `organizations/{orgId}/settings/variationItem_{variationId}` — second iOS fallback; one VariationMap per document plus `recordType: "variationItem"`. Merge by `id`.
+- Evidence Storage: prefer `organizations/{orgId}/variations/{variationId}/{evidenceId}.{ext}`. iOS also retries `organizations/{orgId}/healthSafety/{parentId}/variationEvidence/...` and `organizations/{orgId}/tasks/{parentId}/files/...` until Storage rules include the variations prefix.
 
 **Identity is `id` (document id). `voNumber` is a display label only.** Never query, deep-link, CSV-key or filename by VO number.
 

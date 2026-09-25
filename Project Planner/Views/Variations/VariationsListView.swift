@@ -119,6 +119,9 @@ struct VariationsListView: View {
         .task {
             store.start(firebaseBackend: firebaseBackend)
         }
+        .onChange(of: firebaseBackend.currentOrganization?.firestoreDocumentId) { _, _ in
+            store.start(firebaseBackend: firebaseBackend)
+        }
         .onDisappear { store.stop() }
         .sheet(isPresented: $showingEditor) {
             VariationEditorSheet(

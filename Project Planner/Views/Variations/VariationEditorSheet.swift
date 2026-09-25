@@ -396,7 +396,13 @@ struct VariationEditorSheet: View {
             errorMessage = "You can attach up to 10 files."
             return
         }
-        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
+            ?? await firebaseBackend.resolveOrganizationIdForFirebaseWrites(preferredFallback: nil)
+            ?? ""
+        guard !orgId.isEmpty else {
+            errorMessage = "Organization ID is missing. Open Settings → Force Reload Data, then retry."
+            return
+        }
         let evidenceId = UUID().uuidString
         let pending = VariationEvidenceItem(
             id: evidenceId,
@@ -417,6 +423,7 @@ struct VariationEditorSheet: View {
                 fileName: fileName,
                 contentType: contentType,
                 organizationId: orgId,
+                parentId: project.id.uuidString,
                 variationId: variationId,
                 evidenceId: evidenceId
             )
@@ -440,14 +447,28 @@ struct VariationEditorSheet: View {
     }
 
     private func save() async {
-        guard canSave, let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        guard canSave else { return }
+        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
+            ?? await firebaseBackend.resolveOrganizationIdForFirebaseWrites(preferredFallback: nil)
+            ?? ""
+        guard !orgId.isEmpty else {
+            errorMessage = "Organization ID is missing. Open Settings → Force Reload Data, then retry."
+            return
+        }
         if !trackerOn, store.voNumberIsDuplicate(voNumber, excludingId: variationId) {
             errorMessage = "This VO number is already used on this job."
             return
         }
         isSaving = true
-        while inFlightUploads > 0 {
+        errorMessage = nil
+        let waitDeadline = Date().addingTimeInterval(20)
+        while inFlightUploads > 0 && Date() < waitDeadline {
             try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        if inFlightUploads > 0 {
+            errorMessage = "Evidence is still uploading. Wait a moment and tap Save again."
+            isSaving = false
+            return
         }
         let user = userStore.displayUser
         let uid = user?.id ?? firebaseBackend.currentUser?.uid ?? ""
@@ -501,6 +522,7 @@ struct VariationEditorSheet: View {
         }
         do {
             try await firebaseBackend.saveVariation(variation, organizationId: orgId)
+            store.upsert(variation)
             if existing == nil {
                 await notificationService.notifyVariationAdded(
                     parentId: project.id,
