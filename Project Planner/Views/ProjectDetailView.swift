@@ -259,9 +259,6 @@ struct ProjectDetailView: View {
                 await refreshOpenVariationCount()
             }
         }
-        .onChange(of: navigationDepth) { _, _ in
-            Task { await refreshOpenVariationCount() }
-        }
         .onChange(of: showingAddTask) { _, isOpen in
             if !isOpen {
                 Task {

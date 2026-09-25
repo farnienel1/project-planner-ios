@@ -46,6 +46,7 @@ Collections (American spelling):
 - `organizations/{orgId}/variations/{variationId}`
 - `organizations/{orgId}/variationTrackers/{parentId}`  — document id **is** the parent project/small-work UUID string
 - `organizations/{orgId}/settings/variationTrades` — `{ customTrades: string[] }`
+- `organizations/{orgId}/settings/variations_{parentId}` — iOS fallback while `variations` collection writes are denied (undeployed rules). Shape: `{ parentId, parentType, organizationId, items: { [variationId]: VariationMap }, updatedAt }`. Web must **read and merge** this with the collection (newer `updatedAt` wins, identity is `id`). Prefer **writing** to `variations/{id}`.
 - Evidence Storage: `organizations/{orgId}/variations/{variationId}/{evidenceId}.{ext}`
 
 **Identity is `id` (document id). `voNumber` is a display label only.** Never query, deep-link, CSV-key or filename by VO number.
@@ -199,7 +200,7 @@ iOS currently listens with `parentId ==` only and sorts in memory, so a missing 
 
 ## Rules
 
-iOS already added org-member read/create/update on `variations` and `variationTrackers` (admin-only delete) in both `Project Planner/firestore.rules` and `website/firestore.rules`. `settings/{settingId}` already covers `variationTrades`. Storage: follow the same org-auth pattern as existing uploads; path prefix `organizations/{orgId}/variations/`. Do not introduce a `qs` check.
+iOS already added org-member read/create/update on `variations` and `variationTrackers` (admin-only delete) in both `Project Planner/firestore.rules` and `website/firestore.rules`. **Deploy those rules** or collection creates fail with missing/insufficient permissions. Until they are live, iOS also writes `settings/variations_{parentId}` (covered by existing `settings/{settingId}`). `settings/{settingId}` already covers `variationTrades`. Storage: follow the same org-auth pattern as existing uploads; path prefix `organizations/{orgId}/variations/`. Do not introduce a `qs` check.
 
 ## Acceptance — gaps this pass is meant to close
 

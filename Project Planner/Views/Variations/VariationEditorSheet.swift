@@ -36,6 +36,9 @@ struct VariationEditorSheet: View {
     @State private var customTradeDraft = ""
     @State private var showingCustomTrade = false
     @State private var inFlightUploads = 0
+    @State private var showingTradePicker = false
+    @State private var tradePickerRowID: String?
+    @State private var suggestionNames: [String]
 
     init(project: Project, existing: Variation?, store: VariationStore, materialNames: [String]) {
         self.project = project
@@ -50,6 +53,7 @@ struct VariationEditorSheet: View {
         _labour = State(initialValue: existing?.labour ?? [])
         _materials = State(initialValue: existing?.materials ?? [])
         _evidence = State(initialValue: existing?.evidence ?? [])
+        _suggestionNames = State(initialValue: materialNames)
     }
 
     private var trackerOn: Bool { store.tracker.enabled }
@@ -81,8 +85,8 @@ struct VariationEditorSheet: View {
                         TextField("Short heading", text: $heading)
                     }
                     fieldBlock(title: "Description") {
-                        TextEditor(text: $descriptionText)
-                            .frame(minHeight: 90)
+                        TextField("What changed on site", text: $descriptionText, axis: .vertical)
+                            .lineLimit(3...8)
                     }
 
                     labourSection
@@ -150,27 +154,54 @@ struct VariationEditorSheet: View {
                 Button("Add") { addCustomTrade() }
                 Button("Cancel", role: .cancel) {}
             }
+            .sheet(isPresented: $showingTradePicker) {
+                VariationTradePickerSheet(
+                    options: VariationTrades.mergedPickerOptions(custom: store.customTrades),
+                    onSelect: { trade in
+                        if let id = tradePickerRowID, let idx = labour.firstIndex(where: { $0.id == id }) {
+                            labour[idx].trade = trade
+                        } else if labour.isEmpty {
+                            labour.append(VariationLabourLine(id: UUID().uuidString, trade: trade, hours: 0))
+                        }
+                        showingTradePicker = false
+                    },
+                    onCustom: {
+                        showingTradePicker = false
+                        showingCustomTrade = true
+                    }
+                )
+            }
         }
     }
 
     private var labourSection: some View {
         fieldBlock(title: "Labour · \(formatHours(labourHours)) hrs") {
             ForEach($labour) { $row in
-                HStack {
-                    Menu {
-                        ForEach(VariationTrades.mergedPickerOptions(custom: store.customTrades), id: \.self) { trade in
-                            Button(trade) { row.trade = trade }
-                        }
-                        Button(VariationTrades.customPickerTitle) { showingCustomTrade = true }
+                HStack(alignment: .center, spacing: 8) {
+                    Button {
+                        tradePickerRowID = row.id
+                        showingTradePicker = true
                     } label: {
-                        Text(row.trade.isEmpty ? "Trade" : row.trade)
-                            .foregroundStyle(row.trade.isEmpty ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.ink)
+                        HStack(spacing: 6) {
+                            Text(row.trade.isEmpty ? "Select trade" : row.trade)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                                .foregroundStyle(row.trade.isEmpty ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.ink)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(Color(.systemGray6))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
-                    Spacer()
+                    .buttonStyle(.plain)
                     TextField("Hrs", value: $row.hours, format: .number)
                         .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
-                        .frame(width: 64)
+                        .frame(width: 56)
                     Button(role: .destructive) {
                         labour.removeAll { $0.id == row.id }
                     } label: {
@@ -220,8 +251,8 @@ struct VariationEditorSheet: View {
                             Image(systemName: "minus.circle")
                         }
                     }
-                    if !materialNames.isEmpty {
-                        ForEach(materialNames.filter { name in
+                    if !suggestionNames.isEmpty {
+                        ForEach(suggestionNames.filter { name in
                             let q = row.name.trimmingCharacters(in: .whitespacesAndNewlines)
                             return !q.isEmpty && name.localizedCaseInsensitiveContains(q) && name.localizedCaseInsensitiveCompare(row.name) != .orderedSame
                         }.prefix(3), id: \.self) { suggestion in
@@ -288,8 +319,7 @@ struct VariationEditorSheet: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(ProjectWorksRevampColors.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func addHours(_ hours: Double) {
@@ -314,7 +344,9 @@ struct VariationEditorSheet: View {
     private func addCustomTrade() {
         let trimmed = customTradeDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if labour.isEmpty {
+        if let id = tradePickerRowID, let idx = labour.firstIndex(where: { $0.id == id }) {
+            labour[idx].trade = trimmed
+        } else if labour.isEmpty {
             labour.append(VariationLabourLine(id: UUID().uuidString, trade: trimmed, hours: 0))
         } else {
             labour[labour.count - 1].trade = trimmed
@@ -324,6 +356,7 @@ struct VariationEditorSheet: View {
             Task { await firebaseBackend.addCustomVariationTrade(trimmed, organizationId: orgId) }
         }
         customTradeDraft = ""
+        tradePickerRowID = nil
     }
 
     private func importPhoto(_ item: PhotosPickerItem) async {
@@ -503,6 +536,42 @@ struct VariationEditorSheet: View {
 
     private func formatHours(_ value: Double) -> String {
         String(format: abs(value - value.rounded()) < 0.05 ? "%.0f" : "%.1f", value)
+    }
+}
+
+private struct VariationTradePickerSheet: View {
+    let options: [String]
+    var onSelect: (String) -> Void
+    var onCustom: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(options, id: \.self) { trade in
+                        Button(trade) {
+                            onSelect(trade)
+                            dismiss()
+                        }
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                    }
+                }
+                Section {
+                    Button(VariationTrades.customPickerTitle) {
+                        onCustom()
+                    }
+                }
+            }
+            .navigationTitle("Labour trade")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 

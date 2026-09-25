@@ -520,6 +520,8 @@ service cloud.firestore {
         allow delete: if isOrganizationAdmin(organizationId);
       }
 
+      // Deploy this match. Until it is live, iOS also writes
+      // settings/variations_{parentId} (covered by settings/{settingId}).
       match /variations/{variationId} {
         allow read: if canAccessOrganization(organizationId);
         allow create, update: if canAccessOrganization(organizationId);

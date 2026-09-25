@@ -15,7 +15,6 @@ struct VariationsListView: View {
     @State private var filter: VariationListFilter = .all
     @State private var showingEditor = false
     @State private var editingVariation: Variation?
-    @State private var materialNames: [String] = []
 
     private var parentType: VariationParentType {
         project.jobType == .smallWorks ? .smallWork : .project
@@ -119,10 +118,6 @@ struct VariationsListView: View {
         }
         .task {
             store.start(firebaseBackend: firebaseBackend)
-            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
-               let items = try? await firebaseBackend.loadMaterialCatalogue(organizationId: orgId) {
-                materialNames = items.map(\.name).filter { !$0.isEmpty }
-            }
         }
         .onDisappear { store.stop() }
         .sheet(isPresented: $showingEditor) {
@@ -130,7 +125,7 @@ struct VariationsListView: View {
                 project: project,
                 existing: editingVariation,
                 store: store,
-                materialNames: materialNames
+                materialNames: []
             )
             .environmentObject(firebaseBackend)
             .environmentObject(userStore)

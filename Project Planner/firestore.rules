@@ -560,6 +560,8 @@ service cloud.firestore {
           (request.auth.uid == layoutUserId || isOrganizationAdmin(organizationId));
       }
 
+      // Deploy this match. Until it is live, iOS also writes
+      // settings/variations_{parentId} (covered by settings/{settingId} below).
       match /variations/{variationId} {
         allow read: if canAccessOrganization(organizationId);
         allow create, update: if canAccessOrganization(organizationId);

@@ -202,7 +202,7 @@ enum VariationCodec {
         let status = VariationStatus(rawValue: data["status"] as? String ?? "") ?? .open
         return Variation(
             id: documentId,
-            orgId: data["orgId"] as? String ?? "",
+            orgId: data["orgId"] as? String ?? data["organizationId"] as? String ?? "",
             parentType: parentType,
             parentId: data["parentId"] as? String ?? "",
             parentName: data["parentName"] as? String ?? "",
@@ -236,6 +236,7 @@ enum VariationCodec {
         var map: [String: Any] = [
             "id": variation.id,
             "orgId": variation.orgId,
+            "organizationId": variation.orgId,
             "parentType": variation.parentType.rawValue,
             "parentId": variation.parentId,
             "parentName": variation.parentName,
