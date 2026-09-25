@@ -6,7 +6,7 @@
 import SwiftUI
 import UIKit
 import PencilKit
-import FirebaseFirestore
+@preconcurrency import FirebaseFirestore
 import PhotosUI
 
 struct InvoicingView: View {
@@ -596,7 +596,52 @@ nonisolated enum TimesheetDraftStore {
             "managerSignedByUserId": draft.managerSignedByUserId ?? "",
             "managerSignatureImageBase64": draft.managerSignatureImageBase64 ?? "",
             "exportedAt": draft.exportedAt.map(Timestamp.init(date:)) as Any,
-            "weeklyReportOverride": draft.weeklyReportOverride.map(weeklyReportOverrideMap) as Any,
+            "weeklyReportOverride": draft.weeklyReportOverride.map { override -> [String: Any] in
+                [
+                    "approvedAt": Timestamp(date: override.approvedAt),
+                    "approvedByUserId": override.approvedByUserId,
+                    "approvedByName": override.approvedByName,
+                    "selfSigned": override.selfSigned,
+                    "lines": override.lines.map { line -> [String: Any] in
+                        [
+                            "id": line.id,
+                            "date": Timestamp(date: line.date),
+                            "jobNumber": line.jobNumber,
+                            "projectName": line.projectName,
+                            "locationKind": line.locationKind,
+                            "details": line.details,
+                            "paidHours": line.paidHours,
+                            "days": line.days,
+                            "amount": line.amount,
+                            "isOvertime": line.isOvertime,
+                            "decision": line.decision.rawValue,
+                            "bookingId": line.bookingId ?? ""
+                        ]
+                    },
+                    "priceWork": override.priceWork.map { line -> [String: Any] in
+                        [
+                            "id": line.id,
+                            "title": line.title,
+                            "details": line.details,
+                            "jobNumber": line.jobNumber,
+                            "date": Timestamp(date: line.date),
+                            "amount": line.amount,
+                            "decision": line.decision.rawValue
+                        ]
+                    },
+                    "expenses": override.expenses.map { line -> [String: Any] in
+                        [
+                            "id": line.id,
+                            "title": line.title,
+                            "details": line.details,
+                            "jobNumber": line.jobNumber,
+                            "date": Timestamp(date: line.date),
+                            "amount": line.amount,
+                            "decision": line.decision.rawValue
+                        ]
+                    }
+                ]
+            } as Any,
             "expenseEntries": draft.expenseEntries.map { e in
                 [
                     "id": e.id.uuidString,
@@ -706,45 +751,6 @@ nonisolated enum TimesheetDraftStore {
 
     static func decodeFirestoreMap(_ map: [String: Any]) -> TimesheetDraft? {
         fromFirestoreMap(map)
-    }
-
-    nonisolated private static func weeklyReportOverrideMap(_ override: TimesheetWeeklyReportOverride) -> [String: Any] {
-        [
-            "approvedAt": Timestamp(date: override.approvedAt),
-            "approvedByUserId": override.approvedByUserId,
-            "approvedByName": override.approvedByName,
-            "selfSigned": override.selfSigned,
-            "lines": override.lines.map { line in
-                [
-                    "id": line.id,
-                    "date": Timestamp(date: line.date),
-                    "jobNumber": line.jobNumber,
-                    "projectName": line.projectName,
-                    "locationKind": line.locationKind,
-                    "details": line.details,
-                    "paidHours": line.paidHours,
-                    "days": line.days,
-                    "amount": line.amount,
-                    "isOvertime": line.isOvertime,
-                    "decision": line.decision.rawValue,
-                    "bookingId": line.bookingId ?? ""
-                ] as [String: Any]
-            },
-            "priceWork": override.priceWork.map(moneyLineMap),
-            "expenses": override.expenses.map(moneyLineMap)
-        ]
-    }
-
-    nonisolated private static func moneyLineMap(_ line: TimesheetWeeklyReportMoneyLine) -> [String: Any] {
-        [
-            "id": line.id,
-            "title": line.title,
-            "details": line.details,
-            "jobNumber": line.jobNumber,
-            "date": Timestamp(date: line.date),
-            "amount": line.amount,
-            "decision": line.decision.rawValue
-        ]
     }
 
     private static func weeklyReportOverride(from map: [String: Any]) -> TimesheetWeeklyReportOverride? {
