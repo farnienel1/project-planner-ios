@@ -5,6 +5,7 @@
 
 import Foundation
 import UIKit
+import FirebaseAuth
 import FirebaseFirestore
 #if canImport(FirebaseStorage)
 import FirebaseStorage
