@@ -196,7 +196,7 @@ nonisolated enum VariationNumbering {
 }
 
 nonisolated enum VariationCodec {
-    static func variation(from data: [String: Any], documentId: String) -> Variation? {
+    nonisolated static func variation(from data: [String: Any], documentId: String) -> Variation? {
         let parentType = VariationParentType(rawValue: data["parentType"] as? String ?? "") ?? .project
         let origin = VariationOrigin(rawValue: data["origin"] as? String ?? "") ?? .app
         let status = VariationStatus(rawValue: data["status"] as? String ?? "") ?? .open
@@ -232,7 +232,7 @@ nonisolated enum VariationCodec {
         )
     }
 
-    static func firestoreMap(from variation: Variation) -> [String: Any] {
+    nonisolated static func firestoreMap(from variation: Variation) -> [String: Any] {
         var map: [String: Any] = [
             "id": variation.id,
             "orgId": variation.orgId,
@@ -308,7 +308,7 @@ nonisolated enum VariationCodec {
         return map
     }
 
-    static func tracker(from data: [String: Any], parentId: String) -> VariationTracker {
+    nonisolated static func tracker(from data: [String: Any], parentId: String) -> VariationTracker {
         VariationTracker(
             parentId: parentId,
             parentType: VariationParentType(rawValue: data["parentType"] as? String ?? "") ?? .project,
@@ -331,7 +331,7 @@ nonisolated enum VariationCodec {
         )
     }
 
-    static func firestoreMap(from tracker: VariationTracker) -> [String: Any] {
+    nonisolated static func firestoreMap(from tracker: VariationTracker) -> [String: Any] {
         var map: [String: Any] = [
             "parentId": tracker.parentId,
             "parentType": tracker.parentType.rawValue,
@@ -349,7 +349,7 @@ nonisolated enum VariationCodec {
         return map
     }
 
-    private static func firestoreInt(_ value: Any?) -> Int {
+    nonisolated private static func firestoreInt(_ value: Any?) -> Int {
         if let i = value as? Int { return i }
         if let n = value as? Int64 { return Int(n) }
         if let n = value as? NSNumber { return n.intValue }
@@ -358,7 +358,7 @@ nonisolated enum VariationCodec {
         return 0
     }
 
-    private static func firestoreDouble(_ value: Any?) -> Double {
+    nonisolated private static func firestoreDouble(_ value: Any?) -> Double {
         if let d = value as? Double { return d }
         if let i = value as? Int { return Double(i) }
         if let n = value as? NSNumber { return n.doubleValue }
@@ -366,13 +366,13 @@ nonisolated enum VariationCodec {
         return 0
     }
 
-    private static func date(from value: Any?) -> Date? {
+    nonisolated private static func date(from value: Any?) -> Date? {
         if let ts = value as? Timestamp { return ts.dateValue() }
         if let date = value as? Date { return date }
         return nil
     }
 
-    private static func labour(from value: Any?) -> [VariationLabourLine] {
+    nonisolated private static func labour(from value: Any?) -> [VariationLabourLine] {
         ((value as? [[String: Any]]) ?? []).compactMap { row in
             let id = row["id"] as? String ?? UUID().uuidString
             return VariationLabourLine(
@@ -383,7 +383,7 @@ nonisolated enum VariationCodec {
         }
     }
 
-    private static func materials(from value: Any?) -> [VariationMaterialLine] {
+    nonisolated private static func materials(from value: Any?) -> [VariationMaterialLine] {
         ((value as? [[String: Any]]) ?? []).compactMap { row in
             let id = row["id"] as? String ?? UUID().uuidString
             return VariationMaterialLine(
@@ -394,7 +394,7 @@ nonisolated enum VariationCodec {
         }
     }
 
-    private static func evidence(from value: Any?) -> [VariationEvidenceItem] {
+    nonisolated private static func evidence(from value: Any?) -> [VariationEvidenceItem] {
         ((value as? [[String: Any]]) ?? []).compactMap { row in
             let id = row["id"] as? String ?? UUID().uuidString
             return VariationEvidenceItem(
@@ -411,7 +411,7 @@ nonisolated enum VariationCodec {
         }
     }
 
-    private static func numberHistory(from value: Any?) -> [VariationNumberHistoryEntry] {
+    nonisolated private static func numberHistory(from value: Any?) -> [VariationNumberHistoryEntry] {
         ((value as? [[String: Any]]) ?? []).compactMap { row in
             VariationNumberHistoryEntry(
                 from: row["from"] as? String ?? "",
@@ -422,7 +422,7 @@ nonisolated enum VariationCodec {
         }
     }
 
-    private static func statusHistory(from value: Any?) -> [VariationStatusHistoryEntry] {
+    nonisolated private static func statusHistory(from value: Any?) -> [VariationStatusHistoryEntry] {
         ((value as? [[String: Any]]) ?? []).compactMap { row in
             VariationStatusHistoryEntry(
                 status: row["status"] as? String ?? "",

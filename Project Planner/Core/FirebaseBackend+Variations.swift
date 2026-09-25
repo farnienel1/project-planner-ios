@@ -81,13 +81,13 @@ extension FirebaseBackend {
                         return
                     }
                     guard let snapshot else { return }
-                    let parsed = snapshot.documents.compactMap { doc in
-                        VariationCodec.variation(from: doc.data(), documentId: doc.documentID)
-                    }
+                    let documents = snapshot.documents.map { ($0.documentID, $0.data()) }
                     Task { @MainActor in
-                        bag.collectionItems = parsed
+                        bag.collectionItems = documents.compactMap { id, data in
+                            VariationCodec.variation(from: data, documentId: id)
+                        }
                         bag.receivedCollection = true
-                        if parsed.isEmpty && !bag.receivedFallback && !bag.receivedItemDocs {
+                        if bag.collectionItems.isEmpty && !bag.receivedFallback && !bag.receivedItemDocs {
                             return
                         }
                         onChange(
@@ -118,9 +118,9 @@ extension FirebaseBackend {
                         }
                         return
                     }
-                    let parsed = variationsFromFallbackDocument(snapshot?.data())
+                    let fallbackData = snapshot?.data()
                     Task { @MainActor in
-                        bag.fallbackItems = parsed
+                        bag.fallbackItems = variationsFromFallbackDocument(fallbackData)
                         bag.receivedFallback = true
                         onChange(
                             mergeVariationSources(
@@ -151,15 +151,14 @@ extension FirebaseBackend {
                         }
                         return
                     }
-                    let parsed = (snapshot?.documents ?? []).compactMap { doc -> Variation? in
-                        let data = doc.data()
-                        guard (data["parentId"] as? String) == parentId else { return nil }
-                        let rawId = (data["id"] as? String)
-                            ?? doc.documentID.replacingOccurrences(of: "variationItem_", with: "")
-                        return VariationCodec.variation(from: data, documentId: rawId)
-                    }
+                    let rows = (snapshot?.documents ?? []).map { ($0.documentID, $0.data()) }
                     Task { @MainActor in
-                        bag.itemDocItems = parsed
+                        bag.itemDocItems = rows.compactMap { documentID, data in
+                            guard (data["parentId"] as? String) == parentId else { return nil }
+                            let rawId = (data["id"] as? String)
+                                ?? documentID.replacingOccurrences(of: "variationItem_", with: "")
+                            return VariationCodec.variation(from: data, documentId: rawId)
+                        }
                         bag.receivedItemDocs = true
                         onChange(
                             mergeVariationSources(
@@ -484,7 +483,7 @@ extension FirebaseBackend {
     #endif
 }
 
-nonisolated private func fallbackItemMaps(from data: [String: Any]) -> [[String: Any]] {
+private func fallbackItemMaps(from data: [String: Any]) -> [[String: Any]] {
     if let items = data["items"] as? [[String: Any]] {
         return items
     }
@@ -500,14 +499,14 @@ nonisolated private func fallbackItemMaps(from data: [String: Any]) -> [[String:
     return []
 }
 
-nonisolated private func variationsFromFallbackDocument(_ data: [String: Any]?) -> [Variation] {
+private func variationsFromFallbackDocument(_ data: [String: Any]?) -> [Variation] {
     guard let data else { return [] }
     return fallbackItemMaps(from: data).compactMap { row in
         VariationCodec.variation(from: row, documentId: (row["id"] as? String) ?? UUID().uuidString)
     }
 }
 
-nonisolated private func mergeVariationSources(
+private func mergeVariationSources(
     collection: [Variation],
     fallback: [Variation],
     itemDocs: [Variation] = []
