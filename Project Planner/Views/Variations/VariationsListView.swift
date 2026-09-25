@@ -124,6 +124,9 @@ struct VariationsListView: View {
                 materialNames = items.map(\.name).filter { !$0.isEmpty }
             }
         }
+        .onChange(of: firebaseBackend.currentOrganization?.firestoreDocumentId) { _, _ in
+            store.start(firebaseBackend: firebaseBackend)
+        }
         .onDisappear { store.stop() }
         .sheet(isPresented: $showingEditor) {
             VariationEditorSheet(
