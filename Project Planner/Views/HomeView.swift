@@ -256,10 +256,13 @@ struct HomeView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         }
-        .sheet(isPresented: $showingInvoicing) {
+        .sheet(isPresented: $showingInvoicing, onDismiss: {
+            timesheetReviewDeepLinkUserId = nil
+            timesheetReviewDeepLinkWeekStart = nil
+        }) {
             InvoicingView(
-                initialReviewUserId: timesheetReviewDeepLinkUserId,
-                initialReviewWeekStart: timesheetReviewDeepLinkWeekStart
+                initialReviewUserId: $timesheetReviewDeepLinkUserId,
+                initialReviewWeekStart: $timesheetReviewDeepLinkWeekStart
             )
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
