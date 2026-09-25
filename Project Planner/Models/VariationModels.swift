@@ -208,7 +208,7 @@ enum VariationCodec {
             parentName: data["parentName"] as? String ?? "",
             origin: origin,
             voNumber: data["voNumber"] as? String ?? "",
-            sequence: data["sequence"] as? Int ?? 0,
+            sequence: firestoreInt(data["sequence"]),
             voNumberLocked: data["voNumberLocked"] as? Bool ?? false,
             numberHistory: numberHistory(from: data["numberHistory"]),
             heading: data["heading"] as? String ?? "",
@@ -217,9 +217,9 @@ enum VariationCodec {
             labour: labour(from: data["labour"]),
             materials: materials(from: data["materials"]),
             evidence: evidence(from: data["evidence"]),
-            totalLabourHours: (data["totalLabourHours"] as? Double) ?? Double(data["totalLabourHours"] as? Int ?? 0),
-            materialLineCount: data["materialLineCount"] as? Int ?? 0,
-            evidenceCount: data["evidenceCount"] as? Int ?? 0,
+            totalLabourHours: firestoreDouble(data["totalLabourHours"]),
+            materialLineCount: firestoreInt(data["materialLineCount"]),
+            evidenceCount: firestoreInt(data["evidenceCount"]),
             createdByUid: data["createdByUid"] as? String ?? "",
             createdByName: data["createdByName"] as? String ?? "",
             createdAt: date(from: data["createdAt"]) ?? Date(),
@@ -319,8 +319,11 @@ enum VariationCodec {
                 let raw = (data["prefix"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 return raw.isEmpty ? VariationNumbering.defaultPrefix : raw
             }(),
-            padding: data["padding"] as? Int ?? VariationNumbering.defaultPadding,
-            version: data["version"] as? Int ?? 0,
+            padding: {
+                let parsed = firestoreInt(data["padding"])
+                return parsed > 0 ? parsed : VariationNumbering.defaultPadding
+            }(),
+            version: firestoreInt(data["version"]),
             lockedByUid: data["lockedByUid"] as? String,
             lockedByName: data["lockedByName"] as? String,
             lockedAt: date(from: data["lockedAt"])
@@ -345,6 +348,23 @@ enum VariationCodec {
         return map
     }
 
+    private static func firestoreInt(_ value: Any?) -> Int {
+        if let i = value as? Int { return i }
+        if let n = value as? Int64 { return Int(n) }
+        if let n = value as? NSNumber { return n.intValue }
+        if let d = value as? Double { return Int(d) }
+        if let s = value as? String { return Int(s) ?? 0 }
+        return 0
+    }
+
+    private static func firestoreDouble(_ value: Any?) -> Double {
+        if let d = value as? Double { return d }
+        if let i = value as? Int { return Double(i) }
+        if let n = value as? NSNumber { return n.doubleValue }
+        if let s = value as? String { return Double(s) ?? 0 }
+        return 0
+    }
+
     private static func date(from value: Any?) -> Date? {
         if let ts = value as? Timestamp { return ts.dateValue() }
         if let date = value as? Date { return date }
@@ -357,7 +377,7 @@ enum VariationCodec {
             return VariationLabourLine(
                 id: id,
                 trade: row["trade"] as? String ?? "",
-                hours: (row["hours"] as? Double) ?? Double(row["hours"] as? Int ?? 0)
+                hours: firestoreDouble(row["hours"])
             )
         }
     }
@@ -380,7 +400,7 @@ enum VariationCodec {
                 id: id,
                 fileName: row["fileName"] as? String ?? "",
                 contentType: row["contentType"] as? String ?? "",
-                sizeBytes: row["sizeBytes"] as? Int ?? 0,
+                sizeBytes: firestoreInt(row["sizeBytes"]),
                 storagePath: row["storagePath"] as? String ?? "",
                 downloadURL: row["downloadURL"] as? String ?? "",
                 uploadedByUid: row["uploadedByUid"] as? String ?? "",

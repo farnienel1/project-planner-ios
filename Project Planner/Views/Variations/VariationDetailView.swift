@@ -171,7 +171,11 @@ struct VariationDetailView: View {
     }
 
     private func applyStatus(_ status: VariationStatus) async {
-        guard var variation, let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        guard var variation else { return }
+        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
+            ?? await firebaseBackend.resolveOrganizationIdForFirebaseWrites(preferredFallback: nil)
+            ?? ""
+        guard !orgId.isEmpty else { return }
         let uid = userStore.displayUser?.id ?? ""
         let name = userStore.displayUser?.fullName.isEmpty == false ? (userStore.displayUser?.fullName ?? "") : (userStore.displayUser?.email ?? "")
         variation.status = status
@@ -185,7 +189,12 @@ struct VariationDetailView: View {
         if status == .closed {
             variation.closedAt = Date()
         }
-        try? await firebaseBackend.saveVariation(variation, organizationId: orgId)
+        do {
+            try await firebaseBackend.saveVariation(variation, organizationId: orgId)
+            store.upsert(variation)
+        } catch {
+            print("❌ [Variations] status save failed: \(error.localizedDescription)")
+        }
     }
 
     private func evidenceThumb(_ item: VariationEvidenceItem) -> some View {
