@@ -5960,76 +5960,7 @@ class FirebaseBackend: ObservableObject {
             if currentOrganization != nil {
                 return true
             }
-            
-            // Strategy 4: Check if any organization has data for this user (projects, operatives, etc.)
-            // This is a last resort - find organization by data ownership
-            print("🔥🔥🔥 DEBUG: ⚠️ Trying to find organization by data ownership...")
-            for orgDoc in orgsSnapshot.documents {
-                let organizationId = orgDoc.documentID
-                // Check if user has projects in this organization
-                let projectsSnapshot = try await db.collection("organizations")
-                    .document(organizationId)
-                    .collection("projects")
-                    .whereField("createdBy", isEqualTo: userId)
-                    .limit(to: 1)
-                    .getDocuments()
-                
-                if !projectsSnapshot.isEmpty {
-                    print("🔥🔥🔥 DEBUG: ✅ Found organization with user's projects: \(organizationId)")
-                    // Check if user document exists, if not CREATE it, otherwise UPDATE it
-                    let userDocRef = db.collection("users").document(userId)
-                    let userDoc = try await userDocRef.getDocument()
-                    
-                    if userDoc.exists {
-                        try await userDocRef.updateData([
-                            "organizationId": organizationId,
-                            "updatedAt": Timestamp(date: Date())
-                        ])
-                    } else {
-                        var newUserData: [String: Any] = [
-                            "email": userEmail,
-                            "organizationId": organizationId,
-                            "role": "member",
-                            "isActive": true,
-                            "createdAt": Timestamp(date: Date()),
-                            "updatedAt": Timestamp(date: Date())
-                        ]
-                        if let existing = await existingOrgUserDataByEmail(organizationId: organizationId, userEmail: userEmail) {
-                            newUserData["role"] = existing["role"] ?? "member"
-                            newUserData["adminAccess"] = existing["adminAccess"] ?? false
-                            newUserData["manager"] = existing["manager"] ?? false
-                            newUserData["operatives"] = existing["operatives"] ?? false
-                            newUserData["skills"] = existing["skills"] ?? false
-                            newUserData["qualifications"] = existing["qualifications"] ?? false
-                            newUserData["materials"] = existing["materials"] ?? false
-                            newUserData["operativeMode"] = existing["operativeMode"] ?? false
-                            newUserData["annualLeaveSelfBook"] = existing["annualLeaveSelfBook"] ?? false
-                            newUserData["weeklyReports"] = existing["weeklyReports"] ?? false
-                            newUserData["dailyOverview"] = existing["dailyOverview"] ?? true
-                            newUserData["subContractors"] = existing["subContractors"] ?? false
-                            newUserData["projects"] = existing["projects"] ?? true
-                            newUserData["smallWorks"] = existing["smallWorks"] ?? false
-                            newUserData["isSuperAdmin"] = existing["isSuperAdmin"] ?? false
-                            if let fn = existing["firstName"] { newUserData["firstName"] = fn }
-                            if let sn = existing["surname"] { newUserData["surname"] = sn }
-                            if let mobile = existing["mobileNumber"] { newUserData["mobileNumber"] = mobile }
-                            print("🔥🔥🔥 DEBUG: Preserved permissions from existing org user (e.g. operativeMode)")
-                        }
-                        try await userDocRef.setData(newUserData)
-                    }
-                    
-                    // Store organizationId locally for offline access
-                    storeOrganizationIdLocally(organizationId)
-                    
-                    // Reload organization (rules may deny org root read; fall back to snapshot data).
-                    await loadUserOrganization(userId: userId)
-                    if currentOrganization == nil {
-                        setCurrentOrganizationFromRecovery(orgId: organizationId, orgData: orgDoc.data(), fallbackRole: "member")
-                    }
-                    return currentOrganization != nil
-                }
-            }
-            
+
             print("🔥🔥🔥 DEBUG: ⚠️ Could not find organization through any recovery strategy")
             print("🔥🔥🔥 DEBUG: User may need to contact support or recreate account")
             
