@@ -112,6 +112,15 @@ class LocalNotificationService {
         case .toolboxTalkIssued:
             content.title = "Toolbox Talk issued"
             content.body = details.isEmpty ? "A toolbox talk needs your signature." : details
+        case .variationAdded:
+            content.title = "New variation added"
+            content.body = details.isEmpty ? "A new variation was added." : details
+        case .variationFromTracker:
+            content.title = "New variation from the QS"
+            content.body = details.isEmpty ? "A variation was added from the tracker." : details
+        case .variationNumbersUpdated:
+            content.title = "Variation numbers updated"
+            content.body = details.isEmpty ? "Variation numbers were updated." : details
         }
         
         // Set sound

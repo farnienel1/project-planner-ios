@@ -68,6 +68,36 @@ enum WorkAccess {
         }
     }
 
+    /// Variations: admins see every job. Managers see only jobs they are assigned on.
+    /// Operatives never see the feature.
+    static func canAccessVariations(
+        project: Project,
+        userStore: UserStore,
+        operativeStore: OperativeStore
+    ) -> Bool {
+        if userStore.isOperativeMode() { return false }
+        guard let user = userStore.displayUser ?? userStore.currentUser else { return false }
+        if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
+            return true
+        }
+        guard user.permissions.manager || user.role == .manager else { return false }
+        return isAssignedManager(on: project, user: user, operativeStore: operativeStore)
+    }
+
+    static func isAssignedManager(
+        on project: Project,
+        user: AppUser,
+        operativeStore: OperativeStore
+    ) -> Bool {
+        let assigned = Set(project.allAssignedManagerIds)
+        let email = normalizedEmail(user.email)
+        if let manager = operativeStore.allManagers.first(where: { normalizedEmail($0.email) == email }),
+           assigned.contains(manager.id) {
+            return true
+        }
+        return assigned.contains(ProjectManagerPickerSupport.stableManagerId(email: user.email))
+    }
+
     static func isAssignedOrBookedOnto(
         _ project: Project,
         user: AppUser,

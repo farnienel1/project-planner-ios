@@ -54,6 +54,8 @@ struct EditProjectView: View {
     @State private var showingCreateJobType = false
     @State private var showingCreateManager = false
     @State private var managersHydratedFromRoster = false
+    @State private var managersUserEdited = false
+    @State private var editBaseline: EditProjectSnapshot?
 
     private var screenTitle: String {
         project.jobType == .smallWorks ? "Edit small work" : "Edit project"
@@ -99,7 +101,9 @@ struct EditProjectView: View {
             }
         }()
         _projectWorksType = State(initialValue: worksType)
-        _selectedManagers = State(initialValue: [])
+        _selectedManagers = State(initialValue: project.allAssignedManagerIds.map { id in
+            Manager(id: id, firstName: "Assigned", lastName: "manager", email: "", mobileNumber: "")
+        })
     }
 
     var body: some View {
@@ -189,9 +193,9 @@ struct EditProjectView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 18)
                         .padding(.vertical, 7)
-                        .background(ProjectWorksRevampColors.blue)
+                        .background(canSaveEdits ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.placeholderInk)
                         .clipShape(Capsule())
-                        .disabled(isLoading || !isFormValid)
+                        .disabled(!canSaveEdits)
                 }
             }
             .onAppear {
@@ -529,74 +533,12 @@ struct EditProjectView: View {
     }
 
     private var teamCard: some View {
-        HStack(spacing: 12) {
-            Circle()
-                .fill(
-                    LinearGradient(
-                        colors: [Color(red: 0.325, green: 0.29, blue: 0.718), Color(red: 0.5, green: 0.47, blue: 0.87)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .frame(width: 34, height: 34)
-                .overlay(
-                    Text(managerInitials)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white)
-                )
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Manager")
-                    .font(.system(size: 11))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                Text(selectedManagersSummary)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-            }
-            Spacer()
-            Menu {
-                ForEach(availableManagersToAdd, id: \.id) { m in
-                    Button("\(m.firstName) \(m.lastName)") { selectedManagers.append(m) }
-                }
-                if availableManagersToAdd.isEmpty {
-                    Button("All managers added") {}
-                        .disabled(true)
-                }
-                Button("Create manager…") { showingCreateManager = true }
-            } label: {
-                Image(systemName: selectedManagers.isEmpty ? "chevron.down" : "plus")
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-            }
-            if !selectedManagers.isEmpty {
-                Menu {
-                    ForEach(selectedManagers, id: \.id) { manager in
-                        Button(role: .destructive) {
-                            selectedManagers.removeAll { $0.id == manager.id }
-                        } label: {
-                            Text("Remove \(manager.firstName) \(manager.lastName)")
-                        }
-                    }
-                } label: {
-                    Image(systemName: "minus.circle")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Color(red: 0.74, green: 0.2, blue: 0.2))
-                }
-            }
-        }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        ProjectAssignedManagersEditor(
+            selectedManagers: $selectedManagers,
+            availableManagersToAdd: availableManagersToAdd,
+            onCreateManager: { showingCreateManager = true },
+            onEdited: { managersUserEdited = true }
         )
-    }
-
-    private var managerInitials: String {
-        guard let m = selectedManagers.first else { return "?" }
-        let f = m.firstName.prefix(1)
-        let l = m.lastName.prefix(1)
-        return "\(f)\(l)".uppercased()
     }
 
     private var availableManagersToAdd: [Manager] {
@@ -605,19 +547,6 @@ struct EditProjectView: View {
             userStore: userStore,
             excluding: selectedManagers
         )
-    }
-
-    private var selectedManagersSummary: String {
-        switch selectedManagers.count {
-        case 0:
-            return "Select manager(s)"
-        case 1:
-            let first = selectedManagers[0]
-            return "\(first.firstName) \(first.lastName)"
-        default:
-            let first = selectedManagers[0]
-            return "\(first.firstName) \(first.lastName) +\(selectedManagers.count - 1) more"
-        }
     }
 
     private var quickAddressFormSheet: some View {
@@ -660,6 +589,35 @@ struct EditProjectView: View {
             return pinLatitude != nil && pinLongitude != nil
         }
         return !projectAddressLine1.isEmpty && !projectTownCity.isEmpty && !projectPostcode.isEmpty
+    }
+
+    private var canSaveEdits: Bool {
+        isFormValid && hasUnsavedChanges && !isLoading
+    }
+
+    private var hasUnsavedChanges: Bool {
+        guard let editBaseline else { return false }
+        return currentSnapshot != editBaseline
+    }
+
+    private var currentSnapshot: EditProjectSnapshot {
+        EditProjectSnapshot(
+            jobNumber: projectJobNumber,
+            siteName: projectSiteName,
+            addressLine1: projectAddressLine1,
+            addressLine2: projectAddressLine2,
+            townCity: projectTownCity,
+            postcode: projectPostcode,
+            startDate: projectStartDate,
+            endDate: projectEndDate,
+            worksType: projectWorksType,
+            description: projectDescription,
+            clientId: selectedClient?.id,
+            managerIds: selectedManagers.map(\.id),
+            locationMode: locationMode.rawValue,
+            pinLatitude: pinLatitude,
+            pinLongitude: pinLongitude
+        )
     }
 
     private func saveProject() {
@@ -722,16 +680,11 @@ struct EditProjectView: View {
     }
 
     private func hydrateManagersIfNeeded() {
-        guard !managersHydratedFromRoster else { return }
-        let expected = project.allAssignedManagerIds
-        if expected.isEmpty {
-            managersHydratedFromRoster = true
-            return
+        if !managersUserEdited {
+            selectedManagers = hydrateAssignedManagers(from: project)
         }
-        let hydrated = hydrateAssignedManagers(from: project)
-        if hydrated.count == expected.count || !operativeStore.allManagers.isEmpty {
-            selectedManagers = hydrated
-            managersHydratedFromRoster = true
+        if editBaseline == nil {
+            editBaseline = currentSnapshot
         }
     }
 
@@ -740,10 +693,39 @@ struct EditProjectView: View {
         var selected: [Manager] = []
         var seen = Set<UUID>()
         for id in ids {
-            if let match = operativeStore.allManagers.first(where: { $0.id == id }), seen.insert(match.id).inserted {
+            guard seen.insert(id).inserted else { continue }
+            if let match = operativeStore.allManagers.first(where: { $0.id == id }) {
                 selected.append(match)
+            } else {
+                selected.append(
+                    Manager(
+                        id: id,
+                        firstName: "Assigned",
+                        lastName: "manager",
+                        email: "",
+                        mobileNumber: ""
+                    )
+                )
             }
         }
         return selected
     }
+}
+
+private struct EditProjectSnapshot: Equatable {
+    var jobNumber: String
+    var siteName: String
+    var addressLine1: String
+    var addressLine2: String
+    var townCity: String
+    var postcode: String
+    var startDate: Date
+    var endDate: Date
+    var worksType: String
+    var description: String
+    var clientId: UUID?
+    var managerIds: [UUID]
+    var locationMode: String
+    var pinLatitude: Double?
+    var pinLongitude: Double?
 }

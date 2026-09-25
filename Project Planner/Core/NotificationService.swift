@@ -419,6 +419,38 @@ class NotificationService: ObservableObject {
         await saveNotification(notification)
     }
 
+    /// One notification per recipient when a variation is raised on iOS. Web must do the same on its create path — do not also add a Cloud Function or recipients get two.
+    func notifyVariationAdded(
+        parentId: UUID,
+        parentName: String,
+        isSmallWorks: Bool,
+        createdByUserId: String
+    ) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let creator = resolvedRecipientUserId(createdByUserId)
+        var recipientIds = Set<String>()
+        for user in userStore?.organizationUsers ?? [] {
+            guard user.isActive else { continue }
+            if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
+                recipientIds.insert(resolvedRecipientUserId(user.id))
+            }
+        }
+        recipientIds.remove(creator)
+        for userId in recipientIds {
+            let notification = AppNotification(
+                organizationId: organizationId,
+                type: .variationAdded,
+                title: "New variation added",
+                message: "New variation added to \(parentName)",
+                userId: userId,
+                relatedId: parentId,
+                deepLinkUserId: isSmallWorks ? VariationParentType.smallWork.rawValue : VariationParentType.project.rawValue
+            )
+            await saveNotification(notification)
+        }
+    }
+
     func notifyMaterialAdded(
         projectId: UUID,
         siteName: String,

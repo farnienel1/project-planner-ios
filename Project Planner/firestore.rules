@@ -560,6 +560,18 @@ service cloud.firestore {
           (request.auth.uid == layoutUserId || isOrganizationAdmin(organizationId));
       }
 
+      match /variations/{variationId} {
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
+        allow delete: if isOrganizationAdmin(organizationId);
+      }
+
+      match /variationTrackers/{parentId} {
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
+        allow delete: if isOrganizationAdmin(organizationId);
+      }
+
       // Unknown subcollections: allow org-scoped read fallback only.
       // Keep writes explicit per known subcollection rules above.
       match /{collection}/{document=**} {

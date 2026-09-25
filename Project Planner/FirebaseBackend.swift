@@ -110,7 +110,7 @@ class FirebaseBackend: ObservableObject {
     lazy var auth: Auth = Auth.auth()
     lazy var db: Firestore = Firestore.firestore()
     #if canImport(FirebaseStorage)
-    private lazy var storage: Storage = Storage.storage()
+    lazy var storage: Storage = Storage.storage()
     #endif
     private var authHandle: AuthStateDidChangeListenerHandle?
     /// Single-flight attach: `await` yields MainActor, so a second caller must wait instead of starting a parallel `perform` (duplicate listeners / races).
