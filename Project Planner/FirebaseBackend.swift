@@ -145,7 +145,7 @@ class FirebaseBackend: ObservableObject {
     var organizationHasFirestoreMyScheduleOptions = false
 
     /// Ensures org id is non-empty and org document is readable before subcollection reads.
-    private func ensureReadableOrganization(_ organizationId: String) async throws -> String {
+    func ensureReadableOrganization(_ organizationId: String) async throws -> String {
         let trimmedOrgId = normalizedOrganizationId(organizationId)
         guard !trimmedOrgId.isEmpty else {
             print("🔥🔥🔥 DEBUG: ❌ Refusing Firebase read with empty organizationId")
