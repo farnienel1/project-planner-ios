@@ -418,6 +418,7 @@ struct ContentView: View {
         if force || (!firebaseBackend.hasBootstrappedOrgDataLoad && !firebaseBackend.isBootstrappingOrgDataLoad) {
             await PlannerStoreWiring.bootstrapOrgDataIfNeeded(
                 firebaseBackend: firebaseBackend,
+                userStore: userStore,
                 projectStore: projectStore,
                 operativeStore: operativeStore,
                 bookingStore: bookingStore,

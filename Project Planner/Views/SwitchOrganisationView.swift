@@ -12,6 +12,9 @@ struct SwitchOrganisationView: View {
     @EnvironmentObject var userStore: UserStore
     @Environment(\.dismiss) private var dismiss
 
+    /// When set, that organisation is omitted from the list (last-used org on the deactivated gate).
+    var excludedOrganizationId: String? = nil
+
     @State private var memberships: [OrgMembershipSummary] = []
     @State private var isLoading = true
     @State private var isSwitching = false
@@ -187,10 +190,22 @@ struct SwitchOrganisationView: View {
     }
 
     @MainActor
+    private func filteredMemberships() async -> [OrgMembershipSummary] {
+        let all = await firebaseBackend.fetchOrganizationsForCurrentUser()
+        guard let excluded = excludedOrganizationId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !excluded.isEmpty else {
+            return all
+        }
+        return all.filter {
+            $0.id.compare(excluded, options: [.caseInsensitive, .diacriticInsensitive]) != .orderedSame
+        }
+    }
+
+    @MainActor
     private func reloadMemberships() async {
         isLoading = true
         errorMessage = nil
-        memberships = await firebaseBackend.fetchOrganizationsForCurrentUser()
+        memberships = await filteredMemberships()
         isLoading = false
     }
 
@@ -206,7 +221,10 @@ struct SwitchOrganisationView: View {
         do {
             try await firebaseBackend.switchActiveOrganization(to: membership.id)
             await userStore.loadCurrentUser()
-            memberships = await firebaseBackend.fetchOrganizationsForCurrentUser()
+            memberships = await filteredMemberships()
+            if excludedOrganizationId != nil {
+                dismiss()
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

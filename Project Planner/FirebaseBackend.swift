@@ -17,7 +17,7 @@ import Combine
 // MARK: - Firestore field normalization
 
 /// Resolves `organizationId` whether stored as String, DocumentReference, or legacy path strings.
-private func organizationIdFromFirestore(_ value: Any?) -> String? {
+func organizationIdFromFirestore(_ value: Any?) -> String? {
     if let ref = value as? DocumentReference {
         let id = ref.documentID.trimmingCharacters(in: .whitespacesAndNewlines)
         return id.isEmpty ? nil : id
@@ -3337,6 +3337,24 @@ class FirebaseBackend: ObservableObject {
         }
         
         return Self.parseAppUserDocument(userId: userId, data: data)
+    }
+
+    func observeCurrentUserDocument(
+        userId: String,
+        onChange: @escaping @MainActor (AppUser?) -> Void
+    ) -> ListenerRegistration {
+        db.collection("users").document(userId).addSnapshotListener { snapshot, error in
+            if let error {
+                print("🔥🔥🔥 DEBUG: current user listen error: \(error.localizedDescription)")
+                return
+            }
+            guard let snapshot, snapshot.exists, let data = snapshot.data() else {
+                Task { @MainActor in onChange(nil) }
+                return
+            }
+            let parsed = Self.parseAppUserDocument(userId: userId, data: data)
+            Task { @MainActor in onChange(parsed) }
+        }
     }
     
     /// Copies Firestore fields from an older `users/*` row (same email, different document id) to `users/{authUid}`.
