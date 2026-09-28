@@ -57,6 +57,12 @@ class ManagerScheduleStore: ObservableObject {
             .store(in: &cancellables)
     }
 
+    func discardInMemoryForOrganizationSwitch() {
+        managerSiteBookings = []
+        lastLoadAt = nil
+        errorMessage = nil
+    }
+
     func loadData(force: Bool = false) {
         if !force, let lastLoadAt, Date().timeIntervalSince(lastLoadAt) < minReloadInterval {
             return

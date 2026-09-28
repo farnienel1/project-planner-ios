@@ -36,6 +36,8 @@ struct VariationEditorSheet: View {
     @State private var customTradeDraft = ""
     @State private var showingCustomTrade = false
     @State private var inFlightUploads = 0
+    @State private var tradePickerLineId: String?
+    @State private var tradeSearch = ""
 
     init(project: Project, existing: Variation?, store: VariationStore, materialNames: [String]) {
         self.project = project
@@ -62,8 +64,11 @@ struct VariationEditorSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    fieldBlock(title: "VO number") {
+                    jobBanner
+
+                    fieldBlock(title: "VO number", systemImage: "number", tint: ProjectWorksRevampColors.blue) {
                         TextField("VO-001", text: $voNumber)
+                            .font(.system(size: 17, weight: .semibold))
                             .disabled(trackerOn)
                             .textInputAutocapitalization(.characters)
                         if trackerOn {
@@ -73,16 +78,17 @@ struct VariationEditorSheet: View {
                         } else if store.voNumberIsDuplicate(voNumber, excludingId: variationId) {
                             Text("This VO number is already used on this job.")
                                 .font(.caption)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                         }
                     }
 
-                    fieldBlock(title: "Heading") {
-                        TextField("Short heading", text: $heading)
+                    fieldBlock(title: "Heading", systemImage: "text.alignleft", tint: ProjectWorksRevampColors.jobTypePillInk) {
+                        TextField("What changed on site?", text: $heading)
                     }
-                    fieldBlock(title: "Description") {
+                    fieldBlock(title: "Description", systemImage: "doc.text", tint: ProjectWorksRevampColors.activeGreen) {
                         TextEditor(text: $descriptionText)
-                            .frame(minHeight: 90)
+                            .frame(minHeight: 110)
+                            .scrollContentBackground(.hidden)
                     }
 
                     labourSection
@@ -150,119 +156,295 @@ struct VariationEditorSheet: View {
                 Button("Add") { addCustomTrade() }
                 Button("Cancel", role: .cancel) {}
             }
+            .sheet(isPresented: Binding(
+                get: { tradePickerLineId != nil },
+                set: { if !$0 { tradePickerLineId = nil; tradeSearch = "" } }
+            )) {
+                tradePickerSheet
+            }
         }
+    }
+
+    private var jobBanner: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(ProjectWorksRevampColors.blue.opacity(0.14))
+                    .frame(width: 42, height: 42)
+                Image(systemName: project.jobType == .smallWorks ? "wrench.and.screwdriver.fill" : "building.2.fill")
+                    .foregroundStyle(ProjectWorksRevampColors.blue)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.jobNumber.isEmpty ? "Job" : project.jobNumber)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                Text(project.siteName.isEmpty ? "Variation" : project.siteName)
+                    .font(.system(size: 12))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
+            Spacer()
+            Text(project.jobType == .smallWorks ? "Small works" : "Project")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ProjectWorksRevampColors.jobTypePillInk)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(ProjectWorksRevampColors.jobTypePillBg)
+                .clipShape(Capsule())
+        }
+        .padding(14)
+        .appChromeCardContainer(cornerRadius: 16)
     }
 
     private var labourSection: some View {
-        fieldBlock(title: "Labour · \(formatHours(labourHours)) hrs") {
+        fieldBlock(title: "Labour", systemImage: "person.2.fill", tint: ProjectWorksRevampColors.blue, trailing: formatHours(labourHours) + " hrs") {
+            if labour.isEmpty {
+                Text("Add a trade, then set the hours with the stepper or a preset.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
             ForEach($labour) { $row in
-                HStack {
-                    Menu {
-                        ForEach(VariationTrades.mergedPickerOptions(custom: store.customTrades), id: \.self) { trade in
-                            Button(trade) { row.trade = trade }
-                        }
-                        Button(VariationTrades.customPickerTitle) { showingCustomTrade = true }
-                    } label: {
-                        Text(row.trade.isEmpty ? "Trade" : row.trade)
-                            .foregroundStyle(row.trade.isEmpty ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.ink)
-                    }
-                    Spacer()
-                    TextField("Hrs", value: $row.hours, format: .number)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 64)
-                    Button(role: .destructive) {
-                        labour.removeAll { $0.id == row.id }
-                    } label: {
-                        Image(systemName: "minus.circle")
-                    }
-                }
+                labourCard(row: $row)
             }
-            HStack {
-                ForEach([0.5, 1, 4, 8], id: \.self) { hours in
-                    Button(hours == 0.5 ? "+30 min" : "+\(Int(hours)) hr\(hours == 1 ? "" : "s")") {
-                        addHours(hours)
-                    }
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(ProjectWorksRevampColors.blue.opacity(0.1))
-                    .clipShape(Capsule())
-                }
+            Button {
+                let line = VariationLabourLine(id: UUID().uuidString, trade: "", hours: 1)
+                labour.append(line)
+                tradeSearch = ""
+                tradePickerLineId = line.id
+            } label: {
+                Label("Add trade", systemImage: "plus.circle.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(ProjectWorksRevampColors.blue)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
-            Button("Add labour row") {
-                labour.append(VariationLabourLine(id: UUID().uuidString, trade: "", hours: 0))
-            }
-            .font(.subheadline.weight(.semibold))
+            .buttonStyle(.plain)
         }
     }
 
-    private var materialsSection: some View {
-        fieldBlock(title: "Materials · \(materials.count)") {
-            ForEach($materials) { $row in
-                VStack(alignment: .leading, spacing: 6) {
-                    TextField("Material name", text: $row.name)
+    private func labourCard(row: Binding<VariationLabourLine>) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Button {
+                    tradeSearch = ""
+                    tradePickerLineId = row.wrappedValue.id
+                } label: {
                     HStack {
-                        TextField("Qty / length", text: $row.quantity)
-                        ForEach(["m", "no", "box", "kg"], id: \.self) { unit in
-                            Button(unit) {
-                                appendUnit(unit, to: $row)
-                            }
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color(.systemGray6))
-                            .clipShape(Capsule())
-                        }
-                        Button(role: .destructive) {
-                            materials.removeAll { $0.id == row.id }
-                        } label: {
-                            Image(systemName: "minus.circle")
-                        }
+                        Text(row.wrappedValue.trade.isEmpty ? "Choose trade" : row.wrappedValue.trade)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(row.wrappedValue.trade.isEmpty ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.ink)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
                     }
-                    if !materialNames.isEmpty {
-                        ForEach(materialNames.filter { name in
-                            let q = row.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                            return !q.isEmpty && name.localizedCaseInsensitiveContains(q) && name.localizedCaseInsensitiveCompare(row.name) != .orderedSame
-                        }.prefix(3), id: \.self) { suggestion in
-                            Button(suggestion) { row.name = suggestion }
-                                .font(.caption)
+                }
+                .buttonStyle(.plain)
+                Button(role: .destructive) {
+                    labour.removeAll { $0.id == row.wrappedValue.id }
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                        .frame(width: 32, height: 32)
+                        .background(ProjectWorksRevampColors.requiredPillBg)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 12) {
+                Button {
+                    row.wrappedValue.hours = max(0, row.wrappedValue.hours - 0.5)
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .frame(width: 40, height: 40)
+                        .background(ProjectWorksRevampColors.blue.opacity(0.12))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                VStack(spacing: 0) {
+                    Text(formatHours(row.wrappedValue.hours))
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .monospacedDigit()
+                    Text("hours")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                }
+                .frame(minWidth: 72)
+                Button {
+                    row.wrappedValue.hours += 0.5
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .background(ProjectWorksRevampColors.blue)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 0)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach([0.5, 1, 2, 4, 8], id: \.self) { hours in
+                        let selected = abs(row.wrappedValue.hours - hours) < 0.01
+                        Button(hours == 0.5 ? "30 min" : "\(Int(hours)) hr\(hours == 1 ? "" : "s")") {
+                            row.wrappedValue.hours = hours
                         }
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(selected ? .white : ProjectWorksRevampColors.blue)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(selected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.blue.opacity(0.1))
+                        .clipShape(Capsule())
+                        .buttonStyle(.plain)
                     }
                 }
             }
-            Button("Add material row") {
-                materials.append(VariationMaterialLine(id: UUID().uuidString, name: "", quantity: ""))
+        }
+        .padding(12)
+        .background(ProjectWorksRevampColors.canvas)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var tradePickerSheet: some View {
+        let options = VariationTrades.mergedPickerOptions(custom: store.customTrades).filter { trade in
+            let query = tradeSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+            return query.isEmpty || trade.localizedCaseInsensitiveContains(query)
+        }
+        return NavigationStack {
+            List {
+                Section {
+                    TextField("Search trades", text: $tradeSearch)
+                }
+                Section("Trades") {
+                    ForEach(options, id: \.self) { trade in
+                        Button(trade) {
+                            assignTrade(trade)
+                        }
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                    }
+                }
+                Section("Not in the list?") {
+                    TextField("Custom trade", text: $customTradeDraft)
+                    Button("Add custom trade") { addCustomTrade() }
+                        .disabled(customTradeDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
-            .font(.subheadline.weight(.semibold))
+            .navigationTitle("Choose trade")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        tradePickerLineId = nil
+                        tradeSearch = ""
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var materialsSection: some View {
+        fieldBlock(title: "Materials", systemImage: "shippingbox.fill", tint: ProjectWorksRevampColors.upcomingAmber, trailing: "\(materials.count)") {
+            if materials.isEmpty {
+                Text("Add materials with a quantity, then tap a unit if you need one.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
+            ForEach($materials) { $row in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        TextField("Material name", text: $row.name)
+                            .font(.system(size: 15, weight: .semibold))
+                        Button(role: .destructive) {
+                            materials.removeAll { $0.id == row.id }
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    TextField("Quantity", text: $row.quantity)
+                        .font(.system(size: 15))
+                    HStack(spacing: 6) {
+                        ForEach(["m", "no", "box", "kg"], id: \.self) { unit in
+                            Button(unit) { appendUnit(unit, to: $row) }
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(ProjectWorksRevampColors.upcomingAmber.opacity(0.14))
+                                .clipShape(Capsule())
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    let suggestions = materialNames.filter { name in
+                        let q = row.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        return !q.isEmpty && name.localizedCaseInsensitiveContains(q) && name.localizedCaseInsensitiveCompare(row.name) != .orderedSame
+                    }.prefix(3)
+                    if !suggestions.isEmpty {
+                        ForEach(Array(suggestions), id: \.self) { suggestion in
+                            Button {
+                                row.name = suggestion
+                            } label: {
+                                Text(suggestion)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(12)
+                .background(ProjectWorksRevampColors.canvas)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            Button {
+                materials.append(VariationMaterialLine(id: UUID().uuidString, name: "", quantity: ""))
+            } label: {
+                Label("Add material", systemImage: "plus.circle.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(ProjectWorksRevampColors.upcomingAmber.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
         }
     }
 
     private var evidenceSection: some View {
-        fieldBlock(title: "Evidence") {
+        fieldBlock(title: "Evidence", systemImage: "paperclip", tint: ProjectWorksRevampColors.activeGreen, trailing: "\(evidence.count)") {
             Text("Please upload any supporting evidence here")
-                .font(.subheadline)
-                .foregroundStyle(ProjectWorksRevampColors.ink)
-            Menu {
-                Button("Camera") { showingCamera = true }
-                Button("Photo library") { showingLibrary = true }
-                Button("Files") { showingFileImporter = true }
-            } label: {
-                Label("Add evidence", systemImage: "paperclip")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(ProjectWorksRevampColors.blue.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .font(.system(size: 13))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+            HStack(spacing: 8) {
+                evidenceAddButton("Camera", systemImage: "camera.fill") { showingCamera = true }
+                evidenceAddButton("Library", systemImage: "photo.fill") { showingLibrary = true }
+                evidenceAddButton("Files", systemImage: "folder.fill") { showingFileImporter = true }
             }
             ForEach(evidence) { item in
-                HStack {
+                HStack(spacing: 10) {
                     Text(typeBadge(item))
-                        .font(.caption2.weight(.bold))
-                        .padding(4)
-                        .background(Color(.systemGray5))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                    VStack(alignment: .leading) {
-                        Text(item.fileName).font(.subheadline)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4)
+                        .background(ProjectWorksRevampColors.activeGreen.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.fileName)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
                         Text(item.isPending ? "Uploading…" : byteString(item.sizeBytes))
                             .font(.caption)
                             .foregroundStyle(ProjectWorksRevampColors.muted)
@@ -271,33 +453,77 @@ struct VariationEditorSheet: View {
                     Button(role: .destructive) {
                         Task { await removeEvidence(item) }
                     } label: {
-                        Image(systemName: "xmark.circle")
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                     }
+                    .buttonStyle(.plain)
                 }
+                .padding(10)
+                .background(ProjectWorksRevampColors.canvas)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
     }
 
+    private func evidenceAddButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 16, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(ProjectWorksRevampColors.activeGreen.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
     @ViewBuilder
-    private func fieldBlock<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+    private func fieldBlock<Content: View>(
+        title: String,
+        systemImage: String,
+        tint: Color,
+        trailing: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 26, height: 26)
+                    .background(tint.opacity(0.14))
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                Spacer()
+                if let trailing {
+                    Text(trailing)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(tint)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(tint.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+            }
             content()
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .appChromeCardContainer(cornerRadius: 16)
     }
 
-    private func addHours(_ hours: Double) {
-        if labour.isEmpty {
-            labour.append(VariationLabourLine(id: UUID().uuidString, trade: "", hours: hours))
-        } else {
-            labour[labour.count - 1].hours += hours
-        }
+    private func assignTrade(_ trade: String) {
+        guard let id = tradePickerLineId, let index = labour.firstIndex(where: { $0.id == id }) else { return }
+        labour[index].trade = trade
+        tradePickerLineId = nil
+        tradeSearch = ""
     }
 
     private func appendUnit(_ unit: String, to row: Binding<VariationMaterialLine>) {
@@ -314,12 +540,15 @@ struct VariationEditorSheet: View {
     private func addCustomTrade() {
         let trimmed = customTradeDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if labour.isEmpty {
-            labour.append(VariationLabourLine(id: UUID().uuidString, trade: trimmed, hours: 0))
-        } else {
-            labour[labour.count - 1].trade = trimmed
+        if tradePickerLineId == nil {
+            let line = VariationLabourLine(id: UUID().uuidString, trade: trimmed, hours: 1)
+            labour.append(line)
+            tradePickerLineId = line.id
         }
-        store.customTrades.append(trimmed)
+        assignTrade(trimmed)
+        if !store.customTrades.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            store.customTrades.append(trimmed)
+        }
         if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
             Task { await firebaseBackend.addCustomVariationTrade(trimmed, organizationId: orgId) }
         }

@@ -178,7 +178,7 @@ class ProjectStore: ObservableObject {
             }
             
             // Show last-known jobs immediately so a slow/failed Firebase read cannot blank the UI.
-            let diskCache = await hydrateFromLocalCacheIfNeeded()
+            let diskCache = await hydrateFromLocalCacheIfNeeded(generation: generation)
 
                 // Try to load from Firebase first if authenticated
                 if let firebaseBackend = firebaseBackend, 
@@ -293,6 +293,7 @@ class ProjectStore: ObservableObject {
 
                         let cachedProjects = diskCache.projects.filter { $0.jobType != .smallWorks }
                         let cachedSmallWorks = diskCache.projects.filter { $0.jobType == .smallWorks }
+                        guard loadGeneration == generation else { return }
                         var merged = existingProjectsBeforeLoad
                         merged = ProjectWorksMerge.mergeWorkSlice(
                             existingAll: merged,
@@ -390,6 +391,7 @@ class ProjectStore: ObservableObject {
                         let permissionDeniedWhileLoadingWork =
                             isPermissionDeniedError(projectsError) || isPermissionDeniedError(smallWorksError)
                         let shouldTryOrgAutoSwitch =
+                            firebaseBackend.suppressStaleOrganizationCache != true &&
                             !didAttemptOrgAutoSwitch &&
                             (merged.isEmpty || permissionDeniedWhileLoadingWork)
 
@@ -446,8 +448,22 @@ class ProjectStore: ObservableObject {
         }
     }
     
+    func discardInMemoryForOrganizationSwitch() {
+        loadGeneration += 1
+        pendingReloadAfterCurrentLoad = false
+        isLoading = false
+        projects = []
+        clients = []
+        jobTypes = []
+        errorMessage = nil
+    }
+
     // Helper function to add timeout to async operations
-    private func hydrateFromLocalCacheIfNeeded() async -> (projects: [Project], clients: [Client]) {
+    private func hydrateFromLocalCacheIfNeeded(generation: Int) async -> (projects: [Project], clients: [Client]) {
+        guard loadGeneration == generation else { return ([], []) }
+        if firebaseBackend?.suppressStaleOrganizationCache == true {
+            return ([], [])
+        }
         do {
             let cached = try await persistenceService.loadProjectData()
             if self.projects.isEmpty && !cached.projects.isEmpty {

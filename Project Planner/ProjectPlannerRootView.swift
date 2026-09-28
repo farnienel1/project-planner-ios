@@ -212,7 +212,9 @@ struct ProjectPlannerRootView: View {
     }
 
     private var isSessionLoading: Bool {
-        !hasResolvedInitialAuth || (showMainExperience && userStore.isHomeProfileLoading)
+        !hasResolvedInitialAuth
+            || firebaseBackend.isSwitchingOrganization
+            || (showMainExperience && userStore.isHomeProfileLoading)
     }
 
     @ViewBuilder
@@ -229,6 +231,7 @@ struct ProjectPlannerRootView: View {
             VStack(spacing: 0) {
                 OfflineStatusBanner()
                 ContentView()
+                    .id(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "no-org")
             }
                 .environmentObject(firebaseBackend)
                 .environmentObject(smartCache)
@@ -350,8 +353,28 @@ struct ProjectPlannerRootView: View {
                 )
             }
         }
+        .onChange(of: firebaseBackend.organizationSwitchToken) { _, token in
+            guard token != nil else { return }
+            Task { @MainActor in
+                await performQueuedOrganizationSwitch()
+            }
+        }
+        .alert(
+            "Couldn't switch organisation",
+            isPresented: Binding(
+                get: { firebaseBackend.organizationSwitchErrorMessage != nil },
+                set: { if !$0 { firebaseBackend.organizationSwitchErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                firebaseBackend.organizationSwitchErrorMessage = nil
+            }
+        } message: {
+            Text(firebaseBackend.organizationSwitchErrorMessage ?? "")
+        }
         .onChange(of: userStore.isDeactivatedForLastUsedOrganization) { _, isDeactivated in
             guard !isDeactivated, firebaseBackend.isAuthenticated else { return }
+            guard !firebaseBackend.isSwitchingOrganization else { return }
             Task { @MainActor in
                 await PlannerStoreWiring.bootstrapOrgDataIfNeeded(
                     firebaseBackend: firebaseBackend,
@@ -366,6 +389,68 @@ struct ProjectPlannerRootView: View {
                     notificationService: notificationService
                 )
             }
+        }
+    }
+
+    @MainActor
+    private func performQueuedOrganizationSwitch() async {
+        guard let targetId = firebaseBackend.organizationSwitchTargetId, !targetId.isEmpty else {
+            firebaseBackend.isSwitchingOrganization = false
+            return
+        }
+        firebaseBackend.organizationSwitchTargetId = nil
+        firebaseBackend.isSwitchingOrganization = true
+        defer { firebaseBackend.isSwitchingOrganization = false }
+
+        do {
+            try await firebaseBackend.switchActiveOrganization(to: targetId)
+            userStore.roleTestingPreset = nil
+            userStore.organizationUsers = []
+            await userStore.loadCurrentUser()
+
+            guard !userStore.isDeactivatedForLastUsedOrganization else { return }
+
+            firebaseBackend.suppressStaleOrganizationCache = true
+            projectStore.discardInMemoryForOrganizationSwitch()
+            operativeStore.discardInMemoryForOrganizationSwitch()
+            bookingStore.discardInMemoryForOrganizationSwitch()
+            managerScheduleStore.discardInMemoryForOrganizationSwitch()
+            holidayStore.bookings = []
+            subcontractorStore.subcontractors = []
+            subcontractorStore.bookings = []
+            taskStore.discardInMemoryForOrganizationSwitch()
+            notificationService.discardForOrganizationSwitch()
+            appSettings.loadSettings()
+
+            await PlannerStoreWiring.bootstrapOrgDataIfNeeded(
+                firebaseBackend: firebaseBackend,
+                userStore: userStore,
+                projectStore: projectStore,
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                subcontractorStore: subcontractorStore,
+                taskStore: taskStore,
+                holidayStore: holidayStore,
+                notificationService: notificationService
+            )
+
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            var spins = 0
+            while spins < 60 {
+                let busy = firebaseBackend.isBootstrappingOrgDataLoad
+                    || projectStore.isLoading
+                    || operativeStore.isLoading
+                    || bookingStore.isLoading
+                    || taskStore.isLoading
+                if !busy { break }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                spins += 1
+            }
+            firebaseBackend.suppressStaleOrganizationCache = false
+        } catch {
+            firebaseBackend.suppressStaleOrganizationCache = false
+            firebaseBackend.organizationSwitchErrorMessage = error.localizedDescription
         }
     }
 }

@@ -104,6 +104,14 @@ class FirebaseBackend: ObservableObject {
     /// While `Date() < launchQuietUntil`, skip heavy post-launch work (warnings, reminder storms).
     /// Set when home-critical bootstrap finishes so Holidays publishing cannot immediately freeze Home.
     var launchQuietUntil: Date?
+    /// True while the user is moving from one organisation to another. Root shows the login splash.
+    @Published var isSwitchingOrganization = false
+    /// Bumped when Settings or the deactivated gate asks to switch. Root performs the switch.
+    @Published var organizationSwitchToken: UUID?
+    var organizationSwitchTargetId: String?
+    @Published var organizationSwitchErrorMessage: String?
+    /// While set, store loads must not restore the previous organisation from memory or disk.
+    var suppressStaleOrganizationCache = false
     
     /// Lazy so `FirebaseBackend` can be constructed before `application(_:didFinishLaunchingWithOptions:)` calls `FirebaseApp.configure()`.
     /// `internal` so `FirebaseBackend+OrganizationMembership` (separate file) can use the same clients.
@@ -195,6 +203,18 @@ class FirebaseBackend: ObservableObject {
         lastOrganizationDidLoadBroadcastAt = now
         startOrganizationDocumentListener(organizationId: orgId)
         NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
+    }
+
+    /// Starts an organisation switch on the root shell so the login splash can cover the app
+    /// and the work is not cancelled when Settings is removed from the screen.
+    func queueOrganizationSwitch(to organizationId: String) {
+        let trimmed = normalizedOrganizationId(organizationId)
+        guard !trimmed.isEmpty else { return }
+        guard !isSwitchingOrganization else { return }
+        organizationSwitchErrorMessage = nil
+        organizationSwitchTargetId = trimmed
+        isSwitchingOrganization = true
+        organizationSwitchToken = UUID()
     }
 
     private func stopOrganizationDocumentListener() {

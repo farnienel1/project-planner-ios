@@ -120,7 +120,10 @@ class BookingStore: ObservableObject {
                     
                     // Load bookings from Firebase
                     let firebaseBookings = try await firebaseBackend.loadBookings(organizationId: organizationId)
-                    if firebaseBookings.isEmpty && !self.bookings.isEmpty {
+                    if firebaseBackend.suppressStaleOrganizationCache {
+                        self.bookings = firebaseBookings
+                        self.smartCache?.cacheBookings(firebaseBookings)
+                    } else if firebaseBookings.isEmpty && !self.bookings.isEmpty {
                         print("🔥🔥🔥 DEBUG: Remote returned 0 bookings, preserving \(self.bookings.count) in-memory bookings")
                     } else if firebaseBookings.isEmpty {
                         let cached = (try? await persistenceService.loadBookingData()) ?? []
@@ -155,6 +158,9 @@ class BookingStore: ObservableObject {
             } catch {
                 self.errorMessage = error.localizedDescription
                 print("🔥🔥🔥 DEBUG: Error loading bookings: \(error.localizedDescription)")
+                if firebaseBackend?.suppressStaleOrganizationCache == true {
+                    self.bookings = []
+                } else {
                 // Fallback to local cache when Firebase denies/ fails so operative visibility does not fully disappear.
                 do {
                     let cached = try await self.persistenceService.loadBookingData()
@@ -163,6 +169,7 @@ class BookingStore: ObservableObject {
                 } catch {
                     print("🔥🔥🔥 DEBUG: Local bookings fallback failed: \(error.localizedDescription)")
                     // Keep previous in-memory bookings if any; do not forcibly clear.
+                }
                 }
             }
         }
@@ -516,6 +523,13 @@ class BookingStore: ObservableObject {
             errorMessage = "Failed to save data: \(error.localizedDescription)"
         }
         ScheduleChangeNotifier.postBookingStoreDidChange()
+    }
+
+    func discardInMemoryForOrganizationSwitch() {
+        bookings = []
+        isLoading = false
+        pendingReloadAfterCurrentLoad = false
+        errorMessage = nil
     }
 
     func startLiveUpdates(organizationId: String) {

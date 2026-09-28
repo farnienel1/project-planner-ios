@@ -21,7 +21,14 @@ class ProjectTaskStore: ObservableObject {
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         self.firebaseBackend = backend
     }
-    
+
+    func discardInMemoryForOrganizationSwitch() {
+        tasks = []
+        isLoading = false
+        pendingReloadAfterCurrentLoad = false
+        errorMessage = nil
+    }
+
     func loadData() async {
         if isLoading {
             if firebaseBackend?.isBootstrappingOrgDataLoad == true {
@@ -67,10 +74,13 @@ class ProjectTaskStore: ObservableObject {
 
         do {
             let loadedTasks = try await firebaseBackend.loadProjectTasks(organizationId: organizationId)
+            guard firebaseBackend.currentOrganization?.firestoreDocumentId == organizationId else { return }
             print("🔥🔥🔥 DEBUG: TaskStore - Loaded \(loadedTasks.count) tasks from Firebase")
             // Keep tasks that were just created locally but are not yet visible on the server read (avoids “disappearing” tasks).
             let loadedIds = Set(loadedTasks.map(\.id))
-            let pendingLocal = tasks.filter { !loadedIds.contains($0.id) }
+            let pendingLocal = firebaseBackend.suppressStaleOrganizationCache
+                ? []
+                : tasks.filter { !loadedIds.contains($0.id) }
             tasks = (loadedTasks + pendingLocal).sorted { $0.createdAt > $1.createdAt }
             OfflineTaskLocalStore.shared.save(tasks, organizationId: organizationId)
         } catch {

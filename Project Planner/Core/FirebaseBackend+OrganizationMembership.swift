@@ -225,6 +225,7 @@ extension FirebaseBackend {
             ])
         }
 
+        stopScheduleLiveListeners()
         let organization = buildOrganizationFromDocument(orgId: trimmedId, data: orgData)
         currentOrganization = organization
         userRole = UserRole(rawValue: roleInOrg) ?? .basic

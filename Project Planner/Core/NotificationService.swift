@@ -1005,7 +1005,17 @@ class NotificationService: ObservableObject {
     }
 
     // MARK: - Notification Management
-    
+
+    func discardForOrganizationSwitch() {
+        notificationsListener?.remove()
+        notificationsListener = nil
+        listenerScopeKey = nil
+        didPrimeNotificationStream = false
+        hasLoadedNotificationsThisSession = false
+        notifications = []
+        unreadCount = 0
+    }
+
     /// Lightweight post-idle unread badge warm. Skips if inbox already loaded this session.
     func warmUnreadBadgeIfNeeded() async {
         guard !hasLoadedNotificationsThisSession else { return }
