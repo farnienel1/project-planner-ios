@@ -218,18 +218,22 @@ struct WorksRevampFilterChip: View {
     let title: String
     let isSelected: Bool
     let selectedForeground: Color
+    var selectedFill: Color = ProjectWorksRevampColors.blue
+    var titleFont: Font = .system(size: 11, weight: .medium)
+    var horizontalPadding: CGFloat = 12
+    var verticalPadding: CGFloat = 5
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 11, weight: .medium))
+                .font(titleFont)
                 .foregroundStyle(isSelected ? Color.white : selectedForeground)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
+                .padding(.horizontal, horizontalPadding)
+                .padding(.vertical, verticalPadding)
                 .background(
                     Capsule()
-                        .fill(isSelected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.surface)
+                        .fill(isSelected ? selectedFill : ProjectWorksRevampColors.surface)
                 )
                 .overlay(
                     Capsule()

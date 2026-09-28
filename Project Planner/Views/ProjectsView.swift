@@ -36,23 +36,28 @@ struct ProjectsView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ZStack {
-                ProjectWorksRevampColors.canvas.ignoresSafeArea()
+                WorksDashboardPalette.bg.ignoresSafeArea()
                 projectsRootContent
             }
             .navigationTitle("Projects")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(WorksDashboardPalette.bg, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("")
+                        .accessibilityHidden(true)
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                     }) {
                         Image(systemName: "chevron.left")
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .foregroundStyle(WorksDashboardPalette.ink)
                             .font(.system(size: 17, weight: .semibold))
                             .frame(width: 36, height: 36)
-                            .background(ProjectWorksRevampColors.surface)
+                            .background(WorksDashboardPalette.soft)
                             .clipShape(Circle())
-                            .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                     }
                 }
                 if canCreateProjects {
@@ -64,7 +69,7 @@ struct ProjectsView: View {
                                 .font(.system(size: 18, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .frame(width: 36, height: 36)
-                                .background(ProjectWorksRevampColors.blue)
+                                .background(WorksDashboardListStyle.projects.accent)
                                 .clipShape(Circle())
                         }
                         .accessibilityLabel("New project")
@@ -135,9 +140,11 @@ struct ProjectsView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        WorksListStatsRow(counts: listCounts)
-                        WorksListSearchRow(text: $searchText, placeholder: "Search projects, addresses…") {
+                    VStack(alignment: .leading, spacing: 0) {
+                        WorksDashboardHero(style: .projects)
+                        WorksDashboardStatsRow(counts: listCounts, selectedStatus: $selectedStatus)
+                            .padding(.bottom, 14)
+                        WorksDashboardSearchRow(text: $searchText, placeholder: WorksDashboardListStyle.projects.searchPlaceholder) {
                             Menu {
                                 Button("All · \(listCounts.all)") { selectedStatus = nil }
                                 Button("Active · \(listCounts.active)") { selectedStatus = .active }
@@ -145,11 +152,13 @@ struct ProjectsView: View {
                                 Button("Completed · \(listCounts.completed)") { selectedStatus = .completed }
                             } label: {
                                 Image(systemName: "line.3.horizontal.decrease.circle")
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                                    .font(.body.weight(.medium))
+                                    .foregroundStyle(WorksDashboardListStyle.projects.accent)
                             }
                         }
+                        .padding(.bottom, 12)
                         filterChipsRow
+                            .padding(.bottom, 14)
                         if isWaitingForVisibilityData {
                             ProgressView("Finding jobs assigned to you...")
                                 .frame(maxWidth: .infinity)
@@ -161,12 +170,15 @@ struct ProjectsView: View {
                                 emptySearchState
                             }
                         } else {
-                            LazyVStack(spacing: 10) {
+                            LazyVStack(spacing: 13) {
                                 ForEach(searchFilteredProjects) { project in
                                     NavigationLink(value: project) {
-                                        ProjectDetailRowView(project: project)
-                                            .environmentObject(userStore)
-                                            .environmentObject(operativeStore)
+                                        WorksDashboardCard(
+                                            project: project,
+                                            listAccent: WorksDashboardListStyle.projects.accent,
+                                            showsClientAndManager: !userStore.isOperativeMode()
+                                        )
+                                        .environmentObject(operativeStore)
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -174,8 +186,8 @@ struct ProjectsView: View {
                             .padding(.bottom, 8)
                         }
                     }
-                    .padding(.horizontal, 18)
-                    .padding(.top, 8)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 2)
                 }
                 .navigationDestination(for: Project.self) { project in
                     ProjectDetailView(project: project)
@@ -200,22 +212,38 @@ struct ProjectsView: View {
                 WorksRevampFilterChip(
                     title: "All · \(listCounts.all)",
                     isSelected: selectedStatus == nil,
-                    selectedForeground: ProjectWorksRevampColors.activeGreen
+                    selectedForeground: WorksDashboardPalette.ink,
+                    selectedFill: WorksDashboardListStyle.projects.accent,
+                    titleFont: .subheadline.weight(.semibold),
+                    horizontalPadding: 15,
+                    verticalPadding: 9
                 ) { selectedStatus = nil }
                 WorksRevampFilterChip(
                     title: "Active · \(listCounts.active)",
                     isSelected: selectedStatus == .active,
-                    selectedForeground: ProjectWorksRevampColors.activeGreen
+                    selectedForeground: WorksDashboardPalette.ink,
+                    selectedFill: WorksDashboardListStyle.projects.accent,
+                    titleFont: .subheadline.weight(.semibold),
+                    horizontalPadding: 15,
+                    verticalPadding: 9
                 ) { selectedStatus = .active }
                 WorksRevampFilterChip(
                     title: "Upcoming · \(listCounts.upcoming)",
                     isSelected: selectedStatus == .upcoming,
-                    selectedForeground: ProjectWorksRevampColors.upcomingAmber
+                    selectedForeground: WorksDashboardPalette.ink,
+                    selectedFill: WorksDashboardListStyle.projects.accent,
+                    titleFont: .subheadline.weight(.semibold),
+                    horizontalPadding: 15,
+                    verticalPadding: 9
                 ) { selectedStatus = .upcoming }
                 WorksRevampFilterChip(
                     title: "Completed · \(listCounts.completed)",
                     isSelected: selectedStatus == .completed,
-                    selectedForeground: ProjectWorksRevampColors.muted
+                    selectedForeground: WorksDashboardPalette.ink,
+                    selectedFill: WorksDashboardListStyle.projects.accent,
+                    titleFont: .subheadline.weight(.semibold),
+                    horizontalPadding: 15,
+                    verticalPadding: 9
                 ) { selectedStatus = .completed }
             }
         }
@@ -303,7 +331,10 @@ struct ProjectsView: View {
         if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil {
             return "This is a load problem, not deleted jobs. Pull down to retry. Existing jobs stay on the server and on web."
         }
-        return "Get started by adding your first project"
+        if canCreateProjects {
+            return WorksDashboardListStyle.projects.emptyCreatePrompt
+        }
+        return "Nothing here right now."
     }
 
     private var isUnmatchedOperativeWithJobs: Bool {
