@@ -8,6 +8,20 @@
 import Foundation
 import FirebaseFirestore
 
+nonisolated func firestoreAccountActive(from data: [String: Any]?) -> Bool {
+    guard let data else { return true }
+    if let value = data["accountActive"] as? Bool { return value }
+    if let number = data["accountActive"] as? NSNumber { return number.boolValue }
+    return true
+}
+
+nonisolated func firestoreUserIsActive(from data: [String: Any]?) -> Bool {
+    guard let data else { return true }
+    if let value = data["isActive"] as? Bool { return value }
+    if let number = data["isActive"] as? NSNumber { return number.boolValue }
+    return true
+}
+
 struct OrgMembershipSummary: Identifiable, Equatable {
     let id: String
     let name: String

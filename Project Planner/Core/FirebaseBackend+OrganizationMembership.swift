@@ -36,6 +36,10 @@ extension FirebaseBackend {
         return byId.map { (id: $0.key, data: $0.value.data, role: $0.value.role) }
     }
 
+    private func orgMembershipsCollection(userId: String) -> CollectionReference {
+        db.collection("users").document(userId).collection("orgMemberships")
+    }
+
     /// Loads only organisations the signed-in user belongs to.
     /// Must never scan the full `organizations` collection — that jetsams the Simulator
     /// once the project has more than a handful of orgs.
@@ -63,6 +67,86 @@ extension FirebaseBackend {
             print("🔥🔥🔥 DEBUG: [OrgMembership] Failed to list organisations: \(error.localizedDescription)")
             return []
         }
+    }
+
+    /// Copies the live `users/{uid}` document onto `orgMemberships/{orgId}`, including
+    /// `accountActive` from `isActive`. Does not invent a second user document.
+    func snapshotCurrentUserOntoMembership(
+        userId: String,
+        organizationId: String,
+        userData: [String: Any]
+    ) async throws {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty else { return }
+        var snapshot = userData
+        snapshot["accountActive"] = firestoreUserIsActive(from: userData)
+        snapshot["organizationId"] = orgId
+        snapshot["updatedAt"] = Timestamp(date: Date())
+        try await orgMembershipsCollection(userId: userId).document(orgId).setData(snapshot, merge: true)
+    }
+
+    /// Writes `accountActive` only when that membership document already exists.
+    /// Returns whether the membership document was updated. Never creates a stub.
+    @discardableResult
+    func patchMembershipAccountActiveIfExists(
+        userId: String,
+        organizationId: String,
+        accountActive: Bool
+    ) async -> Bool {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !userId.isEmpty, !orgId.isEmpty else { return false }
+        let ref = orgMembershipsCollection(userId: userId).document(orgId)
+        do {
+            let snap = try await ref.getDocument(source: .server)
+            guard snap.exists else { return false }
+            try await ref.updateData([
+                "accountActive": accountActive,
+                "updatedAt": Timestamp(date: Date())
+            ])
+            return true
+        } catch {
+            print("🔥🔥🔥 DEBUG: [OrgMembership] accountActive patch skipped: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Restores the destination membership onto `users/{uid}` and copies `accountActive`
+    /// onto `isActive` (missing `accountActive` means active). Returns that flag.
+    @discardableResult
+    func applyDestinationMembershipOntoUser(
+        userId: String,
+        organizationId: String,
+        roleInOrg: String,
+        userEmail: String
+    ) async throws -> Bool {
+        let orgId = normalizedOrganizationId(organizationId)
+        let userDocRef = db.collection("users").document(userId)
+        let membershipSnap = try await orgMembershipsCollection(userId: userId).document(orgId).getDocument(source: .server)
+        let accountActive = firestoreAccountActive(from: membershipSnap.data())
+
+        if membershipSnap.exists, var dest = membershipSnap.data() {
+            dest.removeValue(forKey: "accountActive")
+            dest["organizationId"] = orgId
+            dest["role"] = roleInOrg
+            dest["isActive"] = accountActive
+            dest["updatedAt"] = Timestamp(date: Date())
+            if dest["email"] == nil {
+                dest["email"] = userEmail
+            }
+            try await userDocRef.setData(dest, merge: true)
+        } else {
+            try await userDocRef.setData(
+                [
+                    "email": userEmail,
+                    "organizationId": orgId,
+                    "role": roleInOrg,
+                    "isActive": accountActive,
+                    "updatedAt": Timestamp(date: Date())
+                ],
+                merge: true
+            )
+        }
+        return accountActive
     }
 
     @MainActor
@@ -100,14 +184,28 @@ extension FirebaseBackend {
 
         let userDocRef = db.collection("users").document(userId)
         let userDoc = try await userDocRef.getDocument()
+        let userData = userDoc.data() ?? [:]
+        let leavingOrgId = normalizedOrganizationId(organizationIdFromFirestore(userData["organizationId"]) ?? "")
 
+        if userDoc.exists, !leavingOrgId.isEmpty,
+           leavingOrgId.compare(trimmedId, options: [.caseInsensitive, .diacriticInsensitive]) != .orderedSame {
+            try await snapshotCurrentUserOntoMembership(
+                userId: userId,
+                organizationId: leavingOrgId,
+                userData: userData
+            )
+        }
+
+        let destinationAccountActive: Bool
         if userDoc.exists {
-            try await userDocRef.updateData([
-                "organizationId": trimmedId,
-                "role": roleInOrg,
-                "updatedAt": Timestamp(date: Date()),
-            ])
+            destinationAccountActive = try await applyDestinationMembershipOntoUser(
+                userId: userId,
+                organizationId: trimmedId,
+                roleInOrg: roleInOrg,
+                userEmail: userEmail
+            )
         } else {
+            destinationAccountActive = true
             try await userDocRef.setData([
                 "email": userEmail,
                 "organizationId": trimmedId,
@@ -135,7 +233,9 @@ extension FirebaseBackend {
         hasBootstrappedOrgDataLoad = false
         isBootstrappingOrgDataLoad = false
         launchQuietUntil = nil
-        broadcastOrganizationDidLoadIfNeeded(force: true)
+        if destinationAccountActive {
+            broadcastOrganizationDidLoadIfNeeded(force: true)
+        }
     }
 
     @MainActor

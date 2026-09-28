@@ -359,6 +359,21 @@ service cloud.firestore {
           )
         )
       );
+      
+      match /orgMemberships/{orgId} {
+        allow read: if request.auth != null && (
+          request.auth.uid == userId ||
+          isAdminOrSuperAdmin()
+        );
+        allow create, update: if request.auth != null && (
+          request.auth.uid == userId ||
+          isAdminOrSuperAdmin()
+        );
+        allow delete: if request.auth != null && (
+          request.auth.uid == userId ||
+          isAdminOrSuperAdmin()
+        );
+      }
     }
 
     // Organizations - with strict access control

@@ -71,6 +71,7 @@ enum PlannerStoreWiring {
     @MainActor
     static func bootstrapOrgDataIfNeeded(
         firebaseBackend: FirebaseBackend,
+        userStore: UserStore,
         projectStore: ProjectStore,
         operativeStore: OperativeStore,
         bookingStore: BookingStore,
@@ -81,6 +82,10 @@ enum PlannerStoreWiring {
         notificationService: NotificationService
     ) async {
         guard firebaseBackend.isAuthenticated else { return }
+        guard !userStore.isDeactivatedForLastUsedOrganization else {
+            print("🔥🔥🔥 DEBUG: bootstrapOrgDataIfNeeded skipped — account deactivated for last-used organisation")
+            return
+        }
         // Claim the lock before any await so a second caller cannot pass the guard while we wait for org.
         if firebaseBackend.hasBootstrappedOrgDataLoad || firebaseBackend.isBootstrappingOrgDataLoad {
             print("🔥🔥🔥 DEBUG: bootstrapOrgDataIfNeeded skipped (hasBootstrapped=\(firebaseBackend.hasBootstrappedOrgDataLoad), inFlight=\(firebaseBackend.isBootstrappingOrgDataLoad))")
@@ -88,6 +93,16 @@ enum PlannerStoreWiring {
         }
         firebaseBackend.isBootstrappingOrgDataLoad = true
         defer { firebaseBackend.isBootstrappingOrgDataLoad = false }
+
+        var profileWait = 0
+        while userStore.currentUser == nil && Auth.auth().currentUser != nil && profileWait < 10 {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            profileWait += 1
+        }
+        guard !userStore.isDeactivatedForLastUsedOrganization else {
+            print("🔥🔥🔥 DEBUG: bootstrapOrgDataIfNeeded skipped after profile wait — account deactivated")
+            return
+        }
 
         var waitCount = 0
         while firebaseBackend.currentOrganization == nil && waitCount < 10 {
@@ -98,6 +113,10 @@ enum PlannerStoreWiring {
 
         if firebaseBackend.currentOrganization == nil {
             print("🔥🔥🔥 DEBUG: ⚠️ Organization not loaded after waiting, attempting recovery...")
+            if userStore.isDeactivatedForLastUsedOrganization {
+                print("🔥🔥🔥 DEBUG: Skipping org recovery — account deactivated for last-used organisation")
+                return
+            }
             if let userId = firebaseBackend.currentUser?.uid,
                let userEmail = firebaseBackend.currentUser?.email {
                 let recovered = await firebaseBackend.recoverMissingOrganizationLink(userId: userId, userEmail: userEmail)
@@ -198,7 +217,11 @@ struct ProjectPlannerRootView: View {
 
     @ViewBuilder
     private var authenticatedShell: some View {
-        if let currentUser = userStore.currentUser, !currentUser.policyAccepted {
+        if userStore.isDeactivatedForLastUsedOrganization {
+            AccountDeactivatedView()
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+        } else if let currentUser = userStore.currentUser, !currentUser.policyAccepted {
             PolicyAcceptanceView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
@@ -315,6 +338,24 @@ struct ProjectPlannerRootView: View {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 await PlannerStoreWiring.bootstrapOrgDataIfNeeded(
                     firebaseBackend: firebaseBackend,
+                    userStore: userStore,
+                    projectStore: projectStore,
+                    operativeStore: operativeStore,
+                    bookingStore: bookingStore,
+                    managerScheduleStore: managerScheduleStore,
+                    subcontractorStore: subcontractorStore,
+                    taskStore: taskStore,
+                    holidayStore: holidayStore,
+                    notificationService: notificationService
+                )
+            }
+        }
+        .onChange(of: userStore.isDeactivatedForLastUsedOrganization) { _, isDeactivated in
+            guard !isDeactivated, firebaseBackend.isAuthenticated else { return }
+            Task { @MainActor in
+                await PlannerStoreWiring.bootstrapOrgDataIfNeeded(
+                    firebaseBackend: firebaseBackend,
+                    userStore: userStore,
                     projectStore: projectStore,
                     operativeStore: operativeStore,
                     bookingStore: bookingStore,

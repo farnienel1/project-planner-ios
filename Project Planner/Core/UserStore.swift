@@ -30,6 +30,7 @@ class UserStore: ObservableObject {
     /// Single-flight + short cooldown to prevent duplicate org user roster fetches.
     private var organizationUsersLoadInProgress = false
     private var lastOrganizationUsersLoadAt: Date?
+    private var currentUserListener: ListenerRegistration?
 
     private struct OperativeProfileOverride: Codable {
         var assignedManagerUserId: String?
@@ -41,6 +42,17 @@ class UserStore: ObservableObject {
         // Initialize with empty state
     }
     
+    /// Last-used organisation is `users/{uid}.organizationId`. `isActive == false` means that organisation deactivated them.
+    var isDeactivatedForLastUsedOrganization: Bool {
+        currentUser?.isActive == false
+    }
+
+    var lastUsedOrganizationId: String {
+        let fromUser = currentUser?.organizationId.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !fromUser.isEmpty { return fromUser }
+        return firebaseBackend?.currentOrganization?.firestoreDocumentId ?? ""
+    }
+
     func setFirebaseBackend(_ firebaseBackend: FirebaseBackend) {
         self.firebaseBackend = firebaseBackend
     }
@@ -310,7 +322,13 @@ class UserStore: ObservableObject {
                 }
                 
                 self.currentUser = userData
-                
+                startCurrentUserListener(userId: firebaseUser.uid)
+
+                if userData?.isActive == false {
+                    isLoading = false
+                    return
+                }
+
                 // Load org roster in the background so a slow / stuck org query cannot block the main shell.
                 Task { await self.loadOrganizationUsers() }
             }
@@ -425,10 +443,21 @@ class UserStore: ObservableObject {
     
     /// Call when the user signs out so deleted/other-org users don't persist in the UI.
     func clearOnSignOut() {
+        currentUserListener?.remove()
+        currentUserListener = nil
         organizationUsers = []
         currentUser = nil
         roleTestingPreset = nil
         errorMessage = nil
+    }
+
+    private func startCurrentUserListener(userId: String) {
+        guard let firebaseBackend else { return }
+        currentUserListener?.remove()
+        currentUserListener = firebaseBackend.observeCurrentUserDocument(userId: userId) { [weak self] user in
+            guard let self, let user else { return }
+            self.currentUser = user
+        }
     }
     
     // MARK: - Permission Checks
@@ -1223,6 +1252,11 @@ class UserStore: ObservableObject {
                      
                      if let user = updatedUser {
                          try await firebaseBackend.saveUser(user)
+                         await firebaseBackend.patchMembershipAccountActiveIfExists(
+                             userId: user.id,
+                             organizationId: user.organizationId,
+                             accountActive: false
+                         )
                          
                          // Update local array
                          if let index = organizationUsers.firstIndex(where: { $0.id == userId }) {
@@ -2090,17 +2124,30 @@ class UserStore: ObservableObject {
                          let ref = db.collection("users").document(docId)
                          let doc = try await ref.getDocument(source: .server)
                          guard doc.exists, let data = doc.data() else { continue }
-                         guard (data["organizationId"] as? String) == organizationId else { continue }
+                         let docOrgId = organizationIdFromFirestore(data["organizationId"]) ?? ""
+                         let lastUsedIsThisOrg = docOrgId.compare(organizationId, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
                          let docEmailNorm = ((data["email"] as? String) ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
                          let sameRowAsUI = (docId == user.id)
                          guard docEmailNorm == emailNormalized || sameRowAsUI else { continue }
-                         
-                         try await ref.updateData([
-                             "isActive": isActive,
-                             "updatedAt": Timestamp(date: Date())
-                         ])
-                         updatedCount += 1
-                         print("🔥🔥🔥 DEBUG: ✅ isActive=\(isActive) on users/\(docId)")
+
+                         // `users/{uid}.isActive` is the last-used organisation only.
+                         if lastUsedIsThisOrg {
+                             try await ref.updateData([
+                                 "isActive": isActive,
+                                 "updatedAt": Timestamp(date: Date())
+                             ])
+                             updatedCount += 1
+                             print("🔥🔥🔥 DEBUG: ✅ isActive=\(isActive) on users/\(docId)")
+                         }
+
+                         let patchedMembership = await firebaseBackend?.patchMembershipAccountActiveIfExists(
+                             userId: docId,
+                             organizationId: organizationId,
+                             accountActive: isActive
+                         ) ?? false
+                         if patchedMembership, !lastUsedIsThisOrg {
+                             updatedCount += 1
+                         }
                      }
                      
                      if updatedCount == 0 {
