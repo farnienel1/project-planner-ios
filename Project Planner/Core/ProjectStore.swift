@@ -86,8 +86,13 @@ class ProjectStore: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard self.firebaseBackend?.hasBootstrappedOrgDataLoad == true else {
+                    print("🔥🔥🔥 DEBUG: ProjectStore offline sync skipped until org bootstrap finishes")
+                    return
+                }
                 print("🔥🔥🔥 DEBUG: ProjectStore received syncOfflineChanges notification - syncing all data to Firebase")
-                if let self = self, (!self.projects.isEmpty || !self.clients.isEmpty) {
+                if !self.projects.isEmpty || !self.clients.isEmpty {
                     _ = await self.saveDataWithRetry(description: "syncing offline changes to Firebase")
                 }
             }
@@ -448,6 +453,13 @@ class ProjectStore: ObservableObject {
         }
     }
     
+    /// Shows the last saved jobs before Firebase returns. Org-switch sets `suppressStaleOrganizationCache` and skips this.
+    func warmLocalCacheForLaunch() async {
+        guard firebaseBackend?.suppressStaleOrganizationCache != true else { return }
+        guard projects.isEmpty else { return }
+        _ = await hydrateFromLocalCacheIfNeeded(generation: loadGeneration)
+    }
+
     func discardInMemoryForOrganizationSwitch() {
         loadGeneration += 1
         pendingReloadAfterCurrentLoad = false

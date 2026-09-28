@@ -94,9 +94,12 @@ enum PlannerStoreWiring {
         firebaseBackend.isBootstrappingOrgDataLoad = true
         defer { firebaseBackend.isBootstrappingOrgDataLoad = false }
 
+        // Disk jobs can paint while the organisation document is still in flight.
+        await projectStore.warmLocalCacheForLaunch()
+
         var profileWait = 0
-        while userStore.currentUser == nil && Auth.auth().currentUser != nil && profileWait < 10 {
-            try? await Task.sleep(nanoseconds: 300_000_000)
+        while userStore.currentUser == nil && Auth.auth().currentUser != nil && profileWait < 60 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
             profileWait += 1
         }
         guard !userStore.isDeactivatedForLastUsedOrganization else {
@@ -105,9 +108,11 @@ enum PlannerStoreWiring {
         }
 
         var waitCount = 0
-        while firebaseBackend.currentOrganization == nil && waitCount < 10 {
-            print("🔥🔥🔥 DEBUG: Waiting for organization to load... (\(waitCount + 1)/10)")
-            try? await Task.sleep(nanoseconds: 500_000_000)
+        if firebaseBackend.currentOrganization == nil {
+            print("🔥🔥🔥 DEBUG: Waiting for organization to load...")
+        }
+        while firebaseBackend.currentOrganization == nil && waitCount < 50 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
             waitCount += 1
         }
 
@@ -147,7 +152,6 @@ enum PlannerStoreWiring {
         operativeStore.loadData()
         bookingStore.loadData()
 
-        try? await Task.sleep(nanoseconds: 500_000_000)
         await Task.yield()
         managerScheduleStore.loadData()
         await taskStore.loadData()
@@ -204,6 +208,9 @@ struct ProjectPlannerRootView: View {
     @State private var firebaseAuthUID: String?
     /// Avoid flashing the login screen while Firebase session / profile are still resolving.
     @State private var hasResolvedInitialAuth = false
+    /// Bumps only when the signed-in user moves from one organisation to another.
+    /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
+    @State private var contentShellEpoch = 0
 
     /// Prefer backend flag first so we’re not gated on `FirebaseApp.app()` before `ensureFirebaseAppConfigured()` runs; only then read Auth.
     private var showMainExperience: Bool {
@@ -232,7 +239,7 @@ struct ProjectPlannerRootView: View {
             VStack(spacing: 0) {
                 OfflineStatusBanner()
                 ContentView()
-                    .id(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "no-org")
+                    .id(contentShellEpoch)
             }
                 .environmentObject(firebaseBackend)
                 .environmentObject(smartCache)
@@ -328,19 +335,13 @@ struct ProjectPlannerRootView: View {
 
             appSettings.setupObservers()
 
-            // Profile first so the shell can paint; heavy org loads run after a short delay.
+            // Profile and org data start together. A fixed 1.5s pause left Home empty, then the
+            // organisation wait added another half second before disk jobs could show.
             Task { @MainActor in
                 await firebaseBackend.syncAuthStateFromSessionIfNeeded()
                 hasResolvedInitialAuth = true
-                if firebaseBackend.isAuthenticated {
-                    await userStore.loadCurrentUser()
-                }
-                print("🔥🔥🔥 DEBUG: RootView profile pass done — currentUser: \(userStore.currentUser != nil ? "yes" : "no")")
-            }
-
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                await PlannerStoreWiring.bootstrapOrgDataIfNeeded(
+                async let profilePass: Void = loadLaunchProfile()
+                async let bootstrapPass: Void = PlannerStoreWiring.bootstrapOrgDataIfNeeded(
                     firebaseBackend: firebaseBackend,
                     userStore: userStore,
                     projectStore: projectStore,
@@ -352,7 +353,13 @@ struct ProjectPlannerRootView: View {
                     holidayStore: holidayStore,
                     notificationService: notificationService
                 )
+                await profilePass
+                await bootstrapPass
             }
+        }
+        .onChange(of: firebaseBackend.currentOrganization?.firestoreDocumentId) { oldId, newId in
+            guard let oldId, let newId, oldId != newId else { return }
+            contentShellEpoch += 1
         }
         .onChange(of: firebaseBackend.organizationSwitchToken) { _, token in
             guard token != nil else { return }
@@ -391,6 +398,14 @@ struct ProjectPlannerRootView: View {
                 )
             }
         }
+    }
+
+    @MainActor
+    private func loadLaunchProfile() async {
+        if firebaseBackend.isAuthenticated {
+            await userStore.loadCurrentUser()
+        }
+        print("🔥🔥🔥 DEBUG: RootView profile pass done — currentUser: \(userStore.currentUser != nil ? "yes" : "no")")
     }
 
     @MainActor

@@ -51,8 +51,13 @@ class BookingStore: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard self.firebaseBackend?.hasBootstrappedOrgDataLoad == true else {
+                    print("🔥🔥🔥 DEBUG: BookingStore offline sync skipped until org bootstrap finishes")
+                    return
+                }
                 print("🔥🔥🔥 DEBUG: BookingStore received syncOfflineChanges notification - syncing all data to Firebase")
-                if let self = self, !self.bookings.isEmpty {
+                if !self.bookings.isEmpty {
                     await self.saveData()
                 }
             }
