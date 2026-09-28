@@ -218,15 +218,6 @@ struct SwitchOrganisationView: View {
             isSwitching = false
             switchingOrgId = nil
         }
-        do {
-            try await firebaseBackend.switchActiveOrganization(to: membership.id)
-            await userStore.loadCurrentUser()
-            memberships = await filteredMemberships()
-            if excludedOrganizationId != nil {
-                dismiss()
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        firebaseBackend.queueOrganizationSwitch(to: membership.id)
     }
 }

@@ -104,6 +104,14 @@ class FirebaseBackend: ObservableObject {
     /// While `Date() < launchQuietUntil`, skip heavy post-launch work (warnings, reminder storms).
     /// Set when home-critical bootstrap finishes so Holidays publishing cannot immediately freeze Home.
     var launchQuietUntil: Date?
+    /// True while the user is moving from one organisation to another. Root shows the login splash.
+    @Published var isSwitchingOrganization = false
+    /// Bumped when Settings or the deactivated gate asks to switch. Root performs the switch.
+    @Published var organizationSwitchToken: UUID?
+    var organizationSwitchTargetId: String?
+    @Published var organizationSwitchErrorMessage: String?
+    /// While set, store loads must not restore the previous organisation from memory or disk.
+    var suppressStaleOrganizationCache = false
     
     /// Lazy so `FirebaseBackend` can be constructed before `application(_:didFinishLaunchingWithOptions:)` calls `FirebaseApp.configure()`.
     /// `internal` so `FirebaseBackend+OrganizationMembership` (separate file) can use the same clients.
@@ -145,7 +153,7 @@ class FirebaseBackend: ObservableObject {
     var organizationHasFirestoreMyScheduleOptions = false
 
     /// Ensures org id is non-empty and org document is readable before subcollection reads.
-    private func ensureReadableOrganization(_ organizationId: String) async throws -> String {
+    func ensureReadableOrganization(_ organizationId: String) async throws -> String {
         let trimmedOrgId = normalizedOrganizationId(organizationId)
         guard !trimmedOrgId.isEmpty else {
             print("🔥🔥🔥 DEBUG: ❌ Refusing Firebase read with empty organizationId")
@@ -195,6 +203,18 @@ class FirebaseBackend: ObservableObject {
         lastOrganizationDidLoadBroadcastAt = now
         startOrganizationDocumentListener(organizationId: orgId)
         NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
+    }
+
+    /// Starts an organisation switch on the root shell so the login splash can cover the app
+    /// and the work is not cancelled when Settings is removed from the screen.
+    func queueOrganizationSwitch(to organizationId: String) {
+        let trimmed = normalizedOrganizationId(organizationId)
+        guard !trimmed.isEmpty else { return }
+        guard !isSwitchingOrganization else { return }
+        organizationSwitchErrorMessage = nil
+        organizationSwitchTargetId = trimmed
+        isSwitchingOrganization = true
+        organizationSwitchToken = UUID()
     }
 
     private func stopOrganizationDocumentListener() {
@@ -5978,76 +5998,9 @@ class FirebaseBackend: ObservableObject {
             if currentOrganization != nil {
                 return true
             }
-            
-            // Strategy 4: Check if any organization has data for this user (projects, operatives, etc.)
-            // This is a last resort - find organization by data ownership
-            print("🔥🔥🔥 DEBUG: ⚠️ Trying to find organization by data ownership...")
-            for orgDoc in orgsSnapshot.documents {
-                let organizationId = orgDoc.documentID
-                // Check if user has projects in this organization
-                let projectsSnapshot = try await db.collection("organizations")
-                    .document(organizationId)
-                    .collection("projects")
-                    .whereField("createdBy", isEqualTo: userId)
-                    .limit(to: 1)
-                    .getDocuments()
-                
-                if !projectsSnapshot.isEmpty {
-                    print("🔥🔥🔥 DEBUG: ✅ Found organization with user's projects: \(organizationId)")
-                    // Check if user document exists, if not CREATE it, otherwise UPDATE it
-                    let userDocRef = db.collection("users").document(userId)
-                    let userDoc = try await userDocRef.getDocument()
-                    
-                    if userDoc.exists {
-                        try await userDocRef.updateData([
-                            "organizationId": organizationId,
-                            "updatedAt": Timestamp(date: Date())
-                        ])
-                    } else {
-                        var newUserData: [String: Any] = [
-                            "email": userEmail,
-                            "organizationId": organizationId,
-                            "role": "member",
-                            "isActive": true,
-                            "createdAt": Timestamp(date: Date()),
-                            "updatedAt": Timestamp(date: Date())
-                        ]
-                        if let existing = await existingOrgUserDataByEmail(organizationId: organizationId, userEmail: userEmail) {
-                            newUserData["role"] = existing["role"] ?? "member"
-                            newUserData["adminAccess"] = existing["adminAccess"] ?? false
-                            newUserData["manager"] = existing["manager"] ?? false
-                            newUserData["operatives"] = existing["operatives"] ?? false
-                            newUserData["skills"] = existing["skills"] ?? false
-                            newUserData["qualifications"] = existing["qualifications"] ?? false
-                            newUserData["materials"] = existing["materials"] ?? false
-                            newUserData["operativeMode"] = existing["operativeMode"] ?? false
-                            newUserData["annualLeaveSelfBook"] = existing["annualLeaveSelfBook"] ?? false
-                            newUserData["weeklyReports"] = existing["weeklyReports"] ?? false
-                            newUserData["dailyOverview"] = existing["dailyOverview"] ?? true
-                            newUserData["subContractors"] = existing["subContractors"] ?? false
-                            newUserData["projects"] = existing["projects"] ?? true
-                            newUserData["smallWorks"] = existing["smallWorks"] ?? false
-                            newUserData["isSuperAdmin"] = existing["isSuperAdmin"] ?? false
-                            if let fn = existing["firstName"] { newUserData["firstName"] = fn }
-                            if let sn = existing["surname"] { newUserData["surname"] = sn }
-                            if let mobile = existing["mobileNumber"] { newUserData["mobileNumber"] = mobile }
-                            print("🔥🔥🔥 DEBUG: Preserved permissions from existing org user (e.g. operativeMode)")
-                        }
-                        try await userDocRef.setData(newUserData)
-                    }
-                    
-                    // Store organizationId locally for offline access
-                    storeOrganizationIdLocally(organizationId)
-                    
-                    // Reload organization (rules may deny org root read; fall back to snapshot data).
-                    await loadUserOrganization(userId: userId)
-                    if currentOrganization == nil {
-                        setCurrentOrganizationFromRecovery(orgId: organizationId, orgData: orgDoc.data(), fallbackRole: "member")
-                    }
-                    return currentOrganization != nil
-                }
-            }
-            
+
+            // Do not scan the full `organizations` collection as a last resort — that jetsams
+            // the Simulator. Membership, user-doc, and same-email recovery already ran.
             print("🔥🔥🔥 DEBUG: ⚠️ Could not find organization through any recovery strategy")
             print("🔥🔥🔥 DEBUG: User may need to contact support or recreate account")
             

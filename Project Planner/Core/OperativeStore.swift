@@ -86,6 +86,7 @@ class OperativeStore: ObservableObject {
     }
     
     func setFirebaseBackend(_ firebaseBackend: FirebaseBackend) {
+        print("🔥🔥🔥 DEBUG: ProjectStore.setFirebaseBackend called - Firebase backend connected!")
         self.firebaseBackend = firebaseBackend
     }
     
@@ -132,7 +133,18 @@ class OperativeStore: ObservableObject {
     }
     
     // MARK: - Data Loading
-    
+
+    func discardInMemoryForOrganizationSwitch() {
+        loadGeneration += 1
+        pendingReloadAfterCurrentLoad = false
+        isLoading = false
+        operatives = []
+        managers = []
+        organizationSkills = []
+        qualifications = []
+        errorMessage = nil
+    }
+
     func loadData() {
         if isLoading {
             if firebaseBackend?.isBootstrappingOrgDataLoad == true {
@@ -218,6 +230,7 @@ class OperativeStore: ObservableObject {
                             try await firebaseBackend.loadManagers(organizationId: organizationId)
                         }
                         let realManagers = firebaseManagers.filter { !Self.isPlaceholderManager($0) }
+                        guard loadGeneration == generation else { return }
                         self.managers = realManagers
                         if let smartCache = smartCache {
                             smartCache.cacheManagers(realManagers)
@@ -254,6 +267,7 @@ class OperativeStore: ObservableObject {
                             let email = operative.email.lowercased()
                             return !name.contains("placeholder") && !email.contains("placeholder") && !name.contains("initial")
                         }
+                        guard loadGeneration == generation else { return }
                         self.operatives = realOperatives
                         if let smartCache = smartCache {
                             smartCache.cacheOrganizationSkills([])
@@ -299,8 +313,12 @@ class OperativeStore: ObservableObject {
                 self.errorMessage = error.localizedDescription
                 self.isLoading = false
                 print("🔥🔥🔥 DEBUG: Error loading operatives: \(error.localizedDescription)")
-                // Keep prior in-memory data whenever possible; fallback to cache before clearing.
-                if let smartCache = smartCache {
+                if firebaseBackend?.suppressStaleOrganizationCache == true {
+                    self.operatives = []
+                    self.managers = []
+                    self.qualifications = []
+                    self.organizationSkills = []
+                } else if let smartCache = smartCache {
                     let cachedOperatives = smartCache.getCachedOperatives()
                     let cachedManagers = smartCache.getCachedManagers().filter { !Self.isPlaceholderManager($0) }
                     let cachedQualifications = smartCache.getCachedQualifications()

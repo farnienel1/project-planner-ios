@@ -10,6 +10,7 @@ import Combine
 // with WarningsService — avoids "Cannot find WarningsDiskCacheStore in scope".
 
 struct WarningsDiskCache: Codable {
+    var organizationId: String
     var savedAt: Date
     var hasCompletedLiveDetection: Bool
     var allGeneratedWarnings: [Warning]
@@ -20,6 +21,7 @@ struct WarningsDiskCache: Codable {
     var lowCount: Int
 
     static let empty = WarningsDiskCache(
+        organizationId: "",
         savedAt: .distantPast,
         hasCompletedLiveDetection: false,
         allGeneratedWarnings: [],
@@ -32,28 +34,89 @@ struct WarningsDiskCache: Codable {
 }
 
 enum WarningsDiskCacheStore {
-    private static let fileName = "warnings-live-cache-v1.json"
+    private static let activeOrgDefaultsKey = "warnings-live-cache-active-org"
 
-    private static var fileURL: URL {
+    static var activeOrganizationId: String? {
+        get { UserDefaults.standard.string(forKey: activeOrgDefaultsKey) }
+        set {
+            if let newValue, !newValue.isEmpty {
+                UserDefaults.standard.set(newValue, forKey: activeOrgDefaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: activeOrgDefaultsKey)
+            }
+        }
+    }
+
+    private static func fileURL(organizationId: String) -> URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         let folder = dir.appendingPathComponent("ProjectPlanner", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        return folder.appendingPathComponent(fileName)
+        let safe = organizationId
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+        return folder.appendingPathComponent("warnings-live-cache-v2-\(safe).json")
     }
 
-    static func load() -> WarningsDiskCache {
-        let url = fileURL
-        guard let data = try? Data(contentsOf: url) else { return .empty }
-        return (try? JSONDecoder().decode(WarningsDiskCache.self, from: data)) ?? .empty
+    static func load(organizationId: String) -> WarningsDiskCache {
+        guard !organizationId.isEmpty else { return .empty }
+        let url = fileURL(organizationId: organizationId)
+        if let data = try? Data(contentsOf: url),
+           let cache = try? JSONDecoder().decode(WarningsDiskCache.self, from: data),
+           cache.organizationId == organizationId {
+            return cache
+        }
+        return migrateLegacyCacheIfNeeded(into: organizationId)
+    }
+
+    /// The old cache had no organisation. Give it to the first organisation that opens, then leave other organisations empty.
+    private static func migrateLegacyCacheIfNeeded(into organizationId: String) -> WarningsDiskCache {
+        let migratedKey = "warnings-live-cache-v1-migrated"
+        guard !UserDefaults.standard.bool(forKey: migratedKey) else { return .empty }
+        UserDefaults.standard.set(true, forKey: migratedKey)
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let legacyURL = dir
+            .appendingPathComponent("ProjectPlanner", isDirectory: true)
+            .appendingPathComponent("warnings-live-cache-v1.json")
+        guard let data = try? Data(contentsOf: legacyURL),
+              let legacy = try? JSONDecoder().decode(LegacyWarningsDiskCache.self, from: data) else {
+            return .empty
+        }
+        let cache = WarningsDiskCache(
+            organizationId: organizationId,
+            savedAt: legacy.savedAt,
+            hasCompletedLiveDetection: legacy.hasCompletedLiveDetection,
+            allGeneratedWarnings: legacy.allGeneratedWarnings,
+            activeWarnings: legacy.activeWarnings,
+            warningCount: legacy.warningCount,
+            highCount: legacy.highCount,
+            mediumCount: legacy.mediumCount,
+            lowCount: legacy.lowCount
+        )
+        save(cache)
+        return cache
     }
 
     static func save(_ cache: WarningsDiskCache) {
-        let url = fileURL
+        guard !cache.organizationId.isEmpty else { return }
+        let url = fileURL(organizationId: cache.organizationId)
         guard let data = try? JSONEncoder().encode(cache) else { return }
         try? data.write(to: url, options: [.atomic])
-        print("🔥🔥🔥 DEBUG: WarningsDiskCache saved active=\(cache.activeWarnings.count) completed=\(cache.hasCompletedLiveDetection)")
+        activeOrganizationId = cache.organizationId
+        print("🔥🔥🔥 DEBUG: WarningsDiskCache saved org=\(cache.organizationId) active=\(cache.activeWarnings.count) completed=\(cache.hasCompletedLiveDetection)")
     }
+}
+
+private struct LegacyWarningsDiskCache: Codable {
+    var savedAt: Date
+    var hasCompletedLiveDetection: Bool
+    var allGeneratedWarnings: [Warning]
+    var activeWarnings: [Warning]
+    var warningCount: Int
+    var highCount: Int
+    var mediumCount: Int
+    var lowCount: Int
 }
 
 @MainActor
@@ -81,31 +144,59 @@ class WarningsService: ObservableObject {
     private let resolutionStore: WarningResolutionStore
     private var updateTask: Task<Void, Never>?
     private var updateGeneration = 0
+    private var cacheOrganizationId: String?
 
     init(resolutionStore: WarningResolutionStore? = nil, hydrateFromDisk: Bool = true) {
         self.resolutionStore = resolutionStore ?? .shared
-        // Rebuild: hydrate from disk immediately so Home/Warnings never need an auto-scan.
-        // Do NOT compare `self === .shared` here — shared is still being created.
-        if hydrateFromDisk {
-            let cache = WarningsDiskCacheStore.load()
-            if cache.hasCompletedLiveDetection || !cache.activeWarnings.isEmpty {
-                allGeneratedWarnings = cache.allGeneratedWarnings
-                activeWarnings = cache.activeWarnings
-                warningCount = cache.warningCount
-                highCount = cache.highCount
-                mediumCount = cache.mediumCount
-                lowCount = cache.lowCount
-                hasCompletedLiveDetection = cache.hasCompletedLiveDetection
-                print("🔥🔥🔥 DEBUG: WarningsService hydrated from disk active=\(activeWarnings.count) completed=\(hasCompletedLiveDetection)")
-            }
+        // Hydrate only the organisation that last owned this cache. A switch must not
+        // keep the previous organisation's warnings on Home.
+        if hydrateFromDisk, let organizationId = WarningsDiskCacheStore.activeOrganizationId, !organizationId.isEmpty {
+            cacheOrganizationId = organizationId
+            applyDiskCache(WarningsDiskCacheStore.load(organizationId: organizationId))
         }
+    }
+
+    /// Drop the previous organisation's warnings and show this organisation's own cache.
+    func adoptOrganization(_ organizationId: String) {
+        let trimmed = organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard cacheOrganizationId != trimmed else { return }
+        cancelInFlightUpdate()
+        cacheOrganizationId = trimmed
+        WarningResolutionStore.shared.adoptOrganization(trimmed)
+        applyDiskCache(WarningsDiskCacheStore.load(organizationId: trimmed))
+        WarningsRefreshHelper.postWarningsCountDidChange()
+        print("🔥🔥🔥 DEBUG: WarningsService adopted org=\(trimmed) active=\(activeWarnings.count)")
+    }
+
+    private func applyDiskCache(_ cache: WarningsDiskCache) {
+        guard cache.organizationId == cacheOrganizationId,
+              cache.hasCompletedLiveDetection || !cache.activeWarnings.isEmpty else {
+            allGeneratedWarnings = []
+            activeWarnings = []
+            warningCount = 0
+            highCount = 0
+            mediumCount = 0
+            lowCount = 0
+            hasCompletedLiveDetection = false
+            return
+        }
+        allGeneratedWarnings = cache.allGeneratedWarnings
+        activeWarnings = cache.activeWarnings
+        warningCount = cache.warningCount
+        highCount = cache.highCount
+        mediumCount = cache.mediumCount
+        lowCount = cache.lowCount
+        hasCompletedLiveDetection = cache.hasCompletedLiveDetection
     }
 
     private func persistLiveCacheToDisk() {
         // Only the shared live service writes the Home/Warnings cache.
         guard self === WarningsService.shared else { return }
+        guard let cacheOrganizationId, !cacheOrganizationId.isEmpty else { return }
         WarningsDiskCacheStore.save(
             WarningsDiskCache(
+                organizationId: cacheOrganizationId,
                 savedAt: Date(),
                 hasCompletedLiveDetection: hasCompletedLiveDetection,
                 allGeneratedWarnings: allGeneratedWarnings,
