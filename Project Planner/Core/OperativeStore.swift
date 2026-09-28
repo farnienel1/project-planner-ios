@@ -89,8 +89,6 @@ class OperativeStore: ObservableObject {
         print("🔥🔥🔥 DEBUG: ProjectStore.setFirebaseBackend called - Firebase backend connected!")
         self.firebaseBackend = firebaseBackend
     }
-        self.firebaseBackend = firebaseBackend
-    }
     
     func setSmartCache(_ smartCache: SmartCacheService) {
         self.smartCache = smartCache
