@@ -42,23 +42,28 @@ struct SmallWorksView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ZStack {
-                ProjectWorksRevampColors.canvas.ignoresSafeArea()
+                WorksDashboardPalette.bg.ignoresSafeArea()
                 smallWorksRootContent
             }
             .navigationTitle("Small works")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(WorksDashboardPalette.bg, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("")
+                        .accessibilityHidden(true)
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                     }) {
                         Image(systemName: "chevron.left")
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .foregroundStyle(WorksDashboardPalette.ink)
                             .font(.system(size: 17, weight: .semibold))
                             .frame(width: 36, height: 36)
-                            .background(ProjectWorksRevampColors.surface)
+                            .background(WorksDashboardPalette.soft)
                             .clipShape(Circle())
-                            .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                     }
                 }
                 if canCreateSmallWorks {
@@ -70,7 +75,7 @@ struct SmallWorksView: View {
                                 .font(.system(size: 18, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .frame(width: 36, height: 36)
-                                .background(ProjectWorksRevampColors.blue)
+                                .background(WorksDashboardListStyle.smallWorks.accent)
                                 .clipShape(Circle())
                         }
                         .accessibilityLabel("New small work")
@@ -147,9 +152,11 @@ struct SmallWorksView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        WorksListStatsRow(counts: listCounts)
-                        WorksListSearchRow(text: $searchText, placeholder: "Search small works…") {
+                    VStack(alignment: .leading, spacing: 0) {
+                        WorksDashboardHero(style: .smallWorks)
+                        WorksDashboardStatsRow(counts: listCounts, selectedStatus: $selectedStatus)
+                            .padding(.bottom, 14)
+                        WorksDashboardSearchRow(text: $searchText, placeholder: WorksDashboardListStyle.smallWorks.searchPlaceholder) {
                             Menu {
                                 Button("All · \(listCounts.all)") { selectedStatus = nil }
                                 Button("Active · \(listCounts.active)") { selectedStatus = .active }
@@ -157,11 +164,13 @@ struct SmallWorksView: View {
                                 Button("Completed · \(listCounts.completed)") { selectedStatus = .completed }
                             } label: {
                                 Image(systemName: "line.3.horizontal.decrease.circle")
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                                    .font(.body.weight(.medium))
+                                    .foregroundStyle(WorksDashboardListStyle.smallWorks.accent)
                             }
                         }
+                        .padding(.bottom, 12)
                         filterChipsRow
+                            .padding(.bottom, 14)
                         if isWaitingForVisibilityData {
                             ProgressView("Finding jobs assigned to you...")
                                 .frame(maxWidth: .infinity)
@@ -173,12 +182,15 @@ struct SmallWorksView: View {
                                 emptySearchState
                             }
                         } else {
-                            LazyVStack(spacing: 10) {
+                            LazyVStack(spacing: 13) {
                                 ForEach(searchFilteredSmallWorks) { project in
                                     NavigationLink(value: project) {
-                                        SmallWorksDetailRowView(project: project)
-                                            .environmentObject(userStore)
-                                            .environmentObject(operativeStore)
+                                        WorksDashboardCard(
+                                            project: project,
+                                            listAccent: WorksDashboardListStyle.smallWorks.accent,
+                                            showsClientAndManager: !userStore.isOperativeMode()
+                                        )
+                                        .environmentObject(operativeStore)
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -186,8 +198,8 @@ struct SmallWorksView: View {
                             .padding(.bottom, 8)
                         }
                     }
-                    .padding(.horizontal, 18)
-                    .padding(.top, 8)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 2)
                 }
                 .navigationDestination(for: Project.self) { project in
                     ProjectDetailView(project: project)
@@ -212,22 +224,38 @@ struct SmallWorksView: View {
                 WorksRevampFilterChip(
                     title: "All · \(listCounts.all)",
                     isSelected: selectedStatus == nil,
-                    selectedForeground: ProjectWorksRevampColors.activeGreen
+                    selectedForeground: WorksDashboardPalette.ink,
+                    selectedFill: WorksDashboardListStyle.smallWorks.accent,
+                    titleFont: .subheadline.weight(.semibold),
+                    horizontalPadding: 15,
+                    verticalPadding: 9
                 ) { selectedStatus = nil }
                 WorksRevampFilterChip(
                     title: "Active · \(listCounts.active)",
                     isSelected: selectedStatus == .active,
-                    selectedForeground: ProjectWorksRevampColors.activeGreen
+                    selectedForeground: WorksDashboardPalette.ink,
+                    selectedFill: WorksDashboardListStyle.smallWorks.accent,
+                    titleFont: .subheadline.weight(.semibold),
+                    horizontalPadding: 15,
+                    verticalPadding: 9
                 ) { selectedStatus = .active }
                 WorksRevampFilterChip(
                     title: "Upcoming · \(listCounts.upcoming)",
                     isSelected: selectedStatus == .upcoming,
-                    selectedForeground: ProjectWorksRevampColors.upcomingAmber
+                    selectedForeground: WorksDashboardPalette.ink,
+                    selectedFill: WorksDashboardListStyle.smallWorks.accent,
+                    titleFont: .subheadline.weight(.semibold),
+                    horizontalPadding: 15,
+                    verticalPadding: 9
                 ) { selectedStatus = .upcoming }
                 WorksRevampFilterChip(
                     title: "Completed · \(listCounts.completed)",
                     isSelected: selectedStatus == .completed,
-                    selectedForeground: ProjectWorksRevampColors.muted
+                    selectedForeground: WorksDashboardPalette.ink,
+                    selectedFill: WorksDashboardListStyle.smallWorks.accent,
+                    titleFont: .subheadline.weight(.semibold),
+                    horizontalPadding: 15,
+                    verticalPadding: 9
                 ) { selectedStatus = .completed }
             }
         }
@@ -315,7 +343,10 @@ struct SmallWorksView: View {
         if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil {
             return "This is a load problem, not deleted jobs. Pull down to retry. Existing jobs stay on the server and on web."
         }
-        return "Add small works via the menu on the home screen."
+        if canCreateSmallWorks {
+            return WorksDashboardListStyle.smallWorks.emptyCreatePrompt
+        }
+        return "Nothing here right now."
     }
 
     private var isUnmatchedOperativeWithJobs: Bool {
@@ -396,195 +427,6 @@ struct SmallWorksView: View {
         
         return works
     }
-}
-
-// Custom row view for Small Works - same style as ProjectDetailRowView but tailored for Small Works
-struct SmallWorksDetailRowView: View {
-    let project: Project
-    @EnvironmentObject var operativeStore: OperativeStore
-    @EnvironmentObject private var userStore: UserStore
-    
-    var body: some View {
-        Group {
-            if userStore.isOperativeMode() {
-                operativeCompactCard
-            } else {
-                fullDetailCard
-            }
-        }
-    }
-    
-    private var operativeCompactCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(project.jobNumber)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
-            Text(project.siteName)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
-            Text(project.siteAddress)
-                .font(.system(size: 11))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .lineLimit(3)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
-    }
-    
-    private var fullDetailCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(project.jobNumber)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                        .tracking(-0.2)
-                    Text(project.siteName)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                }
-                Spacer(minLength: 8)
-                statusPill
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                rowIcon("building.2", project.client.name)
-                rowIcon("mappin.and.ellipse", project.siteAddress)
-                rowIcon("person", managerDisplayName)
-                rowIcon("calendar", dateRangeDisplay)
-            }
-
-            listProgressSection
-        }
-        .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
-    }
-
-    private func rowIcon(_ system: String, _ text: String) -> some View {
-        HStack(alignment: .center, spacing: 8) {
-            Image(systemName: system)
-                .font(.system(size: 13))
-                .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
-                .frame(width: 14, alignment: .center)
-            Text(text)
-                .font(.system(size: 11))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var dateRangeDisplay: String {
-        let f = DateFormatter()
-        f.dateFormat = "d MMM yyyy"
-        return "\(f.string(from: project.startDate)) – \(f.string(from: project.endDate))"
-    }
-
-    private var statusPill: some View {
-        HStack(spacing: 4) {
-            if project.status == .completed {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .semibold))
-            } else {
-                Circle()
-                    .fill(statusAccent)
-                    .frame(width: 5, height: 5)
-            }
-            Text(project.status.rawValue)
-                .font(.system(size: 10, weight: .medium))
-        }
-        .foregroundStyle(statusPillForeground)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(statusPillBackground)
-        .clipShape(Capsule())
-    }
-
-    private var statusAccent: Color {
-        switch project.status {
-        case .active: return ProjectWorksRevampColors.activeGreen
-        case .upcoming: return ProjectWorksRevampColors.upcomingAmber
-        case .completed, .inactive: return ProjectWorksRevampColors.muted
-        }
-    }
-
-    private var statusPillForeground: Color {
-        switch project.status {
-        case .active: return ProjectWorksRevampColors.activeGreen
-        case .upcoming: return ProjectWorksRevampColors.upcomingAmber
-        case .completed, .inactive: return ProjectWorksRevampColors.muted
-        }
-    }
-
-    private var statusPillBackground: Color {
-        switch project.status {
-        case .active: return Color(red: 0.882, green: 0.961, blue: 0.933)
-        case .upcoming: return Color(red: 1, green: 0.965, blue: 0.882)
-        case .completed, .inactive: return Color(red: 0.949, green: 0.953, blue: 0.961)
-        }
-    }
-
-    private var listProgressSection: some View {
-        let pct = WorksListProgress.fraction(for: project)
-        return VStack(alignment: .leading, spacing: 5) {
-            HStack {
-                Text("Progress")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                Spacer()
-                Text("\(WorksListProgress.percentDisplay(for: project))%")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(project.status == .completed ? ProjectWorksRevampColors.muted : ProjectWorksRevampColors.ink)
-            }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(ProjectWorksRevampColors.border)
-                        .frame(height: 5)
-                    Capsule()
-                        .fill(
-                            project.status == .completed
-                                ? AnyShapeStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
-                                : AnyShapeStyle(
-                                    LinearGradient(
-                                        colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                        )
-                        .frame(width: max(4, geo.size.width * pct), height: 5)
-                }
-            }
-            .frame(height: 5)
-        }
-        .padding(.top, 4)
-    }
-    
-    private var managerDisplayName: String {
-        // If managerId exists, try to resolve the actual manager name
-        if let managerId = project.managerId {
-            if let manager = operativeStore.allManagers.first(where: { $0.id == managerId }) {
-                return "\(manager.firstName) \(manager.lastName)"
-            } else {
-                // Manager ID exists but manager not found in list - might not be loaded yet
-                print("🔥🔥🔥 DEBUG: [SmallWorksCard] Manager ID \(managerId.uuidString) not found in managers list (count: \(operativeStore.allManagers.count))")
-            }
-        }
-        // Otherwise, fall back to the legacy enum display name
-        return project.manager.displayName
-    }
-    
 }
 
 #Preview {
