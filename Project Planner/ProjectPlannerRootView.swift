@@ -135,7 +135,8 @@ enum PlannerStoreWiring {
             return
         }
 
-        guard firebaseBackend.currentOrganization?.firestoreDocumentId != nil else { return }
+        guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        WarningsService.shared.adoptOrganization(organizationId)
         firebaseBackend.hasBootstrappedOrgDataLoad = true
         print("🔥🔥🔥 DEBUG: ✅ Organization loaded, starting single-flight data bootstrap...")
 
@@ -410,6 +411,10 @@ struct ProjectPlannerRootView: View {
 
             guard !userStore.isDeactivatedForLastUsedOrganization else { return }
 
+            WarningsService.shared.adoptOrganization(targetId)
+            WarningsRefreshHelper.prepareForOrganizationSwitch()
+            await userStore.loadOrganizationUsers()
+
             firebaseBackend.suppressStaleOrganizationCache = true
             projectStore.discardInMemoryForOrganizationSwitch()
             operativeStore.discardInMemoryForOrganizationSwitch()
@@ -443,10 +448,30 @@ struct ProjectPlannerRootView: View {
                     || operativeStore.isLoading
                     || bookingStore.isLoading
                     || taskStore.isLoading
+                    || managerScheduleStore.isLoading
+                    || holidayStore.isLoading
                 if !busy { break }
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 spins += 1
             }
+            await holidayStore.loadData()
+            spins = 0
+            while holidayStore.isLoading && spins < 30 {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                spins += 1
+            }
+            _ = await WarningsRefreshHelper.refreshSharedWarnings(
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                projectStore: projectStore,
+                userStore: userStore,
+                managerScheduleStore: managerScheduleStore,
+                holidayStore: holidayStore,
+                firebaseBackend: firebaseBackend,
+                appSettings: appSettings,
+                force: true,
+                bypassLaunchQuiet: true
+            )
             firebaseBackend.suppressStaleOrganizationCache = false
         } catch {
             firebaseBackend.suppressStaleOrganizationCache = false

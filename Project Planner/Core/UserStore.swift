@@ -29,6 +29,8 @@ class UserStore: ObservableObject {
     private var lastSeenAtWriteTime: Date?
     /// Single-flight + short cooldown to prevent duplicate org user roster fetches.
     private var organizationUsersLoadInProgress = false
+    private var organizationUsersLoadGeneration = 0
+    private var organizationUsersLoadOrganizationId: String?
     private var lastOrganizationUsersLoadAt: Date?
     private var currentUserListener: ListenerRegistration?
 
@@ -385,27 +387,40 @@ class UserStore: ObservableObject {
             print("🔥🔥🔥 DEBUG: Cannot load users - missing firebaseBackend or currentUser")
             return
         }
-        if organizationUsersLoadInProgress {
+        let requestedOrganizationId = currentUser.organizationId
+        let sameOrgInFlight = organizationUsersLoadInProgress && organizationUsersLoadOrganizationId == requestedOrganizationId
+        if sameOrgInFlight {
             return
         }
         let now = Date()
-        if let last = lastOrganizationUsersLoadAt,
+        if organizationUsersLoadOrganizationId == requestedOrganizationId,
+           let last = lastOrganizationUsersLoadAt,
            now.timeIntervalSince(last) < 3 {
             return
         }
+        organizationUsersLoadGeneration += 1
+        let generation = organizationUsersLoadGeneration
+        organizationUsersLoadOrganizationId = requestedOrganizationId
         organizationUsersLoadInProgress = true
         defer {
-            organizationUsersLoadInProgress = false
-            lastOrganizationUsersLoadAt = Date()
+            if organizationUsersLoadGeneration == generation {
+                organizationUsersLoadInProgress = false
+                lastOrganizationUsersLoadAt = Date()
+            }
         }
         
-        print("🔥🔥🔥 DEBUG: loadOrganizationUsers called for organizationId: \(currentUser.organizationId)")
+        print("🔥🔥🔥 DEBUG: loadOrganizationUsers called for organizationId: \(requestedOrganizationId)")
         
         do {
-            let users = try await firebaseBackend.getOrganizationUsers(organizationId: currentUser.organizationId)
+            let users = try await firebaseBackend.getOrganizationUsers(organizationId: requestedOrganizationId)
             let cloudOverrides = (try? await firebaseBackend.loadOperativeProfileMetadataFallback(
-                organizationId: currentUser.organizationId
+                organizationId: requestedOrganizationId
             )) ?? [:]
+            guard generation == organizationUsersLoadGeneration,
+                  self.currentUser?.organizationId == requestedOrganizationId else {
+                print("🔥🔥🔥 DEBUG: Ignoring organisation user roster for \(requestedOrganizationId) — a newer organisation load replaced it")
+                return
+            }
             print("🔥🔥🔥 DEBUG: Loaded \(users.count) users from Firebase")
             for user in users {
                 print("🔥🔥🔥 DEBUG: - \(user.email) (\(user.firstName) \(user.surname)) - Active: \(user.isActive), PasswordSet: \(user.passwordSet)")
@@ -2276,14 +2291,32 @@ class UserStore: ObservableObject {
         }
     }
 
+    private func operativeOverridesStorageKey() -> String {
+        let organizationId = currentUser?.organizationId
+            ?? firebaseBackend?.currentOrganization?.firestoreDocumentId
+            ?? "none"
+        return "\(operativeProfileOverridesKey)_\(organizationId)"
+    }
+
     private func loadOperativeProfileOverrides() -> [String: OperativeProfileOverride] {
-        guard let data = UserDefaults.standard.data(forKey: operativeProfileOverridesKey) else { return [:] }
-        return (try? JSONDecoder().decode([String: OperativeProfileOverride].self, from: data)) ?? [:]
+        let key = operativeOverridesStorageKey()
+        if let data = UserDefaults.standard.data(forKey: key),
+           let decoded = try? JSONDecoder().decode([String: OperativeProfileOverride].self, from: data) {
+            return decoded
+        }
+        let migratedKey = "operative_profile_overrides_legacy_migrated_v1"
+        guard !UserDefaults.standard.bool(forKey: migratedKey),
+              let legacy = UserDefaults.standard.data(forKey: operativeProfileOverridesKey) else {
+            return [:]
+        }
+        UserDefaults.standard.set(legacy, forKey: key)
+        UserDefaults.standard.set(true, forKey: migratedKey)
+        return (try? JSONDecoder().decode([String: OperativeProfileOverride].self, from: legacy)) ?? [:]
     }
 
     private func saveOperativeProfileOverrides(_ overrides: [String: OperativeProfileOverride]) {
         if let data = try? JSONEncoder().encode(overrides) {
-            UserDefaults.standard.set(data, forKey: operativeProfileOverridesKey)
+            UserDefaults.standard.set(data, forKey: operativeOverridesStorageKey())
         }
     }
 

@@ -30,7 +30,8 @@ enum WarningsRefreshHelper {
         appSettings: AppSettingsStore,
         force: Bool = false,
         manualUserInitiated: Bool = false,
-        allowWhileSheetVisible: Bool = false
+        allowWhileSheetVisible: Bool = false,
+        bypassLaunchQuiet: Bool = false
     ) async -> Bool {
         guard userStore.hasAdminAccess() else { return false }
 
@@ -43,8 +44,8 @@ enum WarningsRefreshHelper {
             return false
         }
 
-        // Launch quiet blocks automatic scans. Explicit user Refresh may proceed.
-        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil, !manualUserInitiated {
+        // Launch quiet blocks automatic scans. Explicit user Refresh and an organisation switch may proceed.
+        if let quietUntil = firebaseBackend.launchQuietUntil, Date() < quietUntil, !manualUserInitiated, !bypassLaunchQuiet {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (launch quiet period)")
             return false
         }
@@ -118,6 +119,13 @@ enum WarningsRefreshHelper {
             inFlightTask = nil
         }
         return true
+    }
+
+    /// Organisation switch must not reuse the previous scan's cooldown or in-flight task.
+    @MainActor
+    static func prepareForOrganizationSwitch() {
+        lastRefreshAt = nil
+        cancelInFlightRefresh()
     }
 
     /// Cancel any in-flight Home warnings scan before opening heavy sheets (Weekly Report).

@@ -235,6 +235,7 @@ fileprivate struct MyScheduleDayNavigatorCard: View {
     let day: Date
     let onPrev: () -> Void
     let onNext: () -> Void
+    let onSelectDay: () -> Void
     private let cal = Calendar.current
 
     var body: some View {
@@ -245,15 +246,18 @@ fileprivate struct MyScheduleDayNavigatorCard: View {
                     .foregroundStyle(ProjectWorksRevampColors.muted)
             }
             .buttonStyle(.plain)
-            VStack(spacing: 2) {
-                Text(dayTitle)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                Text(cal.isDateInToday(day) ? "Today · Tap to change" : "Tap week strip to jump")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.blue)
+            Button(action: onSelectDay) {
+                VStack(spacing: 2) {
+                    Text(dayTitle)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                    Text(cal.isDateInToday(day) ? "Today · Tap to pick a day" : "Tap to pick a day")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
+            .buttonStyle(.plain)
             Button(action: onNext) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 18, weight: .medium))
@@ -617,6 +621,7 @@ struct ManagerScheduleContentView: View {
     @State private var addToCalendarMessage: String?
     @State private var showingCalendarDestinationPicker = false
     @State private var showingAnnualLeavePage = false
+    @State private var showingDayPicker = false
 
     private struct LocationSearchItem: Identifiable {
         let id: String
@@ -802,13 +807,6 @@ struct ManagerScheduleContentView: View {
     var body: some View {
         ZStack(alignment: .top) {
             VStack(spacing: 0) {
-                weekSelector
-                dayStrip
-                Rectangle()
-                    .fill(ProjectWorksRevampColors.border)
-                    .frame(height: 0.5)
-                    .padding(.horizontal, 18)
-                    .padding(.top, 4)
                 if let day = selectedDate {
                     dayContent(for: day)
                 }
@@ -960,6 +958,36 @@ struct ManagerScheduleContentView: View {
                 onResult: { addToCalendarMessage = $0 },
                 onDismiss: { showingCalendarDestinationPicker = false }
             )
+        }
+        .sheet(isPresented: $showingDayPicker) {
+            NavigationStack {
+                DatePicker(
+                    "Day",
+                    selection: Binding(
+                        get: { selectedDate ?? Date() },
+                        set: { applySelectedDay($0) }
+                    ),
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.graphical)
+                .padding()
+                .navigationTitle("Choose a day")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingDayPicker = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    private func applySelectedDay(_ day: Date) {
+        let start = calendar.startOfDay(for: day)
+        selectedDate = start
+        if let week = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: start)) {
+            weekStart = week
         }
     }
 
@@ -1282,77 +1310,6 @@ struct ManagerScheduleContentView: View {
         )
     }
 
-    private var weekSelector: some View {
-        HStack {
-            Button(action: { moveWeek(by: -1) }) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .frame(width: 44, height: 44)
-            }
-            .buttonStyle(.plain)
-            if isMultiDaySelectionEnabled {
-                Button("Clear") {
-                    selectedDates = []
-                }
-                .font(.system(size: 11, weight: .medium))
-                .buttonStyle(.bordered)
-            }
-            Spacer()
-            Text(weekRangeText)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
-            Spacer()
-            Button(isMultiDaySelectionEnabled ? "Multiday Select: On" : "Multiday Select") {
-                isMultiDaySelectionEnabled.toggle()
-                if isMultiDaySelectionEnabled {
-                    if let day = selectedDate ?? weekDates.first {
-                        selectedDates = [calendar.startOfDay(for: day)]
-                    }
-                } else {
-                    selectedDates = []
-                }
-            }
-            .font(.system(size: 11, weight: .medium))
-            .buttonStyle(.bordered)
-            Button(action: { moveWeek(by: 1) }) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .frame(width: 44, height: 44)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .appChromeCardContainer()
-        .padding(.horizontal, 16)
-        .padding(.top, 10)
-    }
-
-    private var weekRangeText: String {
-        guard let start = weekDates.first, let end = weekDates.last else { return "" }
-        let f = DateFormatter()
-        f.dateFormat = "d MMM"
-        return "\(f.string(from: start)) – \(f.string(from: end))"
-    }
-
-    private func moveWeek(by delta: Int) {
-        if let newStart = calendar.date(byAdding: .weekOfYear, value: delta, to: weekStart) {
-            weekStart = newStart
-            selectDefaultDayInCurrentWeek()
-        }
-    }
-
-    private func selectDefaultDayInCurrentWeek() {
-        let today = calendar.startOfDay(for: Date())
-        if weekDates.contains(where: { calendar.isDate($0, inSameDayAs: today) }) {
-            selectedDate = today
-        } else if let first = weekDates.first {
-            selectedDate = first
-        }
-    }
-
     private func shiftSelectedDay(by delta: Int) {
         let base = selectedDate ?? weekDates.first ?? Date()
         let sod = calendar.startOfDay(for: base)
@@ -1497,8 +1454,32 @@ struct ManagerScheduleContentView: View {
                     MyScheduleDayNavigatorCard(
                         day: day,
                         onPrev: { shiftSelectedDay(by: -1) },
-                        onNext: { shiftSelectedDay(by: 1) }
+                        onNext: { shiftSelectedDay(by: 1) },
+                        onSelectDay: { showingDayPicker = true }
                     )
+                    HStack {
+                        Button(isMultiDaySelectionEnabled ? "Booking \(max(selectedDates.count, 1)) days" : "Book more than one day") {
+                            isMultiDaySelectionEnabled.toggle()
+                            if isMultiDaySelectionEnabled {
+                                selectedDates = [calendar.startOfDay(for: day)]
+                            } else {
+                                selectedDates = []
+                            }
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .buttonStyle(.plain)
+                        Spacer()
+                        if isMultiDaySelectionEnabled {
+                            Button("Clear") { selectedDates = [] }
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    if isMultiDaySelectionEnabled {
+                        dayStrip
+                    }
                     MyScheduleTodaysHoursCard(
                         day: day,
                         policy: policy,
