@@ -2,6 +2,9 @@
 //  VariationEditorSheet.swift
 //  Project Planner
 //
+//  New variation form. Visual and behaviour spec: new-variation-redesign.html.
+//  Saved documents stay labour[{trade, hours}] and materials[{name, quantity}].
+//
 
 import SwiftUI
 import PhotosUI
@@ -9,7 +12,140 @@ import UniformTypeIdentifiers
 import UIKit
 import FirebaseAuth
 
+private enum VariationFormColors {
+    static let bg = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.949, 0.961, 0.980),
+        dark: AppAdaptiveColor.rgb(0.043, 0.071, 0.125)
+    )
+    static let card = AppAdaptiveColor.dynamic(
+        light: .white,
+        dark: AppAdaptiveColor.rgb(0.075, 0.110, 0.180)
+    )
+    static let soft = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.933, 0.953, 0.976),
+        dark: AppAdaptiveColor.rgb(0.090, 0.133, 0.220)
+    )
+    static let soft2 = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.890, 0.918, 0.957),
+        dark: AppAdaptiveColor.rgb(0.118, 0.165, 0.267)
+    )
+    static let line = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.886, 0.910, 0.949),
+        dark: AppAdaptiveColor.rgb(0.141, 0.192, 0.294)
+    )
+    static let line2 = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.788, 0.831, 0.894),
+        dark: AppAdaptiveColor.rgb(0.216, 0.275, 0.416)
+    )
+    static let ink = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.055, 0.090, 0.149),
+        dark: AppAdaptiveColor.rgb(0.918, 0.941, 0.973)
+    )
+    static let ink2 = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.275, 0.333, 0.420),
+        dark: AppAdaptiveColor.rgb(0.686, 0.733, 0.808)
+    )
+    static let ink3 = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.478, 0.529, 0.608),
+        dark: AppAdaptiveColor.rgb(0.494, 0.549, 0.647)
+    )
+    static let blue = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.145, 0.388, 0.788),
+        dark: AppAdaptiveColor.rgb(0.298, 0.545, 0.902)
+    )
+    static let blueTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.902, 0.937, 0.988),
+        dark: AppAdaptiveColor.rgb(0.090, 0.173, 0.302)
+    )
+    static let proj = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.055, 0.663, 0.486),
+        dark: AppAdaptiveColor.rgb(0.231, 0.796, 0.596)
+    )
+    static let projTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.882, 0.969, 0.937),
+        dark: AppAdaptiveColor.rgb(0.067, 0.196, 0.165)
+    )
+    static let amber = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.788, 0.518, 0.000),
+        dark: AppAdaptiveColor.rgb(0.961, 0.725, 0.227)
+    )
+    static let amberTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.988, 0.953, 0.855),
+        dark: AppAdaptiveColor.rgb(0.227, 0.173, 0.047)
+    )
+    static let red = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.827, 0.271, 0.247),
+        dark: AppAdaptiveColor.rgb(1.000, 0.420, 0.420)
+    )
+    static let redTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.984, 0.910, 0.906),
+        dark: AppAdaptiveColor.rgb(0.239, 0.090, 0.090)
+    )
+    static let violet = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.478, 0.357, 0.941),
+        dark: AppAdaptiveColor.rgb(0.655, 0.545, 1.000)
+    )
+    static let violetTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.933, 0.918, 0.996),
+        dark: AppAdaptiveColor.rgb(0.141, 0.110, 0.290)
+    )
+}
+
+private struct LabourDraft: Identifiable, Equatable {
+    var id: String
+    var trade: String
+    var operatives: Int
+    var hoursEach: Double
+
+    var lineHours: Double { Double(max(operatives, 1)) * hoursEach }
+}
+
+private struct MaterialDraft: Identifiable, Equatable {
+    var id: String
+    var name: String
+    var quantity: String
+    var unit: String
+
+    var storedQuantity: String {
+        let qty = quantity.trimmingCharacters(in: .whitespacesAndNewlines)
+        let amount = qty.isEmpty ? "1" : qty
+        // "no" is the untyped count, so the saved string stays "9". m/box/kg become "9m".
+        if unit == "no" || unit.isEmpty { return amount }
+        return amount + unit
+    }
+}
+
+private struct LabourComposerState: Equatable {
+    var isOpen = false
+    var trade = ""
+    var operatives = 1
+    var hoursEach = 8.0
+    var editId: String?
+    var duplicateOf: String?
+
+    var total: Double { Double(max(operatives, 1)) * hoursEach }
+    var canCommit: Bool {
+        !trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && operatives >= 1 && hoursEach > 0
+    }
+}
+
+private struct MaterialComposerState: Equatable {
+    var name = ""
+    var quantity = ""
+    var unit = "no"
+    var editId: String?
+}
+
+private struct VariationUndoNotice: Equatable {
+    var message: String
+    var token: UUID
+    var canUndo: Bool
+}
+
 struct VariationEditorSheet: View {
+    static let maxEvidence = 10
+    private static let units = ["no", "m", "box", "kg"]
+
     let project: Project
     let existing: Variation?
     @ObservedObject var store: VariationStore
@@ -24,20 +160,38 @@ struct VariationEditorSheet: View {
     @State private var voNumber: String
     @State private var heading: String
     @State private var descriptionText: String
-    @State private var labour: [VariationLabourLine]
-    @State private var materials: [VariationMaterialLine]
+    @State private var descriptionExpanded = false
+    @State private var labour: [LabourDraft]
+    @State private var materials: [MaterialDraft]
     @State private var evidence: [VariationEvidenceItem]
+    @State private var labourComposer: LabourComposerState
+    @State private var materialComposer = MaterialComposerState()
+    @State private var extraTrades: [String] = []
+    @State private var catalogue: [MaterialCatalogItem] = []
     @State private var errorMessage: String?
     @State private var isSaving = false
     @State private var showingCamera = false
     @State private var showingLibrary = false
-    @State private var photoItem: PhotosPickerItem?
     @State private var showingFileImporter = false
+    @State private var showingEvidenceChoices = false
+    @State private var showingTrades = false
+    @State private var showingVOEdit = false
+    @State private var voDraft = ""
+    @State private var customTradeOpen = false
     @State private var customTradeDraft = ""
-    @State private var showingCustomTrade = false
+    @State private var tradeQuery = ""
+    @State private var photoItems: [PhotosPickerItem] = []
     @State private var inFlightUploads = 0
-    @State private var tradePickerLineId: String?
-    @State private var tradeSearch = ""
+    @State private var undoNotice: VariationUndoNotice?
+    @State private var undoRestore: (() -> Void)?
+    @FocusState private var focusedField: Field?
+
+    private enum Field: Hashable {
+        case hours
+        case materialName
+        case materialQuantity
+        case customTrade
+    }
 
     init(project: Project, existing: Variation?, store: VariationStore, materialNames: [String]) {
         self.project = project
@@ -49,516 +203,1183 @@ struct VariationEditorSheet: View {
         _voNumber = State(initialValue: existing?.voNumber ?? store.nextVoNumber())
         _heading = State(initialValue: existing?.heading ?? "")
         _descriptionText = State(initialValue: existing?.description ?? "")
-        _labour = State(initialValue: existing?.labour ?? [])
-        _materials = State(initialValue: existing?.materials ?? [])
+        _labour = State(initialValue: (existing?.labour ?? []).map {
+            LabourDraft(id: $0.id, trade: $0.trade, operatives: 1, hoursEach: $0.hours)
+        })
+        _materials = State(initialValue: (existing?.materials ?? []).map { line in
+            let parsed = Self.parseQuantity(line.quantity)
+            return MaterialDraft(id: line.id, name: line.name, quantity: parsed.quantity, unit: parsed.unit)
+        })
         _evidence = State(initialValue: existing?.evidence ?? [])
+        var composer = LabourComposerState()
+        composer.hoursEach = 8
+        _labourComposer = State(initialValue: composer)
     }
 
     private var trackerOn: Bool { store.tracker.enabled }
-    private var labourHours: Double { labour.reduce(0) { $0 + $1.hours } }
+    private var parentName: String {
+        VariationNumbering.parentName(jobNumber: project.jobNumber, siteName: project.siteName)
+    }
+    private var totalHours: Double { labour.reduce(0) { $0 + $1.lineHours } }
     private var canSave: Bool {
         !heading.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving
+    }
+    private var hourPresets: [(label: String, hours: Double)] {
+        let day = firebaseBackend.currentOrganization?.settings.payrollTimePolicy.standardPaidHours ?? 0
+        let full = day > 0 ? day : 8
+        return [("Half day", full / 2), ("Full day", full), ("Day + 2", full + 2)]
+    }
+    private var tradeChips: [String] {
+        let base = Array(VariationTrades.mergedPickerOptions(custom: store.customTrades).prefix(5))
+        var seen = Set<String>()
+        var chips: [String] = []
+        for trade in extraTrades + base {
+            let key = trade.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            chips.append(trade)
+            if chips.count == 6 { break }
+        }
+        return chips
+    }
+    private var materialSuggestions: [(name: String, unit: String)] {
+        let query = materialComposer.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard query.count >= 2 else { return [] }
+        if !catalogue.isEmpty {
+            return catalogue
+                .filter { $0.name.localizedCaseInsensitiveContains(query) }
+                .prefix(3)
+                .map { ($0.name, Self.formUnit(for: $0.defaultUnit)) }
+        }
+        return materialNames
+            .filter { $0.localizedCaseInsensitiveContains(query) }
+            .prefix(3)
+            .map { ($0, "no") }
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    jobBanner
-
-                    fieldBlock(title: "VO number", systemImage: "number", tint: ProjectWorksRevampColors.blue) {
-                        TextField("VO-001", text: $voNumber)
-                            .font(.system(size: 17, weight: .semibold))
-                            .disabled(trackerOn)
-                            .textInputAutocapitalization(.characters)
-                        if trackerOn {
-                            Text("Numbered by the tracker · next free number is \(store.nextVoNumber())")
-                                .font(.caption)
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
-                        } else if store.voNumberIsDuplicate(voNumber, excludingId: variationId) {
-                            Text("This VO number is already used on this job.")
-                                .font(.caption)
-                                .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                        }
+                VStack(spacing: 12) {
+                    detailsCard
+                    labourCard
+                    materialsCard
+                    evidenceCard
+                    if let errorMessage, !errorMessage.isEmpty {
+                        Text(errorMessage)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(VariationFormColors.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-
-                    fieldBlock(title: "Heading", systemImage: "text.alignleft", tint: ProjectWorksRevampColors.jobTypePillInk) {
-                        TextField("What changed on site?", text: $heading)
-                    }
-                    fieldBlock(title: "Description", systemImage: "doc.text", tint: ProjectWorksRevampColors.activeGreen) {
-                        TextEditor(text: $descriptionText)
-                            .frame(minHeight: 110)
-                            .scrollContentBackground(.hidden)
-                    }
-
-                    labourSection
-                    materialsSection
-                    evidenceSection
-
-                    if let errorMessage {
-                        Text(errorMessage).font(.footnote).foregroundStyle(.red)
-                    }
-                    Color.clear.frame(height: 72)
                 }
-                .padding(16)
+                .padding(.horizontal, 14)
+                .padding(.top, 4)
+                .padding(.bottom, 12)
             }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .scrollDismissesKeyboard(.interactively)
+            .background(VariationFormColors.bg.ignoresSafeArea())
             .navigationTitle(existing == nil ? "New variation" : "Edit variation")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(VariationFormColors.bg, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(VariationFormColors.blue)
                 }
-            }
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 6) {
-                    Text("Saves as Open and notifies every admin")
-                        .font(.caption)
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                    Button {
-                        Task { await save() }
-                    } label: {
-                        Text(isSaving ? "Saving…" : "Save")
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .background(canSave ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.placeholderInk)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { Task { await save() } }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(VariationFormColors.blue)
+                        .disabled(!canSave)
+                        .opacity(canSave ? 1 : 0.42)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    if (focusedField == .hours && labourComposer.duplicateOf == nil) || focusedField == .materialQuantity {
+                        Spacer()
+                        Button(focusedField == .hours ? addLabourTitle : (materialComposer.editId == nil ? "Add material" : "Update line item")) {
+                            if focusedField == .hours {
+                                commitLabour(.new)
+                            } else {
+                                commitMaterial()
+                            }
+                        }
+                        .fontWeight(.bold)
                     }
-                    .disabled(!canSave)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(ProjectWorksRevampColors.canvas.ignoresSafeArea(edges: .bottom))
             }
+            .safeAreaInset(edge: .bottom) { footer }
+            .overlay(alignment: .bottom) { undoToast }
+            .sheet(isPresented: $showingTrades) { tradeSheet }
             .sheet(isPresented: $showingCamera) {
                 VariationCameraPicker { image in
                     Task { await addImage(image, fileName: "photo.jpg") }
                 }
             }
-            .photosPicker(isPresented: $showingLibrary, selection: $photoItem, matching: .images)
-            .onChange(of: photoItem) { _, item in
-                guard let item else { return }
-                Task { await importPhoto(item) }
+            .photosPicker(
+                isPresented: $showingLibrary,
+                selection: $photoItems,
+                maxSelectionCount: max(1, Self.maxEvidence - evidence.count),
+                matching: .images
+            )
+            .onChange(of: photoItems) { _, items in
+                guard !items.isEmpty else { return }
+                let batch = items
+                photoItems = []
+                Task { await importPhotos(batch) }
             }
             .fileImporter(
                 isPresented: $showingFileImporter,
                 allowedContentTypes: [.jpeg, .png, .pdf, UTType("public.heic") ?? .image],
-                allowsMultipleSelection: false
+                allowsMultipleSelection: true
             ) { result in
-                if case .success(let urls) = result, let url = urls.first {
-                    Task { await importFile(url) }
+                if case .success(let urls) = result {
+                    Task { await importFiles(urls) }
                 }
             }
-            .alert("Custom trade", isPresented: $showingCustomTrade) {
-                TextField("Trade name", text: $customTradeDraft)
-                Button("Add") { addCustomTrade() }
+            .confirmationDialog("Evidence", isPresented: $showingEvidenceChoices, titleVisibility: .visible) {
+                Button("Take photo") { showingCamera = true }
+                Button("Photo library") { showingLibrary = true }
+                Button("Choose files") { showingFileImporter = true }
                 Button("Cancel", role: .cancel) {}
             }
-            .sheet(isPresented: Binding(
-                get: { tradePickerLineId != nil },
-                set: { if !$0 { tradePickerLineId = nil; tradeSearch = "" } }
-            )) {
-                tradePickerSheet
+            .alert("VO number", isPresented: $showingVOEdit) {
+                TextField("VO number", text: $voDraft)
+                Button("Save") {
+                    let trimmed = voDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { voNumber = trimmed }
+                }
+                Button("Cancel", role: .cancel) {}
             }
+            .task { await loadCatalogue() }
         }
     }
 
-    private var jobBanner: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(ProjectWorksRevampColors.blue.opacity(0.14))
-                    .frame(width: 42, height: 42)
-                Image(systemName: project.jobType == .smallWorks ? "wrench.and.screwdriver.fill" : "building.2.fill")
-                    .foregroundStyle(ProjectWorksRevampColors.blue)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(project.jobNumber.isEmpty ? "Job" : project.jobNumber)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                Text(project.siteName.isEmpty ? "Variation" : project.siteName)
-                    .font(.system(size: 12))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-            }
-            Spacer()
-            Text(project.jobType == .smallWorks ? "Small works" : "Project")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(ProjectWorksRevampColors.jobTypePillInk)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(ProjectWorksRevampColors.jobTypePillBg)
-                .clipShape(Capsule())
-        }
-        .padding(14)
-        .appChromeCardContainer(cornerRadius: 16)
-    }
-
-    private var labourSection: some View {
-        fieldBlock(title: "Labour", systemImage: "person.2.fill", tint: ProjectWorksRevampColors.blue, trailing: formatHours(labourHours) + " hrs") {
-            if labour.isEmpty {
-                Text("Add a trade, then set the hours with the stepper or a preset.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-            }
-            ForEach($labour) { $row in
-                labourCard(row: $row)
-            }
+    private var detailsCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
             Button {
-                let line = VariationLabourLine(id: UUID().uuidString, trade: "", hours: 1)
-                labour.append(line)
-                tradeSearch = ""
-                tradePickerLineId = line.id
+                guard !trackerOn else { return }
+                voDraft = voNumber
+                showingVOEdit = true
             } label: {
-                Label("Add trade", systemImage: "plus.circle.fill")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(ProjectWorksRevampColors.blue)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Text("\(voNumber) · \(trackerOn ? "from tracker" : "auto")")
+                    .font(.system(size: 12, weight: .heavy))
+                    .foregroundStyle(VariationFormColors.violet)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(VariationFormColors.violetTint)
+                    .clipShape(Capsule())
             }
             .buttonStyle(.plain)
+            .disabled(trackerOn)
+            .accessibilityLabel("VO number \(voNumber)")
+
+            TextField("Heading", text: $heading)
+                .font(.system(size: 21, weight: .bold))
+                .foregroundStyle(VariationFormColors.ink)
+                .padding(.top, 10)
+                .padding(.bottom, 4)
+
+            TextField("What changed, who asked for it, and where.", text: $descriptionText, axis: .vertical)
+                .font(.system(size: 15))
+                .foregroundStyle(VariationFormColors.ink2)
+                .lineLimit(descriptionExpanded ? 8 : 3, reservesSpace: true)
+
+            Button(descriptionExpanded ? "Less" : "More detail") {
+                descriptionExpanded.toggle()
+            }
+            .font(.system(size: 13.5, weight: .bold))
+            .foregroundStyle(VariationFormColors.blue)
+            .padding(.vertical, 6)
         }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 8)
+        .formCard()
     }
 
-    private func labourCard(row: Binding<VariationLabourLine>) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Button {
-                    tradeSearch = ""
-                    tradePickerLineId = row.wrappedValue.id
-                } label: {
-                    HStack {
-                        Text(row.wrappedValue.trade.isEmpty ? "Choose trade" : row.wrappedValue.trade)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(row.wrappedValue.trade.isEmpty ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.ink)
-                        Spacer()
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
-                    }
+    private var labourCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionHeader("Labour", pill: formatHours(totalHours) + " hrs", active: totalHours > 0)
+            VStack(alignment: .leading, spacing: 0) {
+                if labour.isEmpty {
+                    Text("No labour added yet.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(VariationFormColors.ink3)
+                        .padding(.top, 6)
+                        .padding(.bottom, 2)
                 }
-                .buttonStyle(.plain)
-                Button(role: .destructive) {
-                    labour.removeAll { $0.id == row.wrappedValue.id }
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                        .frame(width: 32, height: 32)
-                        .background(ProjectWorksRevampColors.requiredPillBg)
-                        .clipShape(Circle())
+                ForEach(labour) { line in
+                    labourRow(line)
                 }
-                .buttonStyle(.plain)
-            }
-
-            HStack(spacing: 12) {
-                Button {
-                    row.wrappedValue.hours = max(0, row.wrappedValue.hours - 0.5)
-                } label: {
-                    Image(systemName: "minus")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
-                        .frame(width: 40, height: 40)
-                        .background(ProjectWorksRevampColors.blue.opacity(0.12))
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
-                VStack(spacing: 0) {
-                    Text(formatHours(row.wrappedValue.hours))
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                        .monospacedDigit()
-                    Text("hours")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                }
-                .frame(minWidth: 72)
-                Button {
-                    row.wrappedValue.hours += 0.5
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 40, height: 40)
-                        .background(ProjectWorksRevampColors.blue)
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
-                Spacer(minLength: 0)
-            }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach([0.5, 1, 2, 4, 8], id: \.self) { hours in
-                        let selected = abs(row.wrappedValue.hours - hours) < 0.01
-                        Button(hours == 0.5 ? "30 min" : "\(Int(hours)) hr\(hours == 1 ? "" : "s")") {
-                            row.wrappedValue.hours = hours
-                        }
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(selected ? .white : ProjectWorksRevampColors.blue)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(selected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.blue.opacity(0.1))
-                        .clipShape(Capsule())
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-        .padding(12)
-        .background(ProjectWorksRevampColors.canvas)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private var tradePickerSheet: some View {
-        let options = VariationTrades.mergedPickerOptions(custom: store.customTrades).filter { trade in
-            let query = tradeSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-            return query.isEmpty || trade.localizedCaseInsensitiveContains(query)
-        }
-        return NavigationStack {
-            List {
-                Section {
-                    TextField("Search trades", text: $tradeSearch)
-                }
-                Section("Trades") {
-                    ForEach(options, id: \.self) { trade in
-                        Button(trade) {
-                            assignTrade(trade)
-                        }
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                    }
-                }
-                Section("Not in the list?") {
-                    TextField("Custom trade", text: $customTradeDraft)
-                    Button("Add custom trade") { addCustomTrade() }
-                        .disabled(customTradeDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-            .navigationTitle("Choose trade")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
-                        tradePickerLineId = nil
-                        tradeSearch = ""
-                    }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private var materialsSection: some View {
-        fieldBlock(title: "Materials", systemImage: "shippingbox.fill", tint: ProjectWorksRevampColors.upcomingAmber, trailing: "\(materials.count)") {
-            if materials.isEmpty {
-                Text("Add materials with a quantity, then tap a unit if you need one.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-            }
-            ForEach($materials) { $row in
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        TextField("Material name", text: $row.name)
-                            .font(.system(size: 15, weight: .semibold))
-                        Button(role: .destructive) {
-                            materials.removeAll { $0.id == row.id }
-                        } label: {
-                            Image(systemName: "trash")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    TextField("Quantity", text: $row.quantity)
-                        .font(.system(size: 15))
-                    HStack(spacing: 6) {
-                        ForEach(["m", "no", "box", "kg"], id: \.self) { unit in
-                            Button(unit) { appendUnit(unit, to: $row) }
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(ProjectWorksRevampColors.upcomingAmber.opacity(0.14))
-                                .clipShape(Capsule())
-                                .buttonStyle(.plain)
-                        }
-                    }
-                    let suggestions = materialNames.filter { name in
-                        let q = row.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                        return !q.isEmpty && name.localizedCaseInsensitiveContains(q) && name.localizedCaseInsensitiveCompare(row.name) != .orderedSame
-                    }.prefix(3)
-                    if !suggestions.isEmpty {
-                        ForEach(Array(suggestions), id: \.self) { suggestion in
-                            Button {
-                                row.name = suggestion
-                            } label: {
-                                Text(suggestion)
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(ProjectWorksRevampColors.blue)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-                .padding(12)
-                .background(ProjectWorksRevampColors.canvas)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            }
-            Button {
-                materials.append(VariationMaterialLine(id: UUID().uuidString, name: "", quantity: ""))
-            } label: {
-                Label("Add material", systemImage: "plus.circle.fill")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(ProjectWorksRevampColors.upcomingAmber.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private var evidenceSection: some View {
-        fieldBlock(title: "Evidence", systemImage: "paperclip", tint: ProjectWorksRevampColors.activeGreen, trailing: "\(evidence.count)") {
-            Text("Please upload any supporting evidence here")
-                .font(.system(size: 13))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-            HStack(spacing: 8) {
-                evidenceAddButton("Camera", systemImage: "camera.fill") { showingCamera = true }
-                evidenceAddButton("Library", systemImage: "photo.fill") { showingLibrary = true }
-                evidenceAddButton("Files", systemImage: "folder.fill") { showingFileImporter = true }
-            }
-            ForEach(evidence) { item in
-                HStack(spacing: 10) {
-                    Text(typeBadge(item))
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 4)
-                        .background(ProjectWorksRevampColors.activeGreen.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.fileName)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                        Text(item.isPending ? "Uploading…" : byteString(item.sizeBytes))
-                            .font(.caption)
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                    }
-                    Spacer()
-                    Button(role: .destructive) {
-                        Task { await removeEvidence(item) }
+                if labourComposer.isOpen {
+                    labourComposerView
+                } else {
+                    Button {
+                        openLabourComposer()
                     } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                        Text("+ Add labour item")
+                            .font(.system(size: 14.5, weight: .bold))
+                            .foregroundStyle(VariationFormColors.blue)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 13)
+                            .background(VariationFormColors.card)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(VariationFormColors.line2, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .padding(.top, 10)
                 }
-                .padding(10)
-                .background(ProjectWorksRevampColors.canvas)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
+        }
+        .formCard()
+    }
+
+    private func labourRow(_ line: LabourDraft) -> some View {
+        let editing = labourComposer.editId == line.id
+        let isLast = labour.last?.id == line.id
+        return HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(line.trade)
+                    .font(.system(size: 15.5, weight: .bold))
+                    .foregroundStyle(VariationFormColors.ink)
+                    .lineLimit(1)
+                if line.operatives > 1 {
+                    Text("\(line.operatives) operatives × \(formatHours(line.hoursEach)) hrs each")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(VariationFormColors.ink3)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Text("\(formatHours(line.lineHours)) hrs")
+                .font(.system(size: 15.5, weight: .heavy))
+                .foregroundStyle(VariationFormColors.ink)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .background(VariationFormColors.soft)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            iconButton(systemImage: "gearshape", label: "Edit \(line.trade)", destructive: false) {
+                editLabour(line)
+            }
+            iconButton(systemImage: "xmark", label: "Remove \(line.trade)", destructive: true) {
+                removeLabour(line)
+            }
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, editing ? 10 : 0)
+        .background(editing ? VariationFormColors.blueTint : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(alignment: .bottom) {
+            if !editing && !isLast {
+                Rectangle().fill(VariationFormColors.line).frame(height: 1)
             }
         }
     }
 
-    private func evidenceAddButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 16, weight: .semibold))
-                Text(title)
-                    .font(.system(size: 11, weight: .semibold))
+    private var labourComposerView: some View {
+        let editing = labourComposer.editId != nil
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(editing ? "Editing line item" : "New labour item")
+                .formMicroLabel()
+            Button { showingTrades = true } label: {
+                HStack {
+                    Text(labourComposer.trade.isEmpty ? "Choose a trade" : labourComposer.trade)
+                        .font(.system(size: 16, weight: labourComposer.trade.isEmpty ? .regular : .semibold))
+                        .foregroundStyle(labourComposer.trade.isEmpty ? VariationFormColors.ink3 : VariationFormColors.ink)
+                    Spacer()
+                    Text("Change ›")
+                        .font(.system(size: 13))
+                        .foregroundStyle(VariationFormColors.ink3)
+                }
+                .padding(13)
+                .background(VariationFormColors.card)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
             }
-            .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(ProjectWorksRevampColors.activeGreen.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .buttonStyle(.plain)
+            .accessibilityLabel(labourComposer.trade.isEmpty ? "Choose a trade" : "Change \(labourComposer.trade)")
+
+            if labourComposer.trade.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 7) {
+                        ForEach(tradeChips, id: \.self) { trade in
+                            Button(trade) { chooseTrade(trade) }
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(VariationFormColors.ink)
+                                .padding(.horizontal, 13)
+                                .padding(.vertical, 8)
+                                .background(VariationFormColors.card)
+                                .overlay(Capsule().stroke(VariationFormColors.line, lineWidth: 1))
+                                .clipShape(Capsule())
+                        }
+                        Button("All trades") { showingTrades = true }
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(VariationFormColors.blue)
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 8)
+                            .background(VariationFormColors.card)
+                            .overlay(Capsule().stroke(VariationFormColors.line, lineWidth: 1))
+                            .clipShape(Capsule())
+                    }
+                }
+                .padding(.top, 9)
+                .scrollClipDisabled()
+            }
+
+            VStack(spacing: 10) {
+                stepperBox(title: "Operatives") {
+                    stepper(
+                        valueText: "\(labourComposer.operatives)",
+                        decrementLabel: "Fewer operatives",
+                        incrementLabel: "More operatives",
+                        decrementDisabled: labourComposer.operatives <= 1,
+                        onDecrement: { labourComposer.operatives = max(1, labourComposer.operatives - 1) },
+                        onIncrement: { labourComposer.operatives += 1 }
+                    ) {
+                        TextField("1", value: $labourComposer.operatives, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.center)
+                            .font(.system(size: 17, weight: .heavy))
+                            .onChange(of: labourComposer.operatives) { _, value in
+                                if value < 1 { labourComposer.operatives = 1 }
+                            }
+                            .accessibilityLabel("Number of operatives")
+                    }
+                }
+                stepperBox(title: "Hours each") {
+                    stepper(
+                        valueText: formatHours(labourComposer.hoursEach),
+                        decrementLabel: "Fewer hours",
+                        incrementLabel: "More hours",
+                        decrementDisabled: labourComposer.hoursEach <= 0,
+                        onDecrement: { bumpHours(-0.5) },
+                        onIncrement: { bumpHours(0.5) }
+                    ) {
+                        TextField("0", value: $labourComposer.hoursEach, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.center)
+                            .font(.system(size: 17, weight: .heavy))
+                            .focused($focusedField, equals: .hours)
+                            .onChange(of: labourComposer.hoursEach) { _, value in
+                                if value < 0 { labourComposer.hoursEach = 0 }
+                            }
+                            .accessibilityLabel("Hours per operative")
+                    }
+                }
+            }
+            .padding(.top, 11)
+
+            HStack(spacing: 6) {
+                ForEach(hourPresets, id: \.label) { preset in
+                    Button(preset.label) { labourComposer.hoursEach = preset.hours }
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(VariationFormColors.blue)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(VariationFormColors.card)
+                        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
+                }
+            }
+            .padding(.top, 10)
+
+            if let duplicateId = labourComposer.duplicateOf,
+               let existingLine = labour.first(where: { $0.id == duplicateId }) {
+                HStack(alignment: .top, spacing: 9) {
+                    Text("⚠")
+                        .font(.system(size: 13))
+                        .foregroundStyle(VariationFormColors.amber)
+                    (
+                        Text(labourComposer.trade).fontWeight(.bold).foregroundColor(VariationFormColors.amber)
+                        + Text(" is already on this variation")
+                            .fontWeight(.bold)
+                            .foregroundColor(VariationFormColors.amber)
+                        + Text(" at \(formatHours(existingLine.hoursEach)) hrs each. Merge them into one line, or add a second line if this was a separate visit.")
+                            .foregroundColor(VariationFormColors.ink2)
+                    )
+                    .font(.system(size: 12.5))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(VariationFormColors.amberTint)
+                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .padding(.top, 11)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.updatesFrequently)
+            }
+
+            HStack(spacing: 8) {
+                if labourComposer.duplicateOf != nil {
+                    composerButton("Add separate", primary: false) { commitLabour(.separate) }
+                    composerButton("Merge", primary: true) { commitLabour(.merge) }
+                } else {
+                    if editing || !labourComposer.trade.isEmpty {
+                        composerButton("Cancel", primary: false) {
+                            labourComposer = freshComposer(open: false)
+                        }
+                    }
+                    composerButton(addLabourTitle, primary: true) { commitLabour(.new) }
+                        .disabled(!labourComposer.canCommit)
+                        .opacity(labourComposer.canCommit ? 1 : 0.4)
+                }
+            }
+            .padding(.top, 11)
+        }
+        .padding(12)
+        .background(editing ? VariationFormColors.blueTint : VariationFormColors.soft)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(editing ? VariationFormColors.blue.opacity(0.3) : VariationFormColors.line, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(.top, 4)
+    }
+
+    private var addLabourTitle: String {
+        if labourComposer.editId != nil { return "Update line item" }
+        if labourComposer.total > 0 { return "Add · \(formatHours(labourComposer.total)) hrs" }
+        return "Add"
+    }
+
+    private var materialsCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionHeader(
+                "Materials",
+                pill: "\(materials.count) line\(materials.count == 1 ? "" : "s")",
+                active: !materials.isEmpty
+            )
+            VStack(alignment: .leading, spacing: 0) {
+                if materials.isEmpty {
+                    Text("No materials added yet.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(VariationFormColors.ink3)
+                        .padding(.bottom, 2)
+                }
+                ForEach(materials) { line in
+                    materialRow(line)
+                }
+                materialComposerView
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
+        }
+        .formCard()
+    }
+
+    private func materialRow(_ line: MaterialDraft) -> some View {
+        let editing = materialComposer.editId == line.id
+        let isLast = materials.last?.id == line.id
+        return HStack(spacing: 8) {
+            Text(line.name)
+                .font(.system(size: 15.5, weight: .bold))
+                .foregroundStyle(VariationFormColors.ink)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("\(line.quantity) \(line.unit)")
+                .font(.system(size: 15.5, weight: .heavy))
+                .foregroundStyle(VariationFormColors.ink)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .background(VariationFormColors.soft)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            iconButton(systemImage: "gearshape", label: "Edit \(line.name)", destructive: false) {
+                editMaterial(line)
+            }
+            iconButton(systemImage: "xmark", label: "Remove \(line.name)", destructive: true) {
+                removeMaterial(line)
+            }
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, editing ? 10 : 0)
+        .background(editing ? VariationFormColors.blueTint : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(alignment: .bottom) {
+            if !editing && !isLast {
+                Rectangle().fill(VariationFormColors.line).frame(height: 1)
+            }
+        }
+    }
+
+    private var materialComposerView: some View {
+        let editing = materialComposer.editId != nil
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(editing ? "Editing line item" : "New material")
+                .formMicroLabel()
+            HStack(spacing: 8) {
+                TextField("Material name", text: $materialComposer.name)
+                    .font(.system(size: 16))
+                    .focused($focusedField, equals: .materialName)
+                    .submitLabel(.done)
+                    .onSubmit { commitMaterial() }
+                    .padding(13)
+                    .background(VariationFormColors.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
+                    .accessibilityLabel("Material name")
+                TextField("Qty", text: $materialComposer.quantity)
+                    .font(.system(size: 16, weight: .bold))
+                    .focused($focusedField, equals: .materialQuantity)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.center)
+                    .submitLabel(.done)
+                    .onSubmit { commitMaterial() }
+                    .frame(width: 80)
+                    .padding(.vertical, 13)
+                    .background(VariationFormColors.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
+                    .accessibilityLabel("Quantity or length")
+            }
+            HStack(spacing: 3) {
+                ForEach(Self.units, id: \.self) { unit in
+                    Button(unit) { materialComposer.unit = unit }
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(materialComposer.unit == unit ? Color.white : VariationFormColors.ink2)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(materialComposer.unit == unit ? VariationFormColors.blue : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .accessibilityLabel("Unit \(unit)")
+                        .accessibilityAddTraits(materialComposer.unit == unit ? .isSelected : [])
+                }
+            }
+            .padding(3)
+            .background(VariationFormColors.card)
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .padding(.top, 9)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Unit")
+
+            if !materialSuggestions.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(materialSuggestions, id: \.name) { suggestion in
+                        Button {
+                            materialComposer.name = suggestion.name
+                            materialComposer.unit = suggestion.unit
+                            focusedField = .materialQuantity
+                        } label: {
+                            HStack {
+                                Text(suggestion.name)
+                                    .font(.system(size: 14.5))
+                                    .foregroundStyle(VariationFormColors.ink)
+                                Spacer()
+                                Text(suggestion.unit)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(VariationFormColors.ink3)
+                            }
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                        Divider().overlay(VariationFormColors.line)
+                    }
+                }
+                .background(VariationFormColors.card)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(.top, 9)
+            }
+
+            HStack(spacing: 8) {
+                if editing {
+                    composerButton("Cancel", primary: false) {
+                        materialComposer = MaterialComposerState(unit: materialComposer.unit)
+                    }
+                }
+                composerButton(editing ? "Update line item" : "Add material", primary: true) {
+                    commitMaterial()
+                }
+                .disabled(materialComposer.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(materialComposer.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
+            }
+            .padding(.top, 11)
+        }
+        .padding(12)
+        .background(editing ? VariationFormColors.blueTint : VariationFormColors.soft)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(editing ? VariationFormColors.blue.opacity(0.3) : VariationFormColors.line, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(.top, 10)
+    }
+
+    private var evidenceCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionHeader(
+                "Evidence",
+                pill: "\(evidence.count) file\(evidence.count == 1 ? "" : "s")",
+                active: !evidence.isEmpty
+            )
+            VStack(alignment: .leading, spacing: 0) {
+                if evidence.isEmpty {
+                    VStack(spacing: 10) {
+                        Text("Please upload any supporting evidence here")
+                            .font(.system(size: 13.5))
+                            .foregroundStyle(VariationFormColors.ink2)
+                            .multilineTextAlignment(.center)
+                        Button("Take photos or choose files") { presentEvidencePicker() }
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(VariationFormColors.ink)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(VariationFormColors.soft2)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        Text("Add as many as you need — up to \(Self.maxEvidence) photos or PDFs per variation.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(VariationFormColors.ink3)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(16)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(VariationFormColors.line2, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                    )
+                } else {
+                    VStack(spacing: 7) {
+                        ForEach(evidence) { item in
+                            HStack(spacing: 10) {
+                                Text(typeBadge(item))
+                                    .font(.system(size: 10.5, weight: .heavy))
+                                    .foregroundStyle(VariationFormColors.blue)
+                                    .frame(width: 30, height: 30)
+                                    .background(VariationFormColors.blueTint)
+                                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                                Text(item.fileName)
+                                    .font(.system(size: 13.5))
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                iconButton(systemImage: "xmark", label: "Remove \(item.fileName)", destructive: true) {
+                                    Task { await removeEvidence(item) }
+                                }
+                            }
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 9)
+                            .background(VariationFormColors.soft)
+                            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                        }
+                    }
+                    Button("+ Add more evidence") { presentEvidencePicker() }
+                        .font(.system(size: 14.5, weight: .bold))
+                        .foregroundStyle(VariationFormColors.blue)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                        .background(VariationFormColors.card)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(VariationFormColors.line2, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .disabled(evidence.count >= Self.maxEvidence)
+                        .opacity(evidence.count >= Self.maxEvidence ? 0.45 : 1)
+                        .padding(.top, 10)
+                    Text(evidenceLimitCopy)
+                        .font(.system(size: 12))
+                        .foregroundStyle(VariationFormColors.ink3)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 9)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
+        }
+        .formCard()
+    }
+
+    private var evidenceLimitCopy: String {
+        if evidence.count >= Self.maxEvidence {
+            return "\(evidence.count) of \(Self.maxEvidence) added — that is the limit"
+        }
+        return "\(evidence.count) of \(Self.maxEvidence) added. Photos, PDFs, anything that proves the work."
+    }
+
+    private var footer: some View {
+        VStack(spacing: 9) {
+            HStack(spacing: 6) {
+                footerPill("\(formatHours(totalHours)) hrs", on: totalHours > 0)
+                footerPill("\(materials.count) material\(materials.count == 1 ? "" : "s")", on: !materials.isEmpty)
+                footerPill("\(evidence.count) evidence file\(evidence.count == 1 ? "" : "s")", on: !evidence.isEmpty)
+            }
+            Button {
+                Task { await save() }
+            } label: {
+                Text(isSaving ? "Saving…" : "Save variation")
+                    .font(.system(size: 16.5, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(VariationFormColors.blue)
+                    .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+                    .shadow(color: canSave ? VariationFormColors.blue.opacity(0.32) : .clear, radius: 12, y: 8)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSave)
+            .opacity(canSave ? 1 : 0.42)
+            Text("Saves as Open on \(parentName) and notifies every admin")
+                .font(.system(size: 12))
+                .foregroundStyle(VariationFormColors.ink3)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+        .background(VariationFormColors.bg.opacity(0.92))
+        .overlay(alignment: .top) { Rectangle().fill(VariationFormColors.line).frame(height: 1) }
+    }
+
+    @ViewBuilder
+    private var undoToast: some View {
+        if let undoNotice {
+            HStack(spacing: 12) {
+                Text(undoNotice.message)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 8)
+                if undoNotice.canUndo {
+                    Button("Undo") { performUndo() }
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color(red: 0.498, green: 0.690, blue: 1))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+            .background(Color(red: 0.055, green: 0.090, blue: 0.149))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding(.horizontal, 14)
+            .padding(.bottom, 96)
+            .accessibilityAddTraits(.updatesFrequently)
+            .accessibilityLabel(undoNotice.message)
+        }
+    }
+
+    private var tradeSheet: some View {
+        NavigationStack {
+            List {
+                ForEach(filteredTrades, id: \.self) { trade in
+                    Button(trade) {
+                        chooseTrade(trade)
+                        showingTrades = false
+                    }
+                    .font(.system(size: 15.5))
+                    .foregroundStyle(VariationFormColors.ink)
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(VariationFormColors.bg)
+            .searchable(text: $tradeQuery, prompt: "Search trades")
+            .navigationTitle("All trades")
+            .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) { customTradeFooter }
+            .onAppear { tradeQuery = "" }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(VariationFormColors.bg)
+    }
+    private var filteredTrades: [String] {
+        let all = extraTrades + VariationTrades.mergedPickerOptions(custom: store.customTrades)
+        var seen = Set<String>()
+        let unique = all.filter { seen.insert($0.lowercased()).inserted }
+        let query = tradeQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return unique }
+        return unique.filter { $0.localizedCaseInsensitiveContains(query) }
+    }
+
+    private var customTradeFooter: some View {
+        VStack(spacing: 8) {
+            if customTradeOpen {
+                HStack(spacing: 8) {
+                    TextField("Trade name", text: $customTradeDraft)
+                        .focused($focusedField, equals: .customTrade)
+                        .submitLabel(.done)
+                        .onSubmit { commitCustomTrade() }
+                        .padding(13)
+                        .background(VariationFormColors.soft)
+                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(VariationFormColors.line))
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .accessibilityLabel("Custom trade name")
+                    Button("Add") { commitCustomTrade() }
+                        .font(.system(size: 14.5, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 13)
+                        .background(VariationFormColors.blue)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .disabled(customTradeDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .opacity(customTradeDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
+                }
+                Text("Saved to your organisation’s trade list for next time.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(VariationFormColors.ink3)
+            } else {
+                Button("+ Custom trade") {
+                    customTradeOpen = true
+                    focusedField = .customTrade
+                }
+                .font(.system(size: 14.5, weight: .bold))
+                .foregroundStyle(VariationFormColors.blue)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(VariationFormColors.line2, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                )
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(VariationFormColors.card)
+    }
+
+    private func sectionHeader(_ title: String, pill: String, active: Bool) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 16, weight: .heavy))
+                .foregroundStyle(VariationFormColors.ink)
+            Spacer()
+            Text(pill)
+                .font(.system(size: 13, weight: .heavy))
+                .foregroundStyle(active ? VariationFormColors.proj : VariationFormColors.ink)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(active ? VariationFormColors.projTint : VariationFormColors.soft)
+                .clipShape(Capsule())
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 8)
+    }
+
+    private func footerPill(_ text: String, on: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(on ? VariationFormColors.proj : VariationFormColors.ink2)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 5)
+            .background(on ? VariationFormColors.projTint : VariationFormColors.card)
+            .overlay(Capsule().stroke(on ? Color.clear : VariationFormColors.line, lineWidth: 1))
+            .clipShape(Capsule())
+    }
+
+    private func iconButton(systemImage: String, label: String, destructive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(destructive ? VariationFormColors.red : VariationFormColors.ink2)
+                .frame(width: 34, height: 34)
+                .background(destructive ? VariationFormColors.redTint : VariationFormColors.card)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .stroke(destructive ? VariationFormColors.red.opacity(0.26) : VariationFormColors.line, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private func stepperBox<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .formMicroLabel()
+            content()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(VariationFormColors.card)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
+    }
+
+    private func stepper<Field: View>(
+        valueText: String,
+        decrementLabel: String,
+        incrementLabel: String,
+        decrementDisabled: Bool,
+        onDecrement: @escaping () -> Void,
+        onIncrement: @escaping () -> Void,
+        @ViewBuilder field: () -> Field
+    ) -> some View {
+        HStack(spacing: 2) {
+            Button("−", action: onDecrement)
+                .font(.system(size: 19, weight: .bold))
+                .foregroundStyle(VariationFormColors.blue)
+                .frame(width: 36, height: 36)
+                .background(VariationFormColors.soft)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .disabled(decrementDisabled)
+                .opacity(decrementDisabled ? 0.3 : 1)
+                .accessibilityLabel(decrementLabel)
+            field()
+                .frame(maxWidth: .infinity)
+            Button("+", action: onIncrement)
+                .font(.system(size: 19, weight: .bold))
+                .foregroundStyle(VariationFormColors.blue)
+                .frame(width: 36, height: 36)
+                .background(VariationFormColors.soft)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .accessibilityLabel(incrementLabel)
+        }
+        .accessibilityHint(valueText)
+    }
+
+    private func composerButton(_ title: String, primary: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 14.5, weight: .bold))
+                .foregroundStyle(primary ? Color.white : VariationFormColors.ink2)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .background(primary ? VariationFormColors.blue : VariationFormColors.card)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: primary ? .clear : .black.opacity(0.06), radius: 1, y: 1)
         }
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder
-    private func fieldBlock<Content: View>(
-        title: String,
-        systemImage: String,
-        tint: Color,
-        trailing: String? = nil,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(tint)
-                    .frame(width: 26, height: 26)
-                    .background(tint.opacity(0.14))
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                Spacer()
-                if let trailing {
-                    Text(trailing)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(tint)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(tint.opacity(0.12))
-                        .clipShape(Capsule())
-                }
-            }
-            content()
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .appChromeCardContainer(cornerRadius: 16)
+    private func freshComposer(open: Bool) -> LabourComposerState {
+        var composer = LabourComposerState()
+        composer.isOpen = open
+        composer.hoursEach = hourPresets.first(where: { $0.label == "Full day" })?.hours ?? 8
+        return composer
     }
 
-    private func assignTrade(_ trade: String) {
-        guard let id = tradePickerLineId, let index = labour.firstIndex(where: { $0.id == id }) else { return }
-        labour[index].trade = trade
-        tradePickerLineId = nil
-        tradeSearch = ""
+    private func openLabourComposer() {
+        labourComposer = freshComposer(open: true)
     }
 
-    private func appendUnit(_ unit: String, to row: Binding<VariationMaterialLine>) {
-        let current = row.wrappedValue.quantity.trimmingCharacters(in: .whitespacesAndNewlines)
-        if current.isEmpty {
-            row.wrappedValue.quantity = unit
-        } else if current.lowercased().hasSuffix(unit) {
+    private func chooseTrade(_ trade: String) {
+        labourComposer.isOpen = true
+        labourComposer.trade = trade
+        labourComposer.duplicateOf = nil
+        showingTrades = false
+        customTradeOpen = false
+        focusedField = .hours
+    }
+
+    private func bumpHours(_ delta: Double) {
+        labourComposer.hoursEach = max(0, (labourComposer.hoursEach + delta * 2).rounded() / 2)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    private enum LabourCommit { case new, merge, separate }
+
+    private func commitLabour(_ mode: LabourCommit) {
+        guard labourComposer.canCommit else { return }
+        if mode == .merge, let targetId = labourComposer.duplicateOf,
+           let index = labour.firstIndex(where: { $0.id == targetId }) {
+            let merged = labour[index].lineHours + labourComposer.total
+            labour[index].operatives = 1
+            labour[index].hoursEach = merged
+            showUndo("\(labour[index].trade) merged — \(formatHours(merged)) hrs", restore: nil)
+            labourComposer = freshComposer(open: false)
             return
-        } else {
-            row.wrappedValue.quantity = current + unit
+        }
+        if let editId = labourComposer.editId, let index = labour.firstIndex(where: { $0.id == editId }) {
+            labour[index].trade = labourComposer.trade
+            labour[index].operatives = labourComposer.operatives
+            labour[index].hoursEach = labourComposer.hoursEach
+            showUndo("\(labourComposer.trade) updated", restore: nil)
+            labourComposer = freshComposer(open: false)
+            return
+        }
+        if mode == .new, let dupe = labour.first(where: { $0.trade == labourComposer.trade }) {
+            labourComposer.duplicateOf = dupe.id
+            return
+        }
+        labour.append(LabourDraft(
+            id: UUID().uuidString,
+            trade: labourComposer.trade,
+            operatives: labourComposer.operatives,
+            hoursEach: labourComposer.hoursEach
+        ))
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        labourComposer = freshComposer(open: true)
+    }
+
+    private func editLabour(_ line: LabourDraft) {
+        labourComposer = LabourComposerState(
+            isOpen: true,
+            trade: line.trade,
+            operatives: line.operatives,
+            hoursEach: line.hoursEach,
+            editId: line.id,
+            duplicateOf: nil
+        )
+        focusedField = .hours
+    }
+
+    private func removeLabour(_ line: LabourDraft) {
+        guard let index = labour.firstIndex(where: { $0.id == line.id }) else { return }
+        let removed = labour[index]
+        labour.remove(at: index)
+        if labourComposer.editId == removed.id {
+            labourComposer = freshComposer(open: false)
+        }
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        showUndo("\(removed.trade) removed") {
+            labour.insert(removed, at: min(index, labour.count))
         }
     }
 
-    private func addCustomTrade() {
-        let trimmed = customTradeDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        if tradePickerLineId == nil {
-            let line = VariationLabourLine(id: UUID().uuidString, trade: trimmed, hours: 1)
-            labour.append(line)
-            tradePickerLineId = line.id
+    private func commitMaterial() {
+        let name = materialComposer.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let quantity = materialComposer.quantity.trimmingCharacters(in: .whitespacesAndNewlines)
+        let amount = quantity.isEmpty ? "1" : quantity
+        if let editId = materialComposer.editId, let index = materials.firstIndex(where: { $0.id == editId }) {
+            materials[index].name = name
+            materials[index].quantity = amount
+            materials[index].unit = materialComposer.unit
+            showUndo("\(name) updated", restore: nil)
+        } else {
+            materials.append(MaterialDraft(id: UUID().uuidString, name: name, quantity: amount, unit: materialComposer.unit))
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         }
-        assignTrade(trimmed)
-        if !store.customTrades.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
-            store.customTrades.append(trimmed)
+        let unit = materialComposer.unit
+        materialComposer = MaterialComposerState(unit: unit)
+        focusedField = .materialName
+    }
+
+    private func editMaterial(_ line: MaterialDraft) {
+        materialComposer = MaterialComposerState(name: line.name, quantity: line.quantity, unit: line.unit, editId: line.id)
+        focusedField = .materialName
+    }
+
+    private func removeMaterial(_ line: MaterialDraft) {
+        guard let index = materials.firstIndex(where: { $0.id == line.id }) else { return }
+        let removed = materials[index]
+        materials.remove(at: index)
+        if materialComposer.editId == removed.id {
+            materialComposer = MaterialComposerState(unit: materialComposer.unit)
         }
-        if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-            Task { await firebaseBackend.addCustomVariationTrade(trimmed, organizationId: orgId) }
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        showUndo("\(removed.name) removed") {
+            materials.insert(removed, at: min(index, materials.count))
+        }
+    }
+
+    private func commitCustomTrade() {
+        let name = customTradeDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let known = (extraTrades + VariationTrades.mergedPickerOptions(custom: store.customTrades))
+            .contains { $0.caseInsensitiveCompare(name) == .orderedSame }
+        if !known {
+            extraTrades.insert(name, at: 0)
+            if !store.customTrades.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
+                store.customTrades.append(name)
+            }
+            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                Task { await firebaseBackend.addCustomVariationTrade(name, organizationId: orgId) }
+            }
         }
         customTradeDraft = ""
+        customTradeOpen = false
+        chooseTrade(name)
     }
 
-    private func importPhoto(_ item: PhotosPickerItem) async {
-        defer { photoItem = nil }
-        if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
-            await addImage(image, fileName: "library.jpg")
+    private func presentEvidencePicker() {
+        let room = Self.maxEvidence - evidence.count
+        guard room > 0 else {
+            showUndo("Up to \(Self.maxEvidence) files per variation", restore: nil)
+            return
+        }
+        showingEvidenceChoices = true
+    }
+
+    private func showUndo(_ message: String, restore: (() -> Void)? = nil) {
+        let token = UUID()
+        undoRestore = restore
+        undoNotice = VariationUndoNotice(message: message, token: token, canUndo: restore != nil)
+        Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            if undoNotice?.token == token {
+                undoNotice = nil
+                undoRestore = nil
+            }
+        }
+    }
+
+    private func performUndo() {
+        undoRestore?()
+        undoRestore = nil
+        undoNotice = nil
+    }
+
+    private func loadCatalogue() async {
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        catalogue = (try? await firebaseBackend.loadMaterialCatalogue(organizationId: orgId)) ?? []
+    }
+
+    private static func formUnit(for unit: MaterialUnit) -> String {
+        switch unit {
+        case .box: return "box"
+        case .length: return "m"
+        default: return "no"
+        }
+    }
+
+    private static func parseQuantity(_ raw: String) -> (quantity: String, unit: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let units = ["box", "kg", "no", "m"]
+        let lower = trimmed.lowercased()
+        for unit in units {
+            if lower.hasSuffix(" " + unit) {
+                let qty = String(trimmed.dropLast(unit.count + 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                return (qty.isEmpty ? "1" : qty, unit)
+            }
+            if lower.hasSuffix(unit), trimmed.count > unit.count {
+                let prefix = trimmed.dropLast(unit.count)
+                if prefix.last?.isNumber == true || prefix.last == "." || prefix.last == " " {
+                    let qty = String(prefix).trimmingCharacters(in: .whitespacesAndNewlines)
+                    return (qty.isEmpty ? "1" : qty, unit)
+                }
+            }
+        }
+        return (trimmed.isEmpty ? "1" : trimmed, "no")
+    }
+
+    private func formatHours(_ value: Double) -> String {
+        abs(value - value.rounded()) < 0.05 ? String(format: "%.0f", value) : String(format: "%.1f", value)
+    }
+
+    @MainActor
+    private func importPhotos(_ items: [PhotosPickerItem]) async {
+        let room = Self.maxEvidence - evidence.count
+        if room <= 0 {
+            showUndo("Up to \(Self.maxEvidence) files per variation", restore: nil)
+            return
+        }
+        if items.count > room {
+            showUndo("Only \(room) more file\(room == 1 ? "" : "s") fit on this variation", restore: nil)
+        }
+        for item in items.prefix(room) {
+            if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
+                await addImage(image, fileName: "photo.jpg")
+            }
+        }
+    }
+
+    @MainActor
+    private func importFiles(_ urls: [URL]) async {
+        let room = Self.maxEvidence - evidence.count
+        if room <= 0 {
+            showUndo("Up to \(Self.maxEvidence) files per variation", restore: nil)
+            return
+        }
+        if urls.count > room {
+            showUndo("Only \(room) more file\(room == 1 ? "" : "s") fit on this variation", restore: nil)
+        }
+        for url in urls.prefix(room) {
+            await importFile(url)
         }
     }
 
@@ -588,8 +1409,8 @@ struct VariationEditorSheet: View {
             errorMessage = "Use a JPG, PNG, HEIC or PDF file."
             return
         }
-        guard evidence.count < 10 else {
-            errorMessage = "You can attach up to 10 files."
+        guard evidence.count < Self.maxEvidence else {
+            showUndo("Up to \(Self.maxEvidence) files per variation", restore: nil)
             return
         }
         let orgId = (await firebaseBackend.resolveOrganizationIdForFirebaseWrites(
@@ -666,6 +1487,12 @@ struct VariationEditorSheet: View {
             isSaving = false
             return
         }
+        let savedLabour = labour
+            .filter { $0.hoursEach > 0 && !$0.trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map { VariationLabourLine(id: $0.id, trade: $0.trade, hours: $0.lineHours) }
+        let savedMaterials = materials
+            .filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map { VariationMaterialLine(id: $0.id, name: $0.name, quantity: $0.storedQuantity) }
         let user = userStore.displayUser
         let uid = user?.id ?? firebaseBackend.currentUser?.uid ?? ""
         let name = (user?.fullName.isEmpty == false ? user?.fullName : user?.email) ?? "Unknown"
@@ -676,8 +1503,8 @@ struct VariationEditorSheet: View {
             existing.voNumber = trackerOn ? existing.voNumber : voNumber.trimmingCharacters(in: .whitespacesAndNewlines)
             existing.heading = heading.trimmingCharacters(in: .whitespacesAndNewlines)
             existing.description = descriptionText
-            existing.labour = labour.filter { !$0.trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || $0.hours > 0 }
-            existing.materials = materials.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            existing.labour = savedLabour
+            existing.materials = savedMaterials
             existing.evidence = evidence.filter { !$0.isPending }
             existing.updatedByUid = uid
             existing.updatedAt = now
@@ -689,7 +1516,7 @@ struct VariationEditorSheet: View {
                 orgId: orgId,
                 parentType: parentType,
                 parentId: project.id.uuidString,
-                parentName: VariationNumbering.parentName(jobNumber: project.jobNumber, siteName: project.siteName),
+                parentName: parentName,
                 origin: .app,
                 voNumber: voNumber.trimmingCharacters(in: .whitespacesAndNewlines),
                 sequence: (store.variations.map(\.sequence).max() ?? 0) + 1,
@@ -698,8 +1525,8 @@ struct VariationEditorSheet: View {
                 heading: heading.trimmingCharacters(in: .whitespacesAndNewlines),
                 description: descriptionText,
                 status: .open,
-                labour: labour.filter { !$0.trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || $0.hours > 0 },
-                materials: materials.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
+                labour: savedLabour,
+                materials: savedMaterials,
                 evidence: evidence.filter { !$0.isPending },
                 totalLabourHours: 0,
                 materialLineCount: 0,
@@ -745,15 +1572,32 @@ struct VariationEditorSheet: View {
 
     private func typeBadge(_ item: VariationEvidenceItem) -> String {
         let ext = (item.fileName as NSString).pathExtension.uppercased()
-        return ext.isEmpty ? "FILE" : ext
+        let badge = ext.isEmpty ? "FILE" : String(ext.prefix(4))
+        return badge
     }
+}
 
-    private func byteString(_ bytes: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+private extension View {
+    func formCard() -> some View {
+        self
+            .background(VariationFormColors.card)
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(VariationFormColors.line, lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.05), radius: 2, y: 1)
+            .shadow(color: Color.black.opacity(0.06), radius: 11, y: 8)
     }
+}
 
-    private func formatHours(_ value: Double) -> String {
-        String(format: abs(value - value.rounded()) < 0.05 ? "%.0f" : "%.1f", value)
+private extension Text {
+    func formMicroLabel() -> some View {
+        self
+            .font(.system(size: 11.5, weight: .heavy))
+            .foregroundStyle(VariationFormColors.ink3)
+            .tracking(0.35)
+            .textCase(.uppercase)
     }
 }
 
