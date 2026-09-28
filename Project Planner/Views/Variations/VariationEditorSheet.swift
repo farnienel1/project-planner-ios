@@ -7,6 +7,7 @@ import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
 import UIKit
+import FirebaseAuth
 
 struct VariationEditorSheet: View {
     let project: Project
@@ -362,9 +363,9 @@ struct VariationEditorSheet: View {
             errorMessage = "You can attach up to 10 files."
             return
         }
-        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
-            ?? await firebaseBackend.resolveOrganizationIdForFirebaseWrites(preferredFallback: nil)
-            ?? ""
+        let orgId = (await firebaseBackend.resolveOrganizationIdForFirebaseWrites(
+            preferredFallback: firebaseBackend.currentOrganization?.firestoreDocumentId
+        )) ?? ""
         guard !orgId.isEmpty else {
             errorMessage = "Organization ID is missing. Open Settings → Force Reload Data, then retry."
             return
@@ -414,9 +415,9 @@ struct VariationEditorSheet: View {
 
     private func save() async {
         guard canSave else { return }
-        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
-            ?? await firebaseBackend.resolveOrganizationIdForFirebaseWrites(preferredFallback: nil)
-            ?? ""
+        let orgId = (await firebaseBackend.resolveOrganizationIdForFirebaseWrites(
+            preferredFallback: firebaseBackend.currentOrganization?.firestoreDocumentId
+        )) ?? ""
         guard !orgId.isEmpty else {
             errorMessage = "Organization ID is missing. Open Settings → Force Reload Data, then retry."
             return
