@@ -534,6 +534,22 @@ extension AppUser {
         vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
 
+    /// Manage Users, Managers, and Operatives share these checks.
+    /// A stored `role` still counts when the boolean flags were saved in a shape the old parser treated as false.
+    var appearsOnOperativesList: Bool {
+        permissions.operativeMode || role == .operative
+    }
+
+    var appearsOnAdminsList: Bool {
+        if appearsOnOperativesList { return false }
+        return isSuperAdmin || permissions.adminAccess || role == .admin
+    }
+
+    var appearsOnManagersList: Bool {
+        if appearsOnOperativesList || appearsOnAdminsList { return false }
+        return permissions.manager || role == .manager
+    }
+
     /// Org-wide admins always see every job; they cannot be denied access via View / `hiddenManagerUserIds`.
     var isExcludedFromManagerVisibilityHiding: Bool {
         if permissions.operativeMode { return false }

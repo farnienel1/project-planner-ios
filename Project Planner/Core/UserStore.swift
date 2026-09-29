@@ -393,7 +393,11 @@ class UserStore: ObservableObject {
             return
         }
         let now = Date()
-        if organizationUsersLoadOrganizationId == requestedOrganizationId,
+        // A one-person roster is what this bug looked like (only the signed-in account).
+        // Do not treat that as a fresh success and ignore the next load for 3 seconds.
+        let rosterLooksComplete = organizationUsers.count > 1
+        if rosterLooksComplete,
+           organizationUsersLoadOrganizationId == requestedOrganizationId,
            let last = lastOrganizationUsersLoadAt,
            now.timeIntervalSince(last) < 3 {
             return

@@ -43,6 +43,21 @@ private func organizationIdsMatch(_ lhs: String?, _ rhs: String?) -> Bool {
     return left == right
 }
 
+/// Firestore often delivers booleans as `Bool`, as `NSNumber` (0/1), or as `"true"` / `"1"`.
+/// `as? Bool` only accepts a real boolean, so a number or string becomes "missing" and the roster hides that person.
+nonisolated func firestoreBool(_ value: Any?) -> Bool? {
+    if let bool = value as? Bool { return bool }
+    if let number = value as? NSNumber { return number.boolValue }
+    if let string = value as? String {
+        switch string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "true", "yes", "1": return true
+        case "false", "no", "0": return false
+        default: return nil
+        }
+    }
+    return nil
+}
+
 /// Shared by `FirebaseBackend` and its membership extension (separate file).
 func normalizedOrganizationId(_ organizationId: String) -> String {
     organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -627,22 +642,25 @@ class FirebaseBackend: ObservableObject {
             return
         }
         let permissionsMap = data["permissions"] as? [String: Any] ?? [:]
+        func permissionFlag(_ key: String, default defaultValue: Bool) -> Bool {
+            firestoreBool(permissionsMap[key]) ?? firestoreBool(data[key]) ?? defaultValue
+        }
         let permissions = UserPermissions(
-            adminAccess: permissionsMap["adminAccess"] as? Bool ?? false,
-            manager: permissionsMap["manager"] as? Bool ?? false,
-            operatives: permissionsMap["operatives"] as? Bool ?? false,
-            skills: permissionsMap["skills"] as? Bool ?? false,
-            qualifications: permissionsMap["qualifications"] as? Bool ?? false,
-            materials: permissionsMap["materials"] as? Bool ?? false,
-            projects: permissionsMap["projects"] as? Bool ?? true,
-            smallWorks: permissionsMap["smallWorks"] as? Bool ?? true,
-            operativeMode: permissionsMap["operativeMode"] as? Bool ?? false,
-            annualLeaveSelfBook: permissionsMap["annualLeaveSelfBook"] as? Bool ?? false,
-            weeklyReports: permissionsMap["weeklyReports"] as? Bool ?? false,
-            dailyOverview: permissionsMap["dailyOverview"] as? Bool ?? true,
-            subContractors: permissionsMap["subContractors"] as? Bool ?? false,
-            siteAudit: permissionsMap["siteAudit"] as? Bool ?? true,
-            wholesalersOrderHistory: permissionsMap["wholesalersOrderHistory"] as? Bool ?? true
+            adminAccess: permissionFlag("adminAccess", default: false),
+            manager: permissionFlag("manager", default: false),
+            operatives: permissionFlag("operatives", default: false),
+            skills: permissionFlag("skills", default: false),
+            qualifications: permissionFlag("qualifications", default: false),
+            materials: permissionFlag("materials", default: false),
+            projects: permissionFlag("projects", default: true),
+            smallWorks: permissionFlag("smallWorks", default: true),
+            operativeMode: permissionFlag("operativeMode", default: false),
+            annualLeaveSelfBook: permissionFlag("annualLeaveSelfBook", default: false),
+            weeklyReports: permissionFlag("weeklyReports", default: false),
+            dailyOverview: permissionFlag("dailyOverview", default: true),
+            subContractors: permissionFlag("subContractors", default: false),
+            siteAudit: permissionFlag("siteAudit", default: true),
+            wholesalersOrderHistory: permissionFlag("wholesalersOrderHistory", default: true)
         )
         let invitedBy = currentUser?.uid ?? ""
         let invitationId = UUID().uuidString
@@ -3408,32 +3426,63 @@ class FirebaseBackend: ObservableObject {
     private static func parseAppUserDocument(userId: String, data: [String: Any]) -> AppUser {
         let email = data["email"] as? String ?? ""
         let organizationId = organizationIdFromFirestore(data["organizationId"]) ?? ""
-        let roleString = data["role"] as? String ?? "viewer"
+        let roleString = (data["role"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? "viewer"
         let role = UserRole(rawValue: roleString) ?? .viewer
         let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-        
-        let operativeMode = data["operativeMode"] as? Bool ?? false
+        let nestedPermissions = data["permissions"] as? [String: Any] ?? [:]
+
+        // Top-level flag wins when it is actually stored. Nested `permissions` covers website / older writes.
+        // `as? Bool` is not used: Firestore may return 0/1 or "true", and that used to zero every flag.
+        func flag(_ key: String, default defaultValue: Bool) -> Bool {
+            if let top = firestoreBool(data[key]) { return top }
+            if let nested = firestoreBool(nestedPermissions[key]) { return nested }
+            return defaultValue
+        }
+
+        var operativeMode = flag("operativeMode", default: false)
+        var adminAccess = flag("adminAccess", default: false)
+        var manager = flag("manager", default: false)
+        var isSuperAdmin = flag("isSuperAdmin", default: false)
+        let matchesARoleList = operativeMode || isSuperAdmin || adminAccess || manager
+        if !matchesARoleList {
+            switch role {
+            case .operative:
+                operativeMode = true
+            case .admin:
+                adminAccess = true
+            case .manager:
+                manager = true
+            case .basic, .viewer:
+                break
+            }
+        }
+        if operativeMode {
+            adminAccess = false
+            manager = false
+            isSuperAdmin = false
+        }
+
         let permissions = UserPermissions(
-            adminAccess: operativeMode ? false : (data["adminAccess"] as? Bool ?? false),
-            manager: operativeMode ? false : (data["manager"] as? Bool ?? false),
-            operatives: operativeMode ? false : (data["operatives"] as? Bool ?? false),
-            skills: operativeMode ? false : (data["skills"] as? Bool ?? false),
-            qualifications: operativeMode ? false : (data["qualifications"] as? Bool ?? false),
-            materials: operativeMode ? (data["materials"] as? Bool ?? false) : (data["materials"] as? Bool ?? true),
-            projects: operativeMode ? true : (data["projects"] as? Bool ?? false),
-            smallWorks: operativeMode ? true : (data["smallWorks"] as? Bool ?? false),
+            adminAccess: adminAccess,
+            manager: manager,
+            operatives: operativeMode ? false : flag("operatives", default: false),
+            skills: false,
+            qualifications: operativeMode ? false : flag("qualifications", default: false),
+            materials: operativeMode ? flag("materials", default: false) : flag("materials", default: true),
+            projects: operativeMode ? true : flag("projects", default: false),
+            smallWorks: operativeMode ? true : flag("smallWorks", default: false),
             operativeMode: operativeMode,
-            annualLeaveSelfBook: data["annualLeaveSelfBook"] as? Bool ?? false,
-            weeklyReports: data["weeklyReports"] as? Bool ?? false,
-            dailyOverview: data["dailyOverview"] as? Bool ?? true,
-            subContractors: data["subContractors"] as? Bool ?? false,
-            siteAudit: data["siteAudit"] as? Bool ?? true,
-            wholesalersOrderHistory: data["wholesalersOrderHistory"] as? Bool ?? true
+            annualLeaveSelfBook: flag("annualLeaveSelfBook", default: false),
+            weeklyReports: flag("weeklyReports", default: false),
+            dailyOverview: flag("dailyOverview", default: true),
+            subContractors: flag("subContractors", default: false),
+            siteAudit: flag("siteAudit", default: true),
+            wholesalersOrderHistory: flag("wholesalersOrderHistory", default: true)
         )
-        let policyAccepted = data["policyAccepted"] as? Bool ?? false
+        let policyAccepted = flag("policyAccepted", default: false)
         let policyAcceptedAt = (data["policyAcceptedAt"] as? Timestamp)?.dateValue()
-        let rawIsSuperAdmin = data["isSuperAdmin"] as? Bool ?? false
-        let isSuperAdmin = operativeMode ? false : rawIsSuperAdmin
         let resolvedRole: UserRole = operativeMode ? .operative : role
         
         let assignedManagerUserId = data["assignedManagerUserId"] as? String
@@ -3474,10 +3523,10 @@ class FirebaseBackend: ObservableObject {
         let alEnd = (data["annualLeaveYearEndMonth"] as? NSNumber)?.intValue
             ?? (data["annualLeaveYearEndMonth"] as? Int)
             ?? AnnualLeavePolicy.defaultEndMonth
-        let alCarry = data["annualLeaveCarriesOver"] as? Bool ?? AnnualLeavePolicy.defaultCarriesOver
-        let alEnabled = data["annualLeaveEnabled"] as? Bool ?? true
-        let hasNoLineManager = data["hasNoLineManager"] as? Bool ?? false
-        let timesheetsEnabledRaw = data["timesheetsEnabled"] as? Bool
+        let alCarry = flag("annualLeaveCarriesOver", default: AnnualLeavePolicy.defaultCarriesOver)
+        let alEnabled = flag("annualLeaveEnabled", default: true)
+        let hasNoLineManager = flag("hasNoLineManager", default: false)
+        let timesheetsEnabledRaw = firestoreBool(data["timesheetsEnabled"]) ?? firestoreBool(nestedPermissions["timesheetsEnabled"])
         let timesheetsEnabled = timesheetsEnabledRaw ?? AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
         let vatRaw = (data["vatNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let utrRaw = (data["utrNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3491,8 +3540,8 @@ class FirebaseBackend: ObservableObject {
             firstName: data["firstName"] as? String ?? "",
             surname: data["surname"] as? String ?? "",
             mobileNumber: data["mobileNumber"] as? String,
-            isActive: data["isActive"] as? Bool ?? true,
-            passwordSet: data["passwordSet"] as? Bool ?? false,
+            isActive: firestoreUserIsActive(from: data),
+            passwordSet: firestoreBool(data["passwordSet"]) ?? firestoreBool(nestedPermissions["passwordSet"]) ?? false,
             permissions: permissions,
             isSuperAdmin: isSuperAdmin,
             policyAccepted: policyAccepted,
@@ -3521,39 +3570,100 @@ class FirebaseBackend: ObservableObject {
         )
     }
     
-    func getOrganizationUsers(organizationId: String) async throws -> [AppUser] {
-        print("🔥🔥🔥 DEBUG: getOrganizationUsers called with organizationId: \(organizationId)")
-        
-        let query = db.collection("users")
-            .whereField("organizationId", isEqualTo: organizationId)
-        let snapshot: QuerySnapshot
+    /// Equality on `users.organizationId` misses documents stored as a reference, a path, or a different UUID casing.
+    /// Those still belong to the org. This does not scan the whole `users` collection.
+    private func userDocuments(whereOrganizationIdEquals value: Any, required: Bool) async throws -> [QueryDocumentSnapshot] {
+        let query = db.collection("users").whereField("organizationId", isEqualTo: value)
         do {
-            snapshot = try await query.getDocuments(source: .server)
+            return try await query.getDocuments(source: .server).documents
         } catch {
-            // Offline: fall back to cache so the app still works; when back online we'll get fresh data
-            snapshot = try await query.getDocuments()
+            if required {
+                return try await query.getDocuments().documents
+            }
+            return (try? await query.getDocuments().documents) ?? []
         }
-        
-        print("🔥🔥🔥 DEBUG: Found \(snapshot.documents.count) user documents")
-        
+    }
+
+    private func indexedMemberUserIds(organizationId: String) async -> Set<String> {
+        var ids = Set<String>()
+        if let orgSnap = try? await db.collection("organizations").document(organizationId).getDocument(source: .server),
+           let members = orgSnap.data()?["members"] as? [String: Any] {
+            for userId in members.keys {
+                let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { ids.insert(trimmed) }
+            }
+        }
+        if let emailSnap = try? await db.collection("organizations")
+            .document(organizationId)
+            .collection("userEmails")
+            .limit(to: 500)
+            .getDocuments(source: .server) {
+            for doc in emailSnap.documents {
+                guard let userId = doc.data()["userId"] as? String else { continue }
+                let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { ids.insert(trimmed) }
+            }
+        }
+        return ids
+    }
+
+    func getOrganizationUsers(organizationId: String) async throws -> [AppUser] {
+        let orgId = normalizedOrganizationId(organizationId)
+        print("🔥🔥🔥 DEBUG: getOrganizationUsers called with organizationId: \(orgId)")
+        guard !orgId.isEmpty else { return [] }
+
+        var documentsById: [String: [String: Any]] = [:]
+        func absorb(_ documents: [QueryDocumentSnapshot]) {
+            for doc in documents {
+                documentsById[doc.documentID] = doc.data()
+            }
+        }
+
+        absorb(try await userDocuments(whereOrganizationIdEquals: orgId, required: true))
+
+        var alternateValues: [Any] = []
+        let lowercasedId = orgId.lowercased()
+        let uppercasedId = orgId.uppercased()
+        if lowercasedId != orgId { alternateValues.append(lowercasedId) }
+        if uppercasedId != orgId && uppercasedId != lowercasedId { alternateValues.append(uppercasedId) }
+        alternateValues.append("organizations/\(orgId)")
+        if lowercasedId != orgId {
+            alternateValues.append("organizations/\(lowercasedId)")
+        }
+        alternateValues.append(db.collection("organizations").document(orgId))
+        for value in alternateValues {
+            absorb(try await userDocuments(whereOrganizationIdEquals: value, required: false))
+        }
+
+        let indexedIds = await indexedMemberUserIds(organizationId: orgId)
+        let missingIds = indexedIds.subtracting(documentsById.keys).prefix(400)
+        for userId in missingIds {
+            let snap = try? await db.collection("users").document(userId).getDocument(source: .server)
+            if let data = snap?.data() {
+                documentsById[userId] = data
+            }
+        }
+
+        print("🔥🔥🔥 DEBUG: Found \(documentsById.count) user documents for organisation \(orgId)")
+
         var users: [AppUser] = []
-        
-        for doc in snapshot.documents {
-            let data = doc.data()
-            let userId = doc.documentID
+
+        for (userId, data) in documentsById {
             let email = data["email"] as? String ?? ""
             let docOrganizationId = organizationIdFromFirestore(data["organizationId"]) ?? ""
-            
-            print("🔥🔥🔥 DEBUG: Processing user - DocumentID: \(userId), Email: \(email), DocOrgId: \(docOrganizationId), RequestedOrgId: \(organizationId)")
-            
-            guard organizationIdsMatch(docOrganizationId, organizationId) else {
+            let belongsByField = organizationIdsMatch(docOrganizationId, orgId)
+            let indexedWithoutOrgField = indexedIds.contains(userId) && docOrganizationId.isEmpty
+
+            print("🔥🔥🔥 DEBUG: Processing user - DocumentID: \(userId), Email: \(email), DocOrgId: \(docOrganizationId), RequestedOrgId: \(orgId)")
+
+            guard belongsByField || indexedWithoutOrgField else {
                 print("🔥🔥🔥 DEBUG: Skipping user \(email) - organizationId mismatch")
                 continue
             }
-            
+
             var user = Self.parseAppUserDocument(userId: userId, data: data)
-            user.organizationId = organizationId
-            
+            user.organizationId = orgId
+
             users.append(user)
             print("🔥🔥🔥 DEBUG: Added user to list: \(user.email) (\(user.firstName) \(user.surname))")
         }
