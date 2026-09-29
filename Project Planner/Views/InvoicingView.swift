@@ -708,7 +708,7 @@ enum TimesheetDraftStore {
         fromFirestoreMap(map)
     }
 
-    private static func weeklyReportOverrideMap(_ override: TimesheetWeeklyReportOverride) -> [String: Any] {
+    nonisolated private static func weeklyReportOverrideMap(_ override: TimesheetWeeklyReportOverride) -> [String: Any] {
         [
             "approvedAt": Timestamp(date: override.approvedAt),
             "approvedByUserId": override.approvedByUserId,
@@ -735,7 +735,7 @@ enum TimesheetDraftStore {
         ]
     }
 
-    private static func moneyLineMap(_ line: TimesheetWeeklyReportMoneyLine) -> [String: Any] {
+    nonisolated private static func moneyLineMap(_ line: TimesheetWeeklyReportMoneyLine) -> [String: Any] {
         [
             "id": line.id,
             "title": line.title,
