@@ -476,16 +476,11 @@ struct ManageUsersView: View {
     private func usersForRoleTab(_ tab: Int) -> [AppUser] {
         switch tab {
         case 0:
-            return userStore.organizationUsers.filter { $0.permissions.adminAccess || $0.isSuperAdmin }
+            return userStore.organizationUsers.filter { $0.appearsOnAdminsList }
         case 1:
-            // Managers only — administrators belong on the Admins tab.
-            return userStore.organizationUsers.filter { user in
-                guard !user.permissions.operativeMode else { return false }
-                guard !user.permissions.adminAccess, !user.isSuperAdmin else { return false }
-                return user.permissions.manager
-            }
+            return userStore.organizationUsers.filter { $0.appearsOnManagersList }
         default:
-            return userStore.organizationUsers.filter { $0.permissions.operativeMode }
+            return userStore.organizationUsers.filter { $0.appearsOnOperativesList }
         }
     }
 
@@ -597,7 +592,7 @@ struct ManageUsersView: View {
     
     private var adminsList: some View {
         let admins = userStore.organizationUsers.filter { user in
-            (user.permissions.adminAccess || user.isSuperAdmin) && rosterSegment.matches(user)
+            user.appearsOnAdminsList && rosterSegment.matches(user)
         }
         return List {
             ForEach(admins) { user in
@@ -622,9 +617,7 @@ struct ManageUsersView: View {
     
     private var managersList: some View {
         let managers = userStore.organizationUsers.filter { user in
-            guard !user.permissions.operativeMode else { return false }
-            let isManager = (user.permissions.adminAccess || user.isSuperAdmin) || user.permissions.manager
-            return isManager && rosterSegment.matches(user)
+            user.appearsOnManagersList && rosterSegment.matches(user)
         }
         return List {
             ForEach(managers) { user in
@@ -649,7 +642,7 @@ struct ManageUsersView: View {
     
     private var operativesList: some View {
         let operatives = userStore.organizationUsers.filter { user in
-            user.permissions.operativeMode && rosterSegment.matches(user)
+            user.appearsOnOperativesList && rosterSegment.matches(user)
         }
         return List {
             ForEach(operatives) { user in

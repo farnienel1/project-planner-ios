@@ -220,7 +220,7 @@ struct OperativesView: View {
 
     /// Source of truth for operative status should mirror Manage Users (AppUser flags).
     private var linkedOperativeRecords: [(user: AppUser, operative: Operative)] {
-        let operativeUsers = userStore.organizationUsers.filter { $0.permissions.operativeMode }
+        let operativeUsers = userStore.organizationUsers.filter { $0.appearsOnOperativesList }
         return operativeUsers.compactMap { user in
             guard let op = operativeStore.allOperatives.first(where: {
                 $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
@@ -233,7 +233,7 @@ struct OperativesView: View {
     }
     
     private var allOperativeUsers: [AppUser] {
-        userStore.organizationUsers.filter { $0.permissions.operativeMode }
+        userStore.organizationUsers.filter { $0.appearsOnOperativesList }
     }
     
     private var hasAnyOperativesInOrganization: Bool {
@@ -259,7 +259,7 @@ struct OperativesView: View {
 
     private var displayedOperativeUsers: [AppUser] {
         let base = userStore.organizationUsers.filter {
-            $0.permissions.operativeMode && rosterSegment.matches($0)
+            $0.appearsOnOperativesList && rosterSegment.matches($0)
         }
         let searched = base.filter { ManageOperativesSearch.matches(user: $0, query: liveSearchText) }
         let filtered = searched.filter { operativeUserPassesTextFilter($0) }
@@ -308,7 +308,7 @@ struct OperativesView: View {
     }
     
     private var pendingOperativeInvitees: [AppUser] {
-        let base = userStore.organizationUsers.filter { $0.permissions.operativeMode && !$0.passwordSet }
+        let base = userStore.organizationUsers.filter { $0.appearsOnOperativesList && !$0.passwordSet }
         let searched = base.filter { ManageOperativesSearch.matches(user: $0, query: liveSearchText) }
         let afterAdvancedFilter: [AppUser]
         if filterText.isEmpty {

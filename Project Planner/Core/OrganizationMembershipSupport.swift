@@ -10,15 +10,13 @@ import FirebaseFirestore
 
 nonisolated func firestoreAccountActive(from data: [String: Any]?) -> Bool {
     guard let data else { return true }
-    if let value = data["accountActive"] as? Bool { return value }
-    if let number = data["accountActive"] as? NSNumber { return number.boolValue }
+    if let value = firestoreBool(data["accountActive"]) { return value }
     return true
 }
 
 nonisolated func firestoreUserIsActive(from data: [String: Any]?) -> Bool {
     guard let data else { return true }
-    if let value = data["isActive"] as? Bool { return value }
-    if let number = data["isActive"] as? NSNumber { return number.boolValue }
+    if let value = firestoreBool(data["isActive"]) { return value }
     return true
 }
 

@@ -33,11 +33,7 @@ struct ManagersView: View {
     
     // Get managers from users — exclude administrators (they appear under Admins / Manage Users).
     private var allManagers: [AppUser] {
-        userStore.organizationUsers.filter { user in
-            guard !user.permissions.operativeMode else { return false }
-            guard !user.permissions.adminAccess, !user.isSuperAdmin else { return false }
-            return user.permissions.manager
-        }
+        userStore.organizationUsers.filter { $0.appearsOnManagersList }
     }
     
     private var filteredManagers: [AppUser] {
