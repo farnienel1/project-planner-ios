@@ -54,6 +54,10 @@ struct HolidayView: View {
     @State private var bankHolidayTooltip: String?
     @State private var bankHolidayAlertTitle = "Annual leave calendar"
     @State private var bankHolidayCalendarTick = 0
+    @State private var teamDisplayedMonth = Date()
+    @State private var teamSort = AnnualLeavePersonSort.firstName
+    @State private var teamTradeFilter: String?
+    @State private var teamSearch = ""
     @State private var isManagingTeamLeave = false
 
     enum HolidaySection: String, CaseIterable {
@@ -277,6 +281,9 @@ struct HolidayView: View {
         }
         .task(id: displayedMonth) {
             await reloadBankHolidays(referenceDate: displayedMonth)
+        }
+        .task(id: teamDisplayedMonth) {
+            await reloadBankHolidays(referenceDate: teamDisplayedMonth)
         }
         .onAppear {
             if showRequests, showsTeamTab { leavePage = .team }
@@ -559,27 +566,539 @@ struct HolidayView: View {
     }
 
     private var teamLeavePage: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if canApproveRequests {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Waiting for you")
-                        .font(.title3.weight(.bold))
-                    Text("Requests sent to you. If someone has two line managers, either of you can approve or decline. The other is told once it is decided.")
-                        .font(.footnote)
-                        .foregroundStyle(AnnualLeavePalette.ink3)
-                    holidayRequestsSection
+        VStack(alignment: .leading, spacing: 18) {
+            teamHero
+            teamWaitingSection
+            teamAwayCalendarSection
+            teamPeopleSection
+        }
+    }
+
+    private var teamHero: some View {
+        let away = teamAwayTodayCount
+        let waiting = approverPendingRequests.count
+        let people = teamPeople.count
+        let booked = teamDaysBooked
+        let soon = teamAwaySoonCount
+        let ring = people > 0 ? min(1, Double(away) / Double(people)) : 0
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("TEAM · \(annualLeaveSummary?.leaveYearLabel ?? "This leave year")")
+                .font(.footnote.weight(.heavy))
+                .padding(.horizontal, 11)
+                .padding(.vertical, 4)
+                .background(Color.white.opacity(0.2))
+                .clipShape(Capsule())
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(away)")
+                        .font(.largeTitle.weight(.heavy))
+                    Text("away today")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.9))
                 }
+                .foregroundStyle(.white)
+                Spacer(minLength: 0)
+                ZStack {
+                    Circle().stroke(Color.white.opacity(0.28), lineWidth: 8)
+                    Circle()
+                        .trim(from: 0, to: ring)
+                        .stroke(style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .foregroundStyle(.white)
+                    Text(soon == 1 ? "1 soon" : "\(soon) soon")
+                        .font(.caption.weight(.heavy))
+                        .foregroundStyle(.white)
+                        .dynamicTypeSize(.xSmall ... .accessibility1)
+                }
+                .frame(width: 86, height: 86)
             }
-            if userStore.canAccessOperativeAnnualLeaveDirectory() {
-                OperativeAnnualLeaveHubView()
-                    .environmentObject(userStore)
-                    .environmentObject(operativeStore)
-                    .environmentObject(holidayStore)
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(notificationService)
-                    .frame(minHeight: 520)
+            HStack(spacing: 8) {
+                teamHeroTile("\(waiting)", "Requests waiting")
+                teamHeroTile("\(people)", "People")
+                teamHeroTile(AnnualLeavePolicy.formatAllowanceDays(booked), "Days booked")
             }
         }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LinearGradient(
+                colors: [AnnualLeavePalette.blue, AnnualLeavePalette.blue.opacity(0.72)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+    }
+
+    private func teamHeroTile(_ value: String, _ title: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value).font(.title3.weight(.heavy))
+            Text(title).font(.footnote.weight(.semibold)).lineLimit(2).minimumScaleFactor(0.7)
+        }
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color.white.opacity(0.17))
+        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+    }
+
+    private var teamWaitingSection: some View {
+        let requests = approverPendingRequests
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Waiting for you")
+                .font(.title3.weight(.bold))
+            if requests.isEmpty {
+                Text("Nothing is waiting for you. New leave requests and cancellation requests from your team will appear here.")
+                    .font(.subheadline)
+                    .foregroundStyle(AnnualLeavePalette.ink3)
+                    .multilineTextAlignment(.center)
+                    .padding(22)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .strokeBorder(AnnualLeavePalette.line, style: StrokeStyle(lineWidth: 1, dash: [5]))
+                    )
+            } else {
+                ForEach(requests) { request in
+                    teamRequestCard(request)
+                }
+            }
+        }
+    }
+
+    private func teamRequestCard(_ request: HolidayBooking) -> some View {
+        let person = teamPerson(for: request)
+        let name = person?.displayName ?? requesterName(for: request)
+        let trade = person?.tradeLabel ?? ""
+        let days = AnnualLeaveDateFormat.consumedDays(from: request.startDate, to: request.endDate, slot: request.timeSlot)
+        let isCancellation = request.cancellationRequestedAt != nil
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Text(initials(from: name))
+                    .font(.subheadline.weight(.heavy))
+                    .foregroundStyle(AnnualLeavePalette.leave)
+                    .frame(width: 38, height: 38)
+                    .background(AnnualLeavePalette.leaveTint)
+                    .clipShape(Circle())
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name).font(.body.weight(.semibold))
+                    if !trade.isEmpty {
+                        Text(trade).font(.footnote).foregroundStyle(AnnualLeavePalette.ink3)
+                    }
+                }
+                Spacer(minLength: 0)
+                if isCancellation {
+                    Text("Cancellation")
+                        .font(.caption.weight(.heavy))
+                        .foregroundStyle(AnnualLeavePalette.violet)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(AnnualLeavePalette.violetTint)
+                        .clipShape(Capsule())
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(AnnualLeaveDateFormat.bookingTitle(request)) · \(AnnualLeaveDateFormat.dayCount(days))")
+                    .font(.subheadline.weight(.semibold))
+                if let note = remainingAfterNote(for: request, person: person) {
+                    Text(note)
+                        .font(.footnote)
+                        .foregroundStyle(AnnualLeavePalette.ink3)
+                }
+                let clashes = conflictingApprovedOperatives(for: request)
+                if !clashes.isEmpty {
+                    Text("Also off: \(clashes.joined(separator: ", "))")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(AnnualLeavePalette.amber)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AnnualLeavePalette.soft)
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            HStack(spacing: 8) {
+                if !isCancellation {
+                    Button("Decline") { declineDraft = request }
+                        .buttonStyle(.plain)
+                        .font(.subheadline.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(AnnualLeavePalette.soft)
+                        .foregroundStyle(AnnualLeavePalette.ink2)
+                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                }
+                Button("Approve") { approveRequest(request) }
+                    .buttonStyle(.plain)
+                    .font(.subheadline.weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .background(AnnualLeavePalette.approved)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            }
+        }
+        .padding(14)
+        .background(AnnualLeavePalette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(isCancellation ? AnnualLeavePalette.violet : AnnualLeavePalette.amber)
+                .frame(width: 5)
+        }
+    }
+
+    private var teamAwayCalendarSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Who is off, and when")
+                .font(.title3.weight(.bold))
+            Text("Initials show on each day, so a clash is obvious before you approve it.")
+                .font(.footnote)
+                .foregroundStyle(AnnualLeavePalette.ink3)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Button {
+                        if let next = calendar.date(byAdding: .month, value: -1, to: teamDisplayedMonth) {
+                            teamDisplayedMonth = next
+                        }
+                    } label: {
+                        Image(systemName: "chevron.left").frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    Text(monthYearString(teamDisplayedMonth)).font(.headline)
+                    Spacer()
+                    Button {
+                        if let next = calendar.date(byAdding: .month, value: 1, to: teamDisplayedMonth) {
+                            teamDisplayedMonth = next
+                        }
+                    } label: {
+                        Image(systemName: "chevron.right").frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .foregroundStyle(AnnualLeavePalette.ink2)
+                let weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                HStack(spacing: 0) {
+                    ForEach(weekdays, id: \.self) { day in
+                        Text(day)
+                            .font(.caption2.weight(.heavy))
+                            .foregroundStyle(AnnualLeavePalette.ink3)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 7), spacing: 3) {
+                    ForEach(Array(monthDays(teamDisplayedMonth).enumerated()), id: \.offset) { _, day in
+                        if let date = day {
+                            teamDayCell(date)
+                        } else {
+                            Color.clear.frame(minHeight: 44)
+                        }
+                    }
+                }
+                AnnualLeaveLegend()
+                HStack(spacing: 6) {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(AnnualLeavePalette.blue.opacity(0.2))
+                        .frame(width: 13, height: 13)
+                    Text("Two or more away")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(AnnualLeavePalette.ink2)
+                }
+                AnnualLeaveBankHolidayNote(
+                    regionName: bankHolidayRegion.title,
+                    loadedCount: bankHolidayService.holidaysByDayKey.count
+                )
+            }
+            .padding(14)
+            .background(AnnualLeavePalette.card)
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(AnnualLeavePalette.line, lineWidth: 1)
+            )
+        }
+    }
+
+    private func teamDayCell(_ date: Date) -> some View {
+        let day = calendar.startOfDay(for: date)
+        let away = teamAway(on: day)
+        let block = AnnualLeaveCalendarRules.blockReason(
+            for: day,
+            bankHolidays: bankHolidayService.holidaysByDayKey,
+            calendar: calendar
+        )
+        let visual: AnnualLeaveDayVisual = {
+            if away.count >= 1 { return .approvedFull }
+            if let block {
+                switch block {
+                case .bankHoliday: return .bankHoliday
+                case .weekend: return .weekend
+                }
+            }
+            return .none
+        }()
+        let initials = away.prefix(2).map { initials(from: $0.displayName) }.joined(separator: " ")
+        return AnnualLeaveDayFace(
+            dayNumber: calendar.component(.day, from: date),
+            visual: away.count >= 2 ? .none : visual,
+            isToday: calendar.isDateInToday(day),
+            initials: initials.isEmpty ? nil : initials,
+            accessibilityLabel: teamDayLabel(date: day, away: away, block: block)
+        )
+        .background {
+            if away.count >= 2 {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(AnnualLeavePalette.blue.opacity(0.22))
+            }
+        }
+    }
+
+    private func teamDayLabel(date: Date, away: [AnnualLeavePerson], block: AnnualLeaveDayBlockReason?) -> String {
+        let spoken = date.formatted(date: .long, time: .omitted)
+        if !away.isEmpty {
+            return "\(spoken), \(away.map(\.displayName).joined(separator: ", ")) away"
+        }
+        if let block {
+            switch block {
+            case .weekend: return "\(spoken), weekend"
+            case .bankHoliday(let name): return "\(spoken), \(name), bank holiday"
+            }
+        }
+        return spoken
+    }
+
+    private var teamPeopleSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Your team")
+                .font(.title3.weight(.bold))
+            TextField("Search name or trade", text: $teamSearch)
+                .padding(12)
+                .background(AnnualLeavePalette.card)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            HStack {
+                Picker("Sort by", selection: $teamSort) {
+                    ForEach(AnnualLeavePersonSort.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                if !teamTradeChoices.isEmpty {
+                    Picker("Trade", selection: Binding(
+                        get: { teamTradeFilter ?? "All trades" },
+                        set: { teamTradeFilter = $0 == "All trades" ? nil : $0 }
+                    )) {
+                        Text("All trades").tag("All trades")
+                        ForEach(teamTradeChoices, id: \.self) { trade in
+                            Text(trade).tag(trade)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+            }
+            if filteredTeamPeople.isEmpty {
+                Text("No one on the team matches those filters. People who book their own leave are not listed here.")
+                    .font(.subheadline)
+                    .foregroundStyle(AnnualLeavePalette.ink3)
+                    .padding(18)
+            } else {
+                ForEach(filteredTeamPeople) { person in
+                    NavigationLink {
+                        OperativeAnnualLeaveCalendarView(person: person)
+                            .environmentObject(holidayStore)
+                            .environmentObject(firebaseBackend)
+                            .environmentObject(notificationService)
+                            .environmentObject(operativeStore)
+                            .environmentObject(userStore)
+                    } label: {
+                        teamPersonRow(person)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func teamPersonRow(_ person: AnnualLeavePerson) -> some View {
+        let balance = teamBalance(for: person)
+        return HStack(spacing: 11) {
+            Text(initials(from: person.displayName))
+                .font(.subheadline.weight(.heavy))
+                .foregroundStyle(AnnualLeavePalette.leave)
+                .frame(width: 38, height: 38)
+                .background(AnnualLeavePalette.leaveTint)
+                .clipShape(Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(person.displayName)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(AnnualLeavePalette.ink)
+                Text(person.tradeLabel)
+                    .font(.footnote)
+                    .foregroundStyle(AnnualLeavePalette.ink3)
+            }
+            Spacer(minLength: 0)
+            if let balance {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(AnnualLeavePolicy.formatAllowanceDays(balance.remaining))
+                        .font(.headline)
+                        .foregroundStyle(balance.remaining < -0.001 ? AnnualLeavePalette.red : AnnualLeavePalette.ink)
+                    Text("of \(AnnualLeavePolicy.formatAllowanceDays(balance.allowance)) left")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(AnnualLeavePalette.ink3)
+                }
+            }
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(AnnualLeavePalette.ink3)
+        }
+        .padding(12)
+        .background(AnnualLeavePalette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(AnnualLeavePalette.line, lineWidth: 1)
+        )
+    }
+
+    private var teamPeople: [AnnualLeavePerson] {
+        AnnualLeavePersonBuilder.build(
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
+    }
+
+    private var teamTradeChoices: [String] {
+        Array(Set(teamPeople.map(\.tradeLabel).filter { !$0.isEmpty && $0 != "General" })).sorted()
+    }
+
+    private var filteredTeamPeople: [AnnualLeavePerson] {
+        var rows = teamPeople
+        if let teamTradeFilter, !teamTradeFilter.isEmpty {
+            rows = rows.filter { $0.tradeLabel == teamTradeFilter }
+        }
+        let query = teamSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            rows = rows.filter {
+                $0.displayName.localizedCaseInsensitiveContains(query) ||
+                $0.tradeLabel.localizedCaseInsensitiveContains(query) ||
+                $0.subtitle.localizedCaseInsensitiveContains(query)
+            }
+        }
+        switch teamSort {
+        case .firstName:
+            rows.sort { $0.firstNameSort.localizedCaseInsensitiveCompare($1.firstNameSort) == .orderedAscending }
+        case .surname:
+            rows.sort { $0.surnameSort.localizedCaseInsensitiveCompare($1.surnameSort) == .orderedAscending }
+        case .trade:
+            rows.sort {
+                if $0.tradeLabel != $1.tradeLabel {
+                    return $0.tradeLabel.localizedCaseInsensitiveCompare($1.tradeLabel) == .orderedAscending
+                }
+                return $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+        }
+        return rows
+    }
+
+    private var teamAwayTodayCount: Int {
+        let today = calendar.startOfDay(for: Date())
+        return Set(teamAway(on: today).map(\.id)).count
+    }
+
+    private var teamAwaySoonCount: Int {
+        let today = calendar.startOfDay(for: Date())
+        guard let end = calendar.date(byAdding: .day, value: 14, to: today) else { return 0 }
+        var ids = Set<String>()
+        var day = today
+        while day <= end {
+            for person in teamAway(on: day) { ids.insert(person.id) }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return ids.count
+    }
+
+    private var teamDaysBooked: Double {
+        teamPeople.reduce(0) { partial, person in
+            partial + (teamBalance(for: person)?.taken ?? 0)
+        }
+    }
+
+    private func teamAway(on day: Date) -> [AnnualLeavePerson] {
+        let dayStart = calendar.startOfDay(for: day)
+        var seen = Set<String>()
+        var people: [AnnualLeavePerson] = []
+        for booking in holidayStore.bookings where booking.status == .approved && booking.cancellationRequestedAt == nil {
+            let start = calendar.startOfDay(for: booking.startDate)
+            let end = calendar.startOfDay(for: booking.endDate)
+            guard dayStart >= start && dayStart <= end else { continue }
+            guard let person = teamPerson(for: booking), seen.insert(person.id).inserted else { continue }
+            people.append(person)
+        }
+        return people
+    }
+
+    private func teamPerson(for booking: HolidayBooking) -> AnnualLeavePerson? {
+        teamPeople.first { person in
+            if let uid = person.userId, booking.userId == uid { return true }
+            if let oid = person.operativeId, booking.operativeId == oid { return true }
+            return false
+        }
+    }
+
+    private func teamBalance(for person: AnnualLeavePerson) -> (remaining: Double, allowance: Double, taken: Double)? {
+        guard let user = teamUser(for: person) else { return nil }
+        let summary = AnnualLeavePolicy.usageSummary(
+            bookings: holidayStore.bookings,
+            profileUserId: user.id,
+            operativeId: person.operativeId,
+            daysPerYear: user.annualLeaveDaysPerYear,
+            startMonth: user.annualLeaveYearStartMonth,
+            endMonth: user.annualLeaveYearEndMonth,
+            carriesOver: user.annualLeaveCarriesOver,
+            referenceDate: Date(),
+            calendar: calendar
+        )
+        return (summary.remainingDays, summary.entitlementDays, summary.takenDays)
+    }
+
+    private func teamUser(for person: AnnualLeavePerson) -> AppUser? {
+        if let uid = person.userId {
+            return userStore.organizationUsers.first { $0.id == uid }
+        }
+        if let oid = person.operativeId,
+           let operative = operativeStore.allOperatives.first(where: { $0.id == oid }) {
+            return userStore.organizationUsers.first { $0.email.lowercased() == operative.email.lowercased() }
+        }
+        return nil
+    }
+
+    private func remainingAfterNote(for request: HolidayBooking, person: AnnualLeavePerson?) -> String? {
+        guard let person, let balance = teamBalance(for: person) else { return nil }
+        let days = AnnualLeaveDateFormat.consumedDays(from: request.startDate, to: request.endDate, slot: request.timeSlot)
+        let after = request.cancellationRequestedAt != nil
+            ? balance.allowance - balance.taken + days
+            : balance.allowance - balance.taken - days
+        return "Remaining after: \(AnnualLeavePolicy.formatAllowanceDays(after)) of \(AnnualLeavePolicy.formatAllowanceDays(balance.allowance))"
+    }
+
+    private func initials(from name: String) -> String {
+        let parts = name.split(separator: " ").prefix(2)
+        let letters = parts.compactMap { $0.first }
+        let text = String(letters).uppercased()
+        return text.isEmpty ? "?" : text
+    }
+
+    private func monthDays(_ month: Date) -> [Date?] {
+        guard let range = calendar.range(of: .day, in: .month, for: month),
+              let first = calendar.date(from: calendar.dateComponents([.year, .month], from: month)) else { return [] }
+        let firstWeekday = (calendar.component(.weekday, from: first) + 5) % 7
+        var days: [Date?] = Array(repeating: nil, count: firstWeekday)
+        for offset in 0..<range.count {
+            if let date = calendar.date(byAdding: .day, value: offset, to: first) {
+                days.append(date)
+            }
+        }
+        return days
     }
 
     private var upcomingLeaveSection: some View {
@@ -606,7 +1125,8 @@ struct HolidayView: View {
                     HolidayRowView(
                         booking: span.primary,
                         titleOverride: span.title,
-                        onRequestCancellation: canRequestCancellation(for: span.primary) ? { requestCancellation(for: span.primary) } : nil
+                        actionTitle: canShowSelfServeBookedAnnualLeave ? "Remove" : "Request cancellation",
+                        onRequestCancellation: leaveRowAction(for: span.primary)
                     )
                 }
             }
@@ -1182,87 +1702,11 @@ struct HolidayView: View {
         return operativeStore.allOperatives.first { $0.email.lowercased() == email.lowercased() }
     }
 
-    private var myHolidaySection: some View {
-        let myBookings = myBookingsList
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("My annual leave")
-                .font(.headline)
-            if myBookings.isEmpty {
-                Text("No annual leave booked.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else {
-                ForEach(myBookings) { b in
-                    HolidayRowView(
-                        booking: b,
-                        onRequestCancellation: canRequestCancellation(for: b) ? { requestCancellation(for: b) } : nil
-                    )
-                }
-            }
-        }
-    }
-
-    /// Approved holidays only (no pending/rejected placeholders).
-    private var myBookingsList: [HolidayBooking] {
-        let uid = firebaseBackend.currentUser?.uid
-        let oid = currentOperative?.id
-        return holidayStore.myBookings(userId: uid, operativeId: oid)
-            .filter { $0.status == .approved }
-            .sorted { $0.startDate > $1.startDate }
-    }
-    
-    private var myPendingHolidayList: [HolidayBooking] {
-        let uid = firebaseBackend.currentUser?.uid
-        let oid = currentOperative?.id
-        return holidayStore.myBookings(userId: uid, operativeId: oid)
-            .filter { $0.status == .pending }
-            .sorted { $0.startDate > $1.startDate }
-    }
-
-    private var holidayRequestsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Pending")
-                .font(.headline)
-            if canApproveRequests {
-                let requests = approverPendingRequests
-                if requests.isEmpty {
-                    Text("Nothing is waiting for you. New leave requests and cancellation requests from your team will appear here.")
-                        .font(.subheadline)
-                        .foregroundStyle(AnnualLeavePalette.ink3)
-                        .padding(18)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    ForEach(requests) { request in
-                        HolidayRequestRowView(
-                            request: request,
-                            requesterName: requesterName(for: request),
-                            conflictingApprovedOperatives: conflictingApprovedOperatives(for: request),
-                            canApprove: true,
-                            onApprove: { approveRequest(request) },
-                            onDecline: { declineDraft = request }
-                        )
-                    }
-                }
-            } else {
-                let myRequests = myPendingHolidayList
-                if myRequests.isEmpty {
-                    Text("No requests.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .padding()
-                } else {
-                    ForEach(myRequests) { request in
-                        HolidayRowView(booking: request)
-                    }
-                }
-            }
-        }
-    }
-
     private var approverPendingRequests: [HolidayBooking] {
         guard let me = userStore.currentUser else { return [] }
-        let all = holidayStore.pendingRequests.sorted { $0.startDate > $1.startDate }
+        let all = holidayStore.pendingRequests
+            .filter { !isOwnAnnualLeave($0) && !isSelfBookedRequester($0) }
+            .sorted { $0.startDate > $1.startDate }
         // Every assigned line manager can approve. Only one decision is required.
         if me.permissions.manager && !me.isSuperAdmin && !me.permissions.adminAccess && me.role != .admin {
             return all.filter { lineManagerIds(for: $0).contains(me.id) }
@@ -1274,6 +1718,33 @@ struct HolidayView: View {
             }
         }
         return []
+    }
+
+    /// Team is other people's requests. Your own leave stays on My leave, even for an admin.
+    private func isOwnAnnualLeave(_ request: HolidayBooking) -> Bool {
+        let ids = Set([firebaseBackend.currentUser?.uid, userStore.currentUser?.id].compactMap { $0 })
+        if let uid = request.userId, ids.contains(uid) { return true }
+        if let email = userStore.currentUser?.email.lowercased(),
+           let oid = request.operativeId,
+           let operative = operativeStore.allOperatives.first(where: { $0.id == oid }),
+           operative.email.lowercased() == email {
+            return true
+        }
+        return false
+    }
+
+    /// People who book their own leave are not approved from the team queue.
+    private func isSelfBookedRequester(_ request: HolidayBooking) -> Bool {
+        if let uid = request.userId,
+           let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
+            return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: requester)
+        }
+        if let oid = request.operativeId,
+           let operative = operativeStore.allOperatives.first(where: { $0.id == oid }),
+           let requester = userStore.organizationUsers.first(where: { $0.email.lowercased() == operative.email.lowercased() }) {
+            return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: requester)
+        }
+        return false
     }
 
     private func lineManagerIds(for request: HolidayBooking) -> [String] {
@@ -1463,6 +1934,20 @@ struct HolidayView: View {
         return (fallback?.isEmpty == false) ? fallback : nil
     }
 
+    private func leaveRowAction(for booking: HolidayBooking) -> (() -> Void)? {
+        guard booking.status == .approved, booking.cancellationRequestedAt == nil else { return nil }
+        if canShowSelfServeBookedAnnualLeave {
+            return {
+                Task {
+                    await holidayStore.deleteBooking(booking)
+                    successMessage = "Annual leave removed."
+                    showSuccess = true
+                }
+            }
+        }
+        return { requestCancellation(for: booking) }
+    }
+
     private func canRequestCancellation(for booking: HolidayBooking) -> Bool {
         booking.status == .approved && booking.cancellationRequestedAt == nil
     }
@@ -1558,6 +2043,7 @@ private struct HalfDayHolidayBookingEditorSheet: View {
 struct HolidayRowView: View {
     let booking: HolidayBooking
     var titleOverride: String? = nil
+    var actionTitle: String = "Request cancellation"
     var onRequestCancellation: (() -> Void)? = nil
 
     var body: some View {
@@ -1573,7 +2059,7 @@ struct HolidayRowView: View {
                     .font(.caption.weight(.bold))
                     .foregroundStyle(statusColor)
                 if let onRequestCancellation {
-                    Button("Request cancellation") {
+                    Button(actionTitle) {
                         onRequestCancellation()
                     }
                     .font(.caption.weight(.semibold))

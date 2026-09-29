@@ -21,7 +21,7 @@ struct AnnualLeavePerson: Identifiable, Hashable {
     var navigationTitle: String { displayName }
 }
 
-private enum AnnualLeavePersonSort: String, CaseIterable, Identifiable {
+enum AnnualLeavePersonSort: String, CaseIterable, Identifiable {
     case firstName = "First name"
     case surname = "Surname"
     case trade = "Trade"
@@ -1405,7 +1405,7 @@ struct OperativeAnnualLeaveCalendarView: View {
     }
 }
 
-private enum AnnualLeavePersonBuilder {
+enum AnnualLeavePersonBuilder {
     static func build(users: [AppUser], operatives: [Operative]) -> [AnnualLeavePerson] {
         var rows: [AnnualLeavePerson] = []
         var seenEmails = Set<String>()

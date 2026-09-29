@@ -254,7 +254,9 @@ struct AnnualLeaveDayFace: View {
             if let initials, !initials.isEmpty, !isSelected {
                 Text(initials)
                     .font(.caption2.weight(.heavy))
-                    .foregroundStyle(AnnualLeavePalette.ink2)
+                    .foregroundStyle(initialsColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                     .offset(y: 14)
             }
         }
@@ -310,14 +312,18 @@ struct AnnualLeaveDayFace: View {
     }
 
     private var numberColor: Color {
-        if isSelected { return .white }
+        if isSelected || visual == .approvedFull || visual == .approvedHalf { return .white }
         switch visual {
-        case .approvedFull, .approvedHalf: return .white
         case .pending: return AnnualLeavePalette.amber
         case .bankHoliday: return AnnualLeavePalette.violet
         case .weekend: return AnnualLeavePalette.ink3
-        case .none: return AnnualLeavePalette.ink
+        case .none, .approvedFull, .approvedHalf: return AnnualLeavePalette.ink
         }
+    }
+
+    private var initialsColor: Color {
+        if visual == .approvedFull || visual == .approvedHalf { return .white.opacity(0.95) }
+        return AnnualLeavePalette.ink2
     }
 }
 
