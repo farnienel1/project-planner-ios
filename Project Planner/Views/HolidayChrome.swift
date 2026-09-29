@@ -42,23 +42,27 @@ struct AnnualLeaveRemoveBookingConfirm: View {
                 .foregroundStyle(HolidayChrome.ink)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
-                Button(action: onYes) {
-                    Text("Yes")
+                Button(action: onNo) {
+                    Text("Keep it")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(HolidayChrome.ink)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
-                        .background(HolidayChrome.taken)
+                        .background(ProjectWorksRevampColors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(HolidayChrome.border, lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.plain)
-                Button(action: onNo) {
-                    Text("No")
+                Button(action: onYes) {
+                    Text("Remove")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
-                        .background(HolidayChrome.pending)
+                        .background(AnnualLeavePalette.red)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.plain)

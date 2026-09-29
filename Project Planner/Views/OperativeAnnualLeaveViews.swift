@@ -36,11 +36,11 @@ private enum OperativeAnnualLeaveHubTab: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: String {
+    var shortTitle: String {
         switch self {
-        case .manage: return "Manage user annual leave"
-        case .approved: return "View approved bookings"
-        case .requests: return "View annual leave requests"
+        case .manage: return "Team"
+        case .approved: return "Approved"
+        case .requests: return "Requests"
         }
     }
 }
@@ -59,35 +59,12 @@ struct OperativeAnnualLeaveHubView: View {
     var body: some View {
         VStack(spacing: 0) {
             if isAdmin {
-                VStack(spacing: 8) {
+                Picker("Team view", selection: $activeTab) {
                     ForEach(OperativeAnnualLeaveHubTab.allCases) { tab in
-                        Button {
-                            activeTab = tab
-                        } label: {
-                            HStack {
-                                Text(tab.title)
-                                    .font(.subheadline.weight(activeTab == tab ? .semibold : .regular))
-                                    .foregroundStyle(activeTab == tab ? HolidayChrome.accent : HolidayChrome.ink)
-                                Spacer(minLength: 0)
-                                if activeTab == tab {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(HolidayChrome.accent)
-                                }
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(activeTab == tab ? HolidayChrome.accent.opacity(0.1) : Color.white)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(activeTab == tab ? HolidayChrome.accent : HolidayChrome.border, lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(.plain)
+                        Text(tab.shortTitle).tag(tab)
                     }
                 }
+                .pickerStyle(.segmented)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
@@ -348,7 +325,7 @@ private struct OperativeAnnualLeaveRequestsListView: View {
     var body: some View {
         List {
             if pendingRequests.isEmpty {
-                Text("No pending requests.")
+                Text("Nothing is waiting. New leave requests and cancellation requests will show here.")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(pendingRequests) { request in
@@ -369,18 +346,41 @@ private struct OperativeAnnualLeaveRequestsListView: View {
     private func approve(_ request: HolidayBooking) {
         guard let uid = firebaseBackend.currentUser?.uid else { return }
         Task {
-            await holidayStore.approveBooking(request, approvedByUserId: uid)
+            if request.cancellationRequestedAt != nil {
+                await holidayStore.deleteBooking(request)
+            } else {
+                await holidayStore.approveBooking(request, approvedByUserId: uid)
+            }
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
             await notifyDecision(to: request, approved: true, decidedByName: approverName)
+            await notifyAnnualLeavePeerManagers(
+                request: request,
+                actorUserId: uid,
+                actorName: approverName,
+                actionVerb: "approved",
+                users: userStore.organizationUsers,
+                operatives: operativeStore.allOperatives,
+                notificationService: notificationService
+            )
         }
     }
 
     private func decline(_ request: HolidayBooking) {
+        if request.cancellationRequestedAt != nil { return }
         guard let uid = firebaseBackend.currentUser?.uid else { return }
         Task {
             await holidayStore.rejectBooking(request, rejectedByUserId: uid)
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
             await notifyDecision(to: request, approved: false, decidedByName: approverName)
+            await notifyAnnualLeavePeerManagers(
+                request: request,
+                actorUserId: uid,
+                actorName: approverName,
+                actionVerb: "declined",
+                users: userStore.organizationUsers,
+                operatives: operativeStore.allOperatives,
+                notificationService: notificationService
+            )
         }
     }
 
@@ -457,11 +457,15 @@ struct OperativeAnnualLeaveCalendarView: View {
             VStack(alignment: .leading, spacing: 18) {
                 headerCard
                 if let summary = annualLeaveSummary {
-                    AnnualLeaveUsageHeroView(summary: summary)
+                    AnnualLeaveBalanceHero(summary: summary, pendingCaption: "Awaiting approval")
                 }
                 bookedLeaveCard
                 pendingLeaveCard
-                legendRow
+                AnnualLeaveLegend()
+                AnnualLeaveBankHolidayNote(
+                    regionName: bankHolidayRegion.title,
+                    loadedCount: bankHolidayService.holidaysByDayKey.count
+                )
                 monthNavigator
                 calendarGrid
                 if let day = selectedDay {
@@ -880,10 +884,7 @@ struct OperativeAnnualLeaveCalendarView: View {
     }
 
     private func leaveDateLabel(_ booking: HolidayBooking) -> String {
-        if calendar.isDate(booking.startDate, inSameDayAs: booking.endDate) {
-            return booking.startDate.formatted(date: .abbreviated, time: .omitted)
-        }
-        return "\(booking.startDate.formatted(date: .abbreviated, time: .omitted)) – \(booking.endDate.formatted(date: .abbreviated, time: .omitted))"
+        return AnnualLeaveDateFormat.bookingTitle(booking, calendar: calendar)
     }
 
     private var legendRow: some View {
@@ -1099,11 +1100,11 @@ struct OperativeAnnualLeaveCalendarView: View {
             if let blockReason {
                 switch blockReason {
                 case .weekend:
-                    bankHolidayAlertTitle = "Annual leave calendar"
+                    bankHolidayAlertTitle = "Weekend"
                     bankHolidayTooltip = "Weekends cannot be booked as annual leave."
                 case .bankHoliday(let name):
                     bankHolidayAlertTitle = name
-                    bankHolidayTooltip = "Bank holidays cannot be booked as annual leave."
+                    bankHolidayTooltip = "\(name) is a bank holiday. It cannot be booked as annual leave and it is not taken out of the allowance."
                 }
                 return
             }
@@ -1118,21 +1119,48 @@ struct OperativeAnnualLeaveCalendarView: View {
                 }
             }
         } label: {
-            Text("\(calendar.component(.day, from: date))")
-                .font(.subheadline)
-                .fontWeight(isSelected ? .bold : .regular)
-                .frame(width: 36, height: 36)
-                .annualLeaveBlockedDayStyle(
-                    blockReason: blockReason,
-                    isSelected: isSelected,
-                    isInMonth: isInMonth,
-                    defaultInk: HolidayChrome.ink,
-                    defaultMuted: HolidayChrome.muted
-                )
-                .overlay(dayOverlay(kind: kind))
-                .clipShape(Circle())
+            AnnualLeaveDayFace(
+                dayNumber: calendar.component(.day, from: date),
+                visual: personFaceVisual(kind: kind, blockReason: blockReason),
+                isSelected: isSelected,
+                isToday: calendar.isDateInToday(day),
+                accessibilityLabel: personDayAccessibility(date: day, kind: kind, blockReason: blockReason, isSelected: isSelected)
+            )
+            .opacity(isInMonth ? 1 : 0.35)
         }
         .buttonStyle(.plain)
+    }
+
+    private func personFaceVisual(kind: DayKind, blockReason: AnnualLeaveDayBlockReason?) -> AnnualLeaveDayVisual {
+        if let blockReason {
+            switch blockReason {
+            case .bankHoliday: return .bankHoliday
+            case .weekend: return .weekend
+            }
+        }
+        switch kind {
+        case .approvedFull: return .approvedFull
+        case .approvedHalf: return .approvedHalf
+        case .pendingFull, .pendingHalf: return .pending
+        case .none: return .none
+        }
+    }
+
+    private func personDayAccessibility(date: Date, kind: DayKind, blockReason: AnnualLeaveDayBlockReason?, isSelected: Bool) -> String {
+        let spoken = date.formatted(date: .long, time: .omitted)
+        if isSelected { return "\(spoken), selected" }
+        if let blockReason {
+            switch blockReason {
+            case .weekend: return "\(spoken), weekend, not bookable"
+            case .bankHoliday(let name): return "\(spoken), \(name), bank holiday, not bookable"
+            }
+        }
+        switch kind {
+        case .approvedFull: return "\(spoken), approved full day"
+        case .approvedHalf: return "\(spoken), approved half day"
+        case .pendingFull, .pendingHalf: return "\(spoken), pending"
+        case .none: return spoken
+        }
     }
 
     @ViewBuilder
@@ -1304,6 +1332,15 @@ struct OperativeAnnualLeaveCalendarView: View {
         await holidayStore.approveBooking(booking, approvedByUserId: uid)
         let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
         await notifyDecision(to: booking, approved: true, decidedByName: approverName)
+        await notifyAnnualLeavePeerManagers(
+            request: booking,
+            actorUserId: uid,
+            actorName: approverName,
+            actionVerb: "approved",
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives,
+            notificationService: notificationService
+        )
         selectedDay = nil
         successMessage = "Request approved."
         showSuccess = true
@@ -1318,6 +1355,15 @@ struct OperativeAnnualLeaveCalendarView: View {
         await holidayStore.rejectBooking(booking, rejectedByUserId: uid)
         let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
         await notifyDecision(to: booking, approved: false, decidedByName: approverName)
+        await notifyAnnualLeavePeerManagers(
+            request: booking,
+            actorUserId: uid,
+            actorName: approverName,
+            actionVerb: "declined",
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives,
+            notificationService: notificationService
+        )
         selectedDay = nil
         successMessage = "Request declined."
         showSuccess = true

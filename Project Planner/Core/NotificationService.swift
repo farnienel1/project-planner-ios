@@ -821,18 +821,27 @@ class NotificationService: ObservableObject {
         await saveNotification(notification)
     }
 
-    func notifyHolidayRequestDecisionToUser(userId: String, bookingId: UUID, approved: Bool, decidedByName: String) async {
+    func notifyHolidayRequestDecisionToUser(userId: String, bookingId: UUID, approved: Bool, decidedByName: String, reason: String = "") async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let targetId = resolvedRecipientUserId(userId)
         print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY DECISION] bookingId=\(bookingId.uuidString) approved=\(approved) decidedBy=\(decidedByName) target=\(targetId) original=\(userId)")
         let dedupeId = syntheticNotificationId(from: "holidayDecision|\(bookingId.uuidString)|\(targetId)|\(approved)")
+        let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let decisionMessage: String
+        if approved {
+            decisionMessage = "\(decidedByName) approved your annual leave request."
+        } else if trimmedReason.isEmpty {
+            decisionMessage = "\(decidedByName) declined your annual leave request."
+        } else {
+            decisionMessage = "\(decidedByName) declined your annual leave request. \(trimmedReason)"
+        }
         let notification = AppNotification(
             id: dedupeId,
             organizationId: organizationId,
             type: approved ? .holidayRequestApproved : .holidayRequestDeclined,
             title: approved ? "Annual Leave Approved" : "Annual Leave Declined",
-            message: approved ? "\(decidedByName) approved your annual leave request." : "\(decidedByName) declined your annual leave request.",
+            message: decisionMessage,
             userId: targetId,
             relatedId: bookingId,
             requiresPermission: nil
@@ -930,10 +939,12 @@ class NotificationService: ObservableObject {
         actionSummary: String,
         peerManagerUserIds: [String],
         excludingActorUserId: String?,
-        actionVerb: String = "approved"
+        actionVerb: String = "approved",
+        message: String? = nil
     ) async {
         guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return }
         let peers = await filterRecipientsExcludingRequester(peerManagerUserIds, requesterId: excludingActorUserId)
+        let body = message ?? "\(actorName) \(actionVerb): \(actionSummary)"
         for peerId in peers {
             let targetId = await resolvedRecipientUserIdResolvingStaleIds(peerId)
             let dedupeId = syntheticNotificationId(from: "lmPeer|\(actorName)|\(actionSummary)|\(targetId)|\(actionVerb)")
@@ -942,7 +953,7 @@ class NotificationService: ObservableObject {
                 organizationId: organizationId,
                 type: .lineManagerPeerUpdate,
                 title: "Line manager update",
-                message: "\(actorName) \(actionVerb): \(actionSummary)",
+                message: body,
                 userId: targetId,
                 relatedId: nil,
                 requiresPermission: nil
