@@ -176,7 +176,7 @@ nonisolated enum AnnualLeavePolicy {
         }
 
         let entitlement = days + carry
-        let remaining = max(0, entitlement - taken - pending)
+        let remaining = entitlement - taken - pending
         let label = formattedLeaveYearLabel(range: range, calendar: calendar)
 
         return AnnualLeaveUsageSummary(
@@ -268,6 +268,47 @@ nonisolated enum AnnualLeavePolicy {
                 let rem = formatAllowanceDays(summary.remainingDays)
                 let req = formatAllowanceDays(requested)
                 return "In \(summary.leaveYearLabel) you have \(rem) days of annual leave left (after booked and pending), but this selection needs \(req) days. Remove dates, choose shorter slots, or wait until your allowance renews."
+            }
+        }
+        return nil
+    }
+
+    /// Same allowance check when each selected day can be full, AM, or PM.
+    static func validateProposedDaySlots(
+        daySlots: [Date: HolidayTimeSlot],
+        bookings: [HolidayBooking],
+        profileUserId: String,
+        operativeId: UUID?,
+        daysPerYear: Double,
+        startMonth: Int,
+        endMonth: Int,
+        carriesOver: Bool,
+        calendar: Calendar = .current
+    ) -> String? {
+        let normalized = Dictionary(uniqueKeysWithValues: daySlots.map { (calendar.startOfDay(for: $0.key), $0.value) })
+        guard !normalized.isEmpty else { return nil }
+        let buckets = bucketStartOfDaysByLeaveYear(Array(normalized.keys), startMonth: startMonth, endMonth: endMonth, calendar: calendar)
+        guard !buckets.isEmpty else {
+            return "Could not determine your leave year for one or more selected dates."
+        }
+        for (_, days) in buckets {
+            let ref = days.first ?? Date()
+            let summary = usageSummary(
+                bookings: bookings,
+                profileUserId: profileUserId,
+                operativeId: operativeId,
+                daysPerYear: daysPerYear,
+                startMonth: startMonth,
+                endMonth: endMonth,
+                carriesOver: carriesOver,
+                referenceDate: ref,
+                calendar: calendar
+            )
+            let requested = days.reduce(0.0) { $0 + (normalized[$1] ?? .fullDay).dayValue }
+            if requested > summary.remainingDays + allowanceEpsilon {
+                let rem = formatAllowanceDays(summary.remainingDays)
+                let req = formatAllowanceDays(requested)
+                return "In \(summary.leaveYearLabel) you have \(rem) days of annual leave left (after booked and pending), but this selection needs \(req) days. You can still send it, and your line manager can allow it."
             }
         }
         return nil
