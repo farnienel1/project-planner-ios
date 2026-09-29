@@ -269,12 +269,17 @@ struct ContentView: View {
             bookingStore.setFirebaseBackend(firebaseBackend)
             userStore.setFirebaseBackend(firebaseBackend)
             print("🔥🔥🔥 DEBUG: Firebase backend connection complete in ContentView")
-            
-            if firebaseBackend.isAuthenticated && firebaseBackend.currentOrganization == nil {
+
+            if firebaseBackend.isAuthenticated
+                && firebaseBackend.currentOrganization == nil
+                && !firebaseBackend.isBootstrappingOrgDataLoad
+                && !firebaseBackend.hasBootstrappedOrgDataLoad {
                 print("🔥🔥🔥 DEBUG: ⚠️ Organization is nil on app appear, waiting for normal load...")
                 Task {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    if firebaseBackend.currentOrganization == nil {
+                    if firebaseBackend.currentOrganization == nil
+                        && !firebaseBackend.isBootstrappingOrgDataLoad
+                        && !firebaseBackend.hasBootstrappedOrgDataLoad {
                         print("🔥🔥🔥 DEBUG: ⚠️ Organization still nil after normal load, attempting recovery...")
                         if let userId = firebaseBackend.currentUser?.uid {
                             await firebaseBackend.loadUserOrganizationWithRecovery(userId: userId)

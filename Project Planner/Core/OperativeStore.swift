@@ -60,8 +60,12 @@ class OperativeStore: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                print("🔥🔥🔥 DEBUG: OperativeStore received syncOfflineChanges notification - syncing all data to Firebase")
                 guard let self else { return }
+                guard self.firebaseBackend?.hasBootstrappedOrgDataLoad == true else {
+                    print("🔥🔥🔥 DEBUG: OperativeStore offline sync skipped until org bootstrap finishes")
+                    return
+                }
+                print("🔥🔥🔥 DEBUG: OperativeStore received syncOfflineChanges notification - syncing all data to Firebase")
                 if WarningsRefreshHelper.isHomeWarningsWarmInFlight
                     || self.firebaseBackend?.isBootstrappingOrgDataLoad == true {
                     print("🔥🔥🔥 DEBUG: OperativeStore offline sync deferred — bootstrap/warm in flight")

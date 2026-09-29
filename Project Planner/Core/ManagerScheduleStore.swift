@@ -33,6 +33,7 @@ class ManagerScheduleStore: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
+                guard self?.firebaseBackend?.hasBootstrappedOrgDataLoad == true else { return }
                 self?.loadData(force: true)
             }
         }

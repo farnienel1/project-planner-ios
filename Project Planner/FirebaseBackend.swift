@@ -1125,7 +1125,6 @@ class FirebaseBackend: ObservableObject {
                 return
             }
             
-            print("🔥🔥🔥 DEBUG: User data keys: \(userData.keys.joined(separator: ", "))")
             if let rawOrg = userData["organizationId"] {
                 print("🔥🔥🔥 DEBUG: Raw organizationId field type: \(type(of: rawOrg)), value: \(rawOrg)")
             }
@@ -1582,7 +1581,6 @@ class FirebaseBackend: ObservableObject {
             let data = doc.data()
             let docId = doc.documentID
             print("🔥🔥🔥 DEBUG: [LOAD] Processing project document: \(docId)")
-            print("🔥🔥🔥 DEBUG: [LOAD] Document data keys: \(data.keys.joined(separator: ", "))")
             
             // Skip placeholder documents
             if docId == "INITIAL-PLACEHOLDER" {
@@ -1925,7 +1923,6 @@ class FirebaseBackend: ObservableObject {
             let data = doc.data()
             let docId = doc.documentID
             print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Processing small works document: \(docId)")
-            print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Document data keys: \(data.keys.joined(separator: ", "))")
             
             // Skip placeholder documents
             if docId == "INITIAL-PLACEHOLDER" {
