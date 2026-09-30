@@ -397,6 +397,18 @@ class FirebaseBackend: ObservableObject {
         await attachAuthStateListenerWhenReady()
     }
 
+    /// Signed-in launch must already have a profile before the first frame.
+    /// Putting Home in after the window appears leaves a blank white screen.
+    func installLaunchSession(into userStore: UserStore) {
+        syncPublishedAuthFromAuthSession()
+        if currentOrganization == nil, let cached = loadOrganizationFromLocalStorage() {
+            currentOrganization = cached
+        }
+        userStore.setFirebaseBackend(self)
+        userStore.unblockLaunchProfileIfNeeded()
+        print("🔥🔥🔥 DEBUG: Launch session before first frame auth=\(isAuthenticated) user=\(userStore.currentUser != nil)")
+    }
+
     /// Pushes `Auth.auth().currentUser` into `@Published` immediately (no listener required). Use so UI gates don’t spin forever while attach runs.
     func syncPublishedAuthFromAuthSession() {
         ensureFirebaseAppConfigured()

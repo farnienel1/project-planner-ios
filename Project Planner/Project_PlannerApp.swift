@@ -179,14 +179,17 @@ struct Project_PlannerApp: App {
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
         // Avoid a plain white UIKit window before the first SwiftUI frame (especially during Firebase / store init).
-        UIWindow.appearance().backgroundColor = UIColor.systemGroupedBackground
-        _firebaseBackend = StateObject(wrappedValue: FirebaseBackend())
+        UIWindow.appearance().backgroundColor = UIColor(red: 0.969, green: 0.973, blue: 0.980, alpha: 1)
+        let backend = FirebaseBackend()
+        let users = UserStore()
+        _firebaseBackend = StateObject(wrappedValue: backend)
         _smartCache = StateObject(wrappedValue: SmartCacheService())
         _projectStore = StateObject(wrappedValue: ProjectStore())
         _operativeStore = StateObject(wrappedValue: OperativeStore())
         _bookingStore = StateObject(wrappedValue: BookingStore())
         _managerScheduleStore = StateObject(wrappedValue: ManagerScheduleStore())
-        _userStore = StateObject(wrappedValue: UserStore())
+        _userStore = StateObject(wrappedValue: users)
+        backend.installLaunchSession(into: users)
         _taskStore = StateObject(wrappedValue: ProjectTaskStore())
         _holidayStore = StateObject(wrappedValue: HolidayStore())
         _subcontractorStore = StateObject(wrappedValue: SubcontractorStore())
@@ -197,7 +200,7 @@ struct Project_PlannerApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack {
-                Color(.systemGroupedBackground).ignoresSafeArea()
+                ProjectWorksRevampColors.canvas.ignoresSafeArea()
                 ProjectPlannerRootView(appDelegate: appDelegate)
                     .environmentObject(firebaseBackend)
                     .environmentObject(smartCache)
@@ -216,9 +219,6 @@ struct Project_PlannerApp: App {
             .preferredColorScheme(appSettings.settings.theme.colorScheme)
             .onAppear {
                 appSettings.settings.theme.applyToKeyWindows()
-                if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                    windowScene.windows.forEach { $0.makeKeyAndVisible() }
-                }
             }
             .onChange(of: appSettings.settings.theme) { _, theme in
                 theme.applyToKeyWindows()

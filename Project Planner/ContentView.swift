@@ -472,8 +472,10 @@ struct ContentView: View {
             case 0:
                 // Home is not inside a NavigationStack. A stack inserted as the window root
                 // stays a blank white (or black) UIKit controller even after Home appears.
-                HomeView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                GeometryReader { proxy in
+                    HomeView()
+                        .frame(width: max(proxy.size.width, 1), height: max(proxy.size.height, 1))
+                }
             case 1:
                 // Same as Small Works: the screen owns its one NavigationStack. Wrapping it again crashes on open.
                 if userStore.canViewProjects() {

@@ -230,14 +230,16 @@ struct ProjectPlannerRootView: View {
         return false
     }
 
-    /// Installs a local profile when one is missing and takes the logo down in this same turn.
+    /// Installs a local profile when one is missing. A profile already in memory is left alone
+    /// so this does not rebuild the window.
     private func revealShellIfReady() {
         if showMainExperience {
             userStore.unblockLaunchProfileIfNeeded()
         }
-        if userStore.currentUser != nil || !showMainExperience {
+        if userStore.currentUser != nil { return }
+        if !showMainExperience {
             hasResolvedInitialAuth = true
-            print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil)")
+            print("🔥🔥🔥 DEBUG: PP splash off user=false")
         }
     }
 
