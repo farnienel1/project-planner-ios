@@ -8,11 +8,6 @@
 import SwiftUI
 import UIKit
 
-/// Identifies a small-works job opened from the list. The list has no navigation stack.
-private struct SmallWorkScreenCover: Identifiable {
-    let id: UUID
-}
-
 struct SmallWorksView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -20,16 +15,11 @@ struct SmallWorksView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var firebaseBackend: FirebaseBackend
-    @EnvironmentObject var appSettings: AppSettingsStore
-    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
-    @EnvironmentObject var holidayStore: HolidayStore
-    @EnvironmentObject var subcontractorStore: SubcontractorStore
-    @EnvironmentObject var taskStore: ProjectTaskStore
     /// Default to Active so the list opens on current jobs; use All / Completed chips for older work.
     @State private var selectedStatus: ProjectStatus? = .active
     @State private var selectedProject: Project? = nil
     @State private var showingEditProject = false
-    @State private var openedSmallWork: SmallWorkScreenCover?
+    @State private var navigationPath = NavigationPath()
     @State private var searchText = ""
     @State private var showingCreateSmallWorks = false
     @State private var deadlineAssignedProjectIds: Set<UUID> = []
@@ -50,87 +40,95 @@ struct SmallWorksView: View {
     }
     
     var body: some View {
-        ZStack {
-            WorksDashboardPalette.bg.ignoresSafeArea()
-            VStack(spacing: 0) {
-                smallWorksHeader
+        NavigationStack(path: $navigationPath) {
+            ZStack {
+                WorksDashboardPalette.bg.ignoresSafeArea()
                 smallWorksRootContent
             }
-        }
-        .background(
-            Color.clear
-                .preference(key: HideBottomMenuKey.self, value: openedSmallWork != nil)
-        )
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("selectTab"))) { notification in
-            if let userInfo = notification.userInfo,
-               let tab = userInfo["tab"] as? Int,
-               tab == 2 {
-                openedSmallWork = nil
-                selectedStatus = .active
+            .navigationTitle("Small works")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(WorksDashboardPalette.bg, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("")
+                        .accessibilityHidden(true)
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: {
+                        NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+                    }) {
+                        Image(systemName: "chevron.left")
+                            .foregroundStyle(WorksDashboardPalette.ink)
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 36, height: 36)
+                            .background(WorksDashboardPalette.soft)
+                            .clipShape(Circle())
+                    }
+                }
+                if canCreateSmallWorks {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showingCreateSmallWorks = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 36, height: 36)
+                                .background(WorksDashboardListStyle.smallWorks.accent)
+                                .clipShape(Circle())
+                        }
+                        .accessibilityLabel("New small work")
+                    }
+                }
             }
-        }
-        .onAppear {
-            if selectedStatus == .inactive || selectedStatus == nil {
-                selectedStatus = .active
+            .navigationBarBackButtonHidden(true)
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("resetNavigationForTab"))) { notification in
+                if let userInfo = notification.userInfo,
+                   let tab = userInfo["tab"] as? Int,
+                   tab == 2 {
+                    // Reset navigation to root
+                    navigationPath.removeLast(navigationPath.count)
+                }
             }
-        }
-        .task {
-            await refreshDeadlineAssignedProjectIds()
-        }
-        .sheet(isPresented: $showingEditProject) {
-            if let project = selectedProject {
-                EditProjectView(project: project)
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("selectTab"))) { notification in
+                if let userInfo = notification.userInfo,
+                   let tab = userInfo["tab"] as? Int,
+                   tab == 2 {
+                    // Reset navigation when Small Works tab is selected
+                    navigationPath.removeLast(navigationPath.count)
+                    selectedStatus = .active
+                }
+            }
+            .onAppear {
+                if selectedStatus == .inactive || selectedStatus == nil {
+                    selectedStatus = .active
+                }
+            }
+            .task {
+                await refreshDeadlineAssignedProjectIds()
+            }
+            .sheet(isPresented: $showingEditProject) {
+                if let project = selectedProject {
+                    EditProjectView(project: project)
+                        .environmentObject(projectStore)
+                        .environmentObject(operativeStore)
+                        .environmentObject(userStore)
+                }
+            }
+            .sheet(isPresented: $showingCreateSmallWorks) {
+                CreateSmallWorksView()
                     .environmentObject(projectStore)
                     .environmentObject(operativeStore)
+                    .environmentObject(notificationService)
                     .environmentObject(userStore)
+                    .environmentObject(firebaseBackend)
             }
+            .background(
+                Color.clear
+                    .preference(key: HideBottomMenuKey.self, value: false)
+            )
         }
-        .sheet(isPresented: $showingCreateSmallWorks) {
-            CreateSmallWorksView()
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(notificationService)
-                .environmentObject(userStore)
-                .environmentObject(firebaseBackend)
-        }
-        .fullScreenCover(item: $openedSmallWork) { cover in
-            NavigationStack {
-                smallWorkDetailDestination(cover.id)
-            }
-        }
-    }
-
-    private var smallWorksHeader: some View {
-        HStack {
-            Button(action: {
-                NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
-            }) {
-                Image(systemName: "chevron.left")
-                    .foregroundStyle(WorksDashboardPalette.ink)
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 36, height: 36)
-                    .background(WorksDashboardPalette.soft)
-                    .clipShape(Circle())
-            }
-            .accessibilityLabel("Back")
-            Spacer()
-            if canCreateSmallWorks {
-                Button {
-                    showingCreateSmallWorks = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
-                        .background(WorksDashboardListStyle.smallWorks.accent)
-                        .clipShape(Circle())
-                }
-                .accessibilityLabel("New small work")
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
     }
 
     private var showsBlockingLoader: Bool {
@@ -184,17 +182,15 @@ struct SmallWorksView: View {
                                 emptySearchState
                             }
                         } else {
-                            VStack(spacing: 13) {
+                            LazyVStack(spacing: 13) {
                                 ForEach(searchFilteredSmallWorks) { project in
-                                    Button {
-                                        openedSmallWork = SmallWorkScreenCover(id: project.id)
-                                    } label: {
+                                    NavigationLink(value: project) {
                                         WorksDashboardCard(
                                             project: project,
                                             listAccent: WorksDashboardListStyle.smallWorks.accent,
-                                            showsClientAndManager: !userStore.isOperativeMode(),
-                                            managerName: managerName(for: project)
+                                            showsClientAndManager: !userStore.isOperativeMode()
                                         )
+                                        .environmentObject(operativeStore)
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -204,6 +200,19 @@ struct SmallWorksView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 2)
+                }
+                .navigationDestination(for: Project.self) { project in
+                    ProjectDetailView(project: project)
+                        .environmentObject(bookingStore)
+                        .environmentObject(operativeStore)
+                        .environmentObject(projectStore)
+                        .background(
+                            Color.clear
+                                .preference(key: HideBottomMenuKey.self, value: true)
+                        )
+                }
+                .refreshable {
+                    projectStore.loadData()
                 }
             }
         }
@@ -332,7 +341,7 @@ struct SmallWorksView: View {
             return "Your account isn’t matched to an operative record yet, so assigned jobs can’t be listed. Pull to refresh, or ask an admin to check the email on your operative profile."
         }
         if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil {
-            return "This is a load problem, not deleted jobs. Tap Retry. Existing jobs stay on the server and on web."
+            return "This is a load problem, not deleted jobs. Pull down to retry. Existing jobs stay on the server and on web."
         }
         if canCreateSmallWorks {
             return WorksDashboardListStyle.smallWorks.emptyCreatePrompt
@@ -373,38 +382,6 @@ struct SmallWorksView: View {
 
         var seen = Set<UUID>()
         return works.filter { seen.insert($0.id).inserted }
-    }
-
-    private func managerName(for project: Project) -> String {
-        if let managerId = project.managerId,
-           let manager = operativeStore.allManagers.first(where: { $0.id == managerId }) {
-            return "\(manager.firstName) \(manager.lastName)".trimmingCharacters(in: .whitespaces)
-        }
-        return project.manager.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    @ViewBuilder
-    private func smallWorkDetailDestination(_ projectId: UUID) -> some View {
-        if let project = projectStore.projects.first(where: { $0.id == projectId }) {
-            ProjectDetailView(project: project)
-                .environmentObject(bookingStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(operativeStore)
-                .environmentObject(projectStore)
-                .environmentObject(userStore)
-                .environmentObject(holidayStore)
-                .environmentObject(subcontractorStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(notificationService)
-                .environmentObject(appSettings)
-                .environmentObject(taskStore)
-                .background(
-                    Color.clear
-                        .preference(key: HideBottomMenuKey.self, value: true)
-                )
-        } else {
-            ContentUnavailableView("Small works unavailable", systemImage: "wrench.and.screwdriver", description: Text("Pull to refresh and try again."))
-        }
     }
 
     private func refreshDeadlineAssignedProjectIds() async {

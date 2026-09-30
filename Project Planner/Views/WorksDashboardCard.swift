@@ -269,6 +269,7 @@ struct WorksDashboardHero: View {
 struct WorksDashboardStatsRow: View {
     let counts: WorksListStatusCounts
     @Binding var selectedStatus: ProjectStatus?
+    @State private var selectionTick = 0
 
     var body: some View {
         HStack(spacing: 9) {
@@ -276,12 +277,14 @@ struct WorksDashboardStatsRow: View {
             tile(status: .upcoming, value: counts.upcoming, label: "Upcoming", color: WorksDashboardPalette.blue, tint: WorksDashboardPalette.blueTint)
             tile(status: .completed, value: counts.completed, label: "Completed", color: WorksDashboardPalette.slate, tint: WorksDashboardPalette.slateTint)
         }
+        .sensoryFeedback(.selection, trigger: selectionTick)
     }
 
     private func tile(status: ProjectStatus, value: Int, label: String, color: Color, tint: Color) -> some View {
         let isSelected = selectedStatus == status
         return Button {
             selectedStatus = isSelected ? nil : status
+            selectionTick += 1
         } label: {
             HStack(spacing: 0) {
                 Rectangle()
@@ -348,14 +351,31 @@ struct WorksDashboardCard: View {
     let project: Project
     let listAccent: Color
     var showsClientAndManager: Bool = true
-    var managerName: String = ""
+
+    @EnvironmentObject private var operativeStore: OperativeStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var drawnFraction: Double = 0
 
     private var typeLabel: String { WorksDashboardJobTypeStyle.displayLabel(for: project) }
     private var typeSwatch: WorksDashboardJobTypeStyle.Swatch {
         WorksDashboardJobTypeStyle.swatch(forDisplayLabel: typeLabel)
     }
+    private var progressFraction: Double {
+        min(max(WorksListProgress.fraction(for: project), 0), 1)
+    }
     private var progressPercent: Int { WorksListProgress.percentDisplay(for: project) }
     private var deadline: WorksDashboardDeadline { WorksDashboardDeadline.from(project: project) }
+
+    private var isPastEnd: Bool {
+        let calendar = Calendar.current
+        return calendar.startOfDay(for: Date()) > calendar.startOfDay(for: project.endDate)
+    }
+
+    private var ringColor: Color {
+        if project.status == .completed { return WorksDashboardPalette.slate }
+        if project.isLive && isPastEnd { return WorksDashboardPalette.red }
+        return typeSwatch.color
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -365,7 +385,7 @@ struct WorksDashboardCard: View {
             VStack(alignment: .leading, spacing: 13) {
                 HStack(alignment: .top, spacing: 13) {
                     infoColumn
-                    progressLabel
+                    progressRing
                 }
                 footer
             }
@@ -377,15 +397,32 @@ struct WorksDashboardCard: View {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(WorksDashboardPalette.line, lineWidth: 1)
         )
+        .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 6)
         .opacity(project.status == .completed ? 0.72 : 1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilitySummary)
         .accessibilityAddTraits(.isButton)
+        .onAppear {
+            drawnFraction = reduceMotion ? progressFraction : 0
+            guard !reduceMotion else { return }
+            withAnimation(.easeOut(duration: 0.4)) {
+                drawnFraction = progressFraction
+            }
+        }
+        .onChange(of: progressFraction) { _, newValue in
+            if reduceMotion {
+                drawnFraction = newValue
+            } else {
+                withAnimation(.easeOut(duration: 0.4)) {
+                    drawnFraction = newValue
+                }
+            }
+        }
     }
 
     private var infoColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
+            WorksDashboardWrap(spacing: 8) {
                 Text(project.jobNumber)
                     .font(.title3.weight(.heavy))
                     .foregroundStyle(WorksDashboardPalette.ink)
@@ -423,19 +460,29 @@ struct WorksDashboardCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var progressLabel: some View {
-        Text("\(progressPercent)%")
-            .font(.title3.weight(.heavy))
-            .foregroundStyle(typeSwatch.color)
-            .monospacedDigit()
-            .lineLimit(1)
-            .frame(width: 64, alignment: .trailing)
-            .accessibilityHidden(true)
+    private var progressRing: some View {
+        ZStack {
+            Circle()
+                .stroke(WorksDashboardPalette.soft2, lineWidth: 7)
+            Circle()
+                .trim(from: 0, to: drawnFraction)
+                .stroke(ringColor, style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            Text("\(progressPercent)%")
+                .font(.title3.weight(.heavy))
+                .foregroundStyle(ringColor)
+                .minimumScaleFactor(0.5)
+                .lineLimit(1)
+                .dynamicTypeSize(.xSmall ... .accessibility1)
+                .padding(8)
+        }
+        .frame(width: 74, height: 74)
+        .accessibilityHidden(true)
     }
 
     private var footer: some View {
         HStack(alignment: .top, spacing: 8) {
-            HStack(spacing: 8) {
+            WorksDashboardWrap(spacing: 8) {
                 if let label = deadline.label {
                     tag(label, color: deadline.color, tint: deadline.tint)
                 }
@@ -487,8 +534,10 @@ struct WorksDashboardCard: View {
     }
 
     private var managerDisplayName: String {
-        let passed = managerName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !passed.isEmpty { return passed }
+        if let managerId = project.managerId,
+           let manager = operativeStore.allManagers.first(where: { $0.id == managerId }) {
+            return "\(manager.firstName) \(manager.lastName)".trimmingCharacters(in: .whitespaces)
+        }
         return project.manager.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -523,5 +572,56 @@ struct WorksDashboardCard: View {
         }
         parts.append(project.status.rawValue.lowercased())
         return parts.joined(separator: ", ")
+    }
+}
+
+/// Tags stay on one row until they no longer fit, then wrap instead of clipping.
+private struct WorksDashboardWrap: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        let rows = rows(maxWidth: maxWidth, subviews: subviews)
+        let height = rows.reduce(0) { $0 + $1.height } + spacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: maxWidth == .greatestFiniteMagnitude ? (rows.map(\.width).max() ?? 0) : maxWidth, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let rows = rows(maxWidth: bounds.width, subviews: subviews)
+        var y = bounds.minY
+        var index = 0
+        for row in rows {
+            var x = bounds.minX
+            for size in row.sizes {
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+                index += 1
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row {
+        var sizes: [CGSize] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func rows(maxWidth: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = []
+        var current = Row()
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            let nextWidth = current.sizes.isEmpty ? size.width : current.width + spacing + size.width
+            if !current.sizes.isEmpty && nextWidth > maxWidth {
+                rows.append(current)
+                current = Row()
+            }
+            current.sizes.append(size)
+            current.width = current.sizes.count == 1 ? size.width : current.width + spacing + size.width
+            current.height = max(current.height, size.height)
+        }
+        if !current.sizes.isEmpty { rows.append(current) }
+        return rows
     }
 }

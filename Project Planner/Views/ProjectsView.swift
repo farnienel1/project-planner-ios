@@ -7,12 +7,6 @@
 
 import SwiftUI
 
-/// Identifies a project opened from the list. The list itself has no navigation stack;
-/// a stack on this tab crashes as soon as the tab appears.
-private struct ProjectScreenCover: Identifiable {
-    let id: UUID
-}
-
 struct ProjectsView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -21,13 +15,9 @@ struct ProjectsView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var firebaseBackend: FirebaseBackend
-    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
-    @EnvironmentObject var holidayStore: HolidayStore
-    @EnvironmentObject var subcontractorStore: SubcontractorStore
-    @EnvironmentObject var taskStore: ProjectTaskStore
     /// Default to Active so the list opens on current jobs; use All / Completed chips for older work.
     @State private var selectedStatus: ProjectStatus? = .active
-    @State private var openedProject: ProjectScreenCover?
+    @State private var navigationPath = NavigationPath()
     @State private var searchText = ""
     @State private var showingCreateProject = false
     @State private var deadlineAssignedProjectIds: Set<UUID> = []
@@ -44,79 +34,89 @@ struct ProjectsView: View {
     }
 
     var body: some View {
-        ZStack {
-            WorksDashboardPalette.bg.ignoresSafeArea()
-            VStack(spacing: 0) {
-                projectsHeader
+        NavigationStack(path: $navigationPath) {
+            ZStack {
+                WorksDashboardPalette.bg.ignoresSafeArea()
                 projectsRootContent
             }
-        }
-        .background(
-            Color.clear
-                .preference(key: HideBottomMenuKey.self, value: openedProject != nil)
-        )
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("selectTab"))) { notification in
-            if let userInfo = notification.userInfo,
-               let tab = userInfo["tab"] as? Int,
-               tab == 1 {
-                openedProject = nil
-                selectedStatus = .active
-            }
-        }
-        .onAppear {
-            if selectedStatus == .inactive || selectedStatus == nil {
-                selectedStatus = .active
-            }
-        }
-        .task {
-            await refreshDeadlineAssignedProjectIds()
-        }
-        .sheet(isPresented: $showingCreateProject) {
-            CreateProjectView()
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(notificationService)
-                .environmentObject(userStore)
-                .environmentObject(firebaseBackend)
-        }
-        .fullScreenCover(item: $openedProject) { cover in
-            NavigationStack {
-                projectDetailDestination(cover.id)
-            }
-        }
-    }
-
-    private var projectsHeader: some View {
-        HStack {
-            Button(action: {
-                NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
-            }) {
-                Image(systemName: "chevron.left")
-                    .foregroundStyle(WorksDashboardPalette.ink)
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 36, height: 36)
-                    .background(WorksDashboardPalette.soft)
-                    .clipShape(Circle())
-            }
-            .accessibilityLabel("Back")
-            Spacer()
-            if canCreateProjects {
-                Button {
-                    showingCreateProject = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
-                        .background(WorksDashboardListStyle.projects.accent)
-                        .clipShape(Circle())
+            .navigationTitle("Projects")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(WorksDashboardPalette.bg, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("")
+                        .accessibilityHidden(true)
                 }
-                .accessibilityLabel("New project")
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: {
+                        NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+                    }) {
+                        Image(systemName: "chevron.left")
+                            .foregroundStyle(WorksDashboardPalette.ink)
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 36, height: 36)
+                            .background(WorksDashboardPalette.soft)
+                            .clipShape(Circle())
+                    }
+                }
+                if canCreateProjects {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showingCreateProject = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 36, height: 36)
+                                .background(WorksDashboardListStyle.projects.accent)
+                                .clipShape(Circle())
+                        }
+                        .accessibilityLabel("New project")
+                    }
+                }
+            }
+            .navigationBarBackButtonHidden(true)
+            .background(
+                // This will be overridden by child views that set preference to true
+                Color.clear
+                    .preference(key: HideBottomMenuKey.self, value: false)
+            )
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("resetNavigationForTab"))) { notification in
+                if let userInfo = notification.userInfo,
+                   let tab = userInfo["tab"] as? Int,
+                   tab == 1 {
+                    // Reset navigation to root
+                    navigationPath.removeLast(navigationPath.count)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("selectTab"))) { notification in
+                if let userInfo = notification.userInfo,
+                   let tab = userInfo["tab"] as? Int,
+                   tab == 1 {
+                    // Reset navigation when Projects tab is selected
+                    navigationPath.removeLast(navigationPath.count)
+                    selectedStatus = .active
+                }
+            }
+            .onAppear {
+                // Ensure Active is selected (Inactive filter removed from UI)
+                if selectedStatus == .inactive || selectedStatus == nil {
+                    selectedStatus = .active
+                }
+            }
+            .task {
+                await refreshDeadlineAssignedProjectIds()
+            }
+            .sheet(isPresented: $showingCreateProject) {
+                CreateProjectView()
+                    .environmentObject(projectStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(notificationService)
+                    .environmentObject(userStore)
+                    .environmentObject(firebaseBackend)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
     }
 
     private var isWaitingForVisibilityData: Bool {
@@ -170,17 +170,15 @@ struct ProjectsView: View {
                                 emptySearchState
                             }
                         } else {
-                            VStack(spacing: 13) {
+                            LazyVStack(spacing: 13) {
                                 ForEach(searchFilteredProjects) { project in
-                                    Button {
-                                        openedProject = ProjectScreenCover(id: project.id)
-                                    } label: {
+                                    NavigationLink(value: project) {
                                         WorksDashboardCard(
                                             project: project,
                                             listAccent: WorksDashboardListStyle.projects.accent,
-                                            showsClientAndManager: !userStore.isOperativeMode(),
-                                            managerName: managerName(for: project)
+                                            showsClientAndManager: !userStore.isOperativeMode()
                                         )
+                                        .environmentObject(operativeStore)
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -190,6 +188,19 @@ struct ProjectsView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 2)
+                }
+                .navigationDestination(for: Project.self) { project in
+                    ProjectDetailView(project: project)
+                        .environmentObject(bookingStore)
+                        .environmentObject(operativeStore)
+                        .environmentObject(projectStore)
+                        .background(
+                            Color.clear
+                                .preference(key: HideBottomMenuKey.self, value: true)
+                        )
+                }
+                .refreshable {
+                    projectStore.loadData()
                 }
             }
         }
@@ -318,7 +329,7 @@ struct ProjectsView: View {
             return "Your account isn’t matched to an operative record yet, so assigned jobs can’t be listed. Pull to refresh, or ask an admin to check the email on your operative profile."
         }
         if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil {
-            return "This is a load problem, not deleted jobs. Tap Retry. Existing jobs stay on the server and on web."
+            return "This is a load problem, not deleted jobs. Pull down to retry. Existing jobs stay on the server and on web."
         }
         if canCreateProjects {
             return WorksDashboardListStyle.projects.emptyCreatePrompt
@@ -359,38 +370,6 @@ struct ProjectsView: View {
 
         var seen = Set<UUID>()
         return projects.filter { seen.insert($0.id).inserted }
-    }
-
-    private func managerName(for project: Project) -> String {
-        if let managerId = project.managerId,
-           let manager = operativeStore.allManagers.first(where: { $0.id == managerId }) {
-            return "\(manager.firstName) \(manager.lastName)".trimmingCharacters(in: .whitespaces)
-        }
-        return project.manager.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    @ViewBuilder
-    private func projectDetailDestination(_ projectId: UUID) -> some View {
-        if let project = projectStore.projects.first(where: { $0.id == projectId }) {
-            ProjectDetailView(project: project)
-                .environmentObject(bookingStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(operativeStore)
-                .environmentObject(projectStore)
-                .environmentObject(userStore)
-                .environmentObject(holidayStore)
-                .environmentObject(subcontractorStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(notificationService)
-                .environmentObject(appSettings)
-                .environmentObject(taskStore)
-                .background(
-                    Color.clear
-                        .preference(key: HideBottomMenuKey.self, value: true)
-                )
-        } else {
-            ContentUnavailableView("Project unavailable", systemImage: "folder", description: Text("Pull to refresh and try again."))
-        }
     }
 
     private func refreshDeadlineAssignedProjectIds() async {

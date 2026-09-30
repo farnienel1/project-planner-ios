@@ -475,7 +475,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             case 1:
-                // ProjectsView draws the list directly. A NavigationStack on this tab crashes on open.
+                // Same as Small Works: the screen owns its one NavigationStack. Wrapping it again crashes on open.
                 if userStore.canViewProjects() {
                     ProjectsView()
                 } else {
