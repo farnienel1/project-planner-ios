@@ -206,10 +206,13 @@ struct ProjectPlannerRootView: View {
 
     /// Kept in sync with notifications only; routing uses `Auth` + `firebaseBackend` so we never sit on an empty “session” gate.
     @State private var firebaseAuthUID: String?
-    /// Avoid flashing the login screen while Firebase session / profile are still resolving.
+    /// Avoid flashing the login screen while Firebase session is still resolving.
     @State private var hasResolvedInitialAuth = false
-    /// Profile reads can sit on a dead network. After this, the splash must leave.
-    @State private var didGiveUpOnProfileSplash = false
+    /// Absolute cap. Nothing Firebase does is allowed to hold the splash past this.
+    /// Set from a detached clock so a stuck MainActor wait cannot keep the splash up.
+    @State private var splashDeadlineReached = false
+    /// After the first splash leaves, an organisation switch may show it again.
+    @State private var launchSplashDismissed = false
     /// Bumps only when the signed-in user moves from one organisation to another.
     /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
     @State private var contentShellEpoch = 0
@@ -222,9 +225,10 @@ struct ProjectPlannerRootView: View {
     }
 
     private var isSessionLoading: Bool {
-        if !hasResolvedInitialAuth || firebaseBackend.isSwitchingOrganization { return true }
-        if didGiveUpOnProfileSplash { return false }
-        return showMainExperience && userStore.isHomeProfileLoading
+        // A real organisation switch covers the app. The launch splash does not wait on profile or Auth attach.
+        if firebaseBackend.isSwitchingOrganization && launchSplashDismissed { return true }
+        if splashDeadlineReached || hasResolvedInitialAuth { return false }
+        return true
     }
 
     @ViewBuilder
@@ -275,6 +279,9 @@ struct ProjectPlannerRootView: View {
         }
         .background(isSessionLoading ? ProjectWorksRevampColors.canvas : Color(.systemGroupedBackground))
         .preferredColorScheme(appSettings.settings.theme.colorScheme)
+        .onChange(of: isSessionLoading) { _, loading in
+            if !loading { launchSplashDismissed = true }
+        }
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
             guard !signedIn else { return }
             guard FirebaseApp.app() != nil else { return }
@@ -296,12 +303,24 @@ struct ProjectPlannerRootView: View {
                     return
                 }
                 firebaseAuthUID = nil
-                didGiveUpOnProfileSplash = false
+                splashDeadlineReached = false
+                hasResolvedInitialAuth = true
                 userStore.clearOnSignOut()
                 print("🔥🔥🔥 DEBUG: RootView auth uid cleared (signed out)")
             }
         }
         .onAppear {
+            // Clock starts before any Firebase call. A stalled Auth/Firestore read must not own this screen.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                splashDeadlineReached = true
+                hasResolvedInitialAuth = true
+                if !firebaseBackend.isSwitchingOrganization {
+                    userStore.unblockLaunchProfileIfNeeded()
+                }
+                print("🔥🔥🔥 DEBUG: PP loading screen deadline — leaving splash")
+            }
+
             // Wire stores before any async profile load so `loadCurrentUser()` never no-ops with “FirebaseBackend not wired yet”.
             PlannerStoreWiring.connectIfNeeded(
                 firebaseBackend: firebaseBackend,
@@ -319,6 +338,9 @@ struct ProjectPlannerRootView: View {
             )
 
             firebaseBackend.syncPublishedAuthFromAuthSession()
+            if firebaseBackend.isAuthenticated {
+                hasResolvedInitialAuth = true
+            }
             if FirebaseApp.app() != nil {
                 firebaseAuthUID = firebaseAuthUID ?? Auth.auth().currentUser?.uid
             }
@@ -343,12 +365,8 @@ struct ProjectPlannerRootView: View {
             Task { @MainActor in
                 await firebaseBackend.syncAuthStateFromSessionIfNeeded()
                 hasResolvedInitialAuth = true
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 10_000_000_000)
-                    guard userStore.isHomeProfileLoading, !firebaseBackend.isSwitchingOrganization else { return }
+                if userStore.currentUser == nil {
                     userStore.unblockLaunchProfileIfNeeded()
-                    didGiveUpOnProfileSplash = true
-                    print("🔥🔥🔥 DEBUG: Left the PP loading screen after the profile wait")
                 }
                 async let profilePass: Void = loadLaunchProfile()
                 async let bootstrapPass: Void = PlannerStoreWiring.bootstrapOrgDataIfNeeded(

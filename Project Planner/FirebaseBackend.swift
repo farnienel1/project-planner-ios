@@ -1068,40 +1068,49 @@ class FirebaseBackend: ObservableObject {
             await loadUserOrganizationFromFirebase(userId: userId)
     }
 
+    private nonisolated enum ServerReadTimeoutError: Error {
+        case timedOut
+    }
+
     private func getDocumentWithServerTimeoutAndCacheFallback(
         _ ref: DocumentReference,
         timeoutSeconds: Double = 8.0
     ) async throws -> DocumentSnapshot {
-        enum ReadTimeoutError: Error { case timedOut }
-
-        func withTimeout<T>(_ seconds: Double, operation: @escaping () async throws -> T) async throws -> T {
-            try await withThrowingTaskGroup(of: T.self) { group in
-                group.addTask { try await operation() }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                    throw ReadTimeoutError.timedOut
-                }
-                let value = try await group.next()!
-                group.cancelAll()
-                return value
-            }
-        }
-
+        let path = ref.path
         do {
-            return try await withTimeout(timeoutSeconds) {
-                try await ref.getDocument(source: .server)
-            }
+            return try await Self.readDocumentFromServer(ref, timeoutSeconds: timeoutSeconds)
         } catch {
-            if error is ReadTimeoutError {
-                print("🔥🔥🔥 DEBUG: ⏱️ Firestore server read timed out for \(ref.path) - trying cache")
+            if error is ServerReadTimeoutError {
+                print("🔥🔥🔥 DEBUG: ⏱️ Firestore server read timed out for \(path) - trying cache")
             } else if isOfflineNetworkError(error) {
-                print("🔥🔥🔥 DEBUG: 🌐 Offline while reading \(ref.path) from server - trying cache")
+                print("🔥🔥🔥 DEBUG: 🌐 Offline while reading \(path) from server - trying cache")
             } else {
                 let nsError = error as NSError
-                print("🔥🔥🔥 DEBUG: ⚠️ Server read failed for \(ref.path) [\(nsError.domain):\(nsError.code)] - trying cache")
+                print("🔥🔥🔥 DEBUG: ⚠️ Server read failed for \(path) [\(nsError.domain):\(nsError.code)] - trying cache")
             }
 
             return try await ref.getDocument(source: .cache)
+        }
+    }
+
+    /// Off the main actor. A server read that never returns must not freeze the splash or Home.
+    private nonisolated static func readDocumentFromServer(
+        _ ref: DocumentReference,
+        timeoutSeconds: Double
+    ) async throws -> DocumentSnapshot {
+        try await withThrowingTaskGroup(of: DocumentSnapshot.self) { group in
+            group.addTask {
+                try await ref.getDocument(source: .server)
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                throw ServerReadTimeoutError.timedOut
+            }
+            defer { group.cancelAll() }
+            guard let value = try await group.next() else {
+                throw ServerReadTimeoutError.timedOut
+            }
+            return value
         }
     }
     
