@@ -224,28 +224,20 @@ struct ProjectPlannerRootView: View {
 
     private var isSessionLoading: Bool {
         if firebaseBackend.isSwitchingOrganization && launchSplashDismissed { return true }
-        // Home owns a NavigationStack. Inserting that stack with no profile, during the
-        // first frame, leaves the UIKit window black. The white splash stays until a user exists.
+        // Signed in with no profile yet: keep the logo up. A profile means the logo comes off now.
         if showMainExperience && userStore.currentUser == nil { return true }
-        if hasResolvedInitialAuth { return false }
-        return true
+        if !showMainExperience && !hasResolvedInitialAuth { return true }
+        return false
     }
 
-    /// Installs a local profile when one is missing, then leaves the splash on the next frame.
+    /// Installs a local profile when one is missing and takes the logo down in this same turn.
     private func revealShellIfReady() {
         if showMainExperience {
             userStore.unblockLaunchProfileIfNeeded()
         }
-        let ready = userStore.currentUser != nil || !showMainExperience
-        guard ready, !hasResolvedInitialAuth else { return }
-        Task { @MainActor in
-            await Task.yield()
-            if showMainExperience {
-                userStore.unblockLaunchProfileIfNeeded()
-            }
-            if userStore.currentUser != nil || !showMainExperience {
-                hasResolvedInitialAuth = true
-            }
+        if userStore.currentUser != nil || !showMainExperience {
+            hasResolvedInitialAuth = true
+            print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil)")
         }
     }
 
@@ -360,9 +352,7 @@ struct ProjectPlannerRootView: View {
             }
 
             appSettings.setupObservers()
-
-            // Do not dismiss the splash inside this onAppear. That swap, in the same turn the
-            // window becomes visible, inserts Home's NavigationStack before it can draw.
+            revealShellIfReady()
             Task { @MainActor in
                 await Task.yield()
                 revealShellIfReady()
