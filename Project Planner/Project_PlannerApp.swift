@@ -67,6 +67,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationC
     ) -> Bool {
         _ = FirebaseStartup.configureIfNeeded()
         print("🔥🔥🔥 DEBUG: Firebase ready in didFinishLaunching (defaultApp: \(FirebaseApp.app() != nil))")
+        showPlannerWindow(reason: "didFinishLaunching")
 
         firebaseAuthStateHandle = Auth.auth().addStateDidChangeListener { _, user in
             DispatchQueue.main.async {
@@ -157,6 +158,25 @@ extension AppDelegate: MessagingDelegate {
 }
 #endif
 
+/// The launch logo stays up when the scene is ignored. Show the window once it exists.
+func showPlannerWindow(reason: String, attempt: Int = 0) {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    var shown = 0
+    for scene in scenes {
+        for window in scene.windows {
+            window.isHidden = false
+            window.makeKeyAndVisible()
+            shown += 1
+        }
+    }
+    print("🔥🔥🔥 DEBUG: PP window showing Home reason=\(reason) attempt=\(attempt) scenes=\(scenes.count) windows=\(shown)")
+    if shown == 0, attempt < 20 {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            showPlannerWindow(reason: reason, attempt: attempt + 1)
+        }
+    }
+}
+
 @main
 struct Project_PlannerApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -178,8 +198,6 @@ struct Project_PlannerApp: App {
         _ = FirebaseStartup.configureIfNeeded()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
-        // Avoid a plain white UIKit window before the first SwiftUI frame (especially during Firebase / store init).
-        UIWindow.appearance().backgroundColor = UIColor.systemGroupedBackground
         let backend = FirebaseBackend()
         let users = UserStore()
         _firebaseBackend = StateObject(wrappedValue: backend)

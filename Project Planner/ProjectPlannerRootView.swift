@@ -335,15 +335,7 @@ struct ProjectPlannerRootView: View {
             appSettings.setupObservers()
             if userStore.currentUser != nil {
                 print("🔥🔥🔥 DEBUG: PP splash skipped — Home is the first frame")
-                DispatchQueue.main.async {
-                    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-                    for scene in scenes {
-                        for window in scene.windows {
-                            window.makeKeyAndVisible()
-                        }
-                    }
-                    print("🔥🔥🔥 DEBUG: PP window showing Home scenes=\(scenes.count)")
-                }
+                showPlannerWindow(reason: "root")
             } else {
                 if showMainExperience {
                     userStore.unblockLaunchProfileIfNeeded()

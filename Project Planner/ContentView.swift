@@ -470,10 +470,10 @@ struct ContentView: View {
             Group {
             switch selectedTab {
             case 0:
-                // No NavigationStack here. Its controller stays a blank white view after launch
-                // even when HOME_APPEARED has already run.
-                HomeView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                NavigationStack {
+                    HomeView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             case 1:
                 // Same as Small Works: the screen owns its one NavigationStack. Wrapping it again crashes on open.
                 if userStore.canViewProjects() {
