@@ -206,11 +206,11 @@ struct ProjectPlannerRootView: View {
 
     /// Kept in sync with notifications only; routing uses `Auth` + `firebaseBackend` so we never sit on an empty “session” gate.
     @State private var firebaseAuthUID: String?
+    /// Logo stays up until Home has been in the window for a frame. Taking it off in the
+    /// same update that inserts Home leaves a blank white window.
+    @State private var coverWithSplash = true
     /// Avoid flashing the login screen while Firebase session is still resolving.
-    /// Set only after a profile exists (or the user is signed out), and only on a later frame.
     @State private var hasResolvedInitialAuth = false
-    /// After the first splash leaves, an organisation switch may show it again.
-    @State private var launchSplashDismissed = false
     /// Bumps only when the signed-in user moves from one organisation to another.
     /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
     @State private var contentShellEpoch = 0
@@ -222,25 +222,10 @@ struct ProjectPlannerRootView: View {
         return Auth.auth().currentUser != nil
     }
 
-    private var isSessionLoading: Bool {
-        if firebaseBackend.isSwitchingOrganization && launchSplashDismissed { return true }
-        // Signed in with no profile yet: keep the logo up. A profile means the logo comes off now.
-        if showMainExperience && userStore.currentUser == nil { return true }
-        if !showMainExperience && !hasResolvedInitialAuth { return true }
-        return false
-    }
-
-    /// Installs a local profile when one is missing. A profile already in memory is left alone
-    /// so this does not rebuild the window.
-    private func revealShellIfReady() {
-        if showMainExperience {
-            userStore.unblockLaunchProfileIfNeeded()
-        }
-        if userStore.currentUser != nil { return }
-        if !showMainExperience {
-            hasResolvedInitialAuth = true
-            print("🔥🔥🔥 DEBUG: PP splash off user=false")
-        }
+    /// Home (or login) is in the tree from the first frame whenever we already know the session.
+    /// The logo only covers it; it is not a replacement for it.
+    private var showShell: Bool {
+        showMainExperience || userStore.currentUser != nil
     }
 
     @ViewBuilder
@@ -278,26 +263,21 @@ struct ProjectPlannerRootView: View {
     var body: some View {
         ZStack {
             ProjectWorksRevampColors.canvas.ignoresSafeArea()
-            // The shell stays in the tree under the splash. Replacing the splash with a new
-            // root left a blank window (black, then white) after Home had already appeared.
-            if showMainExperience, userStore.currentUser != nil {
+            if showShell {
                 authenticatedShell
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if !showMainExperience, hasResolvedInitialAuth {
+            } else if hasResolvedInitialAuth {
                 AuthenticationView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            if isSessionLoading {
+            if coverWithSplash {
                 AppLaunchSplashView()
             }
         }
         .background(ProjectWorksRevampColors.canvas)
         .preferredColorScheme(appSettings.settings.theme.colorScheme)
-        .onChange(of: isSessionLoading) { _, loading in
-            if !loading { launchSplashDismissed = true }
-        }
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
             guard !signedIn else { return }
             guard FirebaseApp.app() != nil else { return }
@@ -354,30 +334,27 @@ struct ProjectPlannerRootView: View {
             }
 
             appSettings.setupObservers()
-            revealShellIfReady()
-            Task { @MainActor in
-                await Task.yield()
-                revealShellIfReady()
+            if showMainExperience {
+                userStore.unblockLaunchProfileIfNeeded()
+            } else {
+                hasResolvedInitialAuth = true
             }
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                revealShellIfReady()
-                if showMainExperience && userStore.currentUser == nil {
-                    for _ in 0..<16 {
-                        try? await Task.sleep(nanoseconds: 250_000_000)
-                        firebaseBackend.syncPublishedAuthFromAuthSession()
-                        revealShellIfReady()
-                        if userStore.currentUser != nil || !showMainExperience { break }
-                    }
+            // Home is already under the logo. Lift the logo on a later turn so this update
+            // does not both insert Home and remove the logo.
+            DispatchQueue.main.async {
+                DispatchQueue.main.async {
+                    coverWithSplash = false
+                    print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil) shell=\(showShell)")
                 }
-                print("🔥🔥🔥 DEBUG: PP loading screen check — user=\(userStore.currentUser != nil) signedIn=\(showMainExperience)")
             }
 
             // Profile and org data start together. A fixed 1.5s pause left Home empty, then the
             // organisation wait added another half second before disk jobs could show.
             Task { @MainActor in
                 await firebaseBackend.syncAuthStateFromSessionIfNeeded()
-                revealShellIfReady()
+                if userStore.currentUser == nil {
+                    userStore.unblockLaunchProfileIfNeeded()
+                }
                 async let profilePass: Void = loadLaunchProfile()
                 async let bootstrapPass: Void = PlannerStoreWiring.bootstrapOrgDataIfNeeded(
                     firebaseBackend: firebaseBackend,

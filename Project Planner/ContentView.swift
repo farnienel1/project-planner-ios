@@ -470,11 +470,10 @@ struct ContentView: View {
             Group {
             switch selectedTab {
             case 0:
-                // Home is not inside a NavigationStack. A stack inserted as the window root
-                // stays a blank white (or black) UIKit controller even after Home appears.
-                GeometryReader { proxy in
+                NavigationStack {
                     HomeView()
-                        .frame(width: max(proxy.size.width, 1), height: max(proxy.size.height, 1))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(ProjectWorksRevampColors.canvas)
                 }
             case 1:
                 // Same as Small Works: the screen owns its one NavigationStack. Wrapping it again crashes on open.
