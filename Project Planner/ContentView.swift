@@ -473,7 +473,6 @@ struct ContentView: View {
                 NavigationStack {
                     HomeView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(ProjectWorksRevampColors.canvas)
                 }
             case 1:
                 // Same as Small Works: the screen owns its one NavigationStack. Wrapping it again crashes on open.

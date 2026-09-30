@@ -73,7 +73,8 @@ struct HomeView: View {
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(homeCanvasBackground.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
+        .background(homeCanvasBackground.ignoresSafeArea(edges: .top))
         .refreshable {
             await refreshHomeConnection()
         }

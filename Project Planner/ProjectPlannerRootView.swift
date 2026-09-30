@@ -206,10 +206,7 @@ struct ProjectPlannerRootView: View {
 
     /// Kept in sync with notifications only; routing uses `Auth` + `firebaseBackend` so we never sit on an empty “session” gate.
     @State private var firebaseAuthUID: String?
-    /// Logo stays up until Home has been in the window for a frame. Taking it off in the
-    /// same update that inserts Home leaves a blank white window.
-    @State private var coverWithSplash = true
-    /// Avoid flashing the login screen while Firebase session is still resolving.
+    /// Avoid flashing the login screen while Firebase session / profile are still resolving.
     @State private var hasResolvedInitialAuth = false
     /// Bumps only when the signed-in user moves from one organisation to another.
     /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
@@ -222,10 +219,11 @@ struct ProjectPlannerRootView: View {
         return Auth.auth().currentUser != nil
     }
 
-    /// Home (or login) is in the tree from the first frame whenever we already know the session.
-    /// The logo only covers it; it is not a replacement for it.
-    private var showShell: Bool {
-        showMainExperience || userStore.currentUser != nil
+    private var isSessionLoading: Bool {
+        if firebaseBackend.isSwitchingOrganization { return true }
+        if !hasResolvedInitialAuth { return true }
+        if showMainExperience && userStore.currentUser == nil { return true }
+        return false
     }
 
     @ViewBuilder
@@ -262,21 +260,19 @@ struct ProjectPlannerRootView: View {
 
     var body: some View {
         ZStack {
-            ProjectWorksRevampColors.canvas.ignoresSafeArea()
-            if showShell {
+            if isSessionLoading {
+                AppLaunchSplashView()
+            } else if showMainExperience {
                 authenticatedShell
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if hasResolvedInitialAuth {
+            } else {
                 AuthenticationView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            if coverWithSplash {
-                AppLaunchSplashView()
-            }
         }
-        .background(ProjectWorksRevampColors.canvas)
+        .background(isSessionLoading ? Color.white : Color(.systemGroupedBackground))
         .preferredColorScheme(appSettings.settings.theme.colorScheme)
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
             guard !signedIn else { return }
@@ -325,6 +321,12 @@ struct ProjectPlannerRootView: View {
             if FirebaseApp.app() != nil {
                 firebaseAuthUID = firebaseAuthUID ?? Auth.auth().currentUser?.uid
             }
+            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+                windowScene.windows.forEach { window in
+                    window.overrideUserInterfaceStyle = .light
+                    window.makeKeyAndVisible()
+                }
+            }
             print("🔥🔥🔥 DEBUG: RootView onAppear — auth uid: \(firebaseAuthUID ?? "nil"), backend.isAuthenticated: \(firebaseBackend.isAuthenticated), showMain: \(showMainExperience), profileLoading: \(userStore.isHomeProfileLoading), defaultApp: \(FirebaseApp.app() != nil)")
 
             appDelegate.onPushToken = { token in
@@ -336,16 +338,15 @@ struct ProjectPlannerRootView: View {
             appSettings.setupObservers()
             if showMainExperience {
                 userStore.unblockLaunchProfileIfNeeded()
-            } else {
-                hasResolvedInitialAuth = true
             }
-            // Home is already under the logo. Lift the logo on a later turn so this update
-            // does not both insert Home and remove the logo.
+            // Leave the logo on the next turn, after this appear has finished touching the window.
+            // Doing both in this function left a blank white window.
             DispatchQueue.main.async {
-                DispatchQueue.main.async {
-                    coverWithSplash = false
-                    print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil) shell=\(showShell)")
+                if showMainExperience {
+                    userStore.unblockLaunchProfileIfNeeded()
                 }
+                hasResolvedInitialAuth = true
+                print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil)")
             }
 
             // Profile and org data start together. A fixed 1.5s pause left Home empty, then the
