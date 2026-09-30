@@ -7,6 +7,11 @@
 
 import SwiftUI
 
+/// Row token. Putting the whole `Project` in the navigation path crashes when the list is built.
+private struct OpenedProjectToken: Hashable {
+    let projectId: UUID
+}
+
 struct ProjectsView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -39,15 +44,10 @@ struct ProjectsView: View {
                 WorksDashboardPalette.bg.ignoresSafeArea()
                 projectsRootContent
             }
-            .navigationTitle("Projects")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(WorksDashboardPalette.bg, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("")
-                        .accessibilityHidden(true)
-                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
@@ -77,6 +77,9 @@ struct ProjectsView: View {
                 }
             }
             .navigationBarBackButtonHidden(true)
+            .navigationDestination(for: OpenedProjectToken.self) { token in
+                projectDetailDestination(token.projectId)
+            }
             .background(
                 // This will be overridden by child views that set preference to true
                 Color.clear
@@ -85,17 +88,17 @@ struct ProjectsView: View {
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("resetNavigationForTab"))) { notification in
                 if let userInfo = notification.userInfo,
                    let tab = userInfo["tab"] as? Int,
-                   tab == 1 {
-                    // Reset navigation to root
-                    navigationPath.removeLast(navigationPath.count)
+                   tab == 1, !navigationPath.isEmpty {
+                    navigationPath = NavigationPath()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("selectTab"))) { notification in
                 if let userInfo = notification.userInfo,
                    let tab = userInfo["tab"] as? Int,
                    tab == 1 {
-                    // Reset navigation when Projects tab is selected
-                    navigationPath.removeLast(navigationPath.count)
+                    if !navigationPath.isEmpty {
+                        navigationPath = NavigationPath()
+                    }
                     selectedStatus = .active
                 }
             }
@@ -172,7 +175,9 @@ struct ProjectsView: View {
                         } else {
                             LazyVStack(spacing: 13) {
                                 ForEach(searchFilteredProjects) { project in
-                                    NavigationLink(value: project) {
+                                    Button {
+                                        navigationPath.append(OpenedProjectToken(projectId: project.id))
+                                    } label: {
                                         WorksDashboardCard(
                                             project: project,
                                             listAccent: WorksDashboardListStyle.projects.accent,
@@ -188,16 +193,6 @@ struct ProjectsView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 2)
-                }
-                .navigationDestination(for: Project.self) { project in
-                    ProjectDetailView(project: project)
-                        .environmentObject(bookingStore)
-                        .environmentObject(operativeStore)
-                        .environmentObject(projectStore)
-                        .background(
-                            Color.clear
-                                .preference(key: HideBottomMenuKey.self, value: true)
-                        )
                 }
                 .refreshable {
                     projectStore.loadData()
@@ -370,6 +365,27 @@ struct ProjectsView: View {
 
         var seen = Set<UUID>()
         return projects.filter { seen.insert($0.id).inserted }
+    }
+
+    @ViewBuilder
+    private func projectDetailDestination(_ projectId: UUID) -> some View {
+        if let project = projectStore.projects.first(where: { $0.id == projectId && $0.jobType != .smallWorks })
+            ?? projectStore.projects.first(where: { $0.id == projectId }) {
+            ProjectDetailView(project: project)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(projectStore)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
+                .environmentObject(appSettings)
+                .background(
+                    Color.clear
+                        .preference(key: HideBottomMenuKey.self, value: true)
+                )
+        } else {
+            ContentUnavailableView("Project unavailable", systemImage: "folder", description: Text("Pull to refresh and try again."))
+        }
     }
 
     private func refreshDeadlineAssignedProjectIds() async {
