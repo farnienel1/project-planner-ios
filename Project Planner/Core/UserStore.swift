@@ -365,9 +365,8 @@ class UserStore: ObservableObject {
         let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId
             ?? firebaseBackend?.cachedOrganizationDocumentId()
             ?? ""
-        guard !organizationId.isEmpty else { return }
         currentUser = provisionalSessionUser(firebaseUser: firebaseUser, organizationId: organizationId)
-        print("🔥🔥🔥 DEBUG: Launch profile timed out — opened with the saved organisation \(organizationId)")
+        print("🔥🔥🔥 DEBUG: Launch profile opened locally org=\(organizationId.isEmpty ? "none yet" : organizationId)")
     }
 
     /// Minimal profile when Firestore is slow or unreachable — keeps `isHomeProfileLoading` false enough to show UI.
