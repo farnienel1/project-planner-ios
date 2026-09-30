@@ -301,6 +301,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Project Planner/Info.plist";
 				INFOPLIST_KEY_FirebaseAppDelegateProxyEnabled = NO;
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
 				INFOPLIST_KEY_NSCalendarsUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
@@ -346,6 +347,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Project Planner/Info.plist";
 				INFOPLIST_KEY_FirebaseAppDelegateProxyEnabled = NO;
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
 				INFOPLIST_KEY_NSCalendarsUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
