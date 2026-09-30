@@ -317,9 +317,16 @@ class UserStore: ObservableObject {
                     }
                     
                     if needsUpdate {
-                        try await firebaseBackend.saveUser(updatedUser)
                         userData = updatedUser
-                        print("🔥🔥🔥 DEBUG: ✅ Updated user document with correct permissions")
+                        let userToSave = updatedUser
+                        Task {
+                            do {
+                                try await firebaseBackend.saveUser(userToSave)
+                                print("🔥🔥🔥 DEBUG: ✅ Updated user document with correct permissions")
+                            } catch {
+                                print("🔥🔥🔥 DEBUG: permission sync save failed: \(error.localizedDescription)")
+                            }
+                        }
                     }
                 }
                 
@@ -350,6 +357,17 @@ class UserStore: ObservableObject {
         }
         
         isLoading = false
+    }
+
+    /// Leaves the launch splash if the profile read has not returned. Uses the organisation already stored on this phone.
+    func unblockLaunchProfileIfNeeded() {
+        guard currentUser == nil, let firebaseUser = Auth.auth().currentUser else { return }
+        let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId
+            ?? firebaseBackend?.cachedOrganizationDocumentId()
+            ?? ""
+        guard !organizationId.isEmpty else { return }
+        currentUser = provisionalSessionUser(firebaseUser: firebaseUser, organizationId: organizationId)
+        print("🔥🔥🔥 DEBUG: Launch profile timed out — opened with the saved organisation \(organizationId)")
     }
 
     /// Minimal profile when Firestore is slow or unreachable — keeps `isHomeProfileLoading` false enough to show UI.

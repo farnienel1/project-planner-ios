@@ -796,6 +796,11 @@ class FirebaseBackend: ObservableObject {
         return UserDefaults.standard.string(forKey: organizationIdKey)
     }
     
+    /// Last organisation stored on this phone. Launch can open with this if Firestore is slow.
+    func cachedOrganizationDocumentId() -> String? {
+        loadOrganizationFromLocalStorage()?.firestoreDocumentId
+    }
+
     /// Load organization from local storage (for offline access)
     @MainActor
     private func loadOrganizationFromLocalStorage() -> Organization? {
@@ -3354,13 +3359,17 @@ class FirebaseBackend: ObservableObject {
     // MARK: - User Management Methods
     
     func getUserData(userId: String) async throws -> AppUser? {
-        let doc = try await db.collection("users").document(userId).getDocument(source: .server)
+        let doc = try await getDocumentWithServerTimeoutAndCacheFallback(
+            db.collection("users").document(userId)
+        )
         
         if !doc.exists {
             // Invited users often have users/{randomUUID} until first sign-in; merge onto Auth UID.
             if let auth = Auth.auth().currentUser, auth.uid == userId, let authEmail = auth.email, !authEmail.isEmpty {
                 try await mergePlaceholderUserDocOntoAuthUidIfNeeded(authUid: userId, email: authEmail)
-                let retry = try await db.collection("users").document(userId).getDocument(source: .server)
+                let retry = try await getDocumentWithServerTimeoutAndCacheFallback(
+                    db.collection("users").document(userId)
+                )
                 guard retry.exists, let data = retry.data() else { return nil }
                 return Self.parseAppUserDocument(userId: userId, data: data)
             }

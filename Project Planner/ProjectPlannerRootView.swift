@@ -208,6 +208,8 @@ struct ProjectPlannerRootView: View {
     @State private var firebaseAuthUID: String?
     /// Avoid flashing the login screen while Firebase session / profile are still resolving.
     @State private var hasResolvedInitialAuth = false
+    /// Profile reads can sit on a dead network. After this, the splash must leave.
+    @State private var didGiveUpOnProfileSplash = false
     /// Bumps only when the signed-in user moves from one organisation to another.
     /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
     @State private var contentShellEpoch = 0
@@ -220,9 +222,9 @@ struct ProjectPlannerRootView: View {
     }
 
     private var isSessionLoading: Bool {
-        !hasResolvedInitialAuth
-            || firebaseBackend.isSwitchingOrganization
-            || (showMainExperience && userStore.isHomeProfileLoading)
+        if !hasResolvedInitialAuth || firebaseBackend.isSwitchingOrganization { return true }
+        if didGiveUpOnProfileSplash { return false }
+        return showMainExperience && userStore.isHomeProfileLoading
     }
 
     @ViewBuilder
@@ -294,6 +296,7 @@ struct ProjectPlannerRootView: View {
                     return
                 }
                 firebaseAuthUID = nil
+                didGiveUpOnProfileSplash = false
                 userStore.clearOnSignOut()
                 print("🔥🔥🔥 DEBUG: RootView auth uid cleared (signed out)")
             }
@@ -340,6 +343,13 @@ struct ProjectPlannerRootView: View {
             Task { @MainActor in
                 await firebaseBackend.syncAuthStateFromSessionIfNeeded()
                 hasResolvedInitialAuth = true
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    guard userStore.isHomeProfileLoading, !firebaseBackend.isSwitchingOrganization else { return }
+                    userStore.unblockLaunchProfileIfNeeded()
+                    didGiveUpOnProfileSplash = true
+                    print("🔥🔥🔥 DEBUG: Left the PP loading screen after the profile wait")
+                }
                 async let profilePass: Void = loadLaunchProfile()
                 async let bootstrapPass: Void = PlannerStoreWiring.bootstrapOrgDataIfNeeded(
                     firebaseBackend: firebaseBackend,
