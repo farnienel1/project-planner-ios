@@ -221,8 +221,11 @@ struct ProjectPlannerRootView: View {
 
     private var isSessionLoading: Bool {
         if firebaseBackend.isSwitchingOrganization { return true }
+        // A profile already exists before the first frame. Showing the logo and then
+        // swapping to Home leaves the UIKit window white even though Home has appeared.
+        if userStore.currentUser != nil { return false }
         if !hasResolvedInitialAuth { return true }
-        if showMainExperience && userStore.currentUser == nil { return true }
+        if showMainExperience { return true }
         return false
     }
 
@@ -321,12 +324,6 @@ struct ProjectPlannerRootView: View {
             if FirebaseApp.app() != nil {
                 firebaseAuthUID = firebaseAuthUID ?? Auth.auth().currentUser?.uid
             }
-            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                windowScene.windows.forEach { window in
-                    window.overrideUserInterfaceStyle = .light
-                    window.makeKeyAndVisible()
-                }
-            }
             print("🔥🔥🔥 DEBUG: RootView onAppear — auth uid: \(firebaseAuthUID ?? "nil"), backend.isAuthenticated: \(firebaseBackend.isAuthenticated), showMain: \(showMainExperience), profileLoading: \(userStore.isHomeProfileLoading), defaultApp: \(FirebaseApp.app() != nil)")
 
             appDelegate.onPushToken = { token in
@@ -336,17 +333,19 @@ struct ProjectPlannerRootView: View {
             }
 
             appSettings.setupObservers()
-            if showMainExperience {
-                userStore.unblockLaunchProfileIfNeeded()
-            }
-            // Leave the logo on the next turn, after this appear has finished touching the window.
-            // Doing both in this function left a blank white window.
-            DispatchQueue.main.async {
+            if userStore.currentUser != nil {
+                print("🔥🔥🔥 DEBUG: PP splash skipped — Home is the first frame")
+            } else {
                 if showMainExperience {
                     userStore.unblockLaunchProfileIfNeeded()
                 }
-                hasResolvedInitialAuth = true
-                print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil)")
+                DispatchQueue.main.async {
+                    if showMainExperience {
+                        userStore.unblockLaunchProfileIfNeeded()
+                    }
+                    hasResolvedInitialAuth = true
+                    print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil)")
+                }
             }
 
             // Profile and org data start together. A fixed 1.5s pause left Home empty, then the

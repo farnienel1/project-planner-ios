@@ -217,12 +217,6 @@ struct Project_PlannerApp: App {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .preferredColorScheme(appSettings.settings.theme.colorScheme)
-            .onAppear {
-                appSettings.settings.theme.applyToKeyWindows()
-                if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                    windowScene.windows.forEach { $0.makeKeyAndVisible() }
-                }
-            }
             .onChange(of: appSettings.settings.theme) { _, theme in
                 theme.applyToKeyWindows()
             }
