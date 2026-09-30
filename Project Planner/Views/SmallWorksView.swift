@@ -56,10 +56,6 @@ struct SmallWorksView: View {
             .toolbarBackground(WorksDashboardPalette.bg, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("")
-                        .accessibilityHidden(true)
-                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
@@ -92,8 +88,7 @@ struct SmallWorksView: View {
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("resetNavigationForTab"))) { notification in
                 if let userInfo = notification.userInfo,
                    let tab = userInfo["tab"] as? Int,
-                   tab == 2 {
-                    // Reset navigation to root
+                   tab == 2, !navigationPath.isEmpty {
                     navigationPath = NavigationPath()
                 }
             }
@@ -101,7 +96,9 @@ struct SmallWorksView: View {
                 if let userInfo = notification.userInfo,
                    let tab = userInfo["tab"] as? Int,
                    tab == 2 {
-                    navigationPath = NavigationPath()
+                    if !navigationPath.isEmpty {
+                        navigationPath = NavigationPath()
+                    }
                     selectedStatus = .active
                 }
             }

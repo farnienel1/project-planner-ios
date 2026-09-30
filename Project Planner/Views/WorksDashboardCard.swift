@@ -269,7 +269,6 @@ struct WorksDashboardHero: View {
 struct WorksDashboardStatsRow: View {
     let counts: WorksListStatusCounts
     @Binding var selectedStatus: ProjectStatus?
-    @State private var selectionTick = 0
 
     var body: some View {
         HStack(spacing: 9) {
@@ -277,14 +276,12 @@ struct WorksDashboardStatsRow: View {
             tile(status: .upcoming, value: counts.upcoming, label: "Upcoming", color: WorksDashboardPalette.blue, tint: WorksDashboardPalette.blueTint)
             tile(status: .completed, value: counts.completed, label: "Completed", color: WorksDashboardPalette.slate, tint: WorksDashboardPalette.slateTint)
         }
-        .sensoryFeedback(.selection, trigger: selectionTick)
     }
 
     private func tile(status: ProjectStatus, value: Int, label: String, color: Color, tint: Color) -> some View {
         let isSelected = selectedStatus == status
         return Button {
             selectedStatus = isSelected ? nil : status
-            selectionTick += 1
         } label: {
             HStack(spacing: 0) {
                 Rectangle()
@@ -353,8 +350,6 @@ struct WorksDashboardCard: View {
     var showsClientAndManager: Bool = true
 
     @EnvironmentObject private var operativeStore: OperativeStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var drawnFraction: Double = 0
 
     private var typeLabel: String { WorksDashboardJobTypeStyle.displayLabel(for: project) }
     private var typeSwatch: WorksDashboardJobTypeStyle.Swatch {
@@ -402,25 +397,11 @@ struct WorksDashboardCard: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilitySummary)
         .accessibilityAddTraits(.isButton)
-        .onAppear {
-            // Capture once. `progressFraction` includes `Date()`, so watching it
-            // with `onChange` starts a new animation on every frame and SwiftUI
-            // kills the process as soon as this list appears.
-            let target = progressFraction
-            if reduceMotion {
-                drawnFraction = target
-            } else {
-                drawnFraction = 0
-                withAnimation(.easeOut(duration: 0.4)) {
-                    drawnFraction = target
-                }
-            }
-        }
     }
 
     private var infoColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
-            WorksDashboardWrap(spacing: 8) {
+            HStack(spacing: 8) {
                 Text(project.jobNumber)
                     .font(.title3.weight(.heavy))
                     .foregroundStyle(WorksDashboardPalette.ink)
@@ -463,7 +444,7 @@ struct WorksDashboardCard: View {
             Circle()
                 .stroke(WorksDashboardPalette.soft2, lineWidth: 7)
             Circle()
-                .trim(from: 0, to: drawnFraction)
+                .trim(from: 0, to: progressFraction)
                 .stroke(ringColor, style: StrokeStyle(lineWidth: 7, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             Text("\(progressPercent)%")
@@ -480,7 +461,7 @@ struct WorksDashboardCard: View {
 
     private var footer: some View {
         HStack(alignment: .top, spacing: 8) {
-            WorksDashboardWrap(spacing: 8) {
+            HStack(spacing: 8) {
                 if let label = deadline.label {
                     tag(label, color: deadline.color, tint: deadline.tint)
                 }
@@ -570,72 +551,5 @@ struct WorksDashboardCard: View {
         }
         parts.append(project.status.rawValue.lowercased())
         return parts.joined(separator: ", ")
-    }
-}
-
-/// Tags stay on one row until they no longer fit, then wrap instead of clipping.
-private struct WorksDashboardWrap: Layout {
-    var spacing: CGFloat = 8
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let proposed = proposal.width ?? 0
-        let bounded = proposed.isFinite && proposed > 0
-        let maxWidth = bounded ? proposed : 10_000
-        let rows = rows(maxWidth: maxWidth, subviews: subviews)
-        let height = rows.reduce(0) { $0 + $1.height } + spacing * CGFloat(max(rows.count - 1, 0))
-        let width = bounded ? maxWidth : (rows.map(\.width).max() ?? 0)
-        return CGSize(
-            width: width.isFinite ? max(width, 0) : 0,
-            height: height.isFinite ? max(height, 0) : 0
-        )
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let width = bounds.width.isFinite && bounds.width > 0 ? bounds.width : 1
-        let rows = rows(maxWidth: width, subviews: subviews)
-        var y = bounds.minY
-        var index = 0
-        for row in rows {
-            var x = bounds.minX
-            for size in row.sizes {
-                guard index < subviews.count else { return }
-                let safe = CGSize(
-                    width: size.width.isFinite ? max(size.width, 0) : 0,
-                    height: size.height.isFinite ? max(size.height, 0) : 0
-                )
-                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(safe))
-                x += safe.width + spacing
-                index += 1
-            }
-            y += row.height + spacing
-        }
-    }
-
-    private struct Row {
-        var sizes: [CGSize] = []
-        var width: CGFloat = 0
-        var height: CGFloat = 0
-    }
-
-    private func rows(maxWidth: CGFloat, subviews: Subviews) -> [Row] {
-        var rows: [Row] = []
-        var current = Row()
-        for subview in subviews {
-            let measured = subview.sizeThatFits(.unspecified)
-            let size = CGSize(
-                width: measured.width.isFinite ? max(measured.width, 0) : 0,
-                height: measured.height.isFinite ? max(measured.height, 0) : 0
-            )
-            let nextWidth = current.sizes.isEmpty ? size.width : current.width + spacing + size.width
-            if !current.sizes.isEmpty && nextWidth > maxWidth {
-                rows.append(current)
-                current = Row()
-            }
-            current.sizes.append(size)
-            current.width = current.sizes.count == 1 ? size.width : current.width + spacing + size.width
-            current.height = max(current.height, size.height)
-        }
-        if !current.sizes.isEmpty { rows.append(current) }
-        return rows
     }
 }
