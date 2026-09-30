@@ -367,8 +367,9 @@ struct ProjectsView: View {
                   currentUser.permissions.manager {
             projects = projects.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
         }
-        
-        return projects
+
+        var seen = Set<UUID>()
+        return projects.filter { seen.insert($0.id).inserted }
     }
 
     private func refreshDeadlineAssignedProjectIds() async {

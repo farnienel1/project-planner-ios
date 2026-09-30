@@ -379,8 +379,9 @@ struct SmallWorksView: View {
                   currentUser.permissions.manager {
             works = works.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
         }
-        
-        return works
+
+        var seen = Set<UUID>()
+        return works.filter { seen.insert($0.id).inserted }
     }
 
     private func refreshDeadlineAssignedProjectIds() async {

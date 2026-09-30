@@ -490,11 +490,13 @@ struct TasksDetailView: View {
             let name = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
             if request.cancellationRequestedAt != nil {
                 await holidayStore.deleteBooking(request)
-                await notifyDecision(
-                    to: request,
-                    approved: true,
-                    decidedByName: "\(name) approved your annual leave cancellation"
-                )
+                if let ownerId = request.userId {
+                    await notificationService.notifyAnnualLeaveCancelledByManager(
+                        userId: ownerId,
+                        booking: request,
+                        managerName: name
+                    )
+                }
                 await notificationService.loadNotifications()
                 return
             }

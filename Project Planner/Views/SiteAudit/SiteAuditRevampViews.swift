@@ -291,7 +291,10 @@ struct SiteAuditDetailsStepView: View {
             detailRow(icon: "folder.fill", iconTint: SiteAuditColors.success, iconBg: SiteAuditColors.successTint, label: "Project", value: "\(p.jobNumber) · \(p.siteName)", showChevron: false) { EmptyView() }
         } else {
             Button(action: onPickProject) {
-                detailRow(icon: "folder.fill", iconTint: SiteAuditColors.success, iconBg: SiteAuditColors.successTint, label: "Project", value: selectedProject.map { "\($0.jobNumber) · \($0.siteName)" } ?? "Select project", showChevron: true) { EmptyView() }
+                detailRow(icon: "folder.fill", iconTint: SiteAuditColors.success, iconBg: SiteAuditColors.successTint, label: "Project or Small works", value: selectedProject.map { job in
+                    let kind = job.jobType == .smallWorks ? "Small works" : "Project"
+                    return "\(kind) · \(job.jobNumber) · \(job.siteName)"
+                } ?? "Select Project/Small Works", showChevron: true) { EmptyView() }
             }
             .buttonStyle(.plain)
         }
@@ -350,7 +353,7 @@ struct SiteAuditDetailsStepView: View {
                     .foregroundStyle(SiteAuditColors.textSecondary)
                 Text(value)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(value == "Select project" ? SiteAuditColors.textSecondary : SiteAuditColors.text)
+                    .foregroundStyle(value == "Select Project/Small Works" ? SiteAuditColors.textSecondary : SiteAuditColors.text)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

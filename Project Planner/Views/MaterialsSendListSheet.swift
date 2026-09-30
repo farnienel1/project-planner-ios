@@ -36,6 +36,8 @@ struct MaterialsSendListSheet: View {
     @State private var sendConfirmation: SendConfirmationState?
     @State private var expandedWholesalerIds: Set<UUID> = []
     @State private var sendAsPlainText = false
+    @State private var orderAwaitingDeliveryDate: [UUID]?
+    @State private var requiredDeliveryDate = Date()
 
     struct ResendDialogState: Identifiable {
         let id = UUID()
@@ -89,10 +91,23 @@ struct MaterialsSendListSheet: View {
                 MaterialsResendIncludeExcludeSheet(
                     dialog: dialog,
                     onContinue: { materialIds in
-                        proceedSend(type: dialog.requestType, materialIds: materialIds)
+                        queueSend(type: dialog.requestType, materialIds: materialIds)
                     },
                     onCancel: { resendDialog = nil }
                 )
+            }
+            .sheet(isPresented: Binding(
+                get: { orderAwaitingDeliveryDate != nil },
+                set: { if !$0 { orderAwaitingDeliveryDate = nil } }
+            )) {
+                MaterialRequiredDeliveryDateSheet(date: $requiredDeliveryDate) {
+                    let ids = orderAwaitingDeliveryDate ?? []
+                    let date = requiredDeliveryDate
+                    orderAwaitingDeliveryDate = nil
+                    proceedSend(type: .order, materialIds: ids, requiredDeliveryDate: date)
+                } onCancel: {
+                    orderAwaitingDeliveryDate = nil
+                }
             }
             .sheet(item: $sendConfirmation) { conf in
                 MaterialsSendConfirmationView(
@@ -423,11 +438,22 @@ struct MaterialsSendListSheet: View {
                 fresh: fresh
             )
         } else {
-            proceedSend(type: type, materialIds: selected.map(\.id))
+            queueSend(type: type, materialIds: selected.map(\.id))
         }
     }
 
-    private func proceedSend(type: MaterialOrderRequest.RequestType, materialIds: [UUID]) {
+    private func queueSend(type: MaterialOrderRequest.RequestType, materialIds: [UUID]) {
+        resendDialog = nil
+        guard !materialIds.isEmpty else { return }
+        if type == .order {
+            requiredDeliveryDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+            orderAwaitingDeliveryDate = materialIds
+            return
+        }
+        proceedSend(type: type, materialIds: materialIds, requiredDeliveryDate: nil)
+    }
+
+    private func proceedSend(type: MaterialOrderRequest.RequestType, materialIds: [UUID], requiredDeliveryDate: Date? = nil) {
         resendDialog = nil
         guard !materialIds.isEmpty else { return }
         isSending = true
@@ -459,7 +485,8 @@ struct MaterialsSendListSheet: View {
             senderPhone: userPhone?.isEmpty == false ? userPhone : nil,
             senderCompany: orgName,
             companyLogoURL: firebaseBackend.currentOrganization?.companyLogoURL,
-            sendAsPlainText: sendAsPlainText
+            sendAsPlainText: sendAsPlainText,
+            requiredDeliveryDate: type == .order ? requiredDeliveryDate : nil
         )
         let recipientSnapshots = buildRecipientSnapshots(for: contacts)
         let calendar = Calendar.current
@@ -533,6 +560,43 @@ struct MaterialsSendListSheet: View {
                 wholesalerName: wholesalerName
             )
         }
+    }
+}
+
+private struct MaterialRequiredDeliveryDateSheet: View {
+    @Binding var date: Date
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Choose the date these materials must arrive on site. The wholesaler email includes this date.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                DatePicker(
+                    "Required delivery date",
+                    selection: $date,
+                    in: Calendar.current.startOfDay(for: Date())...,
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.graphical)
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .navigationTitle("Confirm delivery date")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Send order", action: onConfirm)
+                        .fontWeight(.semibold)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 

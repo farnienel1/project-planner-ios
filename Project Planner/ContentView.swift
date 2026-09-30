@@ -192,7 +192,11 @@ struct ContentView: View {
                 DispatchQueue.main.async {
                     guard userStore.isAnnualLeaveFeatureEnabled() else { return }
                     holidaySheetShowRequests = (notification.userInfo?["showRequests"] as? Bool) ?? false
-                    showingHolidaySheet = true
+                    showingHolidaySheet = false
+                    if selectedTab != 8 {
+                        previousTab = selectedTab
+                        selectedTab = 8
+                    }
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .mainMenuSignOut)) { _ in
@@ -471,8 +475,10 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             case 1:
+                // ProjectsView owns its NavigationStack. Wrapping it again crashes on open
+                // (nested stacks, and a second destination for Project).
                 if userStore.canViewProjects() {
-                    NavigationStack { ProjectsView() }
+                    ProjectsView()
                 } else {
                     NavigationStack { HomeView() }
                 }
@@ -514,7 +520,7 @@ struct ContentView: View {
                     NavigationStack { HomeView() }
                 }
             case 8:
-                HolidayView(showRequests: false)
+                HolidayView(showRequests: holidaySheetShowRequests, presentedAsSheet: false)
                     .environmentObject(holidayStore)
                     .environmentObject(userStore)
                     .environmentObject(operativeStore)

@@ -824,17 +824,22 @@ class NotificationService: ObservableObject {
     func notifyHolidayRequestDecisionToUser(userId: String, bookingId: UUID, approved: Bool, decidedByName: String, reason: String = "") async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let targetId = resolvedRecipientUserId(userId)
+        let targetId = await resolvedRecipientUserIdResolvingStaleIds(userId)
         print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY DECISION] bookingId=\(bookingId.uuidString) approved=\(approved) decidedBy=\(decidedByName) target=\(targetId) original=\(userId)")
         let dedupeId = syntheticNotificationId(from: "holidayDecision|\(bookingId.uuidString)|\(targetId)|\(approved)")
         let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let storedNote = holidayStore?.bookings.first(where: { $0.id == bookingId })?.decisionNote?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let note = trimmedReason.isEmpty ? storedNote : trimmedReason
+        let dateText = annualLeaveDateText(bookingId: bookingId)
+        let when = dateText.isEmpty ? "" : " for \(dateText)"
         let decisionMessage: String
         if approved {
-            decisionMessage = "\(decidedByName) approved your annual leave request."
-        } else if trimmedReason.isEmpty {
-            decisionMessage = "\(decidedByName) declined your annual leave request."
+            decisionMessage = "\(decidedByName) approved your annual leave request\(when)."
+        } else if note.isEmpty {
+            decisionMessage = "\(decidedByName) declined your annual leave request\(when)."
         } else {
-            decisionMessage = "\(decidedByName) declined your annual leave request. \(trimmedReason)"
+            decisionMessage = "\(decidedByName) declined your annual leave request\(when). \(note)"
         }
         let notification = AppNotification(
             id: dedupeId,
@@ -847,6 +852,65 @@ class NotificationService: ObservableObject {
             requiresPermission: nil
         )
         await saveNotification(notification)
+    }
+
+    /// In-app notice and email when a line manager deletes or cancels someone's annual leave.
+    func notifyAnnualLeaveCancelledByManager(
+        userId: String,
+        booking: HolidayBooking,
+        managerName: String
+    ) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let targetId = resolvedRecipientUserId(userId)
+        let dateText = annualLeaveDateText(for: booking)
+        let message = "\(managerName) has cancelled your annual leave request for \(dateText)."
+        let dedupeId = syntheticNotificationId(from: "annualLeaveCancelled|\(booking.id.uuidString)|\(targetId)")
+        let notification = AppNotification(
+            id: dedupeId,
+            organizationId: organizationId,
+            type: .holidayRequestDeclined,
+            title: "Annual Leave Cancelled",
+            message: message,
+            userId: targetId,
+            relatedId: booking.id,
+            requiresPermission: nil
+        )
+        await saveNotification(notification)
+        let email = userStore?.organizationUsers.first(where: { resolvedRecipientUserId($0.id) == targetId })?.email
+            ?? userStore?.organizationUsers.first(where: { $0.id == userId })?.email
+        let trimmedEmail = email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedEmail.isEmpty else { return }
+        let firstName = userStore?.organizationUsers.first(where: { $0.email.lowercased() == trimmedEmail.lowercased() })?.firstName ?? ""
+        let greeting = firstName.isEmpty ? "Hello" : "Hello \(firstName)"
+        let plain = """
+        \(greeting),
+
+        \(message)
+
+        This was sent from Project Planner.
+        """
+        let html = MaterialRequestEmailBuilder.plainTextAsSimpleHTML(plain)
+        let sent = await ResendEmailService().sendEmail(
+            to: trimmedEmail,
+            subject: "Annual leave cancelled",
+            htmlContent: html
+        )
+        print("🔥🔥🔥 DEBUG: [HOLIDAY CANCEL EMAIL] to=\(trimmedEmail) sent=\(sent)")
+    }
+
+    private func annualLeaveDateText(bookingId: UUID) -> String {
+        guard let booking = holidayStore?.bookings.first(where: { $0.id == bookingId }) else { return "" }
+        return annualLeaveDateText(for: booking)
+    }
+
+    private func annualLeaveDateText(for booking: HolidayBooking) -> String {
+        let start = booking.startDate.formatted(date: .abbreviated, time: .omitted)
+        let end = booking.endDate.formatted(date: .abbreviated, time: .omitted)
+        if Calendar.current.isDate(booking.startDate, inSameDayAs: booking.endDate) {
+            return "\(start) (\(booking.timeSlot.rawValue))"
+        }
+        return "\(start) – \(end) (\(booking.timeSlot.rawValue))"
     }
 
     /// Sent when a manager/admin loses self-book annual leave and must request days instead.
@@ -1584,16 +1648,24 @@ class NotificationService: ObservableObject {
         guard let raw = requesterId?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return recipients
         }
-        let requesterCanonical = await resolvedRecipientUserIdResolvingStaleIds(raw)
-        var out: [String] = []
-        for r in recipients {
-            let trimmed = r.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty { continue }
-            if trimmed == raw { continue }
-            let canon = await resolvedRecipientUserIdResolvingStaleIds(trimmed)
-            if canon == requesterCanonical { continue }
-            out.append(trimmed)
-        }
+            let requesterCanonical = await resolvedRecipientUserIdResolvingStaleIds(raw)
+            let requesterEmail = userStore?.organizationUsers.first(where: {
+                resolvedRecipientUserId($0.id) == requesterCanonical || $0.id == raw
+            })?.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var out: [String] = []
+            for r in recipients {
+                let trimmed = r.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty { continue }
+                if trimmed == raw { continue }
+                let canon = await resolvedRecipientUserIdResolvingStaleIds(trimmed)
+                if canon == requesterCanonical { continue }
+                if !requesterEmail.isEmpty {
+                    let recipientEmail = userStore?.organizationUsers.first(where: { $0.id == canon || $0.id == trimmed })?
+                        .email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if recipientEmail == requesterEmail { continue }
+                }
+                out.append(trimmed)
+            }
         return uniqueCanonicalUserIds(from: out)
     }
 
@@ -1634,6 +1706,11 @@ class NotificationService: ObservableObject {
             let canonicalRequester = resolvedRecipientUserId(uid)
             let canonicalUser = resolvedRecipientUserId(user.id)
             if canonicalRequester == canonicalUser { return true }
+            if let requester = userStore?.organizationUsers.first(where: { $0.id == uid || resolvedRecipientUserId($0.id) == canonicalRequester }) {
+                let requesterEmail = requester.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                let userEmail = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                if !requesterEmail.isEmpty, requesterEmail == userEmail { return true }
+            }
         }
         if let oid = request.operativeId,
            let operativeStore,
@@ -1839,12 +1916,23 @@ class NotificationService: ObservableObject {
             .filter { ($0.status == .approved || $0.status == .rejected) && $0.updatedAt >= recentCutoff }
         return myDecisions.map { booking in
             let key = "annualLeaveDecision|\(booking.id.uuidString)|\(user.id)|\(booking.status.rawValue)"
+            let dateText = annualLeaveDateText(for: booking)
+            let when = dateText.isEmpty ? "" : " for \(dateText)"
+            let note = booking.decisionNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let decisionMessage: String
+            if booking.status == .approved {
+                decisionMessage = "Your annual leave request was approved\(when)."
+            } else if note.isEmpty {
+                decisionMessage = "Your annual leave request was declined\(when)."
+            } else {
+                decisionMessage = "Your annual leave request was declined\(when). \(note)"
+            }
             return AppNotification(
                 id: syntheticNotificationId(from: key),
                 organizationId: organizationId,
                 type: booking.status == .approved ? .holidayRequestApproved : .holidayRequestDeclined,
                 title: booking.status == .approved ? "Annual Leave Approved" : "Annual Leave Declined",
-                message: booking.status == .approved ? "Your annual leave request was approved." : "Your annual leave request was declined.",
+                message: decisionMessage,
                 userId: user.id,
                 relatedId: booking.id,
                 isRead: isSyntheticMarkedRead(id: syntheticNotificationId(from: key), stableKey: key),

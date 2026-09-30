@@ -40,6 +40,8 @@ nonisolated struct HolidayBooking: Identifiable, Codable, Hashable, Sendable {
     var approvedAt: Date?
     var cancellationRequestedAt: Date?
     var cancellationRequestedByUserId: String?
+    /// Reason written when a line manager declines a request. Shown on the employee's notification.
+    var decisionNote: String?
     var createdAt: Date
     var updatedAt: Date
 
@@ -56,6 +58,7 @@ nonisolated struct HolidayBooking: Identifiable, Codable, Hashable, Sendable {
         approvedAt: Date? = nil,
         cancellationRequestedAt: Date? = nil,
         cancellationRequestedByUserId: String? = nil,
+        decisionNote: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -71,6 +74,7 @@ nonisolated struct HolidayBooking: Identifiable, Codable, Hashable, Sendable {
         self.approvedAt = approvedAt
         self.cancellationRequestedAt = cancellationRequestedAt
         self.cancellationRequestedByUserId = cancellationRequestedByUserId
+        self.decisionNote = decisionNote
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

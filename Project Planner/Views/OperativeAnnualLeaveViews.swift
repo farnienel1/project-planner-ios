@@ -348,6 +348,24 @@ private struct OperativeAnnualLeaveRequestsListView: View {
         Task {
             if request.cancellationRequestedAt != nil {
                 await holidayStore.deleteBooking(request)
+                let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
+                if let ownerId = request.userId {
+                    await notificationService.notifyAnnualLeaveCancelledByManager(
+                        userId: ownerId,
+                        booking: request,
+                        managerName: approverName
+                    )
+                }
+                await notifyAnnualLeavePeerManagers(
+                    request: request,
+                    actorUserId: uid,
+                    actorName: approverName,
+                    actionVerb: "cancelled",
+                    users: userStore.organizationUsers,
+                    operatives: operativeStore.allOperatives,
+                    notificationService: notificationService
+                )
+                return
             } else {
                 await holidayStore.approveBooking(request, approvedByUserId: uid)
             }
@@ -462,10 +480,6 @@ struct OperativeAnnualLeaveCalendarView: View {
                 bookedLeaveCard
                 pendingLeaveCard
                 AnnualLeaveLegend()
-                AnnualLeaveBankHolidayNote(
-                    regionName: bankHolidayRegion.title,
-                    loadedCount: bankHolidayService.holidaysByDayKey.count
-                )
                 monthNavigator
                 calendarGrid
                 if let day = selectedDay {
@@ -565,6 +579,8 @@ struct OperativeAnnualLeaveCalendarView: View {
         .onChange(of: bankHolidayService.holidaysByDayKey.count) { _, _ in
             bankHolidayCalendarTick += 1
         }
+        .navigationTitle(person.displayName)
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     @ViewBuilder
@@ -1285,6 +1301,17 @@ struct OperativeAnnualLeaveCalendarView: View {
         do {
             booking.timeSlot = changeSlot
             try await holidayStore.saveBooking(booking)
+            let managerName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
+            if let ownerId = booking.userId ?? person.userId {
+                await notificationService.notifyAnnualLeaveBookingConfirmation(
+                    userId: ownerId,
+                    bookingId: booking.id,
+                    bookedByName: managerName,
+                    startDate: booking.startDate,
+                    endDate: booking.endDate,
+                    timeSlot: booking.timeSlot
+                )
+            }
             selectedDay = nil
             successMessage = "Annual leave booking updated."
             showSuccess = true
@@ -1303,6 +1330,14 @@ struct OperativeAnnualLeaveCalendarView: View {
             errorMessage = err
             showError = true
             return
+        }
+        let managerName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
+        if let ownerId = booking.userId ?? person.userId {
+            await notificationService.notifyAnnualLeaveCancelledByManager(
+                userId: ownerId,
+                booking: booking,
+                managerName: managerName
+            )
         }
         if let selected = selectedDay {
             let start = calendar.startOfDay(for: booking.startDate)
