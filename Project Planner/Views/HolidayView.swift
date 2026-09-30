@@ -175,34 +175,7 @@ struct HolidayView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                if isManagingTeamLeave {
-                    Color.clear.frame(width: 20, height: 20)
-                } else {
-                    Button(action: {
-                        if presentedAsSheet {
-                            dismiss()
-                        } else {
-                            NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
-                        }
-                    }) {
-                        Image(systemName: "chevron.left")
-                            .foregroundStyle(HolidayChrome.accent)
-                            .font(.system(size: 17, weight: .semibold))
-                    }
-                }
-                Spacer()
-                Text("Annual leave")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(HolidayChrome.ink)
-                Spacer()
-                Color.clear.frame(width: 20, height: 20)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(Color(.systemBackground))
-
+        NavigationStack {
             Group {
                 if !isAnnualLeaveAvailable {
                     annualLeaveDisabledPlaceholder
@@ -223,8 +196,7 @@ struct HolidayView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    NavigationStack {
-                        ScrollView {
+                    ScrollView {
                             VStack(alignment: .leading, spacing: 20) {
                                 if let msg = holidayStore.errorMessage, !msg.isEmpty {
                                     VStack(alignment: .leading, spacing: 8) {
@@ -269,13 +241,32 @@ struct HolidayView: View {
                         await notificationService.loadNotifications()
                         await reloadBankHolidays(forceRefresh: true)
                     }
-                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(HolidayChrome.canvas)
+            .navigationTitle("Annual leave")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(true)
+            .toolbar {
+                if !isManagingTeamLeave {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(action: {
+                            if presentedAsSheet {
+                                dismiss()
+                            } else {
+                                NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+                            }
+                        }) {
+                            Image(systemName: "chevron.left")
+                                .foregroundStyle(HolidayChrome.accent)
+                                .font(.system(size: 17, weight: .semibold))
+                        }
+                        .accessibilityLabel("Back")
+                    }
+                }
+            }
         }
-        .toolbar(.hidden, for: .navigationBar)
-        .navigationBarBackButtonHidden(true)
         .task(id: bankHolidayRegion.id) {
             await reloadBankHolidays(forceRefresh: false)
         }
@@ -297,6 +288,9 @@ struct HolidayView: View {
             Task {
                 await holidayStore.loadData()
             }
+        }
+        .onChange(of: leavePage) { _, _ in
+            Task { await holidayStore.loadData() }
         }
         .onChange(of: firebaseBackend.currentOrganization?.settings.bankHolidayRegionId) { _, _ in
             Task { await reloadBankHolidays(forceRefresh: true) }
@@ -636,7 +630,7 @@ struct HolidayView: View {
             Text(title).font(.footnote.weight(.semibold)).lineLimit(2).minimumScaleFactor(0.7)
         }
         .foregroundStyle(.white)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
         .padding(10)
         .background(Color.white.opacity(0.17))
         .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
@@ -804,10 +798,6 @@ struct HolidayView: View {
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(AnnualLeavePalette.ink2)
                 }
-                AnnualLeaveBankHolidayNote(
-                    regionName: bankHolidayRegion.title,
-                    loadedCount: bankHolidayService.holidaysByDayKey.count
-                )
             }
             .padding(14)
             .background(AnnualLeavePalette.card)
@@ -1253,15 +1243,7 @@ struct HolidayView: View {
     private var calendarLegend: some View {
         VStack(alignment: .leading, spacing: 8) {
             AnnualLeaveLegend()
-            AnnualLeaveBankHolidayNote(
-                regionName: bankHolidayRegion.title,
-                loadedCount: bankHolidayService.holidaysByDayKey.count
-            )
-            if bankHolidayService.isLoading {
-                Text("Loading bank holidays…")
-                    .font(.footnote)
-                    .foregroundStyle(AnnualLeavePalette.ink3)
-            } else if let error = bankHolidayService.lastErrorMessage, bankHolidayService.holidaysByDayKey.isEmpty {
+            if let error = bankHolidayService.lastErrorMessage, bankHolidayService.holidaysByDayKey.isEmpty {
                 Text(error)
                     .font(.footnote)
                     .foregroundStyle(AnnualLeavePalette.red)
@@ -1790,12 +1772,13 @@ struct HolidayView: View {
             if request.cancellationRequestedAt != nil {
                 await holidayStore.deleteBooking(request)
                 let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
-                await notificationService.notifyHolidayRequestDecisionToUser(
-                    userId: request.userId ?? uid,
-                    bookingId: request.id,
-                    approved: true,
-                    decidedByName: "\(approverName) approved your annual leave cancellation"
-                )
+                if let ownerId = request.userId {
+                    await notificationService.notifyAnnualLeaveCancelledByManager(
+                        userId: ownerId,
+                        booking: request,
+                        managerName: approverName
+                    )
+                }
                 await notifyPeerLineManagers(
                     for: request,
                     actorUserId: uid,
@@ -1859,7 +1842,7 @@ struct HolidayView: View {
         if request.cancellationRequestedAt != nil { return }
         guard let uid = firebaseBackend.currentUser?.uid else { return }
         Task {
-            await holidayStore.rejectBooking(request, rejectedByUserId: uid)
+            await holidayStore.rejectBooking(request, rejectedByUserId: uid, reason: reason)
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
             await notifyDecision(to: request, approved: false, decidedByName: approverName, reason: reason)
             await notifyPeerLineManagers(

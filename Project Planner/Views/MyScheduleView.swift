@@ -620,7 +620,6 @@ struct ManagerScheduleContentView: View {
     @State private var showAddBookingSheet = false
     @State private var addToCalendarMessage: String?
     @State private var showingCalendarDestinationPicker = false
-    @State private var showingAnnualLeavePage = false
     @State private var showingDayPicker = false
 
     private struct LocationSearchItem: Identifiable {
@@ -916,15 +915,6 @@ struct ManagerScheduleContentView: View {
                 },
                 onCancel: { operativeBookingEditTarget = nil }
             )
-        }
-        .sheet(isPresented: $showingAnnualLeavePage) {
-            HolidayView(presentedAsSheet: true)
-                .environmentObject(holidayStore)
-                .environmentObject(userStore)
-                .environmentObject(operativeStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(notificationService)
-                .environmentObject(appSettings)
         }
         .confirmationDialog(
             secondBookingDialog?.title ?? "",
@@ -1497,7 +1487,7 @@ struct ManagerScheduleContentView: View {
                     Section {
                         ForEach(holidayBookings) { holiday in
                             Button {
-                                showingAnnualLeavePage = true
+                                NotificationCenter.default.post(name: NSNotification.Name("openHoliday"), object: nil)
                             } label: {
                                 HStack {
                                     Label("Annual Leave", systemImage: "sun.max.fill")

@@ -85,6 +85,12 @@ enum MaterialRequestEmailBuilder {
         let thankYou = isQuote
             ? "Thank you for taking the time to quote these materials."
             : "Thank you for processing this order."
+        let deliveryDateLine: String = {
+            guard !isQuote else { return "" }
+            let requested = context.requestedDate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !requested.isEmpty else { return "" }
+            return "Required delivery date: \(requested)\n"
+        }()
 
         return """
         Hi \(contact),
@@ -96,7 +102,7 @@ enum MaterialRequestEmailBuilder {
         \(confirm)
 
         Job number: \(context.jobNumber)
-
+        \(deliveryDateLine)
         Material list:
         \(materialLines)
 
@@ -125,6 +131,13 @@ enum MaterialRequestEmailBuilder {
 
     static func orderSubject(jobNumber: String, company: String) -> String {
         "Material order request — \(jobNumber) — \(company)"
+    }
+
+    static func formattedDeliveryDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.dateFormat = "EEE d MMM yyyy"
+        return formatter.string(from: date)
     }
 
     // MARK: - Rendering
@@ -247,7 +260,7 @@ enum MaterialRequestEmailBuilder {
         guard !requested.isEmpty else { return "" }
         return """
         <tr><td colspan="2" style="border-top:1px solid #e3e8ef;padding:12px 18px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-          <span style="display:inline-block;font-size:11px;font-weight:700;letter-spacing:.08em;color:#7c8aa0;text-transform:uppercase;">Requested date:&nbsp;</span>
+          <span style="display:inline-block;font-size:11px;font-weight:700;letter-spacing:.08em;color:#7c8aa0;text-transform:uppercase;">Required delivery date:&nbsp;</span>
           <span style="font-size:14px;font-weight:700;color:#0b1220;">\(escapeHTML(requested))</span>
         </td></tr>
         """

@@ -173,12 +173,14 @@ class HolidayStore: ObservableObject {
         }
     }
 
-    func rejectBooking(_ booking: HolidayBooking, rejectedByUserId: String) async {
+    func rejectBooking(_ booking: HolidayBooking, rejectedByUserId: String, reason: String = "") async {
         var updated = booking
         updated.status = .rejected
         updated.approvedByUserId = rejectedByUserId
         updated.approvedAt = Date()
         updated.updatedAt = Date()
+        let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.decisionNote = trimmedReason.isEmpty ? nil : trimmedReason
         do {
             try await saveBooking(updated)
         } catch {

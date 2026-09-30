@@ -22,6 +22,8 @@ struct SendToWholesalerView: View {
     @State private var selectedContacts: Set<UUID> = []
     @State private var requestType: MaterialOrderRequest.RequestType = .quote
     @State private var isSending = false
+    @State private var showingDeliveryDate = false
+    @State private var requiredDeliveryDate = Date()
     
     var body: some View {
         NavigationView {
@@ -44,7 +46,15 @@ struct SendToWholesalerView: View {
                     
                     Button(action: {
                         requestType = .order
-                        sendRequest()
+                        let selectedWholesalerIds = Set(wholesalers.compactMap { wholesaler in
+                            wholesaler.contacts.contains(where: { selectedContacts.contains($0.id) }) ? wholesaler.id : nil
+                        })
+                        if selectedWholesalerIds.count > 1 {
+                            showingMultipleWholesalerAlert = true
+                            return
+                        }
+                        requiredDeliveryDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+                        showingDeliveryDate = true
                     }) {
                         Text("Send Order")
                             .font(.headline)
@@ -154,6 +164,14 @@ struct SendToWholesalerView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showingDeliveryDate) {
+                MaterialOrderDeliveryDateSheet(date: $requiredDeliveryDate) {
+                    showingDeliveryDate = false
+                    sendRequest()
+                } onCancel: {
+                    showingDeliveryDate = false
+                }
+            }
             .alert("Multiple Wholesalers Selected", isPresented: $showingMultipleWholesalerAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -230,7 +248,8 @@ struct SendToWholesalerView: View {
             senderEmail: userEmail,
             senderPhone: userPhone?.isEmpty == false ? userPhone : nil,
             senderCompany: orgName,
-            companyLogoURL: firebaseBackend.currentOrganization?.companyLogoURL
+            companyLogoURL: firebaseBackend.currentOrganization?.companyLogoURL,
+            requiredDeliveryDate: requestType == .order ? requiredDeliveryDate : nil
         )
         let recipientSnapshots = selectedContactObjects.map { contact in
             let wholesalerName = wholesalers.first { $0.contacts.contains(where: { $0.id == contact.id }) }?.name
@@ -283,6 +302,43 @@ struct SendToWholesalerView: View {
                 }
             }
         }
+    }
+}
+
+private struct MaterialOrderDeliveryDateSheet: View {
+    @Binding var date: Date
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Choose the date these materials must arrive on site. The wholesaler email includes this date.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                DatePicker(
+                    "Required delivery date",
+                    selection: $date,
+                    in: Calendar.current.startOfDay(for: Date())...,
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.graphical)
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .navigationTitle("Confirm delivery date")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Send order", action: onConfirm)
+                        .fontWeight(.semibold)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 

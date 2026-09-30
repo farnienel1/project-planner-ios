@@ -5654,6 +5654,11 @@ class FirebaseBackend: ObservableObject {
         } else {
             data["cancellationRequestedByUserId"] = NSNull()
         }
+        if let note = booking.decisionNote?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+            data["decisionNote"] = note
+        } else {
+            data["decisionNote"] = NSNull()
+        }
         try await db.collection("organizations").document(orgId).collection("holidayBookings").document(booking.id.uuidString).setData(data, merge: true)
     }
 
@@ -5691,6 +5696,7 @@ class FirebaseBackend: ObservableObject {
             let timeSlot = HolidayTimeSlot(rawValue: timeSlotRaw ?? "") ?? .fullDay
             let cancellationRequestedAt = (data["cancellationRequestedAt"] as? Timestamp)?.dateValue()
             let cancellationRequestedByUserId = data["cancellationRequestedByUserId"] as? String
+            let decisionNote = data["decisionNote"] as? String
             let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
             let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
             return HolidayBooking(
@@ -5706,6 +5712,7 @@ class FirebaseBackend: ObservableObject {
                 approvedAt: approvedAt,
                 cancellationRequestedAt: cancellationRequestedAt,
                 cancellationRequestedByUserId: cancellationRequestedByUserId,
+                decisionNote: decisionNote,
                 createdAt: createdAt,
                 updatedAt: updatedAt
             )
@@ -7949,7 +7956,7 @@ extension FirebaseBackend {
                 jobNumber: request.projectNumber,
                 siteName: request.projectName,
                 deliveryAddress: request.siteAddress,
-                requestedDate: nil,
+                requestedDate: request.requiredDeliveryDate.map { MaterialRequestEmailBuilder.formattedDeliveryDate($0) },
                 quoteNeededBy: nil,
                 companyLogoURL: logoURL,
                 materials: request.materials,

@@ -404,7 +404,7 @@ struct AnnualLeaveBalanceHero: View {
                 .minimumScaleFactor(0.7)
         }
         .foregroundStyle(.white)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
         .padding(10)
         .background(Color.white.opacity(0.17))
         .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))

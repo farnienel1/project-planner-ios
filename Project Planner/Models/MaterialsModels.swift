@@ -505,6 +505,8 @@ struct MaterialOrderRequest: Codable {
     var companyLogoURL: String?
     /// When true, email body is plain text (same facts as the HTML template).
     var sendAsPlainText: Bool
+    /// Required on orders. The wholesaler email includes this date. Quotes leave it empty.
+    var requiredDeliveryDate: Date?
     
     enum RequestType: String, Codable {
         case quote = "Quote"
@@ -526,7 +528,8 @@ struct MaterialOrderRequest: Codable {
         senderPhone: String? = nil,
         senderCompany: String = "",
         companyLogoURL: String? = nil,
-        sendAsPlainText: Bool = false
+        sendAsPlainText: Bool = false,
+        requiredDeliveryDate: Date? = nil
     ) {
         self.projectId = projectId
         self.projectNumber = projectNumber
@@ -543,12 +546,13 @@ struct MaterialOrderRequest: Codable {
         self.senderCompany = senderCompany
         self.companyLogoURL = companyLogoURL
         self.sendAsPlainText = sendAsPlainText
+        self.requiredDeliveryDate = requiredDeliveryDate
     }
 
     enum CodingKeys: String, CodingKey {
         case projectId, projectNumber, projectName, siteAddress, materials, requestType
         case sentBy, sentAt, recipientContacts, senderName, senderEmail, senderPhone
-        case senderCompany, companyLogoURL, sendAsPlainText
+        case senderCompany, companyLogoURL, sendAsPlainText, requiredDeliveryDate
     }
 
     init(from decoder: Decoder) throws {
@@ -568,6 +572,7 @@ struct MaterialOrderRequest: Codable {
         senderCompany = try c.decodeIfPresent(String.self, forKey: .senderCompany) ?? ""
         companyLogoURL = try c.decodeIfPresent(String.self, forKey: .companyLogoURL)
         sendAsPlainText = try c.decodeIfPresent(Bool.self, forKey: .sendAsPlainText) ?? false
+        requiredDeliveryDate = try c.decodeIfPresent(Date.self, forKey: .requiredDeliveryDate)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -587,6 +592,7 @@ struct MaterialOrderRequest: Codable {
         try c.encode(senderCompany, forKey: .senderCompany)
         try c.encodeIfPresent(companyLogoURL, forKey: .companyLogoURL)
         try c.encode(sendAsPlainText, forKey: .sendAsPlainText)
+        try c.encodeIfPresent(requiredDeliveryDate, forKey: .requiredDeliveryDate)
     }
 }
 

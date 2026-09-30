@@ -647,7 +647,7 @@ struct SiteAuditCreateFlowView: View {
     @State private var step = 1
     @State private var selectedType: SiteAuditType = .general
     @State private var selectedProject: Project?
-    @State private var selectedProjectFilter: SiteAuditProjectFilter = .all
+    @State private var selectedProjectFilter: SiteAuditProjectFilter = .active
     @State private var customTitle = ""
     @State private var authorName = ""
     @State private var selectedDate = Date()
@@ -1412,41 +1412,100 @@ struct SiteAuditProjectPickerView: View {
     @Binding var selectedProject: Project?
     @Binding var selectedFilter: SiteAuditProjectFilter
     let availableProjects: [Project]
+    @State private var showingSmallWorks = false
+
+    private var scopedJobs: [Project] {
+        availableProjects.filter { showingSmallWorks ? $0.jobType == .smallWorks : $0.jobType != .smallWorks }
+    }
 
     private var filteredProjects: [Project] {
+        let base: [Project]
         switch selectedFilter {
-        case .all: return availableProjects.sorted { $0.jobNumber < $1.jobNumber }
-        case .active: return availableProjects.filter { $0.status == .active }.sorted { $0.jobNumber < $1.jobNumber }
-        case .upcoming: return availableProjects.filter { $0.status == .upcoming }.sorted { $0.jobNumber < $1.jobNumber }
-        case .completed: return availableProjects.filter { $0.status == .completed }.sorted { $0.jobNumber < $1.jobNumber }
+        case .all:
+            base = scopedJobs
+        case .active:
+            base = scopedJobs.filter { $0.status == .active }
+        case .upcoming:
+            base = scopedJobs.filter { $0.status == .upcoming }
+        case .completed:
+            base = scopedJobs.filter { $0.status == .completed }
         }
+        var seen = Set<UUID>()
+        return base
+            .filter { seen.insert($0.id).inserted }
+            .sorted { $0.jobNumber.localizedStandardCompare($1.jobNumber) == .orderedAscending }
+    }
+
+    private var listStyle: WorksDashboardListStyle {
+        showingSmallWorks ? .smallWorks : .projects
     }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Picker("Filter", selection: $selectedFilter) {
-                    ForEach(SiteAuditProjectFilter.allCases) { filter in Text(filter.rawValue).tag(filter) }
+                Picker("Job type", selection: $showingSmallWorks) {
+                    Text("Projects").tag(false)
+                    Text("Small Works").tag(true)
                 }
                 .pickerStyle(.segmented)
-                .padding()
-                List(filteredProjects) { project in
-                    Button {
-                        selectedProject = project
-                        dismiss()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(project.jobNumber).font(.headline)
-                            Text(project.siteName).font(.subheadline).foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(SiteAuditProjectFilter.allCases) { filter in
+                            WorksRevampFilterChip(
+                                title: filter.rawValue,
+                                isSelected: selectedFilter == filter,
+                                selectedForeground: WorksDashboardPalette.ink,
+                                selectedFill: listStyle.accent,
+                                titleFont: .subheadline.weight(.semibold),
+                                horizontalPadding: 15,
+                                verticalPadding: 9
+                            ) { selectedFilter = filter }
                         }
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
                 }
-                .listStyle(.plain)
+
+                if filteredProjects.isEmpty {
+                    ContentUnavailableView(
+                        showingSmallWorks ? "No small works" : "No projects",
+                        systemImage: "folder",
+                        description: Text("Nothing is \(selectedFilter.rawValue.lowercased()) in this list. Try another filter.")
+                    )
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 13) {
+                            ForEach(filteredProjects) { project in
+                                Button {
+                                    selectedProject = project
+                                    dismiss()
+                                } label: {
+                                    WorksDashboardCard(
+                                        project: project,
+                                        listAccent: listStyle.accent,
+                                        showsClientAndManager: true
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
+                    }
+                }
             }
-            .navigationTitle("Select Project")
+            .background(WorksDashboardPalette.bg.ignoresSafeArea())
+            .navigationTitle(showingSmallWorks ? "Small Works" : "Projects")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Close") { dismiss() }
+                }
+            }
         }
     }
 }
