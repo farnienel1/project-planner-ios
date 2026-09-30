@@ -8,6 +8,12 @@
 import SwiftUI
 import UIKit
 
+/// Navigation value for a small-works row. Kept separate from the Projects token
+/// so the two lists never register the same path type.
+private struct OpenedSmallWorkToken: Hashable {
+    let projectId: UUID
+}
+
 struct SmallWorksView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -88,15 +94,14 @@ struct SmallWorksView: View {
                    let tab = userInfo["tab"] as? Int,
                    tab == 2 {
                     // Reset navigation to root
-                    navigationPath.removeLast(navigationPath.count)
+                    navigationPath = NavigationPath()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("selectTab"))) { notification in
                 if let userInfo = notification.userInfo,
                    let tab = userInfo["tab"] as? Int,
                    tab == 2 {
-                    // Reset navigation when Small Works tab is selected
-                    navigationPath.removeLast(navigationPath.count)
+                    navigationPath = NavigationPath()
                     selectedStatus = .active
                 }
             }
@@ -128,6 +133,9 @@ struct SmallWorksView: View {
                 Color.clear
                     .preference(key: HideBottomMenuKey.self, value: false)
             )
+            .navigationDestination(for: OpenedSmallWorkToken.self) { token in
+                smallWorkDetailDestination(token.projectId)
+            }
         }
     }
 
@@ -182,9 +190,11 @@ struct SmallWorksView: View {
                                 emptySearchState
                             }
                         } else {
-                            LazyVStack(spacing: 13) {
+                            VStack(spacing: 13) {
                                 ForEach(searchFilteredSmallWorks) { project in
-                                    NavigationLink(value: project) {
+                                    Button {
+                                        navigationPath.append(OpenedSmallWorkToken(projectId: project.id))
+                                    } label: {
                                         WorksDashboardCard(
                                             project: project,
                                             listAccent: WorksDashboardListStyle.smallWorks.accent,
@@ -200,16 +210,6 @@ struct SmallWorksView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 2)
-                }
-                .navigationDestination(for: Project.self) { project in
-                    ProjectDetailView(project: project)
-                        .environmentObject(bookingStore)
-                        .environmentObject(operativeStore)
-                        .environmentObject(projectStore)
-                        .background(
-                            Color.clear
-                                .preference(key: HideBottomMenuKey.self, value: true)
-                        )
                 }
                 .refreshable {
                     projectStore.loadData()
@@ -382,6 +382,25 @@ struct SmallWorksView: View {
 
         var seen = Set<UUID>()
         return works.filter { seen.insert($0.id).inserted }
+    }
+
+    @ViewBuilder
+    private func smallWorkDetailDestination(_ projectId: UUID) -> some View {
+        if let project = projectStore.projects.first(where: { $0.id == projectId }) {
+            ProjectDetailView(project: project)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(projectStore)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
+                .background(
+                    Color.clear
+                        .preference(key: HideBottomMenuKey.self, value: true)
+                )
+        } else {
+            ContentUnavailableView("Small works unavailable", systemImage: "wrench.and.screwdriver", description: Text("Pull to refresh and try again."))
+        }
     }
 
     private func refreshDeadlineAssignedProjectIds() async {

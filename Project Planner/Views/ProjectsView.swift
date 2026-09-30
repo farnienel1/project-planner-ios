@@ -7,6 +7,12 @@
 
 import SwiftUI
 
+/// Navigation value for a project row. A full `Project` value in the path crashes
+/// when two rows hash the same, and it fights any outer stack that also routes `Project`.
+private struct OpenedProjectToken: Hashable {
+    let projectId: UUID
+}
+
 struct ProjectsView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -82,20 +88,21 @@ struct ProjectsView: View {
                 Color.clear
                     .preference(key: HideBottomMenuKey.self, value: false)
             )
+            .navigationDestination(for: OpenedProjectToken.self) { token in
+                projectDetailDestination(token.projectId)
+            }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("resetNavigationForTab"))) { notification in
                 if let userInfo = notification.userInfo,
                    let tab = userInfo["tab"] as? Int,
                    tab == 1 {
-                    // Reset navigation to root
-                    navigationPath.removeLast(navigationPath.count)
+                    navigationPath = NavigationPath()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("selectTab"))) { notification in
                 if let userInfo = notification.userInfo,
                    let tab = userInfo["tab"] as? Int,
                    tab == 1 {
-                    // Reset navigation when Projects tab is selected
-                    navigationPath.removeLast(navigationPath.count)
+                    navigationPath = NavigationPath()
                     selectedStatus = .active
                 }
             }
@@ -170,9 +177,11 @@ struct ProjectsView: View {
                                 emptySearchState
                             }
                         } else {
-                            LazyVStack(spacing: 13) {
+                            VStack(spacing: 13) {
                                 ForEach(searchFilteredProjects) { project in
-                                    NavigationLink(value: project) {
+                                    Button {
+                                        navigationPath.append(OpenedProjectToken(projectId: project.id))
+                                    } label: {
                                         WorksDashboardCard(
                                             project: project,
                                             listAccent: WorksDashboardListStyle.projects.accent,
@@ -188,16 +197,6 @@ struct ProjectsView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 2)
-                }
-                .navigationDestination(for: Project.self) { project in
-                    ProjectDetailView(project: project)
-                        .environmentObject(bookingStore)
-                        .environmentObject(operativeStore)
-                        .environmentObject(projectStore)
-                        .background(
-                            Color.clear
-                                .preference(key: HideBottomMenuKey.self, value: true)
-                        )
                 }
                 .refreshable {
                     projectStore.loadData()
@@ -370,6 +369,26 @@ struct ProjectsView: View {
 
         var seen = Set<UUID>()
         return projects.filter { seen.insert($0.id).inserted }
+    }
+
+    @ViewBuilder
+    private func projectDetailDestination(_ projectId: UUID) -> some View {
+        if let project = projectStore.projects.first(where: { $0.id == projectId }) {
+            ProjectDetailView(project: project)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(projectStore)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
+                .environmentObject(appSettings)
+                .background(
+                    Color.clear
+                        .preference(key: HideBottomMenuKey.self, value: true)
+                )
+        } else {
+            ContentUnavailableView("Project unavailable", systemImage: "folder", description: Text("Pull to refresh and try again."))
+        }
     }
 
     private func refreshDeadlineAssignedProjectIds() async {

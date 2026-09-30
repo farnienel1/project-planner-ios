@@ -134,7 +134,9 @@ enum WorksListProgress {
         let now = Date()
         if now > project.endDate { return 1 }
         let elapsed = now.timeIntervalSince(project.startDate)
-        return min(max(elapsed / total, 0), 1)
+        let value = elapsed / total
+        guard value.isFinite else { return 0 }
+        return min(max(value, 0), 1)
     }
 
     static func percentDisplay(for project: Project) -> Int {
