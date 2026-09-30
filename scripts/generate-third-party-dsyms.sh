@@ -35,6 +35,10 @@ for name in "${FRAMEWORKS[@]}"; do
   if [[ -d "$out" ]]; then
     continue
   fi
-  echo "note: Generating dSYM for ${name}.framework (TestFlight symbol upload)"
-  dsymutil "$binary" -o "$out"
+  # These binaries ship without debug symbols. dsymutil then exits non-zero and
+  # fails the archive. Skip them; TestFlight does not need an empty dSYM.
+  if ! dsymutil "$binary" -o "$out" >/dev/null 2>&1; then
+    rm -rf "$out"
+    echo "note: ${name}.framework has no debug symbols; archive continues"
+  fi
 done

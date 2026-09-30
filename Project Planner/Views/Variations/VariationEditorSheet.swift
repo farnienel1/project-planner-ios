@@ -182,6 +182,7 @@ struct VariationEditorSheet: View {
     @State private var tradeQuery = ""
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var inFlightUploads = 0
+    @State private var preparingEvidence = 0
     @State private var undoNotice: VariationUndoNotice?
     @State private var undoRestore: (() -> Void)?
     @FocusState private var focusedField: Field?
@@ -221,8 +222,11 @@ struct VariationEditorSheet: View {
         VariationNumbering.parentName(jobNumber: project.jobNumber, siteName: project.siteName)
     }
     private var totalHours: Double { labour.reduce(0) { $0 + $1.lineHours } }
+    private var evidenceBusy: Bool {
+        inFlightUploads > 0 || preparingEvidence > 0 || evidence.contains(where: \.isPending)
+    }
     private var canSave: Bool {
-        !heading.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving
+        !heading.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving && !evidenceBusy
     }
     private var hourPresets: [(label: String, hours: Double)] {
         let day = firebaseBackend.currentOrganization?.settings.payrollTimePolicy.standardPaidHours ?? 0
@@ -313,28 +317,42 @@ struct VariationEditorSheet: View {
             .sheet(isPresented: $showingTrades) { tradeSheet }
             .sheet(isPresented: $showingCamera) {
                 VariationCameraPicker { image in
-                    Task { await addImage(image, fileName: "photo.jpg") }
+                    preparingEvidence += 1
+                    Task {
+                        await addImage(image, fileName: "photo.jpg")
+                        preparingEvidence = max(0, preparingEvidence - 1)
+                    }
                 }
             }
             .photosPicker(
                 isPresented: $showingLibrary,
                 selection: $photoItems,
                 maxSelectionCount: max(1, Self.maxEvidence - evidence.count),
-                matching: .images
+                matching: .any(of: [.images, .videos])
             )
             .onChange(of: photoItems) { _, items in
                 guard !items.isEmpty else { return }
                 let batch = items
                 photoItems = []
-                Task { await importPhotos(batch) }
+                preparingEvidence += 1
+                Task {
+                    await importPhotos(batch)
+                    preparingEvidence = max(0, preparingEvidence - 1)
+                }
             }
             .fileImporter(
                 isPresented: $showingFileImporter,
-                allowedContentTypes: [.jpeg, .png, .pdf, UTType("public.heic") ?? .image],
+                allowedContentTypes: [.item],
                 allowsMultipleSelection: true
             ) { result in
                 if case .success(let urls) = result {
-                    Task { await importFiles(urls) }
+                    preparingEvidence += 1
+                    Task {
+                        await importFiles(urls)
+                        preparingEvidence = max(0, preparingEvidence - 1)
+                    }
+                } else if case .failure(let error) = result {
+                    errorMessage = error.localizedDescription
                 }
             }
             .confirmationDialog("Evidence", isPresented: $showingEvidenceChoices, titleVisibility: .visible) {
@@ -830,7 +848,7 @@ struct VariationEditorSheet: View {
                             .padding(.vertical, 12)
                             .background(VariationFormColors.soft2)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        Text("Add as many as you need — up to \(Self.maxEvidence) photos or PDFs per variation.")
+                        Text("Add as many as you need — up to \(Self.maxEvidence) photos, videos, or files per variation. Each file must be 20 MB or smaller.")
                             .font(.system(size: 12))
                             .foregroundStyle(VariationFormColors.ink3)
                             .multilineTextAlignment(.center)
@@ -850,7 +868,7 @@ struct VariationEditorSheet: View {
                                     .frame(width: 30, height: 30)
                                     .background(VariationFormColors.blueTint)
                                     .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                                Text(item.fileName)
+                                Text(item.isPending ? "\(item.fileName) — uploading" : item.fileName)
                                     .font(.system(size: 13.5))
                                     .lineLimit(1)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -896,7 +914,7 @@ struct VariationEditorSheet: View {
         if evidence.count >= Self.maxEvidence {
             return "\(evidence.count) of \(Self.maxEvidence) added — that is the limit"
         }
-        return "\(evidence.count) of \(Self.maxEvidence) added. Photos, PDFs, anything that proves the work."
+        return "\(evidence.count) of \(Self.maxEvidence) added. Photos, videos, PDFs, and other files."
     }
 
     private var footer: some View {
@@ -1362,10 +1380,50 @@ struct VariationEditorSheet: View {
             showUndo("Only \(room) more file\(room == 1 ? "" : "s") fit on this variation", restore: nil)
         }
         for item in items.prefix(room) {
-            if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
-                await addImage(image, fileName: "photo.jpg")
-            }
+            await importPhotoItem(item)
         }
+    }
+
+    @MainActor
+    private func importPhotoItem(_ item: PhotosPickerItem) async {
+        do {
+            if let picked = try await item.loadTransferable(type: PickedEvidenceFile.self) {
+                let name = picked.fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let fileName = name.isEmpty ? suggestedFileName(for: item) : name
+                await uploadPickedPayload(picked.data, fileName: fileName, contentType: mime(for: fileName))
+                return
+            }
+            if let data = try await item.loadTransferable(type: Data.self) {
+                let fileName = suggestedFileName(for: item)
+                await uploadPickedPayload(data, fileName: fileName, contentType: mime(for: fileName))
+                return
+            }
+            errorMessage = "Could not read that item. Try Choose files."
+        } catch {
+            errorMessage = "Could not read that item. Try Choose files."
+        }
+    }
+
+    private func suggestedFileName(for item: PhotosPickerItem) -> String {
+        let type = item.supportedContentTypes.first
+        let ext = type?.preferredFilenameExtension ?? "bin"
+        if type?.conforms(to: .image) == true { return "photo.\(ext)" }
+        if type?.conforms(to: .movie) == true { return "video.\(ext)" }
+        return "evidence.\(ext)"
+    }
+
+    private func uploadPickedPayload(_ data: Data, fileName: String, contentType: String) async {
+        let type = contentType.lowercased()
+        if type.hasPrefix("image/") || UTType(mimeType: contentType)?.conforms(to: .image) == true,
+           let image = UIImage(data: data),
+           let jpeg = VariationEvidenceProcessor.preparedImageData(image) {
+            let jpegName = (fileName as NSString).pathExtension.lowercased() == "jpg" || (fileName as NSString).pathExtension.lowercased() == "jpeg"
+                ? fileName
+                : "photo.jpg"
+            await uploadData(jpeg, fileName: jpegName, contentType: "image/jpeg")
+            return
+        }
+        await uploadData(data, fileName: fileName, contentType: contentType.isEmpty ? mime(for: fileName) : contentType)
     }
 
     @MainActor
@@ -1392,7 +1450,8 @@ struct VariationEditorSheet: View {
             errorMessage = "That file is too large. Evidence must be 20 MB or smaller."
             return
         }
-        if let image = UIImage(data: data) {
+        let type = UTType(filenameExtension: url.pathExtension)
+        if type?.conforms(to: .image) == true, let image = UIImage(data: data) {
             await addImage(image, fileName: name)
             return
         }
@@ -1405,8 +1464,10 @@ struct VariationEditorSheet: View {
     }
 
     private func uploadData(_ data: Data, fileName: String, contentType: String) async {
-        guard VariationEvidenceProcessor.isAllowed(fileName: fileName, contentType: contentType) else {
-            errorMessage = "Use a JPG, PNG, HEIC or PDF file."
+        guard VariationEvidenceProcessor.isAllowed(fileName: fileName, contentType: contentType, byteCount: data.count) else {
+            errorMessage = data.count > VariationEvidenceProcessor.maxBytes
+                ? "That file is too large. Evidence must be 20 MB or smaller."
+                : "That file could not be added."
             return
         }
         guard evidence.count < Self.maxEvidence else {
@@ -1465,24 +1526,26 @@ struct VariationEditorSheet: View {
 
     private func save() async {
         guard canSave else { return }
+        isSaving = true
+        errorMessage = nil
         let orgId = (await firebaseBackend.resolveOrganizationIdForFirebaseWrites(
             preferredFallback: firebaseBackend.currentOrganization?.firestoreDocumentId
         )) ?? ""
         guard !orgId.isEmpty else {
             errorMessage = "Organization ID is missing. Open Settings → Force Reload Data, then retry."
+            isSaving = false
             return
         }
         if !trackerOn, store.voNumberIsDuplicate(voNumber, excludingId: variationId) {
             errorMessage = "This VO number is already used on this job."
+            isSaving = false
             return
         }
-        isSaving = true
-        errorMessage = nil
-        let waitDeadline = Date().addingTimeInterval(20)
-        while inFlightUploads > 0 && Date() < waitDeadline {
+        let waitDeadline = Date().addingTimeInterval(45)
+        while evidenceBusy && Date() < waitDeadline {
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
-        if inFlightUploads > 0 {
+        if evidenceBusy {
             errorMessage = "Evidence is still uploading. Wait a moment and tap Save again."
             isSaving = false
             return
@@ -1562,12 +1625,11 @@ struct VariationEditorSheet: View {
     }
 
     private func mime(for fileName: String) -> String {
-        switch (fileName as NSString).pathExtension.lowercased() {
-        case "png": return "image/png"
-        case "pdf": return "application/pdf"
-        case "heic": return "image/heic"
-        default: return "image/jpeg"
+        let ext = (fileName as NSString).pathExtension
+        if !ext.isEmpty, let type = UTType(filenameExtension: ext), let mime = type.preferredMIMEType {
+            return mime
         }
+        return "application/octet-stream"
     }
 
     private func typeBadge(_ item: VariationEvidenceItem) -> String {
@@ -1598,6 +1660,31 @@ private extension Text {
             .foregroundStyle(VariationFormColors.ink3)
             .tracking(0.35)
             .textCase(.uppercase)
+    }
+}
+
+private struct PickedEvidenceFile: Transferable {
+    let data: Data
+    let fileName: String
+
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(importedContentType: .image) { data in
+            PickedEvidenceFile(data: data, fileName: "")
+        }
+        DataRepresentation(importedContentType: .movie) { data in
+            PickedEvidenceFile(data: data, fileName: "")
+        }
+        DataRepresentation(importedContentType: .pdf) { data in
+            PickedEvidenceFile(data: data, fileName: "document.pdf")
+        }
+        DataRepresentation(importedContentType: .data) { data in
+            PickedEvidenceFile(data: data, fileName: "")
+        }
+        FileRepresentation(importedContentType: .item) { received in
+            let data = try Data(contentsOf: received.file)
+            let name = received.file.lastPathComponent
+            return PickedEvidenceFile(data: data, fileName: name)
+        }
     }
 }
 

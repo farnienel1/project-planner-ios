@@ -470,13 +470,12 @@ struct ContentView: View {
             Group {
             switch selectedTab {
             case 0:
-                NavigationStack {
-                    HomeView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
+                // Home is not inside a NavigationStack. A stack inserted as the window root
+                // stays a blank white (or black) UIKit controller even after Home appears.
+                HomeView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             case 1:
-                // ProjectsView owns its NavigationStack. Wrapping it again crashes on open
-                // (nested stacks, and a second destination for Project).
+                // Same as Small Works: the screen owns its one NavigationStack. Wrapping it again crashes on open.
                 if userStore.canViewProjects() {
                     ProjectsView()
                 } else {
@@ -827,24 +826,17 @@ extension ContentView {
         // If selecting Home (tab 0), always ensure we go to Home, not Projects
         let targetTab = tag
         
-        withAnimation(.easeInOut(duration: 0.15)) {
-            // Store previous tab before switching (for navigation from secondary tabs)
+        // Animated swaps between navigation stacks crash on open (Projects was the one that died).
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
             if selectedTab != targetTab {
                 previousTab = selectedTab
             }
-            
-            // If selecting Home (tab 0), ensure we reset any navigation state first
             if targetTab == 0 {
-                // Clear previous tab to ensure clean navigation to home
                 previousTab = nil
             }
-            
-            // Explicitly set selectedTab FIRST to prevent navigation loops
             selectedTab = targetTab
-            
-            // Post notification to reset navigation for the selected tab
-            // This ensures each tab resets to its start page
-            // Use async dispatch to prevent immediate re-triggering
             DispatchQueue.main.async {
                 NotificationCenter.default.post(
                     name: NSNotification.Name("resetNavigationForTab"),
@@ -852,7 +844,6 @@ extension ContentView {
                     userInfo: ["tab": targetTab]
                 )
             }
-            
             if showMoreMenuSheet {
                 showMoreMenuSheet = false
             }

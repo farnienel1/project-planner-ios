@@ -403,18 +403,15 @@ struct WorksDashboardCard: View {
         .accessibilityLabel(accessibilitySummary)
         .accessibilityAddTraits(.isButton)
         .onAppear {
-            drawnFraction = reduceMotion ? progressFraction : 0
-            guard !reduceMotion else { return }
-            withAnimation(.easeOut(duration: 0.4)) {
-                drawnFraction = progressFraction
-            }
-        }
-        .onChange(of: progressFraction) { _, newValue in
+            // One shot. Progress uses the clock, so watching it restarts the ring
+            // on every frame and the longer Projects list dies on open.
+            let target = progressFraction.isFinite ? min(max(progressFraction, 0), 1) : 0
             if reduceMotion {
-                drawnFraction = newValue
+                drawnFraction = target
             } else {
+                drawnFraction = 0
                 withAnimation(.easeOut(duration: 0.4)) {
-                    drawnFraction = newValue
+                    drawnFraction = target
                 }
             }
         }
@@ -580,21 +577,33 @@ private struct WorksDashboardWrap: Layout {
     var spacing: CGFloat = 8
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        let proposed = proposal.width ?? 0
+        let bounded = proposed.isFinite && proposed > 0
+        let maxWidth = bounded ? proposed : 10_000
         let rows = rows(maxWidth: maxWidth, subviews: subviews)
         let height = rows.reduce(0) { $0 + $1.height } + spacing * CGFloat(max(rows.count - 1, 0))
-        return CGSize(width: maxWidth == .greatestFiniteMagnitude ? (rows.map(\.width).max() ?? 0) : maxWidth, height: height)
+        let width = bounded ? maxWidth : (rows.map(\.width).max() ?? 0)
+        return CGSize(
+            width: width.isFinite ? max(width, 0) : 0,
+            height: height.isFinite ? max(height, 0) : 0
+        )
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let rows = rows(maxWidth: bounds.width, subviews: subviews)
+        let width = bounds.width.isFinite && bounds.width > 0 ? bounds.width : 1
+        let rows = rows(maxWidth: width, subviews: subviews)
         var y = bounds.minY
         var index = 0
         for row in rows {
             var x = bounds.minX
             for size in row.sizes {
-                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-                x += size.width + spacing
+                guard index < subviews.count else { return }
+                let safe = CGSize(
+                    width: size.width.isFinite ? max(size.width, 0) : 0,
+                    height: size.height.isFinite ? max(size.height, 0) : 0
+                )
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(safe))
+                x += safe.width + spacing
                 index += 1
             }
             y += row.height + spacing
@@ -611,7 +620,11 @@ private struct WorksDashboardWrap: Layout {
         var rows: [Row] = []
         var current = Row()
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let measured = subview.sizeThatFits(.unspecified)
+            let size = CGSize(
+                width: measured.width.isFinite ? max(measured.width, 0) : 0,
+                height: measured.height.isFinite ? max(measured.height, 0) : 0
+            )
             let nextWidth = current.sizes.isEmpty ? size.width : current.width + spacing + size.width
             if !current.sizes.isEmpty && nextWidth > maxWidth {
                 rows.append(current)

@@ -53,7 +53,10 @@ struct BookingClashWarningCard: View {
 
     @State private var timelineOpen = false
 
-    private var entries: [Warning.ClashTimelineEntry] { warning.clashEntries }
+    private var entries: [Warning.ClashTimelineEntry] {
+        var seen = Set<String>()
+        return warning.clashEntries.filter { seen.insert($0.rowId).inserted }
+    }
     private var personName: String { warning.clashPersonName ?? "" }
     private var date: Date { warning.clashDate ?? Date() }
     private var personKind: Warning.ClashPersonKind {
@@ -394,7 +397,7 @@ struct BookingClashWarningCard: View {
 
     private func clashLane(entry: Warning.ClashTimelineEntry, palette: ClashBarPalette, height: CGFloat, corner: CGFloat) -> some View {
         GeometryReader { geo in
-            let w = geo.size.width
+            let w = finiteWidth(geo.size.width)
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
                     .fill(Color(red: 0.937, green: 0.937, blue: 0.957))
@@ -403,13 +406,13 @@ struct BookingClashWarningCard: View {
                     let right = min(1, WarningTimelineMath.fraction(in: window, minutes: region.endMinutes)) * w
                     Rectangle()
                         .fill(Color(red: 0.702, green: 0.149, blue: 0.118).opacity(0.12))
-                        .frame(width: max(1, right - left))
+                        .frame(width: finiteWidth(max(1, right - left)))
                         .offset(x: left)
                 }
                 let iv = WarningTimelineMath.interval(of: entry, window: window)
                 let left = max(0, WarningTimelineMath.fraction(in: window, minutes: max(iv.0, window.startMinutes))) * w
                 let right = min(1, WarningTimelineMath.fraction(in: window, minutes: min(iv.1, window.endMinutes))) * w
-                let barW = max(3, right - left)
+                let barW = finiteWidth(max(3, right - left))
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: corner, style: .continuous)
                         .fill(palette.bar)
@@ -425,8 +428,8 @@ struct BookingClashWarningCard: View {
                                 let ol = CGFloat(s - iv.0) / CGFloat(span) * barW
                                 let ow = CGFloat(e - s) / CGFloat(span) * barW
                                 ClashHatchOverlay(spacing: 7, opacity: 0.34)
-                                    .frame(width: max(1, ow))
-                                    .offset(x: ol)
+                                    .frame(width: finiteWidth(max(1, ow)))
+                                    .offset(x: finiteOffset(ol))
                             }
                         }
                     }
@@ -444,16 +447,27 @@ struct BookingClashWarningCard: View {
         return GeometryReader { geo in
             ZStack(alignment: .topLeading) {
                 ForEach(Array(ticks.enumerated()), id: \.offset) { index, tick in
-                    let x = WarningTimelineMath.fraction(in: window, minutes: tick) * geo.size.width
+                    let width = finiteWidth(geo.size.width)
+                    let x = WarningTimelineMath.fraction(in: window, minutes: tick) * width
                     Text(WarningTimelineMath.formatClock(tick))
                         .font(.system(size: 10).monospacedDigit())
                         .foregroundStyle(Color(red: 0.604, green: 0.604, blue: 0.627))
-                        .offset(x: axisOffset(x: x, index: index, last: index == ticks.count - 1, width: geo.size.width))
+                        .offset(x: axisOffset(x: x, index: index, last: index == ticks.count - 1, width: width))
                 }
             }
         }
         .frame(height: 13)
         .padding(.top, 5)
+    }
+
+    private func finiteWidth(_ raw: CGFloat) -> CGFloat {
+        guard raw.isFinite, raw > 0 else { return 1 }
+        return min(raw, 4_000)
+    }
+
+    private func finiteOffset(_ raw: CGFloat) -> CGFloat {
+        guard raw.isFinite else { return 0 }
+        return min(max(raw, 0), 4_000)
     }
 
     private func axisOffset(x: CGFloat, index: Int, last: Bool, width: CGFloat) -> CGFloat {

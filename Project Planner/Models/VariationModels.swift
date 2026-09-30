@@ -372,7 +372,7 @@ nonisolated enum VariationCodec {
     }
 
     private static func labour(from value: Any?) -> [VariationLabourLine] {
-        ((value as? [[String: Any]]) ?? []).compactMap { row in
+        mapRows(from: value).compactMap { row in
             let id = row["id"] as? String ?? UUID().uuidString
             return VariationLabourLine(
                 id: id,
@@ -383,7 +383,7 @@ nonisolated enum VariationCodec {
     }
 
     private static func materials(from value: Any?) -> [VariationMaterialLine] {
-        ((value as? [[String: Any]]) ?? []).compactMap { row in
+        mapRows(from: value).compactMap { row in
             let id = row["id"] as? String ?? UUID().uuidString
             return VariationMaterialLine(
                 id: id,
@@ -393,8 +393,24 @@ nonisolated enum VariationCodec {
         }
     }
 
+    private static func mapRows(from value: Any?) -> [[String: Any]] {
+        if let rows = value as? [[String: Any]] { return rows }
+        guard let rows = value as? [Any] else { return [] }
+        return rows.compactMap { item in
+            if let row = item as? [String: Any] { return row }
+            if let row = item as? NSDictionary {
+                var mapped: [String: Any] = [:]
+                for (key, value) in row {
+                    if let key = key as? String { mapped[key] = value }
+                }
+                return mapped
+            }
+            return nil
+        }
+    }
+
     private static func evidence(from value: Any?) -> [VariationEvidenceItem] {
-        ((value as? [[String: Any]]) ?? []).compactMap { row in
+        mapRows(from: value).compactMap { row in
             let id = row["id"] as? String ?? UUID().uuidString
             return VariationEvidenceItem(
                 id: id,

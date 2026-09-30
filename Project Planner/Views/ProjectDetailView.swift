@@ -102,7 +102,7 @@ struct ProjectDetailView: View {
     @State private var cameraPosition: MapCameraPosition = .automatic
     @EnvironmentObject var taskStore: ProjectTaskStore
     
-    private enum DetailTile: String, CaseIterable, Identifiable {
+    private enum DetailTile: String, CaseIterable, Identifiable, Hashable {
         case scheduling = "Scheduling"
         case visibility = "View"
         case tasks = "My Tasks"
@@ -155,6 +155,8 @@ struct ProjectDetailView: View {
     @State private var projectTasksSearchText = ""
     @State private var taskFilter = TaskFilter()
     @State private var openVariationCount = 0
+    @State private var openedManageTile: DetailTile?
+    @State private var showingLocationPage = false
     
     var body: some View {
         ScrollView {
@@ -474,14 +476,8 @@ struct ProjectDetailView: View {
 
     /// Tappable Location control inside Details — opens the existing map / Apple Maps / Google Maps page.
     private var detailsLocationButton: some View {
-        NavigationLink {
-            ScrollView {
-                siteLocationSection
-                    .padding()
-            }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
-            .navigationTitle("Location")
-            .navigationBarTitleDisplayMode(.inline)
+        Button {
+            showingLocationPage = true
         } label: {
             HStack(alignment: .center, spacing: 12) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -515,6 +511,15 @@ struct ProjectDetailView: View {
         .padding(.vertical, 6)
         .accessibilityLabel("Location")
         .accessibilityHint("Opens the site location page with map and directions")
+        .navigationDestination(isPresented: $showingLocationPage) {
+            ScrollView {
+                siteLocationSection
+                    .padding()
+            }
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .navigationTitle("Location")
+            .navigationBarTitleDisplayMode(.inline)
+        }
     }
 
     private var timelineDetailSummary: String {
@@ -601,11 +606,16 @@ struct ProjectDetailView: View {
 
         return LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
             ForEach(availableTiles) { tile in
-                NavigationLink(destination: tileDestination(for: tile)) {
+                Button {
+                    openedManageTile = tile
+                } label: {
                     manageTileContents(for: tile)
                 }
                 .buttonStyle(.plain)
             }
+        }
+        .navigationDestination(item: $openedManageTile) { tile in
+            tileDestination(for: tile)
         }
     }
 

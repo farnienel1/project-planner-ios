@@ -27,7 +27,8 @@ private enum WarningsUI {
 
     static func avatarColor(for name: String) -> Color {
         let hash = name.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
-        return avatarPalette[abs(hash) % avatarPalette.count]
+        let index = Int(UInt(bitPattern: hash) % UInt(avatarPalette.count))
+        return avatarPalette[index]
     }
 
     nonisolated static func parseUnbookedPerson(_ raw: String) -> (name: String, badge: String?) {
@@ -74,8 +75,7 @@ struct WarningsDetailView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
+        VStack(spacing: 0) {
                 warningsNavBar
                 Group {
                     if warningsService.activeWarnings.isEmpty {
@@ -167,7 +167,6 @@ struct WarningsDetailView: View {
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(28)
             }
-        }
     }
 
     private var warningsNavBar: some View {
@@ -320,7 +319,7 @@ struct WarningsDetailView: View {
 
     private var warningsScroll: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 WarningsHeroCard(
                     activeCount: warningsService.warningCount,
                     highCount: warningsService.highCount,
@@ -350,7 +349,8 @@ struct WarningsDetailView: View {
     }
 
     private var filteredWarnings: [Warning] {
-        let sorted = warningsService.warningsSortedByDate()
+        var seen = Set<String>()
+        let sorted = warningsService.warningsSortedByDate().filter { seen.insert($0.resolutionKey).inserted }
         switch filterChip {
         case .all: return sorted
         case .clashes:
