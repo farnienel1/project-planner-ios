@@ -392,7 +392,6 @@ struct WorksDashboardCard: View {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(WorksDashboardPalette.line, lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 6)
         .opacity(project.status == .completed ? 0.72 : 1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilitySummary)

@@ -8,10 +8,9 @@
 import SwiftUI
 import UIKit
 
-/// Navigation value for a small-works row. Kept separate from the Projects token
-/// so the two lists never register the same path type.
-private struct OpenedSmallWorkToken: Hashable {
-    let projectId: UUID
+/// Identifies a small-works job opened from the list. The list has no navigation stack.
+private struct SmallWorkScreenCover: Identifiable {
+    let id: UUID
 }
 
 struct SmallWorksView: View {
@@ -21,11 +20,16 @@ struct SmallWorksView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var subcontractorStore: SubcontractorStore
+    @EnvironmentObject var taskStore: ProjectTaskStore
     /// Default to Active so the list opens on current jobs; use All / Completed chips for older work.
     @State private var selectedStatus: ProjectStatus? = .active
     @State private var selectedProject: Project? = nil
     @State private var showingEditProject = false
-    @State private var navigationPath = NavigationPath()
+    @State private var openedSmallWork: SmallWorkScreenCover?
     @State private var searchText = ""
     @State private var showingCreateSmallWorks = false
     @State private var deadlineAssignedProjectIds: Set<UUID> = []
@@ -46,94 +50,87 @@ struct SmallWorksView: View {
     }
     
     var body: some View {
-        NavigationStack(path: $navigationPath) {
-            ZStack {
-                WorksDashboardPalette.bg.ignoresSafeArea()
+        ZStack {
+            WorksDashboardPalette.bg.ignoresSafeArea()
+            VStack(spacing: 0) {
+                smallWorksHeader
                 smallWorksRootContent
             }
-            .navigationTitle("Small works")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(WorksDashboardPalette.bg, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: {
-                        NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
-                    }) {
-                        Image(systemName: "chevron.left")
-                            .foregroundStyle(WorksDashboardPalette.ink)
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(width: 36, height: 36)
-                            .background(WorksDashboardPalette.soft)
-                            .clipShape(Circle())
-                    }
-                }
-                if canCreateSmallWorks {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            showingCreateSmallWorks = true
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 36, height: 36)
-                                .background(WorksDashboardListStyle.smallWorks.accent)
-                                .clipShape(Circle())
-                        }
-                        .accessibilityLabel("New small work")
-                    }
-                }
-            }
-            .navigationBarBackButtonHidden(true)
-            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("resetNavigationForTab"))) { notification in
-                if let userInfo = notification.userInfo,
-                   let tab = userInfo["tab"] as? Int,
-                   tab == 2, !navigationPath.isEmpty {
-                    navigationPath = NavigationPath()
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("selectTab"))) { notification in
-                if let userInfo = notification.userInfo,
-                   let tab = userInfo["tab"] as? Int,
-                   tab == 2 {
-                    if !navigationPath.isEmpty {
-                        navigationPath = NavigationPath()
-                    }
-                    selectedStatus = .active
-                }
-            }
-            .onAppear {
-                if selectedStatus == .inactive || selectedStatus == nil {
-                    selectedStatus = .active
-                }
-            }
-            .task {
-                await refreshDeadlineAssignedProjectIds()
-            }
-            .sheet(isPresented: $showingEditProject) {
-                if let project = selectedProject {
-                    EditProjectView(project: project)
-                        .environmentObject(projectStore)
-                        .environmentObject(operativeStore)
-                        .environmentObject(userStore)
-                }
-            }
-            .sheet(isPresented: $showingCreateSmallWorks) {
-                CreateSmallWorksView()
-                    .environmentObject(projectStore)
-                    .environmentObject(operativeStore)
-                    .environmentObject(notificationService)
-                    .environmentObject(userStore)
-                    .environmentObject(firebaseBackend)
-            }
-            .background(
-                Color.clear
-                    .preference(key: HideBottomMenuKey.self, value: false)
-            )
-            .navigationDestination(for: OpenedSmallWorkToken.self) { token in
-                smallWorkDetailDestination(token.projectId)
+        }
+        .background(
+            Color.clear
+                .preference(key: HideBottomMenuKey.self, value: openedSmallWork != nil)
+        )
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("selectTab"))) { notification in
+            if let userInfo = notification.userInfo,
+               let tab = userInfo["tab"] as? Int,
+               tab == 2 {
+                openedSmallWork = nil
+                selectedStatus = .active
             }
         }
+        .onAppear {
+            if selectedStatus == .inactive || selectedStatus == nil {
+                selectedStatus = .active
+            }
+        }
+        .task {
+            await refreshDeadlineAssignedProjectIds()
+        }
+        .sheet(isPresented: $showingEditProject) {
+            if let project = selectedProject {
+                EditProjectView(project: project)
+                    .environmentObject(projectStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(userStore)
+            }
+        }
+        .sheet(isPresented: $showingCreateSmallWorks) {
+            CreateSmallWorksView()
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
+                .environmentObject(notificationService)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+        }
+        .fullScreenCover(item: $openedSmallWork) { cover in
+            NavigationStack {
+                smallWorkDetailDestination(cover.id)
+            }
+        }
+    }
+
+    private var smallWorksHeader: some View {
+        HStack {
+            Button(action: {
+                NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+            }) {
+                Image(systemName: "chevron.left")
+                    .foregroundStyle(WorksDashboardPalette.ink)
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 36, height: 36)
+                    .background(WorksDashboardPalette.soft)
+                    .clipShape(Circle())
+            }
+            .accessibilityLabel("Back")
+            Spacer()
+            if canCreateSmallWorks {
+                Button {
+                    showingCreateSmallWorks = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(WorksDashboardListStyle.smallWorks.accent)
+                        .clipShape(Circle())
+                }
+                .accessibilityLabel("New small work")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
 
     private var showsBlockingLoader: Bool {
@@ -190,7 +187,7 @@ struct SmallWorksView: View {
                             VStack(spacing: 13) {
                                 ForEach(searchFilteredSmallWorks) { project in
                                     Button {
-                                        navigationPath.append(OpenedSmallWorkToken(projectId: project.id))
+                                        openedSmallWork = SmallWorkScreenCover(id: project.id)
                                     } label: {
                                         WorksDashboardCard(
                                             project: project,
@@ -386,11 +383,16 @@ struct SmallWorksView: View {
         if let project = projectStore.projects.first(where: { $0.id == projectId }) {
             ProjectDetailView(project: project)
                 .environmentObject(bookingStore)
+                .environmentObject(managerScheduleStore)
                 .environmentObject(operativeStore)
                 .environmentObject(projectStore)
                 .environmentObject(userStore)
+                .environmentObject(holidayStore)
+                .environmentObject(subcontractorStore)
                 .environmentObject(firebaseBackend)
                 .environmentObject(notificationService)
+                .environmentObject(appSettings)
+                .environmentObject(taskStore)
                 .background(
                     Color.clear
                         .preference(key: HideBottomMenuKey.self, value: true)
