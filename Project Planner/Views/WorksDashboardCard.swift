@@ -348,29 +348,14 @@ struct WorksDashboardCard: View {
     let project: Project
     let listAccent: Color
     var showsClientAndManager: Bool = true
-
-    @EnvironmentObject private var operativeStore: OperativeStore
+    var managerName: String = ""
 
     private var typeLabel: String { WorksDashboardJobTypeStyle.displayLabel(for: project) }
     private var typeSwatch: WorksDashboardJobTypeStyle.Swatch {
         WorksDashboardJobTypeStyle.swatch(forDisplayLabel: typeLabel)
     }
-    private var progressFraction: Double {
-        min(max(WorksListProgress.fraction(for: project), 0), 1)
-    }
     private var progressPercent: Int { WorksListProgress.percentDisplay(for: project) }
     private var deadline: WorksDashboardDeadline { WorksDashboardDeadline.from(project: project) }
-
-    private var isPastEnd: Bool {
-        let calendar = Calendar.current
-        return calendar.startOfDay(for: Date()) > calendar.startOfDay(for: project.endDate)
-    }
-
-    private var ringColor: Color {
-        if project.status == .completed { return WorksDashboardPalette.slate }
-        if project.isLive && isPastEnd { return WorksDashboardPalette.red }
-        return typeSwatch.color
-    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -380,7 +365,7 @@ struct WorksDashboardCard: View {
             VStack(alignment: .leading, spacing: 13) {
                 HStack(alignment: .top, spacing: 13) {
                     infoColumn
-                    progressRing
+                    progressLabel
                 }
                 footer
             }
@@ -438,24 +423,14 @@ struct WorksDashboardCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var progressRing: some View {
-        ZStack {
-            Circle()
-                .stroke(WorksDashboardPalette.soft2, lineWidth: 7)
-            Circle()
-                .trim(from: 0, to: progressFraction)
-                .stroke(ringColor, style: StrokeStyle(lineWidth: 7, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-            Text("\(progressPercent)%")
-                .font(.title3.weight(.heavy))
-                .foregroundStyle(ringColor)
-                .minimumScaleFactor(0.5)
-                .lineLimit(1)
-                .dynamicTypeSize(.xSmall ... .accessibility1)
-                .padding(8)
-        }
-        .frame(width: 74, height: 74)
-        .accessibilityHidden(true)
+    private var progressLabel: some View {
+        Text("\(progressPercent)%")
+            .font(.title3.weight(.heavy))
+            .foregroundStyle(typeSwatch.color)
+            .monospacedDigit()
+            .lineLimit(1)
+            .frame(width: 64, alignment: .trailing)
+            .accessibilityHidden(true)
     }
 
     private var footer: some View {
@@ -512,10 +487,8 @@ struct WorksDashboardCard: View {
     }
 
     private var managerDisplayName: String {
-        if let managerId = project.managerId,
-           let manager = operativeStore.allManagers.first(where: { $0.id == managerId }) {
-            return "\(manager.firstName) \(manager.lastName)".trimmingCharacters(in: .whitespaces)
-        }
+        let passed = managerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !passed.isEmpty { return passed }
         return project.manager.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

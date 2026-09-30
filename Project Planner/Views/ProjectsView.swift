@@ -178,9 +178,9 @@ struct ProjectsView: View {
                                         WorksDashboardCard(
                                             project: project,
                                             listAccent: WorksDashboardListStyle.projects.accent,
-                                            showsClientAndManager: !userStore.isOperativeMode()
+                                            showsClientAndManager: !userStore.isOperativeMode(),
+                                            managerName: managerName(for: project)
                                         )
-                                        .environmentObject(operativeStore)
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -190,9 +190,6 @@ struct ProjectsView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 2)
-                }
-                .refreshable {
-                    projectStore.loadData()
                 }
             }
         }
@@ -321,7 +318,7 @@ struct ProjectsView: View {
             return "Your account isn’t matched to an operative record yet, so assigned jobs can’t be listed. Pull to refresh, or ask an admin to check the email on your operative profile."
         }
         if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil {
-            return "This is a load problem, not deleted jobs. Pull down to retry. Existing jobs stay on the server and on web."
+            return "This is a load problem, not deleted jobs. Tap Retry. Existing jobs stay on the server and on web."
         }
         if canCreateProjects {
             return WorksDashboardListStyle.projects.emptyCreatePrompt
@@ -362,6 +359,14 @@ struct ProjectsView: View {
 
         var seen = Set<UUID>()
         return projects.filter { seen.insert($0.id).inserted }
+    }
+
+    private func managerName(for project: Project) -> String {
+        if let managerId = project.managerId,
+           let manager = operativeStore.allManagers.first(where: { $0.id == managerId }) {
+            return "\(manager.firstName) \(manager.lastName)".trimmingCharacters(in: .whitespaces)
+        }
+        return project.manager.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @ViewBuilder
