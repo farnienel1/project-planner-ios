@@ -221,12 +221,7 @@ struct ProjectPlannerRootView: View {
 
     private var isSessionLoading: Bool {
         if firebaseBackend.isSwitchingOrganization { return true }
-        // A profile already exists before the first frame. Showing the logo and then
-        // swapping to Home leaves the UIKit window white even though Home has appeared.
-        if userStore.currentUser != nil { return false }
-        if !hasResolvedInitialAuth { return true }
-        if showMainExperience { return true }
-        return false
+        return !hasResolvedInitialAuth
     }
 
     @ViewBuilder
@@ -263,19 +258,23 @@ struct ProjectPlannerRootView: View {
 
     var body: some View {
         ZStack {
-            if isSessionLoading {
-                AppLaunchSplashView()
-            } else if showMainExperience {
+            Color(.systemGroupedBackground).ignoresSafeArea()
+            // Home stays in the hierarchy under the logo. Replacing the logo with a new
+            // root left the iOS 27 window blank white after the logo had already gone.
+            if showMainExperience {
                 authenticatedShell
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            } else if hasResolvedInitialAuth {
                 AuthenticationView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            if isSessionLoading {
+                AppLaunchSplashView()
+            }
         }
-        .background(isSessionLoading ? Color.white : Color(.systemGroupedBackground))
+        .background(Color(.systemGroupedBackground))
         .preferredColorScheme(appSettings.settings.theme.colorScheme)
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
             guard !signedIn else { return }
@@ -333,20 +332,16 @@ struct ProjectPlannerRootView: View {
             }
 
             appSettings.setupObservers()
-            if userStore.currentUser != nil {
-                print("🔥🔥🔥 DEBUG: PP splash skipped — Home is the first frame")
-                showPlannerWindow(reason: "root")
-            } else {
+            appSettings.settings.theme.applyToKeyWindows()
+            if showMainExperience {
+                userStore.unblockLaunchProfileIfNeeded()
+            }
+            DispatchQueue.main.async {
                 if showMainExperience {
                     userStore.unblockLaunchProfileIfNeeded()
                 }
-                DispatchQueue.main.async {
-                    if showMainExperience {
-                        userStore.unblockLaunchProfileIfNeeded()
-                    }
-                    hasResolvedInitialAuth = true
-                    print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil)")
-                }
+                hasResolvedInitialAuth = true
+                print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
             }
 
             // Profile and org data start together. A fixed 1.5s pause left Home empty, then the

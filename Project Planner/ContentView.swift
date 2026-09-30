@@ -470,10 +470,10 @@ struct ContentView: View {
             Group {
             switch selectedTab {
             case 0:
-                NavigationStack {
-                    HomeView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
+                // Home is not the root of a navigation stack. That stack stayed a blank
+                // white screen on iOS 27 and covered the tab bar.
+                HomeView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             case 1:
                 // Same as Small Works: the screen owns its one NavigationStack. Wrapping it again crashes on open.
                 if userStore.canViewProjects() {
