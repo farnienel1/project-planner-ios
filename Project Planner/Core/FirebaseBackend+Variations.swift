@@ -413,14 +413,19 @@ extension FirebaseBackend {
             "organizations/\(orgId)/variations/\(variationId)/\(evidenceId).\(ext.lowercased())"
         ]
         var lastError: Error?
-        for path in paths {
-            do {
-                let result = try await putVariationEvidenceData(data, path: path, contentType: contentType)
-                print("✅ [Variations] Evidence uploaded to \(path)")
-                return result
-            } catch {
-                lastError = error
-                print("⚠️ [Variations] Storage path failed \(path): \(error.localizedDescription)")
+        let contentTypes = contentType == "application/octet-stream"
+            ? [contentType]
+            : [contentType, "application/octet-stream"]
+        for type in contentTypes {
+            for path in paths {
+                do {
+                    let result = try await putVariationEvidenceData(data, path: path, contentType: type)
+                    print("✅ [Variations] Evidence uploaded to \(path)")
+                    return result
+                } catch {
+                    lastError = error
+                    print("⚠️ [Variations] Storage path failed \(path): \(error.localizedDescription)")
+                }
             }
         }
         throw lastError ?? NSError(
@@ -544,13 +549,14 @@ nonisolated private final class VariationListenerBag: NSObject, ListenerRegistra
 
 enum VariationEvidenceProcessor {
     static let maxBytes = 20 * 1024 * 1024
-    static let allowedExtensions: Set<String> = ["jpg", "jpeg", "png", "heic", "pdf"]
 
-    static func isAllowed(fileName: String, contentType: String) -> Bool {
-        let ext = (fileName as NSString).pathExtension.lowercased()
-        if allowedExtensions.contains(ext) { return true }
-        let type = contentType.lowercased()
-        return type.contains("jpeg") || type.contains("jpg") || type.contains("png") || type.contains("heic") || type.contains("pdf")
+    /// Any non-empty file under the size cap. Photos, videos, PDFs, and other documents.
+    static func isAllowed(fileName: String, contentType: String, byteCount: Int) -> Bool {
+        guard byteCount > 0, byteCount <= maxBytes else { return false }
+        let name = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !name.contains("/"), !name.contains("\\"), name != ".", name != ".." else { return false }
+        _ = contentType
+        return true
     }
 
     static func preparedImageData(_ image: UIImage) -> Data? {

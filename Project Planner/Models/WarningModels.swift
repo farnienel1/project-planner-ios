@@ -462,6 +462,10 @@ nonisolated enum WarningTimelineMath: Sendable {
     }
 
     nonisolated static func fraction(in window: ClashWindow, minutes: Int) -> CGFloat {
-        CGFloat(minutes - window.startMinutes) / CGFloat(window.span)
+        let span = CGFloat(window.span)
+        guard span > 0, span.isFinite else { return 0 }
+        let raw = CGFloat(minutes - window.startMinutes) / span
+        guard raw.isFinite else { return 0 }
+        return min(max(raw, 0), 1)
     }
 }

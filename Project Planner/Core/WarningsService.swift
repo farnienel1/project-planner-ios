@@ -182,11 +182,8 @@ class WarningsService: ObservableObject {
             return
         }
         allGeneratedWarnings = cache.allGeneratedWarnings
-        activeWarnings = cache.activeWarnings
-        warningCount = cache.warningCount
-        highCount = cache.highCount
-        mediumCount = cache.mediumCount
-        lowCount = cache.lowCount
+        activeWarnings = uniqueActive(cache.activeWarnings)
+        refreshSeverityCounts()
         hasCompletedLiveDetection = cache.hasCompletedLiveDetection
     }
 
@@ -464,7 +461,7 @@ class WarningsService: ObservableObject {
         guard generation == updateGeneration else { return }
         if isLiveScan {
             allGeneratedWarnings = generated
-            activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+            activeWarnings = uniqueActive(generated)
             refreshSeverityCounts()
             hasCompletedLiveDetection = true
             persistLiveCacheToDisk()
@@ -476,7 +473,7 @@ class WarningsService: ObservableObject {
             if self !== WarningsService.shared {
                 // Private Weekly Report export service — local only.
                 allGeneratedWarnings = generated
-                activeWarnings = generated.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+                activeWarnings = uniqueActive(generated)
                 refreshSeverityCounts()
             }
             print("🔥🔥🔥 DEBUG: WarningsService PERIOD published count=\(generated.count) sharedLiveUntouched=\(self === WarningsService.shared) active=\(WarningsService.shared.activeWarnings.count)")
@@ -488,7 +485,7 @@ class WarningsService: ObservableObject {
         periodGeneratedWarnings = warnings
         hasCompletedPeriodDetection = true
         allGeneratedWarnings = warnings
-        activeWarnings = warnings.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+        activeWarnings = uniqueActive(warnings)
         refreshSeverityCounts()
     }
 
@@ -513,8 +510,15 @@ class WarningsService: ObservableObject {
         WarningsRefreshHelper.postWarningsCountDidChange()
     }
 
+    private func uniqueActive(_ warnings: [Warning]) -> [Warning] {
+        var seen = Set<String>()
+        return warnings.filter { warning in
+            resolutionStore.shouldShowActive(warning.resolutionKey) && seen.insert(warning.resolutionKey).inserted
+        }
+    }
+
     private func refreshActiveFromGenerated() {
-        activeWarnings = allGeneratedWarnings.filter { resolutionStore.shouldShowActive($0.resolutionKey) }
+        activeWarnings = uniqueActive(allGeneratedWarnings)
         refreshSeverityCounts()
         persistLiveCacheToDisk()
     }
