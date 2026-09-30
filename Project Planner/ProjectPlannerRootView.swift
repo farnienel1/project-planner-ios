@@ -283,21 +283,23 @@ struct ProjectPlannerRootView: View {
 
     var body: some View {
         ZStack {
-            // White while the splash is up. The dark canvas behind a dismissed splash is what reads as a black screen.
-            (isSessionLoading ? Color.white : ProjectWorksRevampColors.canvas).ignoresSafeArea()
-            if isSessionLoading {
-                AppLaunchSplashView()
-            } else if showMainExperience {
+            ProjectWorksRevampColors.canvas.ignoresSafeArea()
+            // The shell stays in the tree under the splash. Replacing the splash with a new
+            // root left a blank window (black, then white) after Home had already appeared.
+            if showMainExperience, userStore.currentUser != nil {
                 authenticatedShell
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            } else if !showMainExperience, hasResolvedInitialAuth {
                 AuthenticationView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            if isSessionLoading {
+                AppLaunchSplashView()
+            }
         }
-        .background(isSessionLoading ? Color.white : Color(.systemGroupedBackground))
+        .background(ProjectWorksRevampColors.canvas)
         .preferredColorScheme(appSettings.settings.theme.colorScheme)
         .onChange(of: isSessionLoading) { _, loading in
             if !loading { launchSplashDismissed = true }

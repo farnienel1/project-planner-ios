@@ -470,11 +470,10 @@ struct ContentView: View {
             Group {
             switch selectedTab {
             case 0:
-                NavigationStack {
-                    HomeView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+                // Home is not inside a NavigationStack. A stack inserted as the window root
+                // stays a blank white (or black) UIKit controller even after Home appears.
+                HomeView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             case 1:
                 // Same as Small Works: the screen owns its one NavigationStack. Wrapping it again crashes on open.
                 if userStore.canViewProjects() {
