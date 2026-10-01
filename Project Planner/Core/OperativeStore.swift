@@ -318,14 +318,6 @@ class OperativeStore: ObservableObject {
                         }
                         
                         print("🔥🔥🔥 DEBUG: ✅ Loaded \(self.operatives.count) operatives, \(self.managers.count) managers from Firebase (filtered from \(firebaseOperatives.count) docs)")
-                        NotificationCenter.default.post(
-                            name: .staffDirectoryDidLoad,
-                            object: nil,
-                            userInfo: [
-                                "operatives": self.operatives,
-                                "managers": self.managers
-                            ]
-                        )
                         isOffline = false
                     } else {
                         // Organization still nil after recovery attempt - use cached data

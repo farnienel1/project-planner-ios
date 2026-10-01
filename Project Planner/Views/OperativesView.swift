@@ -147,7 +147,7 @@ struct OperativesView: View {
         let matchingUser = userStore.organizationUsers.first { user in
             user.email.lowercased() == operative.email.lowercased()
         }
-        if let user = matchingUser {
+        if let user = matchingUser, user.isStoredUserDocument {
             selectedUserForProfile = user
         }
         // If no matching user found, do nothing (operative may not have been added as user yet)
@@ -334,6 +334,7 @@ struct OperativesView: View {
             List {
                 ForEach(pendingOperativeInvitees) { user in
                     OperativeUserRowView(user: user) {
+                        guard user.isStoredUserDocument else { return }
                         selectedUserForProfile = user
                     }
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
@@ -374,6 +375,7 @@ struct OperativesView: View {
                 
                 List(displayedOperativeUsers) { user in
                     OperativeUserRowView(user: user) {
+                        guard user.isStoredUserDocument else { return }
                         selectedUserForProfile = user
                     }
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))

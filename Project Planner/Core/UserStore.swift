@@ -33,9 +33,6 @@ class UserStore: ObservableObject {
     private var organizationUsersLoadOrganizationId: String?
     private var lastOrganizationUsersLoadAt: Date?
     private var currentUserListener: ListenerRegistration?
-    private var staffDirectoryObserver: NSObjectProtocol?
-    private var staffDirectoryOperatives: [Operative] = []
-    private var staffDirectoryManagers: [Manager] = []
 
     private struct OperativeProfileOverride: Codable {
         var assignedManagerUserId: String?
@@ -60,18 +57,6 @@ class UserStore: ObservableObject {
 
     func setFirebaseBackend(_ firebaseBackend: FirebaseBackend) {
         self.firebaseBackend = firebaseBackend
-        guard staffDirectoryObserver == nil else { return }
-        staffDirectoryObserver = NotificationCenter.default.addObserver(
-            forName: .staffDirectoryDidLoad,
-            object: nil,
-            queue: .main
-        ) { [weak self] note in
-            let operatives = note.userInfo?["operatives"] as? [Operative] ?? []
-            let managers = note.userInfo?["managers"] as? [Manager] ?? []
-            Task { @MainActor in
-                self?.absorbStaffDirectory(operatives: operatives, managers: managers)
-            }
-        }
     }
     
     func setSmartCache(_ smartCache: SmartCacheService) {
@@ -276,84 +261,8 @@ class UserStore: ObservableObject {
                         )
                         try await firebaseBackend.saveUser(userData!)
                     }
-                } else if var updatedUser = userData {
-                    // Existing user - ensure passwordSet is true if they're authenticated
-                    // (If they can sign in, they have a password set)
-                    var needsUpdate = false
-                    
-                    // If passwordSet is false but user is authenticated, they must have set a password
-                    if !updatedUser.passwordSet {
-                        updatedUser.passwordSet = true
-                        needsUpdate = true
-                        print("🔥🔥🔥 DEBUG: Fixing passwordSet for existing user: \(updatedUser.email)")
-                    }
-                    
-                    // Legacy: role .operative without operativeMode flag — align so permission helpers match.
-                    if updatedUser.role == .operative && !updatedUser.permissions.operativeMode {
-                        updatedUser.permissions.operativeMode = true
-                        needsUpdate = true
-                    }
-                    
-                    // Skills catalogue is retired — clear the flag on load so it cannot resurface.
-                    if updatedUser.permissions.skills {
-                        updatedUser.permissions.skills = false
-                        needsUpdate = true
-                    }
-
-                    // CRITICAL: Operative-first hierarchy – if operativeMode is true, clear admin/manager flags so UI never shows full access
-                    // Run this FIRST so we never elevate an operative to super admin in later steps.
-                    if updatedUser.permissions.operativeMode {
-                        if updatedUser.permissions.adminAccess || updatedUser.permissions.manager || updatedUser.permissions.operatives || updatedUser.permissions.skills || updatedUser.permissions.qualifications || updatedUser.isSuperAdmin {
-                            print("🔥🔥🔥 DEBUG: ⚠️ User has operativeMode but other permissions set – enforcing operative-only")
-                            updatedUser.isSuperAdmin = false
-                            updatedUser.permissions.adminAccess = false
-                            updatedUser.permissions.manager = false
-                            updatedUser.permissions.operatives = false
-                            updatedUser.permissions.skills = false
-                            updatedUser.permissions.qualifications = false
-                            updatedUser.permissions.materials = false
-                            updatedUser.permissions.projects = true
-                            updatedUser.permissions.smallWorks = true
-                            updatedUser.role = .operative
-                            needsUpdate = true
-                        }
-                    }
-                    
-                    // Only the organization creator (stored on the org) may be super admin. Never elevate based on adminAccess or "only user" count.
-                    if let organization = firebaseBackend.currentOrganization,
-                       updatedUser.organizationId == organization.firestoreDocumentId,
-                       !updatedUser.permissions.operativeMode,
-                       let creatorUserId = organization.creatorUserId,
-                       creatorUserId == firebaseUser.uid,
-                       !updatedUser.isSuperAdmin {
-                        print("🔥🔥🔥 DEBUG: User is organization creator – ensuring super admin and adminAccess")
-                        updatedUser.isSuperAdmin = true
-                        updatedUser.permissions.adminAccess = true
-                        updatedUser.role = .admin
-                        needsUpdate = true
-                    }
-                    
-                    // Ensure isSuperAdmin users have adminAccess (no elevation – only syncing existing super admin)
-                    if updatedUser.isSuperAdmin && !updatedUser.permissions.adminAccess {
-                        updatedUser.permissions.adminAccess = true
-                        updatedUser.role = .admin
-                        needsUpdate = true
-                    }
-                    
-                    if needsUpdate {
-                        userData = updatedUser
-                        let userToSave = updatedUser
-                        Task {
-                            do {
-                                try await firebaseBackend.saveUser(userToSave)
-                                print("🔥🔥🔥 DEBUG: ✅ Updated user document with correct permissions")
-                            } catch {
-                                print("🔥🔥🔥 DEBUG: permission sync save failed: \(error.localizedDescription)")
-                            }
-                        }
-                    }
                 }
-                
+
                 self.currentUser = userData
                 startCurrentUserListener(userId: firebaseUser.uid)
 
@@ -422,93 +331,6 @@ class UserStore: ObservableObject {
         )
     }
     
-    /// Operative and manager records are a second copy of the staff list. If the users query
-    /// comes back short, these people still belong on Operatives, Managers, and the job board.
-    func absorbStaffDirectory(operatives: [Operative], managers: [Manager]) {
-        if !operatives.isEmpty { staffDirectoryOperatives = operatives }
-        if !managers.isEmpty { staffDirectoryManagers = managers }
-        let merged = mergingStaffDirectory(into: organizationUsers)
-        let orgId = normalizedOrganizationId(lastUsedOrganizationId)
-        organizationUsers = merged.sorted { $0.email < $1.email }
-        if !orgId.isEmpty {
-            RosterRetention.save(organizationUsers, organizationId: orgId)
-        }
-        let listedOperatives = organizationUsers.filter(\.appearsOnOperativesList).count
-        let listedManagers = organizationUsers.filter(\.appearsOnManagersList).count
-        print("🔥🔥🔥 DEBUG: ROSTER_DIRECTORY operatives=\(staffDirectoryOperatives.count) managers=\(staffDirectoryManagers.count) listedOperatives=\(listedOperatives) listedManagers=\(listedManagers)")
-    }
-
-    private func mergingStaffDirectory(into users: [AppUser]) -> [AppUser] {
-        let orgId = normalizedOrganizationId(lastUsedOrganizationId)
-        func emailKey(_ email: String) -> String {
-            email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        let realEmails = Set(users.compactMap { user -> String? in
-            guard !user.id.hasPrefix("directory:") else { return nil }
-            let key = emailKey(user.email)
-            return key.isEmpty ? nil : key
-        })
-        var result = users.filter { user in
-            guard user.id.hasPrefix("directory:") else { return true }
-            let key = emailKey(user.email)
-            return key.isEmpty || !realEmails.contains(key)
-        }
-        var seen = Set(result.compactMap { user -> String? in
-            let key = emailKey(user.email)
-            return key.isEmpty ? nil : key
-        })
-        for operative in staffDirectoryOperatives {
-            let key = emailKey(operative.email)
-            guard !key.isEmpty, seen.insert(key).inserted else { continue }
-            result.append(directoryOperativeUser(operative, organizationId: orgId))
-        }
-        for manager in staffDirectoryManagers {
-            let key = emailKey(manager.email)
-            guard !key.isEmpty, seen.insert(key).inserted else { continue }
-            result.append(directoryManagerUser(manager, organizationId: orgId))
-        }
-        return result
-    }
-
-    private func directoryOperativeUser(_ operative: Operative, organizationId: String) -> AppUser {
-        AppUser(
-            id: "directory:op:\(operative.id.uuidString)",
-            email: operative.email,
-            organizationId: organizationId,
-            role: .operative,
-            firstName: operative.firstName,
-            surname: operative.lastName,
-            isActive: operative.isActive,
-            passwordSet: true,
-            permissions: UserPermissions(
-                projects: true,
-                smallWorks: true,
-                operativeMode: true,
-                siteAudit: true
-            )
-        )
-    }
-
-    private func directoryManagerUser(_ manager: Manager, organizationId: String) -> AppUser {
-        AppUser(
-            id: "directory:mgr:\(manager.id.uuidString)",
-            email: manager.email,
-            organizationId: organizationId,
-            role: .manager,
-            firstName: manager.firstName,
-            surname: manager.lastName,
-            mobileNumber: manager.mobileNumber,
-            isActive: manager.isActive,
-            passwordSet: true,
-            permissions: UserPermissions(
-                manager: true,
-                operatives: true,
-                projects: true,
-                smallWorks: true
-            )
-        )
-    }
-
     /// Puts the last roster saved on this phone on screen before a network load.
     /// An organisation switch must not sit on an empty list, and it must not keep the previous organisation's people.
     func showCachedRoster(for organizationId: String) {
@@ -609,18 +431,19 @@ class UserStore: ObservableObject {
                 }
                 return user1.email < user2.email
             }
-            let withDirectory = mergingStaffDirectory(into: sortedUsers)
-            organizationUsers = withDirectory
+            let published = sortedUsers.filter(\.isStoredUserDocument)
+            organizationUsers = published
             // Empty is stored only when this load ended with nobody. People the server could not
-            // confirm as gone stay in `sortedUsers`, so a short fetch cannot wipe the saved roster.
+            // confirm as gone stay in `published`, so a short fetch cannot wipe the saved roster.
             RosterRetention.save(
-                withDirectory,
+                published,
                 organizationId: requestedOrganizationId,
-                allowEmpty: withDirectory.isEmpty
+                allowEmpty: published.isEmpty
             )
-            let managers = withDirectory.filter(\.appearsOnManagersList).count
-            let operatives = withDirectory.filter(\.appearsOnOperativesList).count
-            print("🔥🔥🔥 DEBUG: ROSTER_PUBLISHED count=\(withDirectory.count) managers=\(managers) operatives=\(operatives)")
+            let admins = published.filter(\.appearsOnAdminsList).count
+            let managers = published.filter(\.appearsOnManagersList).count
+            let operatives = published.filter(\.appearsOnOperativesList).count
+            print("🔥🔥🔥 DEBUG: ROSTER_PUBLISHED count=\(published.count) admins=\(admins) managers=\(managers) operatives=\(operatives)")
             
             await enforceSingleSuperAdminInFirestoreIfNeeded()
         } catch {
@@ -643,7 +466,7 @@ class UserStore: ObservableObject {
     private func healRosterKeepingKnownPeople(incoming: [AppUser], organizationId: String) async -> [AppUser] {
         guard let firebaseBackend else { return incoming }
         var byId: [String: AppUser] = [:]
-        for user in RosterRetention.users(for: organizationId) where !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
+        for user in RosterRetention.users(for: organizationId) where user.isStoredUserDocument && !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
             byId[user.id] = user
         }
         let inMemoryMatchesOrg = !organizationUsers.isEmpty && organizationUsers.allSatisfy { user in
@@ -651,12 +474,12 @@ class UserStore: ObservableObject {
             return stored.isEmpty || organizationIdsMatch(stored, organizationId)
         }
         if inMemoryMatchesOrg {
-            for user in organizationUsers where !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
+            for user in organizationUsers where user.isStoredUserDocument && !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
                 byId[user.id] = user
             }
         }
         let incomingIds = Set(incoming.map(\.id))
-        for user in incoming where !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
+        for user in incoming where user.isStoredUserDocument && !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
             byId[user.id] = user
         }
         let missingIds = byId.keys.filter { id in
@@ -670,7 +493,11 @@ class UserStore: ObservableObject {
             }
             switch await firebaseBackend.probeOrganizationUser(userId: id, organizationId: organizationId) {
             case .present(let user):
-                byId[id] = user
+                var kept = user
+                if byId[id]?.placedByManagersRecord == true {
+                    kept.placedByManagersRecord = true
+                }
+                byId[id] = kept
             case .confirmedMissing:
                 byId.removeValue(forKey: id)
                 print("🔥🔥🔥 DEBUG: ROSTER_CONFIRMED_GONE \(id)")
@@ -711,17 +538,12 @@ class UserStore: ObservableObject {
         return permission(user)
     }
     
-    // MARK: - Operative-first hierarchy
-    // If the user has operativeMode, they are treated as operative only: no admin/manager features, regardless of other flags in Firestore.
+    // MARK: - Admin, then operative, then manager
     
-    // Helper to check if user has admin-level access (super admin or adminAccess permission).
-    // Operatives are never considered admins.
+    // Admin wins over operativeMode. A super admin or admin is not placed on Operatives.
     func hasAdminAccess() -> Bool {
         guard let currentUser = displayUser else { return false }
-        if currentUser.permissions.operativeMode { return false }
-        return currentUser.isSuperAdmin
-            || currentUser.permissions.adminAccess
-            || currentUser.role == .admin
+        return currentUser.isRosterAdmin
     }
 
     /// When false, hide the Holiday tab and annual-leave entry points (managed per user).

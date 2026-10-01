@@ -424,6 +424,9 @@ struct AppUser: Identifiable, Codable, Hashable {
     var vatNumber: String?
     /// Unique Taxpayer Reference (optional; recommended before generating invoices).
     var utrNumber: String?
+    /// In memory only. A `managers` record can place a non-admin who has no role flags on Managers.
+    /// `saveUser` does not write this field.
+    var placedByManagersRecord: Bool = false
     
     init(
         id: String,
@@ -460,7 +463,8 @@ struct AppUser: Identifiable, Codable, Hashable {
         annualLeaveCarriesOver: Bool = AnnualLeavePolicy.defaultCarriesOver,
         timesheetsEnabled: Bool? = nil,
         vatNumber: String? = nil,
-        utrNumber: String? = nil
+        utrNumber: String? = nil,
+        placedByManagersRecord: Bool = false
     ) {
         self.id = id
         self.email = email
@@ -497,6 +501,7 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.timesheetsEnabled = timesheetsEnabled ?? AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
         self.vatNumber = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.utrNumber = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.placedByManagersRecord = placedByManagersRecord
     }
     
     var fullName: String {
@@ -514,6 +519,96 @@ private extension String {
 }
 
 extension AppUser {
+    private enum CodingKeys: String, CodingKey {
+        case id, email, organizationId, role, createdAt, firstName, surname, mobileNumber
+        case isActive, passwordSet, permissions, isSuperAdmin, policyAccepted, policyAcceptedAt
+        case legalPackVersion, assignedManagerUserId, assignedManagerUserIds, hasNoLineManager
+        case dayRate, hourlyRate, tradeTypePreset, tradeTypeCustom, profilePhotoURL, lastSeenAt
+        case employmentType, employmentTypeTransitionFrom, employmentTypeEffectiveAt
+        case annualLeaveEnabled, annualLeaveDaysPerYear, annualLeaveYearStartMonth, annualLeaveYearEndMonth
+        case annualLeaveCarriesOver, timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        email = try container.decode(String.self, forKey: .email)
+        organizationId = try container.decode(String.self, forKey: .organizationId)
+        role = try container.decode(UserRole.self, forKey: .role)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        firstName = try container.decode(String.self, forKey: .firstName)
+        surname = try container.decode(String.self, forKey: .surname)
+        mobileNumber = try container.decodeIfPresent(String.self, forKey: .mobileNumber)
+        isActive = try container.decode(Bool.self, forKey: .isActive)
+        passwordSet = try container.decode(Bool.self, forKey: .passwordSet)
+        permissions = try container.decode(UserPermissions.self, forKey: .permissions)
+        isSuperAdmin = try container.decode(Bool.self, forKey: .isSuperAdmin)
+        policyAccepted = try container.decode(Bool.self, forKey: .policyAccepted)
+        policyAcceptedAt = try container.decodeIfPresent(Date.self, forKey: .policyAcceptedAt)
+        legalPackVersion = try container.decodeIfPresent(String.self, forKey: .legalPackVersion)
+        assignedManagerUserId = try container.decodeIfPresent(String.self, forKey: .assignedManagerUserId)
+        assignedManagerUserIds = try container.decodeIfPresent([String].self, forKey: .assignedManagerUserIds) ?? []
+        hasNoLineManager = try container.decodeIfPresent(Bool.self, forKey: .hasNoLineManager) ?? false
+        dayRate = try container.decodeIfPresent(Double.self, forKey: .dayRate)
+        hourlyRate = try container.decodeIfPresent(Double.self, forKey: .hourlyRate)
+        tradeTypePreset = try container.decodeIfPresent(String.self, forKey: .tradeTypePreset)
+        tradeTypeCustom = try container.decodeIfPresent(String.self, forKey: .tradeTypeCustom)
+        profilePhotoURL = try container.decodeIfPresent(String.self, forKey: .profilePhotoURL)
+        lastSeenAt = try container.decodeIfPresent(Date.self, forKey: .lastSeenAt)
+        employmentType = try container.decode(EmploymentType.self, forKey: .employmentType)
+        employmentTypeTransitionFrom = try container.decodeIfPresent(EmploymentType.self, forKey: .employmentTypeTransitionFrom)
+        employmentTypeEffectiveAt = try container.decodeIfPresent(Date.self, forKey: .employmentTypeEffectiveAt)
+        annualLeaveEnabled = try container.decode(Bool.self, forKey: .annualLeaveEnabled)
+        annualLeaveDaysPerYear = try container.decode(Double.self, forKey: .annualLeaveDaysPerYear)
+        annualLeaveYearStartMonth = try container.decode(Int.self, forKey: .annualLeaveYearStartMonth)
+        annualLeaveYearEndMonth = try container.decode(Int.self, forKey: .annualLeaveYearEndMonth)
+        annualLeaveCarriesOver = try container.decode(Bool.self, forKey: .annualLeaveCarriesOver)
+        timesheetsEnabled = try container.decode(Bool.self, forKey: .timesheetsEnabled)
+        vatNumber = try container.decodeIfPresent(String.self, forKey: .vatNumber)
+        utrNumber = try container.decodeIfPresent(String.self, forKey: .utrNumber)
+        placedByManagersRecord = try container.decodeIfPresent(Bool.self, forKey: .placedByManagersRecord) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(email, forKey: .email)
+        try container.encode(organizationId, forKey: .organizationId)
+        try container.encode(role, forKey: .role)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(firstName, forKey: .firstName)
+        try container.encode(surname, forKey: .surname)
+        try container.encodeIfPresent(mobileNumber, forKey: .mobileNumber)
+        try container.encode(isActive, forKey: .isActive)
+        try container.encode(passwordSet, forKey: .passwordSet)
+        try container.encode(permissions, forKey: .permissions)
+        try container.encode(isSuperAdmin, forKey: .isSuperAdmin)
+        try container.encode(policyAccepted, forKey: .policyAccepted)
+        try container.encodeIfPresent(policyAcceptedAt, forKey: .policyAcceptedAt)
+        try container.encodeIfPresent(legalPackVersion, forKey: .legalPackVersion)
+        try container.encodeIfPresent(assignedManagerUserId, forKey: .assignedManagerUserId)
+        try container.encode(assignedManagerUserIds, forKey: .assignedManagerUserIds)
+        try container.encode(hasNoLineManager, forKey: .hasNoLineManager)
+        try container.encodeIfPresent(dayRate, forKey: .dayRate)
+        try container.encodeIfPresent(hourlyRate, forKey: .hourlyRate)
+        try container.encodeIfPresent(tradeTypePreset, forKey: .tradeTypePreset)
+        try container.encodeIfPresent(tradeTypeCustom, forKey: .tradeTypeCustom)
+        try container.encodeIfPresent(profilePhotoURL, forKey: .profilePhotoURL)
+        try container.encodeIfPresent(lastSeenAt, forKey: .lastSeenAt)
+        try container.encode(employmentType, forKey: .employmentType)
+        try container.encodeIfPresent(employmentTypeTransitionFrom, forKey: .employmentTypeTransitionFrom)
+        try container.encodeIfPresent(employmentTypeEffectiveAt, forKey: .employmentTypeEffectiveAt)
+        try container.encode(annualLeaveEnabled, forKey: .annualLeaveEnabled)
+        try container.encode(annualLeaveDaysPerYear, forKey: .annualLeaveDaysPerYear)
+        try container.encode(annualLeaveYearStartMonth, forKey: .annualLeaveYearStartMonth)
+        try container.encode(annualLeaveYearEndMonth, forKey: .annualLeaveYearEndMonth)
+        try container.encode(annualLeaveCarriesOver, forKey: .annualLeaveCarriesOver)
+        try container.encode(timesheetsEnabled, forKey: .timesheetsEnabled)
+        try container.encodeIfPresent(vatNumber, forKey: .vatNumber)
+        try container.encodeIfPresent(utrNumber, forKey: .utrNumber)
+        try container.encode(placedByManagersRecord, forKey: .placedByManagersRecord)
+    }
+
     /// Operatives default on; self-employed managers/admins default on; PAYE managers/admins default off.
     static func defaultTimesheetsEnabled(for permissions: UserPermissions, employmentType: EmploymentType = .paye) -> Bool {
         if permissions.operativeMode { return true }
@@ -534,26 +629,37 @@ extension AppUser {
         vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
 
-    /// Manage Users, Managers, and Operatives share these checks.
-    /// A stored `role` still counts when the boolean flags were saved in a shape the old parser treated as false.
-    var appearsOnOperativesList: Bool {
-        permissions.operativeMode || role == .operative
+    /// Manage Users, Managers, and Operatives share this order.
+    /// Admin wins, then `operativeMode`, then the manager flag.
+    /// A managers-collection record may place a non-admin with no role flags on Managers. It does not move an admin.
+    var isRosterAdmin: Bool {
+        isSuperAdmin || permissions.adminAccess || role == .admin
     }
 
     var appearsOnAdminsList: Bool {
-        if appearsOnOperativesList { return false }
-        return isSuperAdmin || permissions.adminAccess || role == .admin
+        isRosterAdmin
+    }
+
+    var appearsOnOperativesList: Bool {
+        if isRosterAdmin { return false }
+        return permissions.operativeMode
     }
 
     var appearsOnManagersList: Bool {
-        if appearsOnOperativesList || appearsOnAdminsList { return false }
-        return permissions.manager || role == .manager
+        if isRosterAdmin || permissions.operativeMode { return false }
+        if permissions.manager { return true }
+        return placedByManagersRecord
+    }
+
+    /// Roster rows are `users/{id}` documents. An operative or manager record is not one of those.
+    var isStoredUserDocument: Bool {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && !trimmed.hasPrefix("directory:")
     }
 
     /// Org-wide admins always see every job; they cannot be denied access via View / `hiddenManagerUserIds`.
     var isExcludedFromManagerVisibilityHiding: Bool {
-        if permissions.operativeMode { return false }
-        return isSuperAdmin || permissions.adminAccess || role == .admin
+        isRosterAdmin
     }
 
     /// Base £/hour for payroll: explicit hourly rate, or day rate ÷ 8 when only day rate is set.

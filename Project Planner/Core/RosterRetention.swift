@@ -21,7 +21,9 @@ enum RosterRetention {
         do {
             let decoded = try JSONDecoder().decode([AppUser].self, from: data)
             let buried = tombstones(for: orgId)
-            return decoded.filter { !buried.contains($0.id) }
+            return decoded.filter { user in
+                !buried.contains(user.id) && user.isStoredUserDocument
+            }
         } catch {
             print("🔥🔥🔥 DEBUG: ROSTER_CACHE unreadable for \(orgId): \(error.localizedDescription)")
             return []
@@ -32,7 +34,9 @@ enum RosterRetention {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
         let buried = tombstones(for: orgId)
-        let kept = users.filter { !buried.contains($0.id) }
+        let kept = users.filter { user in
+            !buried.contains(user.id) && user.isStoredUserDocument
+        }
         // An empty save is refused unless this load confirmed the organisation has nobody left.
         // Sign-out and a failed fetch must not erase the people stored on this phone.
         guard !kept.isEmpty || allowEmpty else { return }

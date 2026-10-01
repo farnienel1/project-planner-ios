@@ -176,6 +176,7 @@ struct ManagersView: View {
                     ManagerUserRowView(user: user) {
                         // Use async to prevent state update during view update
                         DispatchQueue.main.async {
+                            guard user.isStoredUserDocument else { return }
                             selectedUser = user
                         }
                     }
