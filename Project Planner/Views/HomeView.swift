@@ -554,6 +554,7 @@ struct HomeView: View {
         .onAppear {
             loadPersistedAdminOverviewMetricsIfNeeded()
             print("🔥🔥🔥 DEBUG: HOME_APPEARED")
+            NotificationCenter.default.post(name: .plannerHomeDidDraw, object: nil)
             homeWarningCount = WarningsService.shared.warningCount
         }
         .task(id: homeDataRefreshTrigger) {

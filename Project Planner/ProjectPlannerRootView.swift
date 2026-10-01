@@ -208,6 +208,8 @@ struct ProjectPlannerRootView: View {
     @State private var firebaseAuthUID: String?
     /// Avoid flashing the login screen while Firebase session / profile are still resolving.
     @State private var hasResolvedInitialAuth = false
+    /// Home has drawn at least once. The logo stays up until then so a dark window is not the first thing on the glass.
+    @State private var homeHasDrawn = false
     /// Bumps only when the signed-in user moves from one organisation to another.
     /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
     @State private var contentShellEpoch = 0
@@ -221,7 +223,9 @@ struct ProjectPlannerRootView: View {
 
     private var isSessionLoading: Bool {
         if firebaseBackend.isSwitchingOrganization { return true }
-        return !hasResolvedInitialAuth
+        if !hasResolvedInitialAuth { return true }
+        if showMainExperience && !homeHasDrawn { return true }
+        return false
     }
 
     @ViewBuilder
@@ -258,9 +262,11 @@ struct ProjectPlannerRootView: View {
 
     var body: some View {
         ZStack {
-            Color(.systemGroupedBackground).ignoresSafeArea()
+            // White until Home has drawn. systemGroupedBackground is black in dark mode,
+            // and that was the screen people saw when the logo came off too early.
+            (homeHasDrawn ? Color(.systemGroupedBackground) : Color.white).ignoresSafeArea()
             // Home stays in the hierarchy under the logo. Replacing the logo with a new
-            // root left the iOS 27 window blank white after the logo had already gone.
+            // root left the window blank after the logo had already gone.
             if showMainExperience {
                 authenticatedShell
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -274,7 +280,12 @@ struct ProjectPlannerRootView: View {
                 AppLaunchSplashView()
             }
         }
-        .background(Color(.systemGroupedBackground))
+        .background(homeHasDrawn ? Color(.systemGroupedBackground) : Color.white)
+        .onReceive(NotificationCenter.default.publisher(for: .plannerHomeDidDraw)) { _ in
+            guard !homeHasDrawn else { return }
+            homeHasDrawn = true
+            print("🔥🔥🔥 DEBUG: PP home drawn — splash can leave")
+        }
         .preferredColorScheme(appSettings.settings.theme.colorScheme)
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
             guard !signedIn else { return }
@@ -332,7 +343,8 @@ struct ProjectPlannerRootView: View {
             }
 
             appSettings.setupObservers()
-            appSettings.settings.theme.applyToKeyWindows()
+            // Do not call applyToKeyWindows here. Setting the window style during the first
+            // frame replaces the logo with a black window.
             if showMainExperience {
                 userStore.unblockLaunchProfileIfNeeded()
             }
@@ -341,7 +353,13 @@ struct ProjectPlannerRootView: View {
                     userStore.unblockLaunchProfileIfNeeded()
                 }
                 hasResolvedInitialAuth = true
-                print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
+                print("🔥🔥🔥 DEBUG: PP splash waiting for Home user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                if !homeHasDrawn {
+                    homeHasDrawn = true
+                    print("🔥🔥🔥 DEBUG: PP splash off — Home had not reported a frame")
+                }
             }
 
             // Profile and org data start together. A fixed 1.5s pause left Home empty, then the
