@@ -17,6 +17,8 @@ import UserNotifications
 extension Notification.Name {
     /// Main-thread only. `userInfo["uid"]` is a non-empty String when signed in; absent when signed out.
     static let firebaseAuthUIDChanged = Notification.Name("app.firebaseAuthUIDChanged")
+    /// Home's first frame is on screen. The launch logo stays up until this fires.
+    static let plannerHomeDidDraw = Notification.Name("app.plannerHomeDidDraw")
 }
 
 /// Runs before any `@StateObject` on `App` — SwiftUI can construct those before `application(_:didFinishLaunchingWithOptions:)` returns.
@@ -178,8 +180,8 @@ struct Project_PlannerApp: App {
         _ = FirebaseStartup.configureIfNeeded()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
-        // SwiftUI owns the window. Calling makeKeyAndVisible here shows an empty white window on iOS 27.
-        UIWindow.appearance().backgroundColor = UIColor.systemGroupedBackground
+        // Do not touch UIWindow here. Doing it before the scene exists leaves a black window
+        // and the log line "Ignoring activation message because no connection exists".
         let backend = FirebaseBackend()
         let users = UserStore()
         _firebaseBackend = StateObject(wrappedValue: backend)
@@ -200,7 +202,7 @@ struct Project_PlannerApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack {
-                Color(.systemGroupedBackground).ignoresSafeArea()
+                Color.white.ignoresSafeArea()
                 ProjectPlannerRootView(appDelegate: appDelegate)
                     .environmentObject(firebaseBackend)
                     .environmentObject(smartCache)
