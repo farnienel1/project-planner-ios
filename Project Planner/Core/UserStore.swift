@@ -222,9 +222,19 @@ class UserStore: ObservableObject {
                 }
                 
                 // If user doesn't exist or isn't a super admin, check if they created the organization
-                if userData == nil {
-                    // User doesn't exist, create as super admin (organization creator)
-                    if let organization = firebaseBackend.currentOrganization {
+                if userData == nil, let organization = firebaseBackend.currentOrganization {
+                    // A cache miss is not proof the account is gone. Writing a new profile over `users/{uid}`
+                    // used to replace the real document. Only create when the server confirms it is missing.
+                    let probe = await firebaseBackend.probeOrganizationUser(
+                        userId: firebaseUser.uid,
+                        organizationId: organization.firestoreDocumentId
+                    )
+                    switch probe {
+                    case .present(let existing):
+                        userData = existing
+                    case .unconfirmed:
+                        print("🔥🔥🔥 DEBUG: Not creating a user document — the server did not confirm users/\(firebaseUser.uid) is missing")
+                    case .confirmedMissing:
                         let superAdminPermissions = UserPermissions(
                             adminAccess: true,
                             operatives: true,
@@ -251,10 +261,9 @@ class UserStore: ObservableObject {
                         )
                         try await firebaseBackend.saveUser(userData!)
                     }
-                } else {
+                } else if var updatedUser = userData {
                     // Existing user - ensure passwordSet is true if they're authenticated
                     // (If they can sign in, they have a password set)
-                    var updatedUser = userData!
                     var needsUpdate = false
                     
                     // If passwordSet is false but user is authenticated, they must have set a password
@@ -398,21 +407,47 @@ class UserStore: ObservableObject {
         )
     }
     
+    /// Puts the last roster saved on this phone on screen before a network load.
+    /// An organisation switch must not sit on an empty list, and it must not keep the previous organisation's people.
+    func showCachedRoster(for organizationId: String) {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty else { return }
+        let cached = RosterRetention.users(for: orgId)
+        organizationUsers = cached
+        organizationUsersLoadOrganizationId = orgId
+        let managers = cached.filter(\.appearsOnManagersList).count
+        let operatives = cached.filter(\.appearsOnOperativesList).count
+        print("🔥🔥🔥 DEBUG: ROSTER_RESTORED org=\(orgId) count=\(cached.count) managers=\(managers) operatives=\(operatives)")
+    }
+
     func loadOrganizationUsers() async {
         guard let firebaseBackend = firebaseBackend,
               let currentUser = currentUser else {
             print("🔥🔥🔥 DEBUG: Cannot load users - missing firebaseBackend or currentUser")
             return
         }
-        let requestedOrganizationId = currentUser.organizationId
+        var requestedOrganizationId = normalizedOrganizationId(currentUser.organizationId)
+        if requestedOrganizationId.isEmpty {
+            requestedOrganizationId = normalizedOrganizationId(
+                firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
+            )
+        }
+        guard !requestedOrganizationId.isEmpty else {
+            print("🔥🔥🔥 DEBUG: ROSTER_LOAD skipped — no organisation id, leaving the current list in place")
+            return
+        }
         let sameOrgInFlight = organizationUsersLoadInProgress && organizationUsersLoadOrganizationId == requestedOrganizationId
         if sameOrgInFlight {
             return
         }
         let now = Date()
-        // A one-person roster is what this bug looked like (only the signed-in account).
+        // A one-person roster, or a roster with nobody on Managers or Operatives, is the failure mode.
         // Do not treat that as a fresh success and ignore the next load for 3 seconds.
+        let cachedCount = RosterRetention.users(for: requestedOrganizationId).count
+        let listedStaff = organizationUsers.filter { $0.appearsOnManagersList || $0.appearsOnOperativesList }.count
         let rosterLooksComplete = organizationUsers.count > 1
+            && listedStaff > 0
+            && cachedCount <= organizationUsers.count
         if rosterLooksComplete,
            organizationUsersLoadOrganizationId == requestedOrganizationId,
            let last = lastOrganizationUsersLoadAt,
@@ -429,6 +464,14 @@ class UserStore: ObservableObject {
                 lastOrganizationUsersLoadAt = Date()
             }
         }
+
+        if organizationUsers.isEmpty {
+            let cached = RosterRetention.users(for: requestedOrganizationId)
+            if !cached.isEmpty {
+                organizationUsers = cached
+                print("🔥🔥🔥 DEBUG: ROSTER_RESTORED before fetch count=\(cached.count)")
+            }
+        }
         
         print("🔥🔥🔥 DEBUG: loadOrganizationUsers called for organizationId: \(requestedOrganizationId)")
         
@@ -437,44 +480,100 @@ class UserStore: ObservableObject {
             let cloudOverrides = (try? await firebaseBackend.loadOperativeProfileMetadataFallback(
                 organizationId: requestedOrganizationId
             )) ?? [:]
-            guard generation == organizationUsersLoadGeneration,
-                  self.currentUser?.organizationId == requestedOrganizationId else {
+            guard generation == organizationUsersLoadGeneration else {
                 print("🔥🔥🔥 DEBUG: Ignoring organisation user roster for \(requestedOrganizationId) — a newer organisation load replaced it")
+                return
+            }
+            let stillSameOrg = normalizedOrganizationId(self.currentUser?.organizationId ?? "") == requestedOrganizationId
+                || normalizedOrganizationId(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") == requestedOrganizationId
+            guard stillSameOrg else {
+                print("🔥🔥🔥 DEBUG: Ignoring organisation user roster for \(requestedOrganizationId) — the signed-in organisation changed")
                 return
             }
             print("🔥🔥🔥 DEBUG: Loaded \(users.count) users from Firebase")
             for user in users {
                 print("🔥🔥🔥 DEBUG: - \(user.email) (\(user.firstName) \(user.surname)) - Active: \(user.isActive), PasswordSet: \(user.passwordSet)")
             }
-            
-            await MainActor.run {
-                // Sort users: super admin first, then by email
-                let usersWithCloudOverrides = applyCloudOperativeProfileOverrides(users, overrides: cloudOverrides)
-                let usersWithOverrides = applyOperativeProfileOverrides(to: usersWithCloudOverrides)
-                let sortedUsers = usersWithOverrides.sorted { user1, user2 in
-                    if user1.isSuperAdmin != user2.isSuperAdmin {
-                        return user1.isSuperAdmin // Super admin first
-                    }
-                    return user1.email < user2.email // Then alphabetically by email
+
+            let usersWithCloudOverrides = applyCloudOperativeProfileOverrides(users, overrides: cloudOverrides)
+            let usersWithOverrides = applyOperativeProfileOverrides(to: usersWithCloudOverrides)
+            let healed = await healRosterKeepingKnownPeople(
+                incoming: usersWithOverrides,
+                organizationId: requestedOrganizationId
+            )
+            let sortedUsers = healed.sorted { user1, user2 in
+                if user1.isSuperAdmin != user2.isSuperAdmin {
+                    return user1.isSuperAdmin
                 }
-                
-                self.organizationUsers = sortedUsers
-                print("🔥🔥🔥 DEBUG: Updated organizationUsers array with \(sortedUsers.count) users")
-                for (index, user) in sortedUsers.enumerated() {
-                    print("🔥🔥🔥 DEBUG: [\(index)] \(user.email) - SuperAdmin: \(user.isSuperAdmin), Active: \(user.isActive)")
-                }
+                return user1.email < user2.email
             }
+            organizationUsers = sortedUsers
+            // Empty is stored only when this load ended with nobody. People the server could not
+            // confirm as gone stay in `sortedUsers`, so a short fetch cannot wipe the saved roster.
+            RosterRetention.save(
+                sortedUsers,
+                organizationId: requestedOrganizationId,
+                allowEmpty: sortedUsers.isEmpty
+            )
+            let managers = sortedUsers.filter(\.appearsOnManagersList).count
+            let operatives = sortedUsers.filter(\.appearsOnOperativesList).count
+            print("🔥🔥🔥 DEBUG: ROSTER_PUBLISHED count=\(sortedUsers.count) managers=\(managers) operatives=\(operatives)")
             
             await enforceSingleSuperAdminInFirestoreIfNeeded()
-            
-            // Cache the data
-            if smartCache != nil {
-                // We'll add user caching to SmartCacheService later
-            }
         } catch {
             errorMessage = "Failed to load organization users: \(error.localizedDescription)"
             print("🔥🔥🔥 DEBUG: Error loading organization users: \(error)")
+            if organizationUsers.isEmpty {
+                let cached = RosterRetention.users(for: requestedOrganizationId)
+                if !cached.isEmpty {
+                    organizationUsers = cached
+                    print("🔥🔥🔥 DEBUG: ROSTER_KEPT cached count=\(cached.count) after fetch error")
+                }
+            } else {
+                print("🔥🔥🔥 DEBUG: ROSTER_KEPT on-screen count=\(organizationUsers.count) after fetch error")
+            }
         }
+    }
+
+    /// A short Firestore query must not delete managers or operatives who were already on the list.
+    /// Someone leaves only when their user document is confirmed gone, or an admin deletes them in the app.
+    private func healRosterKeepingKnownPeople(incoming: [AppUser], organizationId: String) async -> [AppUser] {
+        guard let firebaseBackend else { return incoming }
+        var byId: [String: AppUser] = [:]
+        for user in RosterRetention.users(for: organizationId) where !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
+            byId[user.id] = user
+        }
+        let inMemoryMatchesOrg = !organizationUsers.isEmpty && organizationUsers.allSatisfy { user in
+            let stored = normalizedOrganizationId(user.organizationId)
+            return stored.isEmpty || organizationIdsMatch(stored, organizationId)
+        }
+        if inMemoryMatchesOrg {
+            for user in organizationUsers where !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
+                byId[user.id] = user
+            }
+        }
+        let incomingIds = Set(incoming.map(\.id))
+        for user in incoming where !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
+            byId[user.id] = user
+        }
+        let missingIds = byId.keys.filter { !incomingIds.contains($0) }
+        let started = Date()
+        for id in missingIds {
+            if Date().timeIntervalSince(started) > 8 {
+                print("🔥🔥🔥 DEBUG: ROSTER_KEPT remaining people — stopped confirming absences after 8s")
+                break
+            }
+            switch await firebaseBackend.probeOrganizationUser(userId: id, organizationId: organizationId) {
+            case .present(let user):
+                byId[id] = user
+            case .confirmedMissing:
+                byId.removeValue(forKey: id)
+                print("🔥🔥🔥 DEBUG: ROSTER_CONFIRMED_GONE \(id)")
+            case .unconfirmed:
+                print("🔥🔥🔥 DEBUG: ROSTER_KEPT \(byId[id]?.email ?? id) — this fetch missed them and their document was not confirmed gone")
+            }
+        }
+        return Array(byId.values)
     }
     
     /// Call when the user signs out so deleted/other-org users don't persist in the UI.
@@ -871,19 +970,19 @@ class UserStore: ObservableObject {
         guard let firebaseBackend,
               let creatorId = firebaseBackend.currentOrganization?.creatorUserId,
               hasAdminAccess() else { return }
-        var demoted = false
-        for var user in organizationUsers where user.isSuperAdmin && user.id != creatorId {
-            user.isSuperAdmin = false
+        for index in organizationUsers.indices where organizationUsers[index].isSuperAdmin && organizationUsers[index].id != creatorId {
+            let userId = organizationUsers[index].id
+            let email = organizationUsers[index].email
             do {
-                try await firebaseBackend.saveUser(user)
-                demoted = true
-                print("🔥🔥🔥 DEBUG: Demoted mistaken super admin for \(user.email)")
+                try await firebaseBackend.clearMistakenSuperAdminFlag(userId: userId)
+                organizationUsers[index].isSuperAdmin = false
+                print("🔥🔥🔥 DEBUG: Demoted mistaken super admin for \(email) without rewriting the rest of their profile")
             } catch {
-                print("🔥🔥🔥 DEBUG: Failed to demote super admin for \(user.email): \(error.localizedDescription)")
+                print("🔥🔥🔥 DEBUG: Failed to demote super admin for \(email): \(error.localizedDescription)")
             }
         }
-        if demoted {
-            await loadOrganizationUsers()
+        if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? organizationUsers.first?.organizationId {
+            RosterRetention.save(organizationUsers, organizationId: orgId)
         }
     }
     
@@ -1511,8 +1610,13 @@ class UserStore: ObservableObject {
                     return
                 }
                 
-                // Remove from local array and reload so UI matches Firebase (if owner deleted someone in console, they disappear)
+                // Remember the delete. A later short fetch must not put this person back, and must not be the way anyone else disappears.
+                let removedIds = organizationUsers
+                    .filter { $0.email.lowercased() == userEmail }
+                    .map(\.id) + [userId]
+                RosterRetention.tombstone(removedIds, organizationId: organizationId)
                 organizationUsers.removeAll { $0.email.lowercased() == userEmail }
+                RosterRetention.save(organizationUsers, organizationId: organizationId)
                 print("🔥🔥🔥 DEBUG: ✅ User removed from local array")
                 await loadOrganizationUsers()
                  print("🔥🔥🔥 DEBUG: ✅ Reloaded organization users after deletion")

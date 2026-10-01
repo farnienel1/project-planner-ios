@@ -432,7 +432,7 @@ struct ProjectPlannerRootView: View {
         do {
             try await firebaseBackend.switchActiveOrganization(to: targetId)
             userStore.roleTestingPreset = nil
-            userStore.organizationUsers = []
+            userStore.showCachedRoster(for: targetId)
             await userStore.loadCurrentUser()
 
             guard !userStore.isDeactivatedForLastUsedOrganization else { return }
