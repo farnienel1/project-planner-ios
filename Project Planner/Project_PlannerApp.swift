@@ -178,15 +178,18 @@ struct Project_PlannerApp: App {
         _ = FirebaseStartup.configureIfNeeded()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
-        // Avoid a plain white UIKit window before the first SwiftUI frame (especially during Firebase / store init).
+        // SwiftUI owns the window. Calling makeKeyAndVisible here shows an empty white window on iOS 27.
         UIWindow.appearance().backgroundColor = UIColor.systemGroupedBackground
-        _firebaseBackend = StateObject(wrappedValue: FirebaseBackend())
+        let backend = FirebaseBackend()
+        let users = UserStore()
+        _firebaseBackend = StateObject(wrappedValue: backend)
         _smartCache = StateObject(wrappedValue: SmartCacheService())
         _projectStore = StateObject(wrappedValue: ProjectStore())
         _operativeStore = StateObject(wrappedValue: OperativeStore())
         _bookingStore = StateObject(wrappedValue: BookingStore())
         _managerScheduleStore = StateObject(wrappedValue: ManagerScheduleStore())
-        _userStore = StateObject(wrappedValue: UserStore())
+        _userStore = StateObject(wrappedValue: users)
+        backend.installLaunchSession(into: users)
         _taskStore = StateObject(wrappedValue: ProjectTaskStore())
         _holidayStore = StateObject(wrappedValue: HolidayStore())
         _subcontractorStore = StateObject(wrappedValue: SubcontractorStore())
@@ -214,12 +217,6 @@ struct Project_PlannerApp: App {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .preferredColorScheme(appSettings.settings.theme.colorScheme)
-            .onAppear {
-                appSettings.settings.theme.applyToKeyWindows()
-                if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                    windowScene.windows.forEach { $0.makeKeyAndVisible() }
-                }
-            }
             .onChange(of: appSettings.settings.theme) { _, theme in
                 theme.applyToKeyWindows()
             }

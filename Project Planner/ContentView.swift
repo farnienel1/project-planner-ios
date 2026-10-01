@@ -470,8 +470,8 @@ struct ContentView: View {
             Group {
             switch selectedTab {
             case 0:
-                // Home is not inside a NavigationStack. A stack inserted as the window root
-                // stays a blank white (or black) UIKit controller even after Home appears.
+                // Home is not the root of a navigation stack. That stack stayed a blank
+                // white screen on iOS 27 and covered the tab bar.
                 HomeView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case 1:
