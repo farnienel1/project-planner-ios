@@ -19,6 +19,8 @@ extension Notification.Name {
     static let firebaseAuthUIDChanged = Notification.Name("app.firebaseAuthUIDChanged")
     /// Home's first frame is on screen. The launch logo stays up until this fires.
     static let plannerHomeDidDraw = Notification.Name("app.plannerHomeDidDraw")
+    /// Operative and manager records finished loading. The user roster must absorb anyone the users query missed.
+    static let staffDirectoryDidLoad = Notification.Name("app.staffDirectoryDidLoad")
 }
 
 /// Runs before any `@StateObject` on `App` — SwiftUI can construct those before `application(_:didFinishLaunchingWithOptions:)` returns.

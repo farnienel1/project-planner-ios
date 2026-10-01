@@ -116,6 +116,13 @@ class BookingStore: ObservableObject {
                 }
             }
             do {
+                if bookings.isEmpty {
+                    let cached = (try? await persistenceService.loadBookingData()) ?? []
+                    if !cached.isEmpty {
+                        bookings = cached
+                        print("🔥🔥🔥 DEBUG: BOOKINGS_RESTORED \(cached.count) from disk before fetch")
+                    }
+                }
                 // Try to load from Firebase first if authenticated
                 if let firebaseBackend = firebaseBackend, 
                    firebaseBackend.isAuthenticated,
@@ -538,13 +545,30 @@ class BookingStore: ObservableObject {
     }
 
     func startLiveUpdates(organizationId: String) {
-        firebaseBackend?.listenBookings(organizationId: organizationId) { [weak self] remote in
+        firebaseBackend?.listenBookings(organizationId: organizationId) { [weak self] remote, fromCache in
             guard let self else { return }
-            self.applyRemoteBookings(remote)
+            self.applyRemoteBookings(remote, fromCache: fromCache)
         }
     }
 
-    private func applyRemoteBookings(_ remote: [Booking]) {
+    /// A cache snapshot or a short server result must not delete bookings that are already on screen.
+    private func applyRemoteBookings(_ remote: [Booking], fromCache: Bool) {
+        if remote.isEmpty && !bookings.isEmpty {
+            print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT \(bookings.count) — refused an empty update fromCache=\(fromCache)")
+            return
+        }
+        if remote.count < bookings.count {
+            var byId = Dictionary(uniqueKeysWithValues: bookings.map { ($0.id, $0) })
+            for booking in remote {
+                byId[booking.id] = booking
+            }
+            let merged = Array(byId.values)
+            print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT merged \(merged.count) (update had \(remote.count), fromCache=\(fromCache))")
+            bookings = merged
+            smartCache?.cacheBookings(merged)
+            ScheduleChangeNotifier.postBookingStoreDidChange()
+            return
+        }
         let incoming = remote.sorted { $0.id.uuidString < $1.id.uuidString }
         let current = bookings.sorted { $0.id.uuidString < $1.id.uuidString }
         if incoming.count == current.count {

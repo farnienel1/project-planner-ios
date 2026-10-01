@@ -33,6 +33,9 @@ class UserStore: ObservableObject {
     private var organizationUsersLoadOrganizationId: String?
     private var lastOrganizationUsersLoadAt: Date?
     private var currentUserListener: ListenerRegistration?
+    private var staffDirectoryObserver: NSObjectProtocol?
+    private var staffDirectoryOperatives: [Operative] = []
+    private var staffDirectoryManagers: [Manager] = []
 
     private struct OperativeProfileOverride: Codable {
         var assignedManagerUserId: String?
@@ -57,6 +60,18 @@ class UserStore: ObservableObject {
 
     func setFirebaseBackend(_ firebaseBackend: FirebaseBackend) {
         self.firebaseBackend = firebaseBackend
+        guard staffDirectoryObserver == nil else { return }
+        staffDirectoryObserver = NotificationCenter.default.addObserver(
+            forName: .staffDirectoryDidLoad,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let operatives = note.userInfo?["operatives"] as? [Operative] ?? []
+            let managers = note.userInfo?["managers"] as? [Manager] ?? []
+            Task { @MainActor in
+                self?.absorbStaffDirectory(operatives: operatives, managers: managers)
+            }
+        }
     }
     
     func setSmartCache(_ smartCache: SmartCacheService) {
@@ -407,6 +422,93 @@ class UserStore: ObservableObject {
         )
     }
     
+    /// Operative and manager records are a second copy of the staff list. If the users query
+    /// comes back short, these people still belong on Operatives, Managers, and the job board.
+    func absorbStaffDirectory(operatives: [Operative], managers: [Manager]) {
+        if !operatives.isEmpty { staffDirectoryOperatives = operatives }
+        if !managers.isEmpty { staffDirectoryManagers = managers }
+        let merged = mergingStaffDirectory(into: organizationUsers)
+        let orgId = normalizedOrganizationId(lastUsedOrganizationId)
+        organizationUsers = merged.sorted { $0.email < $1.email }
+        if !orgId.isEmpty {
+            RosterRetention.save(organizationUsers, organizationId: orgId)
+        }
+        let listedOperatives = organizationUsers.filter(\.appearsOnOperativesList).count
+        let listedManagers = organizationUsers.filter(\.appearsOnManagersList).count
+        print("🔥🔥🔥 DEBUG: ROSTER_DIRECTORY operatives=\(staffDirectoryOperatives.count) managers=\(staffDirectoryManagers.count) listedOperatives=\(listedOperatives) listedManagers=\(listedManagers)")
+    }
+
+    private func mergingStaffDirectory(into users: [AppUser]) -> [AppUser] {
+        let orgId = normalizedOrganizationId(lastUsedOrganizationId)
+        func emailKey(_ email: String) -> String {
+            email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let realEmails = Set(users.compactMap { user -> String? in
+            guard !user.id.hasPrefix("directory:") else { return nil }
+            let key = emailKey(user.email)
+            return key.isEmpty ? nil : key
+        })
+        var result = users.filter { user in
+            guard user.id.hasPrefix("directory:") else { return true }
+            let key = emailKey(user.email)
+            return key.isEmpty || !realEmails.contains(key)
+        }
+        var seen = Set(result.compactMap { user -> String? in
+            let key = emailKey(user.email)
+            return key.isEmpty ? nil : key
+        })
+        for operative in staffDirectoryOperatives {
+            let key = emailKey(operative.email)
+            guard !key.isEmpty, seen.insert(key).inserted else { continue }
+            result.append(directoryOperativeUser(operative, organizationId: orgId))
+        }
+        for manager in staffDirectoryManagers {
+            let key = emailKey(manager.email)
+            guard !key.isEmpty, seen.insert(key).inserted else { continue }
+            result.append(directoryManagerUser(manager, organizationId: orgId))
+        }
+        return result
+    }
+
+    private func directoryOperativeUser(_ operative: Operative, organizationId: String) -> AppUser {
+        AppUser(
+            id: "directory:op:\(operative.id.uuidString)",
+            email: operative.email,
+            organizationId: organizationId,
+            role: .operative,
+            firstName: operative.firstName,
+            surname: operative.lastName,
+            isActive: operative.isActive,
+            passwordSet: true,
+            permissions: UserPermissions(
+                projects: true,
+                smallWorks: true,
+                operativeMode: true,
+                siteAudit: true
+            )
+        )
+    }
+
+    private func directoryManagerUser(_ manager: Manager, organizationId: String) -> AppUser {
+        AppUser(
+            id: "directory:mgr:\(manager.id.uuidString)",
+            email: manager.email,
+            organizationId: organizationId,
+            role: .manager,
+            firstName: manager.firstName,
+            surname: manager.lastName,
+            mobileNumber: manager.mobileNumber,
+            isActive: manager.isActive,
+            passwordSet: true,
+            permissions: UserPermissions(
+                manager: true,
+                operatives: true,
+                projects: true,
+                smallWorks: true
+            )
+        )
+    }
+
     /// Puts the last roster saved on this phone on screen before a network load.
     /// An organisation switch must not sit on an empty list, and it must not keep the previous organisation's people.
     func showCachedRoster(for organizationId: String) {
@@ -507,17 +609,18 @@ class UserStore: ObservableObject {
                 }
                 return user1.email < user2.email
             }
-            organizationUsers = sortedUsers
+            let withDirectory = mergingStaffDirectory(into: sortedUsers)
+            organizationUsers = withDirectory
             // Empty is stored only when this load ended with nobody. People the server could not
             // confirm as gone stay in `sortedUsers`, so a short fetch cannot wipe the saved roster.
             RosterRetention.save(
-                sortedUsers,
+                withDirectory,
                 organizationId: requestedOrganizationId,
-                allowEmpty: sortedUsers.isEmpty
+                allowEmpty: withDirectory.isEmpty
             )
-            let managers = sortedUsers.filter(\.appearsOnManagersList).count
-            let operatives = sortedUsers.filter(\.appearsOnOperativesList).count
-            print("🔥🔥🔥 DEBUG: ROSTER_PUBLISHED count=\(sortedUsers.count) managers=\(managers) operatives=\(operatives)")
+            let managers = withDirectory.filter(\.appearsOnManagersList).count
+            let operatives = withDirectory.filter(\.appearsOnOperativesList).count
+            print("🔥🔥🔥 DEBUG: ROSTER_PUBLISHED count=\(withDirectory.count) managers=\(managers) operatives=\(operatives)")
             
             await enforceSingleSuperAdminInFirestoreIfNeeded()
         } catch {
@@ -556,7 +659,9 @@ class UserStore: ObservableObject {
         for user in incoming where !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
             byId[user.id] = user
         }
-        let missingIds = byId.keys.filter { !incomingIds.contains($0) }
+        let missingIds = byId.keys.filter { id in
+            !incomingIds.contains(id) && !id.hasPrefix("directory:")
+        }
         let started = Date()
         for id in missingIds {
             if Date().timeIntervalSince(started) > 8 {

@@ -2835,12 +2835,11 @@ class FirebaseBackend: ObservableObject {
                 return nil
             }
             
-            guard let startDate = (data["startDate"] as? Timestamp)?.dateValue(),
-                  let skillsArray = data["skills"] as? [String] else {
-                return nil
-            }
-            
-            let skills = Set(skillsArray)
+            // A missing start date or skills list used to drop the whole person, which then hid their bookings.
+            let startDate = (data["startDate"] as? Timestamp)?.dateValue()
+                ?? (data["createdAt"] as? Timestamp)?.dateValue()
+                ?? Date()
+            let skills = Set(data["skills"] as? [String] ?? [])
             
             // Parse qualifications
             var qualifications: Set<Qualification> = []
@@ -2927,7 +2926,7 @@ class FirebaseBackend: ObservableObject {
                     qualifications: Array(qualifications),
                     qualificationExpiryDates: qualificationExpiryDates,
                     qualificationCertificateURLs: qualificationCertificateURLs,
-                    isActive: data["isActive"] as? Bool ?? true,
+                    isActive: firestoreBool(data["isActive"]) ?? true,
                     hourlyRate: loadedHourly,
                     dayRate: loadedDay ?? loadedHourly,
                     currencySymbol: data["currencySymbol"] as? String,
@@ -3179,13 +3178,13 @@ class FirebaseBackend: ObservableObject {
                 
                 guard let firstName = data["firstName"] as? String,
                       let lastName = data["lastName"] as? String,
-                      let email = data["email"] as? String,
-                      let isActive = data["isActive"] as? Bool,
-                      let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
-                      let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() else {
+                      let email = data["email"] as? String else {
                     print("🔥🔥🔥 DEBUG: Failed to parse manager data for document: \(doc.documentID)")
                     continue
                 }
+                let isActive = firestoreBool(data["isActive"]) ?? true
+                let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+                let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
                 let mobileNumber = (data["mobileNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 
                 let id = UUID(uuidString: doc.documentID) ?? UUID()
@@ -5677,7 +5676,7 @@ class FirebaseBackend: ObservableObject {
             )
     }
 
-    func listenBookings(organizationId: String, onChange: @escaping ([Booking]) -> Void) {
+    func listenBookings(organizationId: String, onChange: @escaping (_ bookings: [Booking], _ fromCache: Bool) -> Void) {
         bookingsLiveListener?.remove()
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
@@ -5688,10 +5687,15 @@ class FirebaseBackend: ObservableObject {
                     return
                 }
                 guard let snapshot else { return }
+                let fromCache = snapshot.metadata.isFromCache
                 Task { @MainActor in
                     guard let self else { return }
+                    if fromCache && snapshot.documents.isEmpty {
+                        print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT — ignored an empty cache snapshot")
+                        return
+                    }
                     let list = snapshot.documents.compactMap { self.bookingFromFirestoreDocument($0) }
-                    onChange(list)
+                    onChange(list, fromCache)
                 }
             }
     }

@@ -270,13 +270,7 @@ struct DailyOverviewView: View {
 
     private var operativeUsers: [AppUser] {
         userStore.organizationUsers.filter {
-            $0.isActive &&
-            $0.passwordSet &&
-            $0.permissions.operativeMode &&
-            !$0.permissions.manager &&
-            !$0.permissions.adminAccess &&
-            !$0.isSuperAdmin &&
-            $0.role != .admin
+            $0.appearsOnOperativesList && $0.isActive && $0.passwordSet
         }
     }
 
