@@ -55,9 +55,9 @@ private enum FirebaseStartup {
     }
 }
 
-/// NSObject, not MainActor. The app default is MainActor, and that hid this class from
-/// UIKit. Firebase then reported the delegate did not conform and crashed after the white window.
-nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+/// Main actor, NSObject. UIKit calls this on the main thread. Taking it off the main actor
+/// crashed as soon as the white launch window appeared.
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     var onPushToken: ((String) -> Void)?
     private var firebaseAuthStateHandle: AuthStateDidChangeListenerHandle?
 
@@ -78,15 +78,7 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         _ = FirebaseStartup.configureIfNeeded()
         print("🔥🔥🔥 DEBUG: Firebase ready in didFinishLaunching (defaultApp: \(FirebaseApp.app() != nil))")
 
-        firebaseAuthStateHandle = Auth.auth().addStateDidChangeListener { _, user in
-            DispatchQueue.main.async {
-                if let uid = user?.uid, !uid.isEmpty {
-                    NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: ["uid": uid])
-                } else {
-                    NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: [:])
-                }
-            }
-        }
+        firebaseAuthStateHandle = installAuthUIDNotifications()
 
         UNUserNotificationCenter.current().delegate = self
         requestRemoteNotificationRegistration(application: application)
@@ -140,7 +132,7 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         completionHandler(.newData)
     }
 
-    private func requestRemoteNotificationRegistration(application: UIApplication) {
+    nonisolated private func requestRemoteNotificationRegistration(application: UIApplication) {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
             if let error {
                 print("🔥🔥🔥 DEBUG: Push permission request failed: \(error.localizedDescription)")
@@ -159,13 +151,29 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
 
 #if canImport(FirebaseMessaging)
 extension AppDelegate: MessagingDelegate {
-    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
+    nonisolated func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
         guard let token = fcmToken, !token.isEmpty else { return }
         print("🔥🔥🔥 DEBUG: Received FCM token")
-        onPushToken?(token)
+        Task { @MainActor in
+            self.onPushToken?(token)
+        }
     }
 }
 #endif
+
+/// Firebase calls this off the main actor. A closure formed on the main actor crashes there.
+private nonisolated func installAuthUIDNotifications() -> AuthStateDidChangeListenerHandle {
+    Auth.auth().addStateDidChangeListener { _, user in
+        let uid = user?.uid
+        DispatchQueue.main.async {
+            if let uid, !uid.isEmpty {
+                NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: ["uid": uid])
+            } else {
+                NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: [:])
+            }
+        }
+    }
+}
 
 @main
 struct Project_PlannerApp: App {
@@ -188,7 +196,7 @@ struct Project_PlannerApp: App {
         _ = FirebaseStartup.configureIfNeeded()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
-        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD open-home")
+        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD logo-then-home")
         // Do not touch UIWindow here. Doing it before the scene exists leaves a black window
         // and the log line "Ignoring activation message because no connection exists".
         let backend = FirebaseBackend()
