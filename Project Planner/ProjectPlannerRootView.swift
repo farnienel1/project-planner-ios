@@ -206,8 +206,7 @@ struct ProjectPlannerRootView: View {
 
     /// Kept in sync with notifications only; routing uses `Auth` + `firebaseBackend` so we never sit on an empty “session” gate.
     @State private var firebaseAuthUID: String?
-    /// Logo covers the first frames. It is not removed from the tree — taking it out left a blank white window.
-    @State private var splashCoverVisible = true
+    /// Only covers the shell while an organisation switch is in progress.
     /// Bumps only when the signed-in user moves from one organisation to another.
     /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
     @State private var contentShellEpoch = 0
@@ -220,8 +219,7 @@ struct ProjectPlannerRootView: View {
     }
 
     private var showSplash: Bool {
-        if firebaseBackend.isSwitchingOrganization { return true }
-        return splashCoverVisible
+        firebaseBackend.isSwitchingOrganization
     }
 
     @ViewBuilder
@@ -259,23 +257,20 @@ struct ProjectPlannerRootView: View {
     var body: some View {
         ZStack {
             ProjectWorksRevampColors.canvas.ignoresSafeArea()
-            // The signed-in shell is in the first frame. Adding it later, after the
-            // window exists, is the blank white screen.
             if showMainExperience {
                 authenticatedShell
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if !splashCoverVisible {
+            } else {
                 AuthenticationView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            AppLaunchSplashView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .opacity(showSplash ? 1 : 0)
-                .allowsHitTesting(showSplash)
-                .accessibilityHidden(!showSplash)
-                .zIndex(1)
+            if showSplash {
+                AppLaunchSplashView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .zIndex(1)
+            }
         }
         .background(ProjectWorksRevampColors.canvas)
         .onReceive(NotificationCenter.default.publisher(for: .plannerHomeDidDraw)) { _ in
@@ -302,7 +297,6 @@ struct ProjectPlannerRootView: View {
                     return
                 }
                 firebaseAuthUID = nil
-                splashCoverVisible = false
                 userStore.clearOnSignOut()
                 print("🔥🔥🔥 DEBUG: RootView auth uid cleared (signed out)")
             }
@@ -342,34 +336,27 @@ struct ProjectPlannerRootView: View {
             if showMainExperience {
                 userStore.unblockLaunchProfileIfNeeded()
             }
-            // Uncover Home on the next turn. It is already mounted, so this does not
-            // insert a new root. Firestore starts only after that turn is queued.
-            DispatchQueue.main.async {
-                splashCoverVisible = false
-                print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                Task { @MainActor in
-                    await firebaseBackend.syncAuthStateFromSessionIfNeeded()
-                    if userStore.currentUser == nil {
-                        userStore.unblockLaunchProfileIfNeeded()
-                    }
-                    async let profilePass: Void = loadLaunchProfile()
-                    async let bootstrapPass: Void = PlannerStoreWiring.bootstrapOrgDataIfNeeded(
-                        firebaseBackend: firebaseBackend,
-                        userStore: userStore,
-                        projectStore: projectStore,
-                        operativeStore: operativeStore,
-                        bookingStore: bookingStore,
-                        managerScheduleStore: managerScheduleStore,
-                        subcontractorStore: subcontractorStore,
-                        taskStore: taskStore,
-                        holidayStore: holidayStore,
-                        notificationService: notificationService
-                    )
-                    await profilePass
-                    await bootstrapPass
+            print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
+            Task { @MainActor in
+                await firebaseBackend.syncAuthStateFromSessionIfNeeded()
+                if userStore.currentUser == nil {
+                    userStore.unblockLaunchProfileIfNeeded()
                 }
+                async let profilePass: Void = loadLaunchProfile()
+                async let bootstrapPass: Void = PlannerStoreWiring.bootstrapOrgDataIfNeeded(
+                    firebaseBackend: firebaseBackend,
+                    userStore: userStore,
+                    projectStore: projectStore,
+                    operativeStore: operativeStore,
+                    bookingStore: bookingStore,
+                    managerScheduleStore: managerScheduleStore,
+                    subcontractorStore: subcontractorStore,
+                    taskStore: taskStore,
+                    holidayStore: holidayStore,
+                    notificationService: notificationService
+                )
+                await profilePass
+                await bootstrapPass
             }
         }
         .onChange(of: firebaseBackend.currentOrganization?.firestoreDocumentId) { oldId, newId in

@@ -55,28 +55,34 @@ private enum FirebaseStartup {
     }
 }
 
-/// Main actor, NSObject. UIKit calls this on the main thread. Taking it off the main actor
-/// crashed as soon as the white launch window appeared.
-final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+/// UIKit creates this on the main thread during launch and calls it synchronously.
+/// This module's default isolation is MainActor. A MainActor delegate makes that call
+/// hop back onto the main actor while already on the main thread, so the first frame
+/// never arrives: white launch screen, then the system kills the app.
+nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     var onPushToken: ((String) -> Void)?
     private var firebaseAuthStateHandle: AuthStateDidChangeListenerHandle?
 
     /// Runs before `didFinishLaunching` — configures Firebase before Messaging / Auth swizzler touches the default app (fixes I-COR000003 noise and bad first-frame auth).
-    func application(
+    nonisolated func application(
         _ application: UIApplication,
         willFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        _ = FirebaseStartup.configureIfNeeded()
-        print("🔥🔥🔥 DEBUG: Firebase configured in willFinishLaunching (defaultApp: \(FirebaseApp.app() != nil))")
+        MainActor.assumeIsolated {
+            _ = FirebaseStartup.configureIfNeeded()
+            print("🔥🔥🔥 DEBUG: Firebase configured in willFinishLaunching (defaultApp: \(FirebaseApp.app() != nil))")
+        }
         return true
     }
 
-    func application(
+    nonisolated func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        _ = FirebaseStartup.configureIfNeeded()
-        print("🔥🔥🔥 DEBUG: Firebase ready in didFinishLaunching (defaultApp: \(FirebaseApp.app() != nil))")
+        MainActor.assumeIsolated {
+            _ = FirebaseStartup.configureIfNeeded()
+            print("🔥🔥🔥 DEBUG: Firebase ready in didFinishLaunching (defaultApp: \(FirebaseApp.app() != nil))")
+        }
 
         firebaseAuthStateHandle = installAuthUIDNotifications()
 
@@ -88,7 +94,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         return true
     }
 
-    func userNotificationCenter(
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
@@ -96,7 +102,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         completionHandler([.banner, .sound, .badge, .list])
     }
 
-    func userNotificationCenter(
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
@@ -112,7 +118,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         completionHandler()
     }
 
-    func application(
+    nonisolated func application(
         _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
@@ -121,7 +127,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 #endif
     }
 
-    func application(
+    nonisolated func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
@@ -196,7 +202,7 @@ struct Project_PlannerApp: App {
         _ = FirebaseStartup.configureIfNeeded()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
-        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD shell-mounted")
+        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD no-actor-hop")
         // Do not touch UIWindow here. Doing it before the scene exists leaves a black window
         // and the log line "Ignoring activation message because no connection exists".
         let backend = FirebaseBackend()
