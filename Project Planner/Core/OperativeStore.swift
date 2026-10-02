@@ -148,10 +148,29 @@ class OperativeStore: ObservableObject {
             print("🔥🔥🔥 DEBUG: MANAGERS_KEPT \(existing.count) — refused an empty fetch")
             return existing
         }
-        if incoming.count >= existing.count { return incoming }
-        var byId = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
-        for person in incoming { byId[person.id] = person }
-        let merged = Array(byId.values)
+        var byDocument: [String: Manager] = [:]
+        for person in existing {
+            byDocument[person.firestoreDocumentId] = person
+        }
+        for person in incoming {
+            byDocument[person.firestoreDocumentId] = person
+        }
+        let incomingDocuments = Set(incoming.map(\.firestoreDocumentId))
+        var byEmail: [String: Manager] = [:]
+        for person in byDocument.values {
+            let email = person.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = email.isEmpty ? "id:\(person.firestoreDocumentId)" : email
+            if let current = byEmail[key] {
+                let personIsIncoming = incomingDocuments.contains(person.firestoreDocumentId)
+                let currentIsIncoming = incomingDocuments.contains(current.firestoreDocumentId)
+                if personIsIncoming && !currentIsIncoming {
+                    byEmail[key] = person
+                }
+            } else {
+                byEmail[key] = person
+            }
+        }
+        let merged = Array(byEmail.values)
         print("🔥🔥🔥 DEBUG: MANAGERS_KEPT merged \(merged.count) (fetch had \(incoming.count))")
         return merged
     }

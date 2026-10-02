@@ -345,7 +345,9 @@ struct Manager: Identifiable, Codable, Hashable {
     var tradeTypeCustom: String?
     var createdAt: Date
     var updatedAt: Date
-    
+    /// `organizations/{org}/managers/{id}`. Kept when that id is not a UUID so a save updates the same document.
+    var firestoreDocumentId: String
+
     init(
         id: UUID = UUID(),
         firstName: String,
@@ -356,7 +358,10 @@ struct Manager: Identifiable, Codable, Hashable {
         isActive: Bool = true,
         notes: String? = nil,
         tradeTypePreset: String? = nil,
-        tradeTypeCustom: String? = nil
+        tradeTypeCustom: String? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        firestoreDocumentId: String? = nil
     ) {
         self.id = id
         self.firstName = firstName
@@ -368,8 +373,79 @@ struct Manager: Identifiable, Codable, Hashable {
         self.notes = notes
         self.tradeTypePreset = tradeTypePreset
         self.tradeTypeCustom = tradeTypeCustom
-        self.createdAt = Date()
-        self.updatedAt = Date()
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        let stored = firestoreDocumentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.firestoreDocumentId = stored.isEmpty ? id.uuidString : stored
+    }
+
+    /// Same document id always maps to the same in-memory id. A Firebase user id is not a UUID.
+    static func stableId(forFirestoreDocumentId documentId: String) -> UUID {
+        let trimmed = documentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let parsed = UUID(uuidString: trimmed) { return parsed }
+        var h1: UInt64 = 14_695_981_039_346_656_037
+        var h2: UInt64 = 1_099_511_628_211
+        for byte in trimmed.utf8 {
+            h1 ^= UInt64(byte)
+            h1 &*= 1_099_511_628_211
+            h2 ^= UInt64(byte)
+            h2 &*= 14_695_981_039_346_656_037
+        }
+        var bytes = [UInt8](repeating: 0, count: 16)
+        for index in 0..<8 {
+            bytes[index] = UInt8((h1 >> (8 * index)) & 0xff)
+            bytes[index + 8] = UInt8((h2 >> (8 * index)) & 0xff)
+        }
+        bytes[6] = (bytes[6] & 0x0F) | 0x50
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, firstName, lastName, email, mobileNumber, department, isActive, notes
+        case tradeTypePreset, tradeTypeCustom, createdAt, updatedAt, firestoreDocumentId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try container.decode(UUID.self, forKey: .id)
+        self.id = id
+        firstName = try container.decode(String.self, forKey: .firstName)
+        lastName = try container.decode(String.self, forKey: .lastName)
+        email = try container.decode(String.self, forKey: .email)
+        mobileNumber = try container.decodeIfPresent(String.self, forKey: .mobileNumber) ?? ""
+        department = try container.decodeIfPresent(String.self, forKey: .department)
+        isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? true
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
+        tradeTypePreset = try container.decodeIfPresent(String.self, forKey: .tradeTypePreset)
+        tradeTypeCustom = try container.decodeIfPresent(String.self, forKey: .tradeTypeCustom)
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        let stored = try container.decodeIfPresent(String.self, forKey: .firestoreDocumentId)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        firestoreDocumentId = stored.isEmpty ? id.uuidString : stored
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(firstName, forKey: .firstName)
+        try container.encode(lastName, forKey: .lastName)
+        try container.encode(email, forKey: .email)
+        try container.encode(mobileNumber, forKey: .mobileNumber)
+        try container.encodeIfPresent(department, forKey: .department)
+        try container.encode(isActive, forKey: .isActive)
+        try container.encodeIfPresent(notes, forKey: .notes)
+        try container.encodeIfPresent(tradeTypePreset, forKey: .tradeTypePreset)
+        try container.encodeIfPresent(tradeTypeCustom, forKey: .tradeTypeCustom)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encode(firestoreDocumentId, forKey: .firestoreDocumentId)
     }
     
     var fullName: String {

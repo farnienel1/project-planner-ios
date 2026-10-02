@@ -530,7 +530,39 @@ class UserStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: ROSTER_KEPT \(byId[id]?.email ?? id) — this fetch missed them and their document was not confirmed gone")
             }
         }
-        return Array(byId.values)
+        return collapseRosterByEmail(Array(byId.values))
+    }
+
+    /// Two `users` documents can share an email. The Managers list must show that person once.
+    private func collapseRosterByEmail(_ users: [AppUser]) -> [AppUser] {
+        var byKey: [String: AppUser] = [:]
+        for user in users {
+            let emailKey = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = emailKey.isEmpty ? "id:\(user.id)" : emailKey
+            if let existing = byKey[key] {
+                if rosterDocumentRank(user) > rosterDocumentRank(existing) {
+                    var chosen = user
+                    if existing.placedByManagersRecord { chosen.placedByManagersRecord = true }
+                    byKey[key] = chosen
+                } else if user.placedByManagersRecord {
+                    var kept = existing
+                    kept.placedByManagersRecord = true
+                    byKey[key] = kept
+                }
+            } else {
+                byKey[key] = user
+            }
+        }
+        return Array(byKey.values)
+    }
+
+    private func rosterDocumentRank(_ user: AppUser) -> Int {
+        var rank = 0
+        if user.passwordSet { rank += 4 }
+        if user.appearsOnManagersList || user.appearsOnOperativesList || user.appearsOnAdminsList { rank += 2 }
+        if !user.firstName.isEmpty || !user.surname.isEmpty { rank += 1 }
+        if user.isActive { rank += 1 }
+        return rank
     }
     
     /// Call when the user signs out so deleted/other-org users don't persist in the UI.
@@ -1259,7 +1291,7 @@ class UserStore: ObservableObject {
     func transferSuperAdmin(to newOwnerUserId: String) async -> Bool {
         guard let firebaseBackend else { return false }
         guard let currentUser else { return false }
-        guard currentUser.isSuperAdmin || isOrganizationCreator(userId: currentUser.id) else {
+        guard currentUser.isSuperAdmin else {
             errorMessage = "Only the Super Admin can transfer ownership."
             return false
         }
@@ -1620,13 +1652,17 @@ class UserStore: ObservableObject {
 
         do {
             for id in idsToPatch {
-                try await firebaseBackend.patchUserIdentity(
-                    userId: id,
-                    firstName: trimmedFirst,
-                    surname: trimmedSurname,
-                    email: trimmedEmail,
-                    mobileNumber: mobileOut
-                )
+                do {
+                    try await firebaseBackend.patchUserIdentity(
+                        userId: id,
+                        firstName: trimmedFirst,
+                        surname: trimmedSurname,
+                        email: trimmedEmail,
+                        mobileNumber: mobileOut
+                    )
+                } catch {
+                    print("🔥🔥🔥 DEBUG: identity patch skipped for \(id): \(error.localizedDescription)")
+                }
             }
             do {
                 try await firebaseBackend.saveUser(updated)
@@ -1654,17 +1690,27 @@ class UserStore: ObservableObject {
                     op.updatedAt = Date()
                     await opStore.updateOperative(op)
                 }
-                if let mi = opStore.managers.firstIndex(where: {
-                    $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == oldEmailNorm
-                }) {
-                    var mgr = opStore.managers[mi]
-                    mgr.email = trimmedEmail
-                    mgr.firstName = trimmedFirst
-                    mgr.lastName = trimmedSurname
-                    mgr.mobileNumber = mobileOut ?? ""
-                    mgr.updatedAt = Date()
-                    try await firebaseBackend.saveManager(mgr, organizationId: orgId)
-                    opStore.managers[mi] = mgr
+                let managerIndexes = opStore.managers.indices.filter {
+                    opStore.managers[$0].email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == oldEmailNorm
+                }
+                for mi in managerIndexes {
+                    opStore.managers[mi].email = trimmedEmail
+                    opStore.managers[mi].firstName = trimmedFirst
+                    opStore.managers[mi].lastName = trimmedSurname
+                    opStore.managers[mi].mobileNumber = mobileOut ?? ""
+                    opStore.managers[mi].updatedAt = Date()
+                }
+                do {
+                    try await firebaseBackend.updateManagerIdentityInPlace(
+                        organizationId: orgId,
+                        previousEmail: oldEmailNorm,
+                        firstName: trimmedFirst,
+                        lastName: trimmedSurname,
+                        email: trimmedEmail,
+                        mobileNumber: mobileOut ?? ""
+                    )
+                } catch {
+                    print("🔥🔥🔥 DEBUG: manager identity update skipped: \(error.localizedDescription)")
                 }
             }
 
@@ -1678,7 +1724,7 @@ class UserStore: ObservableObject {
             if people.indices.contains(index) {
                 people[index] = updated
             }
-            organizationUsers = people
+            organizationUsers = collapseRosterByEmail(people)
             identityRevision = IdentityRevision(
                 userIds: idsToPatch,
                 previousFirst: previousFirst,

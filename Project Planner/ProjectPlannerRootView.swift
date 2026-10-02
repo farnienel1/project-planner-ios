@@ -210,6 +210,11 @@ struct ProjectPlannerRootView: View {
     /// Bumps only when the signed-in user moves from one organisation to another.
     /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
     @State private var contentShellEpoch = 0
+    /// Logo overlay. Home stays mounted underneath. It leaves when Home has drawn and a short minimum has passed, or at the hard stop.
+    @State private var launchSplashVisible = true
+    @State private var launchSplashDidSchedule = false
+    @State private var launchSplashHomeDrawn = false
+    @State private var launchSplashMinElapsed = false
 
     /// Prefer backend flag first so we’re not gated on `FirebaseApp.app()` before `ensureFirebaseAppConfigured()` runs; only then read Auth.
     private var showMainExperience: Bool {
@@ -219,7 +224,33 @@ struct ProjectPlannerRootView: View {
     }
 
     private var showSplash: Bool {
-        firebaseBackend.isSwitchingOrganization
+        if firebaseBackend.isSwitchingOrganization { return true }
+        return showMainExperience && launchSplashVisible
+    }
+
+    private func beginLaunchSplashIfNeeded() {
+        guard showMainExperience, !launchSplashDidSchedule else { return }
+        launchSplashDidSchedule = true
+        launchSplashVisible = true
+        print("🔥🔥🔥 DEBUG: PP splash overlay on")
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            launchSplashMinElapsed = true
+            finishLaunchSplashIfReady()
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_200_000_000)
+            if launchSplashVisible {
+                launchSplashVisible = false
+                print("🔥🔥🔥 DEBUG: PP splash overlay off (timeout)")
+            }
+        }
+    }
+
+    private func finishLaunchSplashIfReady() {
+        guard launchSplashHomeDrawn, launchSplashMinElapsed, launchSplashVisible else { return }
+        launchSplashVisible = false
+        print("🔥🔥🔥 DEBUG: PP splash overlay off")
     }
 
     @ViewBuilder
@@ -272,6 +303,11 @@ struct ProjectPlannerRootView: View {
         .background(ProjectWorksRevampColors.canvas)
         .onReceive(NotificationCenter.default.publisher(for: .plannerHomeDidDraw)) { _ in
             print("🔥🔥🔥 DEBUG: PP_LAUNCH_VISIBLE home")
+            launchSplashHomeDrawn = true
+            finishLaunchSplashIfReady()
+        }
+        .onChange(of: showMainExperience) { _, signedIn in
+            if signedIn { beginLaunchSplashIfNeeded() }
         }
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
             guard !signedIn else { return }
@@ -333,7 +369,8 @@ struct ProjectPlannerRootView: View {
             if showMainExperience {
                 userStore.unblockLaunchProfileIfNeeded()
             }
-            print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
+            print("🔥🔥🔥 DEBUG: PP splash overlay user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
+            beginLaunchSplashIfNeeded()
             Task { @MainActor in
                 await firebaseBackend.syncAuthStateFromSessionIfNeeded()
                 if userStore.currentUser == nil {
