@@ -82,13 +82,9 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         MainActor.assumeIsolated {
             _ = FirebaseStartup.configureIfNeeded()
             print("🔥🔥🔥 DEBUG: Firebase ready in didFinishLaunching (defaultApp: \(FirebaseApp.app() != nil))")
-            LaunchWindowReveal.revealIfNeeded()
         }
 
         firebaseAuthStateHandle = installAuthUIDNotifications()
-
-        // Scene is often still connecting in didFinish. Become-active is the moment a window can be keyed.
-        // This does not hide windows and does not call makeKeyAndVisible.
 
         UNUserNotificationCenter.current().delegate = self
         requestRemoteNotificationRegistration(application: application)
@@ -96,14 +92,6 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         Messaging.messaging().delegate = self
 #endif
         return true
-    }
-
-    nonisolated func applicationDidBecomeActive(_ application: UIApplication) {
-        DispatchQueue.main.async {
-            MainActor.assumeIsolated {
-                LaunchWindowReveal.revealIfNeeded()
-            }
-        }
     }
 
     nonisolated func userNotificationCenter(
@@ -193,46 +181,40 @@ private nonisolated func installAuthUIDNotifications() -> AuthStateDidChangeList
     }
 }
 
-/// The simulator keeps an empty window in front of Home. That empty window is the white screen.
-/// Only the window that already has a root controller is brought forward. Empty windows are left alone.
-/// UIWindow.appearance is not used. makeKeyAndVisible is not called on every window.
-/// The first attempt often runs before a scene exists. That used to return with no log and leave the white window.
+/// Shows the one window that already contains Home, and only after its scene is active.
+/// Calling this from didFinishLaunching hits a scene with no connection and leaves the white launch screen up.
+/// Empty windows are left alone. UIWindow.appearance is not used.
 enum LaunchWindowReveal {
     private static var didReveal = false
-    private static var attempts = 0
 
     @MainActor
     static func revealIfNeeded() {
         guard !didReveal else { return }
-        attempts += 1
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        var rooted: [UIWindow] = []
-        for scene in scenes {
-            print("🔥🔥🔥 DEBUG: PP_LAUNCH_WINDOWS total=\(scene.windows.count) attempt=\(attempts)")
-            for window in scene.windows {
-                let hasRoot = window.rootViewController != nil
-                print("🔥🔥🔥 DEBUG: PP_LAUNCH_WIN key=\(window.isKeyWindow) hidden=\(window.isHidden) rooted=\(hasRoot) \(Int(window.bounds.width))x\(Int(window.bounds.height))")
-                if hasRoot { rooted.append(window) }
-            }
+        let ready = scenes.filter {
+            $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive
         }
-        guard let host = rooted.first(where: \.isKeyWindow) ?? rooted.first else {
-            guard attempts < 40 else {
-                print("🔥🔥🔥 DEBUG: PP_LAUNCH_REVEAL gave up after \(attempts) attempts")
-                return
-            }
-            print("🔥🔥🔥 DEBUG: PP_LAUNCH_REVEAL waiting scenes=\(scenes.count) attempt=\(attempts)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                revealIfNeeded()
-            }
+        guard !ready.isEmpty else {
+            print("🔥🔥🔥 DEBUG: PP_LAUNCH_REVEAL scene not active yet")
             return
         }
+        var host: UIWindow?
+        for scene in ready {
+            print("🔥🔥🔥 DEBUG: PP_LAUNCH_WINDOWS total=\(scene.windows.count) state=\(scene.activationState.rawValue)")
+            for window in scene.windows {
+                let hasRoot = window.rootViewController != nil
+                let wide = window.bounds.width > 1 && window.bounds.height > 1
+                print("🔥🔥🔥 DEBUG: PP_LAUNCH_WIN key=\(window.isKeyWindow) hidden=\(window.isHidden) rooted=\(hasRoot) \(Int(window.bounds.width))x\(Int(window.bounds.height))")
+                if hasRoot && wide && host == nil {
+                    host = window
+                }
+            }
+        }
+        guard let host else { return }
         didReveal = true
         host.isHidden = false
-        host.backgroundColor = UIColor(red: 0.969, green: 0.973, blue: 0.980, alpha: 1)
-        if !host.isKeyWindow {
-            host.makeKey()
-        }
-        print("🔥🔥🔥 DEBUG: PP_LAUNCH_REVEAL keyed \(Int(host.bounds.width))x\(Int(host.bounds.height))")
+        host.makeKeyAndVisible()
+        print("🔥🔥🔥 DEBUG: PP_LAUNCH_REVEAL visible \(Int(host.bounds.width))x\(Int(host.bounds.height))")
     }
 }
 
@@ -257,7 +239,7 @@ struct Project_PlannerApp: App {
         _ = FirebaseStartup.configureIfNeeded()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
-        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD key-host reveal-retry")
+        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD scene-active")
         // Do not touch UIWindow here. Doing it before the scene exists leaves a black window
         // and the log line "Ignoring activation message because no connection exists".
         let backend = FirebaseBackend()
@@ -279,31 +261,48 @@ struct Project_PlannerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            GeometryReader { proxy in
-                ProjectPlannerRootView(appDelegate: appDelegate)
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(smartCache)
-                    .environmentObject(projectStore)
-                    .environmentObject(operativeStore)
-                    .environmentObject(bookingStore)
-                    .environmentObject(managerScheduleStore)
-                    .environmentObject(userStore)
-                    .environmentObject(taskStore)
-                    .environmentObject(holidayStore)
-                    .environmentObject(subcontractorStore)
-                    .environmentObject(appSettings)
-                    .environmentObject(notificationService)
-                    .frame(width: proxy.size.width, height: proxy.size.height)
+            LaunchSceneHost(appDelegate: appDelegate)
+                .environmentObject(firebaseBackend)
+                .environmentObject(smartCache)
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
+                .environmentObject(bookingStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(userStore)
+                .environmentObject(taskStore)
+                .environmentObject(holidayStore)
+                .environmentObject(subcontractorStore)
+                .environmentObject(appSettings)
+                .environmentObject(notificationService)
+        }
+    }
+}
+
+/// Gives Home the screen size once UIKit has measured it, and shows that window only after the scene is active.
+private struct LaunchSceneHost: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @EnvironmentObject private var appSettings: AppSettingsStore
+    let appDelegate: AppDelegate
+
+    var body: some View {
+        GeometryReader { proxy in
+            ProjectPlannerRootView(appDelegate: appDelegate)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(
+                    width: proxy.size.width > 1 ? proxy.size.width : nil,
+                    height: proxy.size.height > 1 ? proxy.size.height : nil
+                )
+        }
+        .ignoresSafeArea()
+        .onAppear { LaunchWindowReveal.revealIfNeeded() }
+        .onChange(of: scenePhase) { _, phase in
+            print("🔥🔥🔥 DEBUG: PP_LAUNCH_PHASE \(String(describing: phase))")
+            if phase == .active {
+                LaunchWindowReveal.revealIfNeeded()
             }
-            .ignoresSafeArea()
-            .onAppear {
-                DispatchQueue.main.async {
-                    LaunchWindowReveal.revealIfNeeded()
-                }
-            }
-            .onChange(of: appSettings.settings.theme) { _, theme in
-                theme.applyToKeyWindows()
-            }
+        }
+        .onChange(of: appSettings.settings.theme) { _, theme in
+            theme.applyToKeyWindows()
         }
     }
 }
