@@ -59,14 +59,15 @@ struct AddUserView: View {
     @State private var showSuccess = false
     @State private var errorMessage: String?
     
-    private var totalSteps: Int {
-        mode == .managerAddingOperative ? 3 : 4
-    }
+    private var totalSteps: Int { 4 }
     
     private var finalReviewStep: Int { totalSteps }
     
     init(mode: AddUserMode = .admin) {
         self.mode = mode
+        if mode == .managerAddingOperative {
+            _invitedAccountType = State(initialValue: .operative)
+        }
     }
     
     var body: some View {
@@ -127,7 +128,7 @@ struct AddUserView: View {
                     .font(.system(size: 17))
                     .foregroundStyle(ManageUserProfilePalette.listBlue)
                 Spacer()
-                Text(mode == .managerAddingOperative ? "Add Operative" : "Add New User")
+                Text("Add New User")
                     .font(.system(size: 17, weight: .bold))
                 Spacer()
                 Text("Step \(currentStep)/\(totalSteps)")
@@ -170,21 +171,12 @@ struct AddUserView: View {
 
     @ViewBuilder
     private var stepContentInner: some View {
-        if mode == .managerAddingOperative {
-            switch currentStep {
-            case 1: stepDetailsOnly
-            case 2: stepManagerOperativeSummary
-            case 3: stepReview
-            default: EmptyView()
-            }
-        } else {
-            switch currentStep {
-            case 1: stepAccountType
-            case 2: stepDetailsWithManager
-            case 3: stepPermissionsControlled
-            case 4: stepReview
-            default: EmptyView()
-            }
+        switch currentStep {
+        case 1: stepAccountType
+        case 2: stepDetailsWithManager
+        case 3: stepPermissionsControlled
+        case 4: stepReview
+        default: EmptyView()
         }
     }
 
@@ -259,14 +251,6 @@ struct AddUserView: View {
     }
     
     private var stepTitle: String {
-        if mode == .managerAddingOperative {
-            switch currentStep {
-            case 1: return "User Details"
-            case 2: return "Operative"
-            case 3: return "Review"
-            default: return ""
-            }
-        }
         switch currentStep {
         case 1: return "Account Type"
         case 2: return "User Details"
@@ -280,13 +264,17 @@ struct AddUserView: View {
     
     private var stepAccountType: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Choose what kind of account this will be. Super admin is never assigned from here.")
+            Text(mode == .managerAddingOperative
+                ? "This account is an operative. Super admin is never assigned from here."
+                : "Choose what kind of account this will be. Super admin is never assigned from here.")
                 .font(.system(size: 14))
                 .foregroundStyle(ManageUserProfilePalette.textSecondary)
                 .lineSpacing(3)
             VStack(spacing: 11) {
-                accountTypeCard(.admin, icon: "🛡️", description: "Full organisation access except operative mode.")
-                accountTypeCard(.manager, icon: "👔", description: "Manage teams, schedules and optional modules.")
+                if mode != .managerAddingOperative {
+                    accountTypeCard(.admin, icon: "🛡️", description: "Full organisation access except operative mode.")
+                    accountTypeCard(.manager, icon: "👔", description: "Manage teams, schedules and optional modules.")
+                }
                 accountTypeCard(.operative, icon: "👷", description: "Schedule, annual leave and qualifications.")
             }
         }
@@ -294,7 +282,9 @@ struct AddUserView: View {
 
     private func accountTypeCard(_ type: InvitedAccountType, icon: String, description: String) -> some View {
         let selected = invitedAccountType == type
+        let lockedToOperative = mode == .managerAddingOperative
         return Button {
+            guard !lockedToOperative else { return }
             invitedAccountType = type
             applyPermissionsForInvitedType()
             resetAnnualLeaveInviteDefaults()
@@ -1063,18 +1053,6 @@ struct AddUserView: View {
     }
     
     private var canProceed: Bool {
-        if mode == .managerAddingOperative {
-            switch currentStep {
-            case 1:
-                return !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email) && tradeRequiredAndValid
-            case 2:
-                return lineManagerSelectionValid
-            case 3:
-                return true
-            default:
-                return false
-            }
-        }
         switch currentStep {
         case 1:
             return true

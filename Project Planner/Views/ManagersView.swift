@@ -104,7 +104,7 @@ struct ManagersView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationBarBackButtonHidden(true)
             .sheet(item: $selectedUser) { user in
-                EditUserView(user: user, suppressAdminAccessToggle: true)
+                OperativeProfileView(user: user)
                     .environmentObject(userStore)
                     .environmentObject(bookingStore)
                     .environmentObject(operativeStore)

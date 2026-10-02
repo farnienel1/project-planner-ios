@@ -33,6 +33,19 @@ class UserStore: ObservableObject {
     private var organizationUsersLoadOrganizationId: String?
     private var lastOrganizationUsersLoadAt: Date?
     private var currentUserListener: ListenerRegistration?
+    /// Stops a roster reload that started before a name save from putting the old name back.
+    private var identityRevision: IdentityRevision?
+
+    private struct IdentityRevision {
+        var userIds: Set<String>
+        var previousFirst: String
+        var previousSurname: String
+        var firstName: String
+        var surname: String
+        var email: String
+        var mobile: String?
+        var savedAt: Date
+    }
 
     private struct OperativeProfileOverride: Codable {
         var assignedManagerUserId: String?
@@ -263,6 +276,9 @@ class UserStore: ObservableObject {
                     }
                 }
 
+                if let loaded = userData {
+                    userData = await firebaseBackend.applyDeviceSessionIfNeeded(to: loaded)
+                }
                 self.currentUser = userData
                 startCurrentUserListener(userId: firebaseUser.uid)
 
@@ -478,7 +494,18 @@ class UserStore: ObservableObject {
         }
         let incomingIds = Set(incoming.map(\.id))
         for user in incoming where user.isStoredUserDocument && !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
-            byId[user.id] = user
+            var stored = user
+            if let rev = identityRevision,
+               rev.userIds.contains(user.id),
+               Date().timeIntervalSince(rev.savedAt) < 30,
+               stored.firstName == rev.previousFirst,
+               stored.surname == rev.previousSurname {
+                stored.firstName = rev.firstName
+                stored.surname = rev.surname
+                stored.email = rev.email
+                stored.mobileNumber = rev.mobile
+            }
+            byId[user.id] = stored
         }
         let missingIds = byId.keys.filter { id in
             !incomingIds.contains(id) && !id.hasPrefix("directory:")
@@ -521,7 +548,10 @@ class UserStore: ObservableObject {
         currentUserListener?.remove()
         currentUserListener = firebaseBackend.observeCurrentUserDocument(userId: userId) { [weak self] user in
             guard let self, let user else { return }
-            self.currentUser = user
+            Task { @MainActor in
+                let resolved = await self.firebaseBackend?.applyDeviceSessionIfNeeded(to: user) ?? user
+                self.currentUser = resolved
+            }
         }
     }
     
@@ -581,9 +611,11 @@ class UserStore: ObservableObject {
     
     func canViewOperatives() -> Bool {
         if isOperativeMode() { return false }
-        if hasAdminAccess() { return true }
         guard let u = displayUser else { return false }
-        return u.permissions.manager && u.permissions.operatives
+        // Super admin keeps the Operatives page. Everyone else, including admins, follows the Operatives toggle.
+        if u.isSuperAdmin { return true }
+        let canHoldTheToggle = u.permissions.manager || u.permissions.adminAccess || u.role == .admin || u.role == .manager
+        return canHoldTheToggle && u.permissions.operatives
     }
     
     /// Organisation material catalogue (batch upload, CRUD). Admins and managers only — not operatives with project materials access.
@@ -593,19 +625,18 @@ class UserStore: ObservableObject {
         return hasAdminAccess() || u.permissions.manager
     }
 
-    /// Wholesalers directory — admins and managers can add/edit wholesaler records.
+    /// Wholesalers page. Off hides the page. Super admin is unchanged.
     func canAccessWholesalers() -> Bool {
         if isOperativeMode() { return false }
         guard let u = displayUser else { return false }
-        return hasAdminAccess() || u.permissions.manager
+        if u.isSuperAdmin { return true }
+        let isStaff = u.permissions.manager || u.permissions.adminAccess || u.role == .admin || u.role == .manager
+        return isStaff && u.permissions.wholesalersOrderHistory
     }
 
-    /// Quote/order history in materials and wholesaler profiles (admins always; managers need toggle).
+    /// Quote and order history follows the same Wholesalers toggle as the page.
     func canViewWholesalerOrderHistory() -> Bool {
-        if isOperativeMode() { return false }
-        guard let u = displayUser else { return false }
-        if hasAdminAccess() { return true }
-        return u.permissions.manager && u.permissions.wholesalersOrderHistory
+        canAccessWholesalers()
     }
 
     /// Skills catalogue management has been removed from the product.
@@ -614,7 +645,7 @@ class UserStore: ObservableObject {
     }
 
     /// Organisation qualification templates (add / rename / delete).
-    /// Admins always can; managers only when `permissions.qualifications` is on.
+    /// Super admin always can. Admins and managers follow the Qualifications toggle.
     ///
     /// **Permission scope (important):** toggling `permissions.qualifications` only
     /// changes who may open the Organisation Qualifications editor. It must never
@@ -760,11 +791,7 @@ class UserStore: ObservableObject {
     }
     
     func canEditProjects() -> Bool {
-        guard let currentUser = displayUser else { return false }
-        if currentUser.permissions.operativeMode { return false }
-        if currentUser.isSuperAdmin || currentUser.permissions.adminAccess { return true }
-        guard currentUser.permissions.manager else { return false }
-        return currentUser.permissions.projects || currentUser.permissions.smallWorks
+        canManageWorkCatalogue(.projects) || canManageWorkCatalogue(.smallWorks)
     }
     
     func canViewSiteAudit() -> Bool {
@@ -826,11 +853,13 @@ class UserStore: ObservableObject {
     }
 
     /// Create / edit / add projects or small works. Lists stay available when this is off.
+    /// Admins follow the Projects and Small Works toggles. Super admin does not.
     func canManageWorkCatalogue(_ catalogue: WorkAccess.JobCatalogue) -> Bool {
         if isOperativeMode() { return false }
         guard let u = displayUser else { return false }
-        if u.isSuperAdmin || u.permissions.adminAccess || u.role == .admin { return true }
-        guard u.permissions.manager else { return false }
+        if u.isSuperAdmin { return true }
+        let isStaff = u.permissions.manager || u.permissions.adminAccess || u.role == .admin || u.role == .manager
+        guard isStaff else { return false }
         switch catalogue {
         case .projects: return u.permissions.projects
         case .smallWorks: return u.permissions.smallWorks
@@ -860,9 +889,8 @@ class UserStore: ObservableObject {
     }
     
     /// Manager account with operative management only (no admin / super admin).
-    /// These users can open Manage Operatives, view profiles, and edit operative details
-    /// via the same EditUserView used by Manage Users (shared AppUser + Operative records).
-    /// They cannot add users — only admins can.
+    /// These users can open Manage Operatives, view profiles, edit operative details,
+    /// and add a new operative. They cannot add managers or admins.
     func isActingManagerOperativeManagementOnly() -> Bool {
         guard let u = displayUser else { return false }
         if u.permissions.operativeMode { return false }
@@ -1560,7 +1588,10 @@ class UserStore: ObservableObject {
     ) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
-        if isOrganizationCreator(userId: userId) { return false }
+        if isOrganizationCreator(userId: userId) {
+            errorMessage = "Could not save this name."
+            return false
+        }
 
         var updated = organizationUsers[index]
         let oldEmailNorm = updated.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1582,9 +1613,29 @@ class UserStore: ObservableObject {
 
         let emailChanged = oldEmailNorm != trimmedEmail
         let orgId = updated.organizationId
+        let previousFirst = organizationUsers[index].firstName
+        let previousSurname = organizationUsers[index].surname
+        var idsToPatch = Set(organizationUsers.filter { person in
+            let email = person.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            return email == oldEmailNorm || email == trimmedEmail
+        }.map(\.id))
+        idsToPatch.insert(userId)
 
         do {
-            try await firebaseBackend.saveUser(updated)
+            for id in idsToPatch {
+                try await firebaseBackend.patchUserIdentity(
+                    userId: id,
+                    firstName: trimmedFirst,
+                    surname: trimmedSurname,
+                    email: trimmedEmail,
+                    mobileNumber: mobileOut
+                )
+            }
+            do {
+                try await firebaseBackend.saveUser(updated)
+            } catch {
+                print("🔥🔥🔥 DEBUG: identity patch stuck; full profile save failed: \(error.localizedDescription)")
+            }
             if emailChanged {
                 try await firebaseBackend.reconcileUserEmailIndex(
                     organizationId: orgId,
@@ -1620,9 +1671,35 @@ class UserStore: ObservableObject {
                 }
             }
 
-            organizationUsers[index] = updated
+            var people = organizationUsers
+            for offset in people.indices where idsToPatch.contains(people[offset].id) {
+                people[offset].firstName = trimmedFirst
+                people[offset].surname = trimmedSurname
+                people[offset].email = trimmedEmail
+                people[offset].mobileNumber = mobileOut
+            }
+            if people.indices.contains(index) {
+                people[index] = updated
+            }
+            organizationUsers = people
+            identityRevision = IdentityRevision(
+                userIds: idsToPatch,
+                previousFirst: previousFirst,
+                previousSurname: previousSurname,
+                firstName: trimmedFirst,
+                surname: trimmedSurname,
+                email: trimmedEmail,
+                mobile: mobileOut,
+                savedAt: Date()
+            )
+            if let orgForRoster = firebaseBackend.currentOrganization?.firestoreDocumentId ?? Optional(updated.organizationId) {
+                RosterRetention.save(organizationUsers, organizationId: orgForRoster)
+            }
             if var cu = currentUser, cu.id == userId {
-                cu = updated
+                cu.firstName = trimmedFirst
+                cu.surname = trimmedSurname
+                cu.email = trimmedEmail
+                cu.mobileNumber = mobileOut
                 currentUser = cu
             }
 
@@ -1647,7 +1724,8 @@ class UserStore: ObservableObject {
                  userId: String,
                  permissions: UserPermissions,
                  holidayStore: HolidayStore? = nil,
-                 linkedOperativeUUID: UUID? = nil
+                 linkedOperativeUUID: UUID? = nil,
+                 role: UserRole? = nil
              ) async -> Bool {
                  guard let firebaseBackend = firebaseBackend else { return false }
 
@@ -1668,15 +1746,17 @@ class UserStore: ObservableObject {
                         // This method must not load/save organisations/.../qualifications or
                         // rewrite operative.qualifications when that flag changes.
                         updatedUser.permissions = sanitized
-
-                        if sanitized.adminAccess {
-                            updatedUser.role = .admin
-                        } else if sanitized.manager {
-                            updatedUser.role = .manager
-                        } else if sanitized.operativeMode {
-                            updatedUser.role = .operative
-                        } else {
-                            updatedUser.role = .viewer
+                        // Role follows Change user type. A toggle save must not invent a different role.
+                        if let role {
+                            updatedUser.role = role
+                        }
+                        let staffMaterialsAlwaysOn = updatedUser.isSuperAdmin
+                            || sanitized.adminAccess
+                            || updatedUser.role == .admin
+                            || ((sanitized.manager || updatedUser.role == .manager) && !sanitized.operativeMode)
+                        if staffMaterialsAlwaysOn {
+                            updatedUser.permissions.materials = true
+                            updatedUser.permissions.siteAudit = true
                         }
 
                         try await firebaseBackend.saveUser(updatedUser)

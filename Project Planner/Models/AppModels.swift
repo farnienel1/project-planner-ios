@@ -161,7 +161,7 @@ nonisolated struct UserPermissions: Codable, Hashable, Sendable {
     var operatives: Bool   // Can see operatives list and details on home screen (Operative Management)
     /// Deprecated — skills catalogue removed from the product. Always persisted as false.
     var skills: Bool
-    var qualifications: Bool // Manage organisation qualification templates (admins always; managers when enabled)
+    var qualifications: Bool // Manage organisation qualification templates (super admin always; admins and managers when enabled)
     var materials: Bool    // Operative materials visibility/access inside project detail
     var projects: Bool     // Can create and manage projects
     var smallWorks: Bool   // Can create and manage small works
