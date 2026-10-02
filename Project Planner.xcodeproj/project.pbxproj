@@ -151,7 +151,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "PLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -f \"$PLIST\" ]; then\n  /usr/libexec/PlistBuddy -c \"Delete :FirebaseAppDelegateProxyEnabled\" \"$PLIST\" >/dev/null 2>&1 || true\n  /usr/libexec/PlistBuddy -c \"Add :FirebaseAppDelegateProxyEnabled bool false\" \"$PLIST\"\n  echo \"FirebaseAppDelegateProxyEnabled=false in $PLIST\"\nfi\n";
+			shellScript = "set +e\nPLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -f \"$PLIST\" ]; then\n  /usr/libexec/PlistBuddy -c \"Delete :FirebaseAppDelegateProxyEnabled\" \"$PLIST\" >/dev/null 2>&1\n  /usr/libexec/PlistBuddy -c \"Add :FirebaseAppDelegateProxyEnabled bool false\" \"$PLIST\"\n  echo \"FirebaseAppDelegateProxyEnabled=false in $PLIST\"\nfi\nexit 0\n";
 		};
 		27F1A0B12F9A100100A1D1F0 /* Generate Third-Party Framework dSYMs */ = {
 			isa = PBXShellScriptBuildPhase;
