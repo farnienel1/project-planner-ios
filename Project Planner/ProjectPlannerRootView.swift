@@ -210,8 +210,10 @@ struct ProjectPlannerRootView: View {
     @State private var hasResolvedInitialAuth = false
     /// Home has drawn at least once. The logo stays up until then so a dark window is not the first thing on the glass.
     @State private var homeHasDrawn = false
-    /// The window that hosts this view is the one on screen. An empty window in front stays white.
+    /// The logo's view has appeared. Home is not mounted until the frame after that.
     @State private var hostWindowReady = false
+    /// Heavy Home is added only after the logo frame. Putting Home in the first frame left a blank window.
+    @State private var launchChromeReady = false
     /// Bumps only when the signed-in user moves from one organisation to another.
     /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
     @State private var contentShellEpoch = 0
@@ -225,7 +227,7 @@ struct ProjectPlannerRootView: View {
 
     private var isSessionLoading: Bool {
         if firebaseBackend.isSwitchingOrganization { return true }
-        if showMainExperience { return !homeHasDrawn || !hostWindowReady }
+        if showMainExperience { return !launchChromeReady || !homeHasDrawn || !hostWindowReady }
         return !hasResolvedInitialAuth
     }
 
@@ -264,21 +266,21 @@ struct ProjectPlannerRootView: View {
     var body: some View {
         ZStack {
             ProjectWorksRevampColors.canvas.ignoresSafeArea()
-            // Home stays mounted. Removing the logo from the tree, or swapping it for a new
-            // root, leaves an empty white window on this iOS even after HOME_APPEARED.
-            if showMainExperience {
+            // The logo is the first frame. Home is added on the next one. A first frame that
+            // is already Home stays blank on this iOS even after HOME_APPEARED.
+            if launchChromeReady && showMainExperience {
                 authenticatedShell
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if hasResolvedInitialAuth {
+            } else if launchChromeReady && hasResolvedInitialAuth {
                 AuthenticationView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            LaunchWindowAnchor(coverVisible: isSessionLoading) {
+            LaunchWindowAnchor {
                 guard !hostWindowReady else { return }
                 hostWindowReady = true
-                print("🔥🔥🔥 DEBUG: PP_LAUNCH_WINDOW claimed")
+                launchChromeReady = true
             }
             .frame(width: 1, height: 1)
             .allowsHitTesting(false)
@@ -361,9 +363,12 @@ struct ProjectPlannerRootView: View {
                     userStore.unblockLaunchProfileIfNeeded()
                 }
                 hasResolvedInitialAuth = true
-                print("🔥🔥🔥 DEBUG: PP splash waiting for Home and its window user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
+                print("🔥🔥🔥 DEBUG: PP splash waiting for Home user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+                if !launchChromeReady {
+                    launchChromeReady = true
+                }
                 if !hostWindowReady {
                     hostWindowReady = true
                     print("🔥🔥🔥 DEBUG: PP_LAUNCH_TIMEOUT window was not claimed")
