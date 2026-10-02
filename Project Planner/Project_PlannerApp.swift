@@ -14,6 +14,13 @@ import FirebaseMessaging
 import UIKit
 import UserNotifications
 
+/// Notification payloads are `[AnyHashable: Any]`, which is not Sendable. The box only
+/// carries the same dictionary onto the main queue.
+private struct NotificationUserInfoBox: @unchecked Sendable {
+    let value: [AnyHashable: Any]
+    init(_ value: [AnyHashable: Any]) { self.value = value }
+}
+
 extension Notification.Name {
     /// Main-thread only. `userInfo["uid"]` is a non-empty String when signed in; absent when signed out.
     static let firebaseAuthUIDChanged = Notification.Name("app.firebaseAuthUIDChanged")
@@ -102,12 +109,12 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let info = response.notification.request.content.userInfo
+        let info = NotificationUserInfoBox(response.notification.request.content.userInfo)
         DispatchQueue.main.async {
             NotificationCenter.default.post(
                 name: .openNotificationDeepLink,
                 object: nil,
-                userInfo: NotificationDeepLink.userInfo(from: info)
+                userInfo: NotificationDeepLink.userInfo(from: info.value)
             )
         }
         completionHandler()
