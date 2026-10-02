@@ -738,32 +738,32 @@ struct DailyOverviewView: View {
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                 }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(unbookedAllNames, id: \.self) { name in
-                            HStack(spacing: 5) {
-                                Text(PlannerUIInitials.from(name))
-                                    .font(.system(size: 8, weight: .medium))
-                                    .foregroundStyle(Color.white)
-                                    .frame(width: 18, height: 18)
-                                    .background(
-                                        LinearGradient(
-                                            colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(unbookedAllNames, id: \.self) { name in
+                        HStack(spacing: 8) {
+                            Text(PlannerUIInitials.from(name))
+                                .font(.system(size: 8, weight: .medium))
+                                .foregroundStyle(Color.white)
+                                .frame(width: 18, height: 18)
+                                .background(
+                                    LinearGradient(
+                                        colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
                                     )
-                                    .clipShape(Circle())
-                                Text(name)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                                    .lineLimit(1)
-                            }
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 4)
-                            .background(ProjectWorksRevampColors.surface)
-                            .clipShape(Capsule())
+                                )
+                                .clipShape(Circle())
+                            Text(name)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
                         }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(ProjectWorksRevampColors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                 }
                 if canBookLabour {
@@ -948,11 +948,15 @@ struct DailyOverviewView: View {
                 day: overviewDate,
                 canEditBookings: canBookLabour,
                 onEditOperative: { booking in
-                    guard let op = operativeStore.operatives.first(where: { $0.id == booking.operativeId }) else { return }
+                    let name = rosterNameForLabourBooking(
+                        operativeId: booking.operativeId,
+                        operatives: operativeStore.allOperatives,
+                        users: userStore.organizationUsers
+                    )
                     bookingEditTarget = .operative(
                         booking: booking,
                         project: project,
-                        personName: op.name
+                        personName: name
                     )
                 },
                 onEditManager: { booking in
@@ -1620,23 +1624,26 @@ struct ProjectBookingCard: View {
         let p = payrollTimePolicy
         var keyed: [(Int, String, ProjectDayPersonRow)] = []
         for b in sortedBookings {
-            guard let op = operativeStore.operatives.first(where: { $0.id == b.operativeId }) else { continue }
+            let personName = rosterNameForLabourBooking(
+                operativeId: b.operativeId,
+                operatives: operativeStore.allOperatives,
+                users: userStore.organizationUsers
+            )
             let sub = b.scheduleCoverageSubtitle(policy: p)
             let row = ProjectDayPersonRow(
                 id: "op-\(b.id.uuidString)",
-                name: op.name,
+                name: personName,
                 subtitle: sub.text,
                 subtitleOvertime: sub.emphasizedOvertime,
                 pillText: b.scheduleCoveragePillHours(policy: p),
                 pillOvertime: sub.emphasizedOvertime,
-                initials: PlannerUIInitials.from(op.name),
-                gradientPair: initialsGradient(for: op.name),
+                initials: PlannerUIInitials.from(personName),
+                gradientPair: initialsGradient(for: personName),
                 operativeBooking: b,
                 managerBooking: nil,
                 subcontractorBooking: nil
             )
-            let tie = op.name
-            keyed.append((b.minutesSortKey(policy: p), tie, row))
+            keyed.append((b.minutesSortKey(policy: p), personName, row))
         }
         for b in managerBookingsThisProjectDay {
             let sub = b.scheduleCoverageSubtitle(policy: p)

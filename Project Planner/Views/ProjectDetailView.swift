@@ -1077,9 +1077,11 @@ struct ProjectDetailView: View {
 
         var rows: [SchedulingGridPersonRow] = []
         for id in opIds {
-            let name = operativeStore.activeOperatives.first(where: { $0.id == id })?.name
-                ?? operativeStore.allOperatives.first(where: { $0.id == id })?.name
-                ?? "Operative"
+            let name = rosterNameForLabourBooking(
+                operativeId: id,
+                operatives: operativeStore.allOperatives,
+                users: userStore.organizationUsers
+            )
             rows.append(makeSchedulingPersonRow(
                 id: "op-\(id.uuidString)",
                 name: name,
@@ -1672,7 +1674,11 @@ struct ProjectDetailView: View {
             } else {
                 ForEach(rows, id: \.id) { booking in
                     schedulingOperativeBookingRow(booking: booking) {
-                        let name = operativeStore.activeOperatives.first { $0.id == booking.operativeId }?.name ?? "Operative"
+                        let name = rosterNameForLabourBooking(
+                            operativeId: booking.operativeId,
+                            operatives: operativeStore.allOperatives,
+                            users: userStore.organizationUsers
+                        )
                         bookingEditTarget = .operative(
                             booking: booking,
                             project: project,
@@ -1689,13 +1695,20 @@ struct ProjectDetailView: View {
         updated.bookingGroupId = nil
         updated.updatedAt = Date()
         await bookingStore.updateBooking(updated)
-        let name = operativeStore.activeOperatives.first { $0.id == booking.operativeId }?.name ?? "Operative"
+        let name = rosterNameForLabourBooking(
+            operativeId: booking.operativeId,
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers
+        )
         bookingEditTarget = .operative(booking: updated, project: project, personName: name)
     }
 
     private func schedulingOperativeBookingRow(booking: Booking, onTap: @escaping () -> Void) -> some View {
-        let op = operativeStore.activeOperatives.first { $0.id == booking.operativeId }
-        let name = op?.name ?? "Unknown operative"
+        let name = rosterNameForLabourBooking(
+            operativeId: booking.operativeId,
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers
+        )
         let initials = PlannerUIInitials.from(name)
         let p = firebaseBackend.payrollPolicy(for: booking.date)
         let hrs = booking.paidBookedHours(policy: p)

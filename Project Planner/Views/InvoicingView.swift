@@ -254,12 +254,14 @@ struct InvoicingView: View {
         let _ = landingVersion
         let reviewUsers = managerReviewUsersIncludingPending()
         let openWeek = pendingReviewWeek ?? WeekRange.current(settings: settings)
-        let awaiting = landingAwaitingTimesheetCount(users: reviewUsers, preferredWeek: openWeek)
+        let awaiting = landingAwaitingTimesheetCount(users: reviewUsers)
         let signed = reviewUsers.filter {
             let draft = TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start)
-            return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: $0) && draft.exportedAt == nil
+            return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: $0) && !TimesheetApprovalPolicy.isExported(draft)
         }.count
-        let exported = reviewUsers.filter { TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start).exportedAt != nil }.count
+        let exported = reviewUsers.filter {
+            TimesheetApprovalPolicy.isExported(TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start))
+        }.count
 
         VStack(spacing: 12) {
             if canShowMyTimesheets {
@@ -394,18 +396,16 @@ struct InvoicingView: View {
         return users
     }
 
-    private func landingAwaitingTimesheetCount(users: [AppUser], preferredWeek: WeekRange) -> Int {
+    private func landingAwaitingTimesheetCount(users: [AppUser]) -> Int {
         var seen = Set<String>()
         for user in users {
-            var starts = Set(TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id))
-            starts.insert(preferredWeek.start)
-            starts.insert(WeekRange.current(settings: settings).start)
-            starts.insert(TimesheetPayrollPolicy.timesheetWeekRange(for: settings).start)
-            for start in starts {
-                let draft = TimesheetDraftStore.load(userId: user.id, weekStart: start)
-                guard TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user) else { continue }
-                let period = TimesheetPayrollPolicy.periodMatchingStoredStart(start, settings: settings)
-                seen.insert("\(user.id)|\(Int(period.start.timeIntervalSince1970))")
+            let documentStarts = TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id)
+            for periodStart in TimesheetApprovalPolicy.awaitingPayPeriodStarts(
+                user: user,
+                documentStarts: documentStarts,
+                settings: settings
+            ) {
+                seen.insert("\(user.id)|\(Int(periodStart.timeIntervalSince1970))")
             }
         }
         return seen.count
@@ -475,24 +475,84 @@ enum TimesheetApprovalPolicy {
         user.hasLineManager
     }
 
+    /// A stored instant before 2020 is a placeholder, not a signature or an export.
+    private static let earliestRealSignature = Date(timeIntervalSince1970: 1_577_836_800)
+
+    static func recordedSignatureDate(_ date: Date?) -> Date? {
+        guard let date, date > earliestRealSignature else { return nil }
+        return date
+    }
+
+    /// The operative signed on device: a real date plus the name or signature image iOS writes together.
+    static func operativeHasSigned(_ draft: TimesheetDraft) -> Bool {
+        guard recordedSignatureDate(draft.operativeSignedAt) != nil else { return false }
+        let name = draft.operativeSignedByName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let image = draft.operativeSignatureImageBase64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !name.isEmpty || !image.isEmpty
+    }
+
+    static func isExported(_ draft: TimesheetDraft) -> Bool {
+        recordedSignatureDate(draft.exportedAt) != nil
+    }
+
     static func isTimesheetFullyApproved(draft: TimesheetDraft, user: AppUser) -> Bool {
-        guard draft.operativeSignedAt != nil else { return false }
+        guard operativeHasSigned(draft) else { return false }
         if requiresLineManagerCounterSign(for: user) {
-            return draft.managerSignedAt != nil
+            return recordedSignatureDate(draft.managerSignedAt) != nil
         }
         return true
     }
 
+    /// Awaiting sign-off means the operative has actually signed, the line manager has not, and the sheet is not exported.
     static func awaitingManagerSignOff(draft: TimesheetDraft, user: AppUser) -> Bool {
         requiresLineManagerCounterSign(for: user)
-            && draft.operativeSignedAt != nil
-            && draft.managerSignedAt == nil
+            && operativeHasSigned(draft)
+            && recordedSignatureDate(draft.managerSignedAt) == nil
+            && !isExported(draft)
+    }
+
+    /// One row per pay period. An exported copy of that period never waits for sign-off.
+    /// A signature on a spare week key cannot promote the period when the period-start sheet is unsigned.
+    static func awaitingPayPeriodStarts(
+        user: AppUser,
+        documentStarts: [Date],
+        settings: OrganizationInvoicingSettings
+    ) -> [Date] {
+        let calendar = Calendar.current
+        var keysByPeriod: [Date: [Date]] = [:]
+        for start in documentStarts {
+            let day = calendar.startOfDay(for: start)
+            let period = TimesheetPayrollPolicy.periodMatchingStoredStart(day, settings: settings, calendar: calendar)
+            let periodDay = calendar.startOfDay(for: period.start)
+            var keys = keysByPeriod[periodDay] ?? []
+            if !keys.contains(where: { calendar.isDate($0, inSameDayAs: day) }) {
+                keys.append(day)
+            }
+            keysByPeriod[periodDay] = keys
+        }
+        var awaiting: [Date] = []
+        for (periodDay, keys) in keysByPeriod {
+            let drafts = keys.map { TimesheetDraftStore.load(userId: user.id, weekStart: $0) }
+            if drafts.contains(where: { isExported($0) }) { continue }
+            let authoritative: TimesheetDraft
+            if let index = keys.firstIndex(where: { calendar.isDate($0, inSameDayAs: periodDay) }) {
+                authoritative = drafts[index]
+            } else if let signed = drafts.first(where: { operativeHasSigned($0) }) {
+                authoritative = signed
+            } else {
+                continue
+            }
+            if awaitingManagerSignOff(draft: authoritative, user: user) {
+                awaiting.append(periodDay)
+            }
+        }
+        return awaiting.sorted(by: >)
     }
 
     static func applySelfApprovalIfNoLineManager(draft: inout TimesheetDraft, user: AppUser) {
         // No line manager: operative signature alone completes approval.
         guard !requiresLineManagerCounterSign(for: user) else { return }
-        guard draft.operativeSignedAt != nil else { return }
+        guard operativeHasSigned(draft) else { return }
         // Clear any stale manager signature fields so UI doesn't imply a counter-sign is pending.
         if draft.managerSignedAt != nil
             || draft.managerSignedByName != nil
@@ -527,7 +587,7 @@ enum TimesheetApprovalPolicy {
     }
 
     static func wasFullyApprovedBeforeExtrasChange(draft: TimesheetDraft, user: AppUser) -> Bool {
-        draft.operativeSignedAt != nil && isTimesheetFullyApproved(draft: draft, user: user)
+        operativeHasSigned(draft) && isTimesheetFullyApproved(draft: draft, user: user)
     }
 }
 
@@ -636,19 +696,19 @@ enum TimesheetDraftStore {
     private static func fromFirestoreMap(_ map: [String: Any]) -> TimesheetDraft? {
         var output = TimesheetDraft()
         output.managerNote = map["managerNote"] as? String ?? ""
-        output.operativeSignedAt = (map["operativeSignedAt"] as? Timestamp)?.dateValue()
+        output.operativeSignedAt = firestoreDate(map["operativeSignedAt"])
         let operativeSignedBy = (map["operativeSignedByName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         output.operativeSignedByName = operativeSignedBy.isEmpty ? nil : operativeSignedBy
         let operativeSignature = (map["operativeSignatureImageBase64"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         output.operativeSignatureImageBase64 = operativeSignature.isEmpty ? nil : operativeSignature
-        output.managerSignedAt = (map["managerSignedAt"] as? Timestamp)?.dateValue()
+        output.managerSignedAt = firestoreDate(map["managerSignedAt"])
         let signedBy = (map["managerSignedByName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         output.managerSignedByName = signedBy.isEmpty ? nil : signedBy
         let signedByUserId = (map["managerSignedByUserId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         output.managerSignedByUserId = signedByUserId.isEmpty ? nil : signedByUserId
         let managerSignature = (map["managerSignatureImageBase64"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         output.managerSignatureImageBase64 = managerSignature.isEmpty ? nil : managerSignature
-        output.exportedAt = (map["exportedAt"] as? Timestamp)?.dateValue()
+        output.exportedAt = firestoreDate(map["exportedAt"])
 
         output.expenseEntries = ((map["expenseEntries"] as? [[String: Any]]) ?? []).compactMap { row in
             guard let idRaw = row["id"] as? String,
@@ -808,7 +868,7 @@ enum TimesheetDraftStore {
     }
 
     static func ingestCloudRow(_ row: [String: Any], userId: String) -> Date? {
-        guard let weekStart = (row["weekStart"] as? Timestamp)?.dateValue() else { return nil }
+        guard let weekStart = firestoreDate(row["weekStart"]) else { return nil }
         let storedStart = Calendar.current.startOfDay(for: weekStart)
         guard let draft = decodeFirestoreMap(row) else { return nil }
         save(draft, userId: userId, weekStart: storedStart)
@@ -914,7 +974,7 @@ private struct MyTimesheetsHubView: View {
                 limit: 200
             ) {
                 for row in rows {
-                    guard let weekStart = (row["weekStart"] as? Timestamp)?.dateValue() else { continue }
+                    guard let weekStart = firestoreDate(row["weekStart"]) else { continue }
                     let storedStart = Calendar.current.startOfDay(for: weekStart)
                     let week = TimesheetPayrollPolicy.periodMatchingStoredStart(storedStart, settings: settings)
                     guard week.start != current.start else { continue }
@@ -1051,12 +1111,12 @@ private struct MyTimesheetsHubView: View {
     private func pastSubtitle(for week: WeekRange) -> String {
         guard let user = userStore.displayUser else { return "Previous period" }
         let draft = TimesheetDraftStore.load(userId: user.id, weekStart: week.start)
-        if draft.exportedAt != nil { return "Exported" }
+        if TimesheetApprovalPolicy.isExported(draft) { return "Exported" }
         if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) { return "Signed off" }
         if TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user) {
             return "Timesheet pending manager signature"
         }
-        if draft.operativeSignedAt != nil { return "Partially signed" }
+        if TimesheetApprovalPolicy.operativeHasSigned(draft) { return "Partially signed" }
         return "Saved draft"
     }
 
@@ -2246,7 +2306,7 @@ private struct PreviousTimesheetsView: View {
             limit: 200
         ) {
             for row in rows {
-                guard let weekStart = (row["weekStart"] as? Timestamp)?.dateValue() else { continue }
+                guard let weekStart = firestoreDate(row["weekStart"]) else { continue }
                 let storedStart = Calendar.current.startOfDay(for: weekStart)
                 let week = TimesheetPayrollPolicy.periodMatchingStoredStart(storedStart, settings: settings)
                 guard let draft = TimesheetDraftStore.decodeFirestoreMap(row) else { continue }
@@ -2463,9 +2523,9 @@ private struct OperativeTimesheetsView: View {
             case .awaiting:
                 return TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user)
             case .signedOff:
-                return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) && draft.exportedAt == nil
+                return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) && !TimesheetApprovalPolicy.isExported(draft)
             case .exported:
-                return draft.exportedAt != nil
+                return TimesheetApprovalPolicy.isExported(draft)
             }
         }
     }
@@ -2731,7 +2791,7 @@ private struct OperativeTimesheetsView: View {
 
     @ViewBuilder
     private func statusPill(for draft: TimesheetDraft, user: AppUser) -> some View {
-        if draft.exportedAt != nil {
+        if TimesheetApprovalPolicy.isExported(draft) {
             Label("Exported", systemImage: "tray.and.arrow.up.fill")
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 8)
@@ -2747,7 +2807,7 @@ private struct OperativeTimesheetsView: View {
                 .background(Color.green.opacity(0.14))
                 .foregroundStyle(.green)
                 .clipShape(Capsule())
-        } else if draft.operativeSignedAt != nil {
+        } else if TimesheetApprovalPolicy.operativeHasSigned(draft) {
             Label("Pending", systemImage: "clock.fill")
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 8)
@@ -2813,14 +2873,13 @@ private struct OperativeTimesheetsView: View {
         var rows: [ManagerTimesheetRow] = []
         var seen = Set<String>()
         for user in managerScopeUsers {
-            var starts = Set(TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id))
-            starts.insert(week.start)
-            starts.insert(WeekRange.current(settings: settings).start)
-            starts.insert(TimesheetPayrollPolicy.timesheetWeekRange(for: settings).start)
-            for start in starts {
-                let draft = TimesheetDraftStore.load(userId: user.id, weekStart: start)
-                guard TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user) else { continue }
-                let period = TimesheetPayrollPolicy.periodMatchingStoredStart(start, settings: settings)
+            let documentStarts = TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id)
+            for periodStart in TimesheetApprovalPolicy.awaitingPayPeriodStarts(
+                user: user,
+                documentStarts: documentStarts,
+                settings: settings
+            ) {
+                let period = TimesheetPayrollPolicy.periodMatchingStoredStart(periodStart, settings: settings)
                 let id = "\(user.id)|\(Int(period.start.timeIntervalSince1970))"
                 guard seen.insert(id).inserted else { continue }
                 rows.append(ManagerTimesheetRow(id: id, user: user, week: period))
@@ -2971,10 +3030,10 @@ private struct OperativeTimesheetsView: View {
                    limit: 400
                ) {
                 for row in cloudRows {
-                    guard let weekStart = (row["weekStart"] as? Timestamp)?.dateValue() else { continue }
+                    guard let weekStart = firestoreDate(row["weekStart"]) else { continue }
                     let day = Calendar.current.startOfDay(for: weekStart)
                     weekStarts.insert(day)
-                    if let decoded = TimesheetDraftStore.decodeFirestoreMap(row), decoded.exportedAt != nil {
+                    if let decoded = TimesheetDraftStore.decodeFirestoreMap(row), TimesheetApprovalPolicy.isExported(decoded) {
                         TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day)
                     }
                 }
@@ -2982,7 +3041,7 @@ private struct OperativeTimesheetsView: View {
 
             for start in weekStarts {
                 let draft = TimesheetDraftStore.load(userId: user.id, weekStart: start)
-                guard draft.exportedAt != nil else { continue }
+                guard TimesheetApprovalPolicy.isExported(draft) else { continue }
                 let period = TimesheetPayrollPolicy.periodMatchingStoredStart(start, settings: settings)
                 let rowId = "\(user.id)|\(Int(period.start.timeIntervalSince1970))"
                 byId[rowId] = ExportedTimesheetHistoryRow(
@@ -3120,13 +3179,18 @@ private struct OperativeTimesheetReviewView: View {
         let isAdmin = viewer.isSuperAdmin || viewer.permissions.adminAccess || viewer.role == .admin
         let isLineManager = operative.isLineManager(viewer.id)
         guard isAdmin || isLineManager else { return false }
-        if draft.exportedAt != nil {
+        if TimesheetApprovalPolicy.isExported(draft) {
             return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative)
         }
-        return operative.hasLineManager && draft.managerSignedAt == nil && draft.operativeSignedAt != nil
+        return operative.hasLineManager
+            && TimesheetApprovalPolicy.recordedSignatureDate(draft.managerSignedAt) == nil
+            && TimesheetApprovalPolicy.operativeHasSigned(draft)
+            && !TimesheetApprovalPolicy.isExported(draft)
     }
 
-    private var managerHasSigned: Bool { draft.managerSignedAt != nil }
+    private var managerHasSigned: Bool {
+        TimesheetApprovalPolicy.recordedSignatureDate(draft.managerSignedAt) != nil
+    }
 
     private var effectiveGrandTotal: Double {
         TimesheetDraftAdjustments.grandTotal(
@@ -3351,8 +3415,8 @@ private struct OperativeTimesheetReviewView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             .buttonStyle(.plain)
-            .disabled(draft.operativeSignedAt == nil)
-            .opacity(draft.operativeSignedAt == nil ? 0.5 : 1)
+            .disabled(!TimesheetApprovalPolicy.operativeHasSigned(draft))
+            .opacity(TimesheetApprovalPolicy.operativeHasSigned(draft) ? 1 : 0.5)
         }
     }
 
@@ -3406,7 +3470,7 @@ private struct OperativeTimesheetReviewView: View {
 
     @ViewBuilder
     private var operativeSignatureBlock: some View {
-        if let signedAt = draft.operativeSignedAt {
+        if TimesheetApprovalPolicy.operativeHasSigned(draft), let signedAt = draft.operativeSignedAt {
             signatureImageView(base64: draft.operativeSignatureImageBase64)
             Text("Operative: \(draft.operativeSignedByName ?? (operative.fullName.isEmpty ? operative.email : operative.fullName)) · \(signedAt.formatted(date: .abbreviated, time: .shortened))")
                 .font(.footnote)
@@ -3592,7 +3656,7 @@ private struct OperativeTimesheetReviewView: View {
 
     @ViewBuilder
     private var statusLine: some View {
-        if draft.operativeSignedAt != nil {
+        if TimesheetApprovalPolicy.operativeHasSigned(draft) {
             Text("Operative signed")
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 8)

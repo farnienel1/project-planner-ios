@@ -181,10 +181,11 @@ private nonisolated func installAuthUIDNotifications() -> AuthStateDidChangeList
     }
 }
 
-/// Working launch shell. Do not replace this with makeKeyAndVisible, a splash, or a scene-phase gate.
+/// Working launch shell. Do not replace this with a key-and-visible call, a splash, or a scene-phase gate.
 /// Those three each left a white window after Home had already appeared.
 /// Only the window that already has a root controller is brought forward. Empty windows are left alone.
-/// UIWindow.appearance is not used.
+/// UIWindow appearance proxies are not used. Do not set a color scheme on this WindowGroup.
+/// scripts/verify-launch-shell.sh fails the Xcode build if this shell is replaced.
 enum LaunchWindowReveal {
     private static var didReveal = false
 
