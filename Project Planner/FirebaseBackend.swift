@@ -823,6 +823,18 @@ class FirebaseBackend: ObservableObject {
         loadOrganizationFromLocalStorage()?.firestoreDocumentId
     }
 
+    /// Organisation id saved on this phone, even when the cached name is missing.
+    func cachedOrganizationIdString() -> String? {
+        let raw = UserDefaults.standard.string(forKey: organizationIdKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return raw.isEmpty ? nil : raw
+    }
+
+    /// Company last written on `users/{uid}.organizationId`. Web and iOS can sit in different companies, so this is not the phone's session.
+    var sharedUserOrganizationId: String?
+    /// Profile this phone is using when that company is not `sharedUserOrganizationId`.
+    var deviceSessionProfile: AppUser?
+
     /// Load organization from local storage (for offline access)
     @MainActor
     private func loadOrganizationFromLocalStorage() -> Organization? {
@@ -1183,27 +1195,35 @@ class FirebaseBackend: ObservableObject {
                 print("🔥🔥🔥 DEBUG: Raw organizationId field type: \(type(of: rawOrg)), value: \(rawOrg)")
             }
             
-            guard let organizationId = organizationIdFromFirestore(userData["organizationId"]) else {
+            let sharedOrg = organizationIdFromFirestore(userData["organizationId"])
+            if let sharedOrg, !sharedOrg.isEmpty {
+                sharedUserOrganizationId = normalizedOrganizationId(sharedOrg)
+            }
+            // This phone keeps the company it last opened. A web switch updates the shared field and must not move iOS.
+            guard let organizationId = await preferredSessionOrganizationId(userId: userId, sharedOrganizationId: sharedOrg) else {
                 print("🔥🔥🔥 DEBUG: ❌ No organizationId found in user document!")
                 print("🔥🔥🔥 DEBUG: User data keys: \(userData.keys.joined(separator: ", "))")
                 print("🔥🔥🔥 DEBUG: User data: \(userData)")
                 print("🔥🔥🔥 DEBUG: This account may need to be linked to an organization.")
                 errorMessage = "Organization not linked. Attempting recovery..."
                 
-                // Try to find or create organization
                 self.currentOrganization = nil
-                clearLocalOrganizationCache()
+                let deviceOrg = cachedOrganizationIdString() ?? ""
+                let deviceStillMember = !deviceOrg.isEmpty && await userBelongsToOrganization(userId: userId, organizationId: deviceOrg)
+                if !deviceStillMember {
+                    clearLocalOrganizationCache()
+                }
                 await attemptToFixMissingOrganization(userId: userId, userData: userData)
                 return
             }
             discoveredOrganizationId = organizationId
             discoveredUserRoleRaw = userData["role"] as? String
             
-            print("🔥🔥🔥 DEBUG: ✅ Found organizationId in user document: \(organizationId)")
+            print("🔥🔥🔥 DEBUG: ✅ Session organisation: \(organizationId) (shared users.organizationId: \(sharedOrg ?? "nil"))")
             
-            // If organizationId is stored as DocumentReference, Firestore rules often deny org/subcollection access.
-            // Migrate to plain string on load so `userOrgIdMatchesPath` succeeds on the next read.
-            if !(userData["organizationId"] is String) {
+            // Migrate a DocumentReference to a string only for the company already stored on the user document.
+            // Do not overwrite a different company — that is another platform's session.
+            if organizationIdsMatch(sharedOrg, organizationId), !(userData["organizationId"] is String) {
                 do {
                     try await ensureUserDocumentLinked(organizationId: organizationId)
                 } catch {
@@ -1445,11 +1465,20 @@ class FirebaseBackend: ObservableObject {
         // Store a plain string: Firestore security rules match `users/{uid}.organizationId` reliably as string;
         // DocumentReference often fails `userOrgIdMatchesPath` in rules (type not treated as path).
         do {
-            try await db.collection("users").document(user.uid).setData([
-                "organizationId": orgIdStr,
-                "updatedAt": Timestamp(date: Date())
-            ], merge: true)
-            shouldReloadOrganization = true
+            let existing = try await db.collection("users").document(user.uid).getDocument(source: .server)
+            let storedOrg = organizationIdFromFirestore(existing.data()?["organizationId"])
+            let storedIsString = existing.data()?["organizationId"] is String
+            let missing = storedOrg == nil || storedOrg?.isEmpty == true
+            let sameOrgNeedsString = organizationIdsMatch(storedOrg, orgIdStr) && !storedIsString
+            if missing || sameOrgNeedsString {
+                try await db.collection("users").document(user.uid).setData([
+                    "organizationId": orgIdStr,
+                    "updatedAt": Timestamp(date: Date())
+                ], merge: true)
+                shouldReloadOrganization = true
+            } else if !organizationIdsMatch(storedOrg, orgIdStr) {
+                print("🔥🔥🔥 DEBUG: repairCurrentUserOrganizationAccess - leaving users.organizationId as \(storedOrg ?? "nil")")
+            }
         } catch {
             print("🔥🔥🔥 DEBUG: repairCurrentUserOrganizationAccess - failed user doc patch: \(error.localizedDescription)")
         }
@@ -3462,7 +3491,7 @@ class FirebaseBackend: ObservableObject {
         }
     }
     
-    private static func parseAppUserDocument(userId: String, data: [String: Any]) -> AppUser {
+    static func parseAppUserDocument(userId: String, data: [String: Any]) -> AppUser {
         let email = data["email"] as? String ?? ""
         let organizationId = organizationIdFromFirestore(data["organizationId"]) ?? ""
         let role = Self.roleFromStoredToken(data["role"] as? String)
@@ -3550,14 +3579,15 @@ class FirebaseBackend: ObservableObject {
         let vatRaw = (data["vatNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let utrRaw = (data["utrNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         
+        let parsedName = Self.personName(from: data)
         return AppUser(
             id: userId,
             email: email,
             organizationId: organizationId,
             role: resolvedRole,
             createdAt: createdAt,
-            firstName: data["firstName"] as? String ?? "",
-            surname: data["surname"] as? String ?? "",
+            firstName: parsedName.first,
+            surname: parsedName.surname,
             mobileNumber: data["mobileNumber"] as? String,
             isActive: firestoreUserIsActive(from: data),
             passwordSet: {
@@ -3595,6 +3625,23 @@ class FirebaseBackend: ObservableObject {
         )
     }
     
+    /// Reads the name the list shows. Website rows sometimes store `lastName` or a single `name`.
+    private static func personName(from data: [String: Any]) -> (first: String, surname: String) {
+        func text(_ key: String) -> String {
+            (data[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        var first = text("firstName")
+        var surname = text("surname")
+        if surname.isEmpty { surname = text("lastName") }
+        if first.isEmpty && surname.isEmpty {
+            let combined = text("displayName").isEmpty ? text("name") : text("displayName")
+            let parts = combined.split(separator: " ", maxSplits: 1).map(String.init)
+            if let given = parts.first, !given.isEmpty { first = given }
+            if parts.count > 1 { surname = parts[1] }
+        }
+        return (first, surname)
+    }
+
     /// "Manager", "managers", "administrator", and the org members-map token all count.
     /// A strict `UserRole(rawValue:)` miss used to leave the person on no list.
     private static func roleFromStoredToken(_ raw: String?) -> UserRole {
@@ -4522,7 +4569,7 @@ class FirebaseBackend: ObservableObject {
             "weeklyReports": user.permissions.weeklyReports,
             "dailyOverview": user.permissions.dailyOverview,
             "subContractors": user.permissions.subContractors,
-            "siteAudit": user.permissions.siteAudit,
+            "siteAudit": operativeOnly ? user.permissions.siteAudit : true,
             "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory,
             "isSuperAdmin": isSuperAdminToSave,
             "policyAccepted": user.policyAccepted,
@@ -4620,7 +4667,69 @@ class FirebaseBackend: ObservableObject {
             userData["utrNumber"] = FieldValue.delete()
         }
         
+        if sessionsAreSeparate(for: user) {
+            try await saveSeparateDeviceSession(user, payload: userData)
+            return
+        }
         try await db.collection("users").document(user.id).setData(userData, merge: true)
+    }
+
+    /// True when this phone is in a different company from `users/{uid}.organizationId`.
+    private func sessionsAreSeparate(for user: AppUser) -> Bool {
+        guard user.id == auth.currentUser?.uid,
+              let shared = sharedUserOrganizationId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !shared.isEmpty else { return false }
+        return !organizationIdsMatch(shared, user.organizationId)
+    }
+
+    /// Writes the phone's profile onto `orgMemberships/{org}` and leaves the shared user document's company alone.
+    /// Name, email, and phone still update on `users/{uid}` so a profile save sticks.
+    private func saveSeparateDeviceSession(_ user: AppUser, payload: [String: Any]) async throws {
+        try await patchUserIdentity(
+            userId: user.id,
+            firstName: user.firstName,
+            surname: user.surname,
+            email: user.email,
+            mobileNumber: user.mobileNumber
+        )
+        try await snapshotCurrentUserOntoMembership(
+            userId: user.id,
+            organizationId: user.organizationId,
+            userData: payload
+        )
+        deviceSessionProfile = user
+    }
+
+    /// Name, email, and phone only. Does not touch organisation, role, or permission flags.
+    func patchUserIdentity(
+        userId: String,
+        firstName: String,
+        surname: String,
+        email: String,
+        mobileNumber: String?
+    ) async throws {
+        let trimmedFirst = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSurname = surname.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let display = [trimmedFirst, trimmedSurname].filter { !$0.isEmpty }.joined(separator: " ")
+        var payload: [String: Any] = [
+            "firstName": trimmedFirst,
+            "surname": trimmedSurname,
+            "lastName": trimmedSurname,
+            "email": trimmedEmail,
+            "updatedAt": Timestamp(date: Date())
+        ]
+        if !display.isEmpty {
+            payload["name"] = display
+            payload["displayName"] = display
+        }
+        let trimmedMobile = mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedMobile.isEmpty {
+            payload["mobileNumber"] = trimmedMobile
+        } else {
+            payload["mobileNumber"] = FieldValue.delete()
+        }
+        try await db.collection("users").document(userId).updateData(payload)
     }
 
     func recordLegalPackAcceptance(
@@ -6156,29 +6265,23 @@ class FirebaseBackend: ObservableObject {
                 let orgIdStr = normalizedOrganizationId(organizationId)
                 // Migrate DocumentReference (or any non-string) to string so Firestore rules `userOrgIdMatchesPath` succeeds.
                 let storedAsPlainString = userData["organizationId"] is String
+                let fieldMissing = currentOrgId == nil || currentOrgId?.isEmpty == true
                 let needsOrgStringMigration = organizationIdsMatch(currentOrgId, organizationId) && !storedAsPlainString
                 
-                if !organizationIdsMatch(currentOrgId, organizationId) || needsOrgStringMigration {
+                if fieldMissing || needsOrgStringMigration {
                     if needsOrgStringMigration {
                         print("🔥🔥🔥 DEBUG: [ensureUserDocumentLinked] Migrating organizationId to string for rules compatibility (was ref/other type)")
                     } else {
-                        print("🔥🔥🔥 DEBUG: [ensureUserDocumentLinked] Current orgId: \(currentOrgId ?? "nil"), updating to: \(organizationId)")
+                        print("🔥🔥🔥 DEBUG: [ensureUserDocumentLinked] organizationId missing, setting: \(organizationId)")
                     }
                     try await userDocRef.updateData([
                         "organizationId": orgIdStr,
                         "updatedAt": Timestamp(date: Date())
                     ])
                     print("🔥🔥🔥 DEBUG: [ensureUserDocumentLinked] ✅ User document updated successfully")
-                    
-                    // Verify the update
-                    let verifyDoc = try await userDocRef.getDocument(source: .server)
-                    if let verifyData = verifyDoc.data(),
-                       let verifiedOrgId = organizationIdFromFirestore(verifyData["organizationId"]),
-                       organizationIdsMatch(verifiedOrgId, organizationId) {
-                        print("🔥🔥🔥 DEBUG: [ensureUserDocumentLinked] ✅ Verification passed - organizationId is now: \(verifiedOrgId)")
-                    } else {
-                        print("🔥🔥🔥 DEBUG: [ensureUserDocumentLinked] ⚠️ Verification failed - update may not have propagated")
-                    }
+                } else if !organizationIdsMatch(currentOrgId, organizationId) {
+                    // Another platform is in a different company. Membership still allows this phone to use its own session.
+                    print("🔥🔥🔥 DEBUG: [ensureUserDocumentLinked] Keeping users.organizationId \(currentOrgId ?? "nil"); this phone is in \(organizationId)")
                 } else {
                     print("🔥🔥🔥 DEBUG: [ensureUserDocumentLinked] ✅ User document already has correct organizationId: \(organizationId)")
                 }
@@ -6492,9 +6595,8 @@ class FirebaseBackend: ObservableObject {
         isBootstrappingOrgDataLoad = false
         launchQuietUntil = nil
 
-        // Clear current organization to force fresh load
+        // Refresh the company already chosen on this phone. Do not adopt another platform's organisation.
         currentOrganization = nil
-        clearLocalOrganizationCache()
         
         // First, try normal load
         await loadUserOrganization(userId: userId)
@@ -6744,77 +6846,10 @@ class FirebaseBackend: ObservableObject {
     /// Returns true if the app switched `currentOrganization` and persisted the new org locally.
     @MainActor
     func autoSwitchToOrganizationWithWorkData(userId: String, currentOrganizationId: String) async -> Bool {
-        do {
-            print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] Scanning user memberships for work data...")
-            let memberships = await fetchOrganizationsForCurrentUser()
-            guard !memberships.isEmpty else {
-                print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] No accessible organizations found for user")
-                return false
-            }
-
-            var bestOrganization: Organization?
-            var bestScore = -1
-            let normalizedCurrentOrgId = currentOrganizationId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-
-            for membership in memberships {
-                let orgId = membership.id
-                let orgRef = db.collection("organizations").document(orgId)
-                let projectsCount: Int
-                let smallWorksCount: Int
-                let clientsCount: Int
-                do {
-                    projectsCount = try await orgRef.collection("projects").limit(to: 200).getDocuments(source: .server).documents.count
-                    smallWorksCount = try await orgRef.collection("smallWorks").limit(to: 200).getDocuments(source: .server).documents.count
-                    clientsCount = try await orgRef.collection("clients").limit(to: 200).getDocuments(source: .server).documents.count
-                } catch {
-                    if isFirestorePermissionDenied(error) {
-                        print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] Skipping org \(orgId) due to permission denial while counting")
-                        continue
-                    }
-                    throw error
-                }
-
-                // Prefer orgs with actual work data first, then use clients as tie-breaker.
-                let score = (projectsCount * 1000) + (smallWorksCount * 100) + clientsCount
-                print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] Org \(orgId) counts — projects: \(projectsCount), smallWorks: \(smallWorksCount), clients: \(clientsCount), score: \(score)")
-
-                if score > bestScore {
-                    bestScore = score
-                    bestOrganization = Organization(
-                        id: UUID(uuidString: orgId) ?? UUID(),
-                        firestoreDocumentId: orgId,
-                        name: membership.name,
-                        settings: OrganizationSettings()
-                    )
-                }
-            }
-
-            guard let targetOrg = bestOrganization else {
-                print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] No accessible organizations found for user")
-                return false
-            }
-
-            let normalizedTarget = targetOrg.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let targetHasWorkData = bestScore >= 100 // at least one project/small work
-            guard targetHasWorkData, normalizedTarget != normalizedCurrentOrgId else {
-                print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] No better org with work data found")
-                return false
-            }
-
-            print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] Switching organization to \(targetOrg.name) (\(targetOrg.firestoreDocumentId))")
-            currentOrganization = targetOrg
-            storeOrganizationLocally(targetOrg)
-            do {
-                try await ensureUserDocumentLinked(organizationId: targetOrg.firestoreDocumentId)
-            } catch {
-                print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] Could not update user org link immediately: \(error.localizedDescription)")
-            }
-            NotificationCenter.default.post(name: .organizationDidLoad, object: nil)
-            return true
-        } catch {
-            print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] Failed: \(error.localizedDescription)")
-            return false
-        }
+        // An empty project list must not move this phone to another company. The user stays until they tap Switch organisation.
+        print("🔥🔥🔥 DEBUG: [OrgAutoSwitch] Skipped — this phone keeps \(currentOrganizationId)")
+        _ = userId
+        return false
     }
 }
 

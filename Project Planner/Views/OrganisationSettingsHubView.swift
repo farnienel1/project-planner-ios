@@ -236,9 +236,10 @@ struct OrganisationSettingsHubView: View {
                                         .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                                 )
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Delete organisation")
+                                Text("Delete Organisation and Cancel Project Planner Membership")
                                     .font(.system(size: 13, weight: .medium))
                                     .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                                    .fixedSize(horizontal: false, vertical: true)
                                 Text("Permanent · cannot be undone")
                                     .font(.system(size: 11, weight: .regular))
                                     .foregroundStyle(ProjectWorksRevampColors.muted)
@@ -276,10 +277,10 @@ struct OrganisationSettingsHubView: View {
             CompanyDetailsEditView()
                 .environmentObject(firebaseBackend)
         }
-        .alert("Delete organisation", isPresented: $showingDeleteInfo) {
+        .alert("Delete Organisation and Cancel Project Planner Membership", isPresented: $showingDeleteInfo) {
             Button("OK", role: .cancel) { }
         } message: {
-            Text("Organisation deletion is not available in the app. Contact support if you need to close an account.")
+            Text("Subscriptions can be turned off via the web app. To delete and organisation entirely, please contact info@projectplanner.us")
         }
     }
 

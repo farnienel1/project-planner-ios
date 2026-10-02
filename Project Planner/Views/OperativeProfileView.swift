@@ -155,7 +155,7 @@ struct OperativeProfileView: View {
                                 .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(ManageUserProfilePalette.listBlue)
                         }
-                        .accessibilityLabel("Operative settings")
+                        .accessibilityLabel("Settings")
                     }
                 }
             }

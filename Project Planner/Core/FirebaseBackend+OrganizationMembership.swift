@@ -185,36 +185,39 @@ extension FirebaseBackend {
         let userDocRef = db.collection("users").document(userId)
         let userDoc = try await userDocRef.getDocument()
         let userData = userDoc.data() ?? [:]
-        let leavingOrgId = normalizedOrganizationId(organizationIdFromFirestore(userData["organizationId"]) ?? "")
-
-        if userDoc.exists, !leavingOrgId.isEmpty,
-           leavingOrgId.compare(trimmedId, options: [.caseInsensitive, .diacriticInsensitive]) != .orderedSame {
-            try await snapshotCurrentUserOntoMembership(
-                userId: userId,
-                organizationId: leavingOrgId,
-                userData: userData
-            )
+        let sharedOrgId = normalizedOrganizationId(organizationIdFromFirestore(userData["organizationId"]) ?? "")
+        if !sharedOrgId.isEmpty {
+            sharedUserOrganizationId = sharedOrgId
+        }
+        // Snapshot the company this phone is leaving. Do not copy that profile onto users/{uid},
+        // because that document is the other platform's current company.
+        let leavingOrgId = normalizedOrganizationId(currentOrganization?.firestoreDocumentId ?? "")
+        if !leavingOrgId.isEmpty,
+           !organizationIdsMatch(leavingOrgId, trimmedId) {
+            if let sessionProfile = deviceSessionProfile,
+               organizationIdsMatch(sessionProfile.organizationId, leavingOrgId) {
+                try await snapshotCurrentUserOntoMembership(
+                    userId: userId,
+                    organizationId: leavingOrgId,
+                    userData: membershipPayload(from: sessionProfile)
+                )
+            } else if userDoc.exists, organizationIdsMatch(sharedOrgId, leavingOrgId) {
+                try await snapshotCurrentUserOntoMembership(
+                    userId: userId,
+                    organizationId: leavingOrgId,
+                    userData: userData
+                )
+            }
         }
 
-        let destinationAccountActive: Bool
-        if userDoc.exists {
-            destinationAccountActive = try await applyDestinationMembershipOntoUser(
-                userId: userId,
-                organizationId: trimmedId,
-                roleInOrg: roleInOrg,
-                userEmail: userEmail
-            )
-        } else {
-            destinationAccountActive = true
-            try await userDocRef.setData([
-                "email": userEmail,
-                "organizationId": trimmedId,
-                "role": roleInOrg,
-                "isActive": true,
-                "createdAt": Timestamp(date: Date()),
-                "updatedAt": Timestamp(date: Date()),
-            ])
-        }
+        let destinationAccountActive = await loadDeviceSessionProfile(
+            userId: userId,
+            organizationId: trimmedId,
+            roleInOrg: roleInOrg,
+            userEmail: userEmail,
+            creatorUserId: creatorUserId,
+            sharedUserData: userData
+        )
 
         if members[userId] == nil {
             var membersUpdate = members
@@ -228,7 +231,6 @@ extension FirebaseBackend {
         stopScheduleLiveListeners()
         let organization = buildOrganizationFromDocument(orgId: trimmedId, data: orgData)
         currentOrganization = organization
-        userRole = UserRole(rawValue: roleInOrg) ?? .basic
         errorMessage = nil
         storeOrganizationLocally(organization)
         hasBootstrappedOrgDataLoad = false
@@ -278,5 +280,234 @@ extension FirebaseBackend {
         var organization = Organization.make(fromFirestoreId: orgId, data: data, settings: orgSettings)
         Self.applyPayrollPolicyFields(from: data, to: &organization)
         return organization
+    }
+
+    /// Phone session wins when this person still belongs to the company saved on the device.
+    @MainActor
+    func preferredSessionOrganizationId(userId: String, sharedOrganizationId: String?) async -> String? {
+        let device = normalizedOrganizationId(cachedOrganizationIdString() ?? "")
+        if !device.isEmpty, await userBelongsToOrganization(userId: userId, organizationId: device) {
+            return device
+        }
+        let shared = normalizedOrganizationId(sharedOrganizationId ?? "")
+        return shared.isEmpty ? nil : shared
+    }
+
+    @MainActor
+    func userBelongsToOrganization(userId: String, organizationId: String) async -> Bool {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !userId.isEmpty, !orgId.isEmpty else { return false }
+        do {
+            let doc = try await db.collection("organizations").document(orgId).getDocument(source: .server)
+            guard doc.exists, let data = doc.data() else { return false }
+            let members = data["members"] as? [String: String] ?? [:]
+            if members[userId] != nil { return true }
+            return (data["creatorUserId"] as? String) == userId
+        } catch {
+            // Offline: keep the company already stored on this phone.
+            return organizationIdsMatch(orgId, cachedOrganizationIdString())
+        }
+    }
+
+    /// Loads this phone's rights for `organizationId` into memory. Does not write `users/{uid}`.
+    @MainActor
+    @discardableResult
+    func loadDeviceSessionProfile(
+        userId: String,
+        organizationId: String,
+        roleInOrg: String,
+        userEmail: String,
+        creatorUserId: String?,
+        sharedUserData: [String: Any]
+    ) async -> Bool {
+        let orgId = normalizedOrganizationId(organizationId)
+        let base = Self.parseAppUserDocument(userId: userId, data: sharedUserData)
+        if organizationIdsMatch(sharedUserOrganizationId, orgId) {
+            deviceSessionProfile = nil
+            userRole = base.role
+            return base.isActive
+        }
+        let membershipSnap = try? await orgMembershipsCollection(userId: userId).document(orgId).getDocument(source: .server)
+        let isCreator = creatorUserId == userId
+        let accountActive = firestoreAccountActive(from: membershipSnap?.data())
+
+        var profile: AppUser
+        if let data = membershipSnap?.data(), membershipSnap?.exists == true {
+            profile = Self.parseAppUserDocument(userId: userId, data: data)
+            profile.organizationId = orgId
+            profile.isActive = accountActive
+        } else {
+            let shaped = Self.sessionPermissions(forMembersRole: roleInOrg, isCreator: isCreator)
+            profile = base
+            profile.organizationId = orgId
+            profile.role = shaped.role
+            profile.permissions = shaped.permissions
+            profile.isSuperAdmin = shaped.isSuperAdmin
+            profile.isActive = true
+        }
+        profile.id = userId
+        profile.email = base.email.isEmpty ? userEmail : base.email
+        profile.firstName = base.firstName
+        profile.surname = base.surname
+        profile.mobileNumber = base.mobileNumber
+        profile.profilePhotoURL = base.profilePhotoURL
+        if !organizationIdsMatch(sharedUserOrganizationId, orgId) {
+            deviceSessionProfile = profile
+        } else {
+            deviceSessionProfile = nil
+        }
+        userRole = profile.role
+        return profile.isActive
+    }
+
+    /// Applies the phone's company onto a profile loaded from `users/{uid}` without writing that document.
+    @MainActor
+    func applyDeviceSessionIfNeeded(to user: AppUser) async -> AppUser {
+        let shared = normalizedOrganizationId(user.organizationId)
+        if !shared.isEmpty {
+            sharedUserOrganizationId = shared
+        }
+        let sessionOrg = normalizedOrganizationId(
+            currentOrganization?.firestoreDocumentId ?? cachedOrganizationIdString() ?? ""
+        )
+        guard !sessionOrg.isEmpty, !organizationIdsMatch(sessionOrg, shared) else {
+            deviceSessionProfile = nil
+            return user
+        }
+        guard await userBelongsToOrganization(userId: user.id, organizationId: sessionOrg) else {
+            return user
+        }
+        let orgDoc = try? await db.collection("organizations").document(sessionOrg).getDocument(source: .server)
+        let orgData = orgDoc?.data() ?? [:]
+        let members = orgData["members"] as? [String: String] ?? [:]
+        let creator = orgData["creatorUserId"] as? String
+        let role = members[user.id] ?? (creator == user.id ? "admin" : "member")
+        var sharedData: [String: Any] = [
+            "email": user.email,
+            "firstName": user.firstName,
+            "surname": user.surname,
+            "organizationId": shared,
+            "role": user.role.rawValue,
+            "isActive": user.isActive
+        ]
+        if let mobile = user.mobileNumber { sharedData["mobileNumber"] = mobile }
+        if let photo = user.profilePhotoURL { sharedData["profilePhotoURL"] = photo }
+        _ = await loadDeviceSessionProfile(
+            userId: user.id,
+            organizationId: sessionOrg,
+            roleInOrg: role,
+            userEmail: user.email,
+            creatorUserId: creator,
+            sharedUserData: sharedData
+        )
+        return deviceSessionProfile ?? user
+    }
+
+    private func membershipPayload(from user: AppUser) -> [String: Any] {
+        var data: [String: Any] = [
+            "email": user.email,
+            "organizationId": user.organizationId,
+            "role": user.role.rawValue,
+            "firstName": user.firstName,
+            "surname": user.surname,
+            "lastName": user.surname,
+            "isActive": user.isActive,
+            "passwordSet": user.passwordSet,
+            "adminAccess": user.permissions.adminAccess,
+            "manager": user.permissions.manager,
+            "operatives": user.permissions.operatives,
+            "skills": false,
+            "qualifications": user.permissions.qualifications,
+            "materials": user.permissions.operativeMode ? user.permissions.materials : true,
+            "projects": user.permissions.projects,
+            "smallWorks": user.permissions.smallWorks,
+            "operativeMode": user.permissions.operativeMode,
+            "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
+            "weeklyReports": user.permissions.weeklyReports,
+            "dailyOverview": user.permissions.dailyOverview,
+            "subContractors": user.permissions.subContractors,
+            "siteAudit": user.permissions.operativeMode ? user.permissions.siteAudit : true,
+            "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory,
+            "isSuperAdmin": user.isSuperAdmin,
+            "accountActive": user.isActive
+        ]
+        if let mobile = user.mobileNumber, !mobile.isEmpty {
+            data["mobileNumber"] = mobile
+        }
+        return data
+    }
+
+    /// No membership snapshot yet: use the members-map role only. Do not copy toggles from another company.
+    private static func sessionPermissions(forMembersRole role: String, isCreator: Bool) -> (role: UserRole, permissions: UserPermissions, isSuperAdmin: Bool) {
+        if isCreator {
+            return (
+                .admin,
+                UserPermissions(
+                    adminAccess: true,
+                    manager: true,
+                    operatives: true,
+                    qualifications: true,
+                    materials: true,
+                    projects: true,
+                    smallWorks: true,
+                    operativeMode: false,
+                    siteAudit: true
+                ),
+                true
+            )
+        }
+        let token = role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if token.contains("admin") {
+            return (
+                .admin,
+                UserPermissions(
+                    adminAccess: true,
+                    manager: true,
+                    materials: true,
+                    operativeMode: false,
+                    siteAudit: true
+                ),
+                false
+            )
+        }
+        if token.contains("operative") {
+            return (
+                .operative,
+                UserPermissions(
+                    manager: false,
+                    adminAccess: false,
+                    materials: false,
+                    operativeMode: true,
+                    siteAudit: true,
+                    wholesalersOrderHistory: false
+                ),
+                false
+            )
+        }
+        if token.contains("manager") {
+            return (
+                .manager,
+                UserPermissions(
+                    adminAccess: false,
+                    manager: true,
+                    materials: true,
+                    operativeMode: false,
+                    siteAudit: true
+                ),
+                false
+            )
+        }
+        return (
+            .viewer,
+            UserPermissions(
+                adminAccess: false,
+                manager: false,
+                materials: false,
+                operativeMode: false,
+                siteAudit: false,
+                wholesalersOrderHistory: false
+            ),
+            false
+        )
     }
 }

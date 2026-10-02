@@ -28,6 +28,7 @@ struct OperativesView: View {
     @State private var selectedFilterType: FilterType = .firstName
     @State private var showingFilterOptions = false
     @State private var selectedUserForProfile: AppUser? = nil
+    @State private var showingAddOperative = false
     @State private var rosterSegment: UserRosterSegment = .active
     @State private var operativeToDelete: Operative? = nil
     @State private var liveSearchText = ""
@@ -84,7 +85,15 @@ struct OperativesView: View {
                             .font(.system(size: 17, weight: .semibold))
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if userStore.canViewOperatives() {
+                        Button {
+                            showingAddOperative = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel("Add operative")
+                    }
                     Button(action: { showingFilterOptions.toggle() }) {
                         Image(systemName: "line.3.horizontal.decrease.circle")
                     }
@@ -99,6 +108,12 @@ struct OperativesView: View {
             }
         .sheet(isPresented: $showingFilterOptions) {
             OperativeFilterOptionsView(selectedFilter: $selectedFilterType, filterText: $filterText)
+        }
+        .sheet(isPresented: $showingAddOperative, onDismiss: {
+            Task { await userStore.loadOrganizationUsers() }
+        }) {
+            AddUserView(mode: .managerAddingOperative)
+                .environmentObject(userStore)
         }
         .sheet(item: $selectedUserForProfile) { user in
             OperativeProfileView(user: user)

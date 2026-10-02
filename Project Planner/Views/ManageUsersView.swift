@@ -1307,6 +1307,8 @@ struct EditUserView: View {
     @State private var editSurname: String
     @State private var editEmail: String
     @State private var editMobile: String
+    @State private var didSyncIdentityDrafts = false
+    @State private var showingAdminAccessLockedMessage = false
     @State private var showingProfilePhotoSourcePicker = false
     @State private var profilePhotoPickerSource: UIImagePickerController.SourceType = .photoLibrary
     @State private var showingProfileImagePicker = false
@@ -1425,15 +1427,24 @@ struct EditUserView: View {
 
     private var identityDirty: Bool {
         guard canEditIdentityDetails else { return false }
+        let baseline = displayedUser
         let f = editFirstName.trimmingCharacters(in: .whitespacesAndNewlines)
         let s = editSurname.trimmingCharacters(in: .whitespacesAndNewlines)
         let e = editEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let m = editMobile.trimmingCharacters(in: .whitespacesAndNewlines)
-        let origM = user.mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return f != user.firstName.trimmingCharacters(in: .whitespacesAndNewlines) ||
-            s != user.surname.trimmingCharacters(in: .whitespacesAndNewlines) ||
-            e != user.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ||
+        let origM = baseline.mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return f != baseline.firstName.trimmingCharacters(in: .whitespacesAndNewlines) ||
+            s != baseline.surname.trimmingCharacters(in: .whitespacesAndNewlines) ||
+            e != baseline.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ||
             m != origM
+    }
+
+    /// Manager accounts turn Admin Access on through Change user type, not this switch.
+    private var isManagerLevelAccount: Bool {
+        if user.isSuperAdmin || displayedUser.isSuperAdmin { return false }
+        if permissions.adminAccess || user.role == .admin || displayedUser.role == .admin { return false }
+        if permissions.operativeMode { return false }
+        return permissions.manager || user.role == .manager || displayedUser.role == .manager
     }
 
     private var shouldShowAnnualLeaveAccessToggle: Bool {
@@ -1828,6 +1839,11 @@ struct EditUserView: View {
             editUserFormSections
         }
         .onAppear(perform: syncEditUserDraftsFromStore)
+        .alert("Admin Access", isPresented: $showingAdminAccessLockedMessage) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Change user type at the bottom of their profile, to enable admin level access.")
+        }
         .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
         .navigationTitle(editNavigationTitle)
         .navigationBarTitleDisplayMode(.inline)
@@ -1911,6 +1927,8 @@ struct EditUserView: View {
     }
 
     private func syncEditUserDraftsFromStore() {
+        guard !didSyncIdentityDrafts else { return }
+        didSyncIdentityDrafts = true
         let u = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
         editFirstName = u.firstName
         editSurname = u.surname
@@ -2246,11 +2264,18 @@ struct EditUserView: View {
             operative: operativeConfig
         )
         newPerms.skills = false
+        let nextRole: UserRole
+        switch changeUserTypeDraft {
+        case .operative: nextRole = .operative
+        case .manager: nextRole = .manager
+        case .administrator: nextRole = .admin
+        }
         let ok = await userStore.updateUserPermissions(
             userId: user.id,
             permissions: newPerms,
             holidayStore: holidayStore,
-            linkedOperativeUUID: linkedOperativeForUser?.id
+            linkedOperativeUUID: linkedOperativeForUser?.id,
+            role: nextRole
         )
         await MainActor.run { isApplyingUserType = false }
         if ok {
@@ -3020,10 +3045,6 @@ struct EditUserView: View {
                                 operativeMaterialsAndSiteAuditRows
                             } else {
                                 adminAndManagerCapabilityPermissionRows
-                                if !permissions.adminAccess {
-                                    ManageUserCardDivider()
-                                    nonOperativeMaterialsAndSiteAuditSummaryRows
-                                }
                             }
                         }
                     }
@@ -3066,17 +3087,11 @@ struct EditUserView: View {
                         title: "Admin Access",
                         description: "Can add and manage users.",
                         isOn: $permissions.adminAccess,
-                        isDisabled: false
+                        isDisabled: isManagerLevelAccount,
+                        onDisabledTap: {
+                            showingAdminAccessLockedMessage = true
+                        }
                     )
-                }
-                .onChange(of: permissions.adminAccess) { _, newValue in
-                    if newValue {
-                        permissions.manager = true
-                        permissions.projects = true
-                        permissions.smallWorks = true
-                        permissions.weeklyReports = true
-                        permissions.dailyOverview = true
-                    }
                 }
 
                 ManageUserCardDivider()
@@ -3195,39 +3210,14 @@ struct EditUserView: View {
                 iconName: "building.2.fill",
                 iconBackground: ManageUserProfilePalette.chipAmberBg,
                 iconForeground: ManageUserProfilePalette.chipAmberFg,
-                title: "Wholesalers (order & quote history)",
-                description: "Can view quote and order history in Wholesalers and on project materials. Wholesaler directory editing remains available to all managers.",
+                title: "Wholesalers",
+                description: "Can view and manage the Wholesalers page, including quote and order history. If off, that page is not available.",
                 isOn: $permissions.wholesalersOrderHistory,
                 isDisabled: false
             )
         }
     }
 
-    /// Read-only view of operative-only flags when editing a manager/admin account (not in operative mode).
-    private var nonOperativeMaterialsAndSiteAuditSummaryRows: some View {
-        Group {
-            ManageUserExpandablePermissionToggleRow(
-                iconName: "shippingbox.fill",
-                iconBackground: ManageUserProfilePalette.chipAmberBg,
-                iconForeground: ManageUserProfilePalette.chipAmberFg,
-                title: "Materials (operative)",
-                description: "Shown for reference on this account. Turn on operative mode to edit, or use Change user type.",
-                isOn: $permissions.materials,
-                isDisabled: true
-            )
-            ManageUserCardDivider()
-            ManageUserExpandablePermissionToggleRow(
-                iconName: "checklist",
-                iconBackground: ManageUserProfilePalette.chipTealBg,
-                iconForeground: ManageUserProfilePalette.chipTealFg,
-                title: "Site Audit (operative)",
-                description: "Shown for reference on this account. Turn on operative mode to edit, or use Change user type.",
-                isOn: $permissions.siteAudit,
-                isDisabled: true
-            )
-        }
-    }
-    
     private func saveChanges() {
         isUpdating = true
         Task {
@@ -3287,20 +3277,6 @@ struct EditUserView: View {
     private func runPersistUserEdits(dayRateEffectiveAt: Date?, employmentTypeEffectiveAt: Date?) async {
         await MainActor.run { isUpdating = true }
 
-        var identitySuccess = true
-        if canEditIdentityDetails && identityDirty {
-            identitySuccess = await userStore.updateUserIdentityProfile(
-                userId: user.id,
-                firstName: editFirstName,
-                surname: editSurname,
-                email: editEmail,
-                mobileNumber: editMobile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? nil
-                    : editMobile.trimmingCharacters(in: .whitespacesAndNewlines),
-                operativeStore: operativeStore
-            )
-        }
-
         let subjectUser = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
         let linkedOpId = operativeStore.allOperatives.first(where: {
             $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
@@ -3343,6 +3319,14 @@ struct EditUserView: View {
                 didPersistPermissions = true
                 var outgoing = permissions
                 outgoing.skills = false
+                let staffMaterialsAlwaysOn = subjectUser.isSuperAdmin
+                    || outgoing.adminAccess
+                    || subjectUser.role == .admin
+                    || ((outgoing.manager || subjectUser.role == .manager) && !outgoing.operativeMode)
+                if staffMaterialsAlwaysOn {
+                    outgoing.materials = true
+                    outgoing.siteAudit = true
+                }
                 if !outgoing.adminAccess && !outgoing.operativeMode {
                     outgoing.manager = true
                 }
@@ -3475,6 +3459,20 @@ struct EditUserView: View {
                 userId: user.id,
                 vatNumber: normalizedVATDraft,
                 utrNumber: normalizedUTRDraft
+            )
+        }
+
+        var identitySuccess = true
+        if canEditIdentityDetails && identityDirty {
+            identitySuccess = await userStore.updateUserIdentityProfile(
+                userId: user.id,
+                firstName: editFirstName,
+                surname: editSurname,
+                email: editEmail,
+                mobileNumber: editMobile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil
+                    : editMobile.trimmingCharacters(in: .whitespacesAndNewlines),
+                operativeStore: operativeStore
             )
         }
 

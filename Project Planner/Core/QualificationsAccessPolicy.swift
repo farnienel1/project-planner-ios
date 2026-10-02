@@ -17,8 +17,9 @@ enum QualificationsAccessPolicy {
     /// Whether the user may add / rename / delete organisation qualification templates.
     static func canManageOrganisationCatalogue(user: AppUser?, isOperativeMode: Bool, hasAdminAccess: Bool) -> Bool {
         if isOperativeMode { return false }
-        if hasAdminAccess { return true }
         guard let user else { return false }
+        if user.isSuperAdmin { return true }
+        _ = hasAdminAccess
         return user.permissions.qualifications
     }
 

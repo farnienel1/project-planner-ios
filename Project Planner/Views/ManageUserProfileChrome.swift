@@ -326,6 +326,7 @@ struct ManageUserExpandablePermissionToggleRow: View {
     var description: String?
     @Binding var isOn: Bool
     var isDisabled: Bool = false
+    var onDisabledTap: (() -> Void)? = nil
 
     @State private var expanded = false
 
@@ -359,12 +360,20 @@ struct ManageUserExpandablePermissionToggleRow: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                Toggle("", isOn: $isOn)
-                    .labelsHidden()
-                    .tint(ManageUserProfilePalette.primaryBlue)
-                    .disabled(isDisabled)
-                    .scaleEffect(0.86)
-                    .frame(width: 44, height: 28)
+                ZStack {
+                    Toggle("", isOn: $isOn)
+                        .labelsHidden()
+                        .tint(ManageUserProfilePalette.primaryBlue)
+                        .disabled(isDisabled)
+                        .allowsHitTesting(!isDisabled)
+                    if isDisabled && onDisabledTap != nil {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture { onDisabledTap?() }
+                    }
+                }
+                .scaleEffect(0.86)
+                .frame(width: 44, height: 28)
             }
             if expanded, let description, !description.isEmpty {
                 Text(description)
