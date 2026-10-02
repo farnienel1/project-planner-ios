@@ -208,10 +208,6 @@ struct ProjectPlannerRootView: View {
     @State private var firebaseAuthUID: String?
     /// Avoid flashing the login screen while Firebase session / profile are still resolving.
     @State private var hasResolvedInitialAuth = false
-    /// Home is added after the logo frame. A first frame that is already Home stays white on this iOS.
-    @State private var launchChromeReady = false
-    /// Splash stays in the tree and only fades after Home has appeared.
-    @State private var homeHasDrawn = false
     /// Bumps only when the signed-in user moves from one organisation to another.
     /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
     @State private var contentShellEpoch = 0
@@ -225,7 +221,6 @@ struct ProjectPlannerRootView: View {
 
     private var isSessionLoading: Bool {
         if firebaseBackend.isSwitchingOrganization { return true }
-        if showMainExperience { return !launchChromeReady || !homeHasDrawn }
         return !hasResolvedInitialAuth
     }
 
@@ -264,10 +259,10 @@ struct ProjectPlannerRootView: View {
     var body: some View {
         ZStack {
             ProjectWorksRevampColors.canvas.ignoresSafeArea()
-            if launchChromeReady && showMainExperience {
+            if hasResolvedInitialAuth && showMainExperience {
                 authenticatedShell
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if launchChromeReady && hasResolvedInitialAuth {
+            } else if hasResolvedInitialAuth {
                 AuthenticationView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
@@ -282,8 +277,6 @@ struct ProjectPlannerRootView: View {
         }
         .background(ProjectWorksRevampColors.canvas)
         .onReceive(NotificationCenter.default.publisher(for: .plannerHomeDidDraw)) { _ in
-            guard !homeHasDrawn else { return }
-            homeHasDrawn = true
             print("🔥🔥🔥 DEBUG: PP_LAUNCH_VISIBLE home")
         }
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
@@ -352,17 +345,7 @@ struct ProjectPlannerRootView: View {
                     userStore.unblockLaunchProfileIfNeeded()
                 }
                 hasResolvedInitialAuth = true
-                launchChromeReady = true
-                print("🔥🔥🔥 DEBUG: PP splash waiting for Home user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                if !launchChromeReady {
-                    launchChromeReady = true
-                }
-                if !homeHasDrawn {
-                    homeHasDrawn = true
-                    print("🔥🔥🔥 DEBUG: PP_LAUNCH_TIMEOUT Home had not reported a frame")
-                }
+                print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
             }
 
             // Profile and org data start together. A fixed 1.5s pause left Home empty, then the
