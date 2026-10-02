@@ -565,9 +565,8 @@ struct HomeView: View {
             print("🔥🔥🔥 DEBUG: HOME_APPEARED inset=\(Int(inset))")
             NotificationCenter.default.post(name: .plannerHomeDidDraw, object: nil)
             homeWarningCount = WarningsService.shared.warningCount
-            // Apply the saved Light/Dark choice after Home has drawn. Doing it on the
-            // first frame left a white window.
-            DispatchQueue.main.async {
+            // Saved Light/Dark is applied after Home is on screen. The launch shell does not touch it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 appSettings.settings.theme.applyToKeyWindows()
             }
         }

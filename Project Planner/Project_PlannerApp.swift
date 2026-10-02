@@ -181,9 +181,10 @@ private nonisolated func installAuthUIDNotifications() -> AuthStateDidChangeList
     }
 }
 
-/// Shows the one window that already contains Home, and only after its scene is active.
-/// Calling this from didFinishLaunching hits a scene with no connection and leaves the white launch screen up.
-/// Empty windows are left alone. UIWindow.appearance is not used.
+/// Working launch shell. Do not replace this with makeKeyAndVisible, a splash, or a scene-phase gate.
+/// Those three each left a white window after Home had already appeared.
+/// Only the window that already has a root controller is brought forward. Empty windows are left alone.
+/// UIWindow.appearance is not used.
 enum LaunchWindowReveal {
     private static var didReveal = false
 
@@ -191,30 +192,22 @@ enum LaunchWindowReveal {
     static func revealIfNeeded() {
         guard !didReveal else { return }
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let ready = scenes.filter {
-            $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive
-        }
-        guard !ready.isEmpty else {
-            print("🔥🔥🔥 DEBUG: PP_LAUNCH_REVEAL scene not active yet")
-            return
-        }
-        var candidates: [UIWindow] = []
-        for scene in ready {
-            print("🔥🔥🔥 DEBUG: PP_LAUNCH_WINDOWS total=\(scene.windows.count) state=\(scene.activationState.rawValue)")
+        guard !scenes.isEmpty else { return }
+        didReveal = true
+        for scene in scenes {
+            print("🔥🔥🔥 DEBUG: PP_LAUNCH_WINDOWS total=\(scene.windows.count)")
             for window in scene.windows {
-                let hasRoot = window.rootViewController != nil
-                let wide = window.bounds.width > 1 && window.bounds.height > 1
-                print("🔥🔥🔥 DEBUG: PP_LAUNCH_WIN key=\(window.isKeyWindow) hidden=\(window.isHidden) rooted=\(hasRoot) \(Int(window.bounds.width))x\(Int(window.bounds.height))")
-                if hasRoot && wide {
-                    candidates.append(window)
-                }
+                let rooted = window.rootViewController != nil
+                print("🔥🔥🔥 DEBUG: PP_LAUNCH_WIN key=\(window.isKeyWindow) hidden=\(window.isHidden) rooted=\(rooted) \(Int(window.bounds.width))x\(Int(window.bounds.height))")
+            }
+            let rooted = scene.windows.filter { $0.rootViewController != nil }
+            guard let host = rooted.first(where: \.isKeyWindow) ?? rooted.first else { continue }
+            host.isHidden = false
+            host.backgroundColor = UIColor(red: 0.969, green: 0.973, blue: 0.980, alpha: 1)
+            if !host.isKeyWindow {
+                host.makeKey()
             }
         }
-        guard let host = candidates.first(where: \.isKeyWindow) ?? candidates.first else { return }
-        didReveal = true
-        host.isHidden = false
-        host.makeKeyAndVisible()
-        print("🔥🔥🔥 DEBUG: PP_LAUNCH_REVEAL visible \(Int(host.bounds.width))x\(Int(host.bounds.height))")
     }
 }
 
@@ -239,7 +232,7 @@ struct Project_PlannerApp: App {
         _ = FirebaseStartup.configureIfNeeded()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
-        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD scene-active safe-full")
+        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD key-host")
         // Do not touch UIWindow here. Doing it before the scene exists leaves a black window
         // and the log line "Ignoring activation message because no connection exists".
         let backend = FirebaseBackend()
@@ -261,48 +254,31 @@ struct Project_PlannerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            LaunchSceneHost(appDelegate: appDelegate)
-                .environmentObject(firebaseBackend)
-                .environmentObject(smartCache)
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(bookingStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(userStore)
-                .environmentObject(taskStore)
-                .environmentObject(holidayStore)
-                .environmentObject(subcontractorStore)
-                .environmentObject(appSettings)
-                .environmentObject(notificationService)
-        }
-    }
-}
-
-/// Gives Home the screen size once UIKit has measured it, and shows that window only after the scene is active.
-private struct LaunchSceneHost: View {
-    @Environment(\.scenePhase) private var scenePhase
-    @EnvironmentObject private var appSettings: AppSettingsStore
-    let appDelegate: AppDelegate
-
-    var body: some View {
-        GeometryReader { proxy in
-            ProjectPlannerRootView(appDelegate: appDelegate)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .frame(
-                    width: proxy.size.width > 1 ? proxy.size.width : nil,
-                    height: proxy.size.height > 1 ? proxy.size.height : nil
-                )
-        }
-        .ignoresSafeArea()
-        .onAppear { LaunchWindowReveal.revealIfNeeded() }
-        .onChange(of: scenePhase) { _, phase in
-            print("🔥🔥🔥 DEBUG: PP_LAUNCH_PHASE \(String(describing: phase))")
-            if phase == .active {
-                LaunchWindowReveal.revealIfNeeded()
+            GeometryReader { proxy in
+                ProjectPlannerRootView(appDelegate: appDelegate)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(smartCache)
+                    .environmentObject(projectStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(userStore)
+                    .environmentObject(taskStore)
+                    .environmentObject(holidayStore)
+                    .environmentObject(subcontractorStore)
+                    .environmentObject(appSettings)
+                    .environmentObject(notificationService)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
             }
-        }
-        .onChange(of: appSettings.settings.theme) { _, theme in
-            theme.applyToKeyWindows()
+            .ignoresSafeArea()
+            .onAppear {
+                DispatchQueue.main.async {
+                    LaunchWindowReveal.revealIfNeeded()
+                }
+            }
+            .onChange(of: appSettings.settings.theme) { _, theme in
+                theme.applyToKeyWindows()
+            }
         }
     }
 }
