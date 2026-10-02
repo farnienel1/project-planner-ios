@@ -1106,7 +1106,7 @@ class FirebaseBackend: ObservableObject {
         case timedOut
     }
 
-    private func getDocumentWithServerTimeoutAndCacheFallback(
+    func getDocumentWithServerTimeoutAndCacheFallback(
         _ ref: DocumentReference,
         timeoutSeconds: Double = 8.0
     ) async throws -> DocumentSnapshot {
@@ -5065,9 +5065,11 @@ class FirebaseBackend: ObservableObject {
         }
         let previousCreatorId = (orgSnap.data()?["creatorUserId"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let signedInIsCreator = organizationIdsMatch(previousCreatorId, signedInId)
 
         let signedInSnap = try await db.collection("users").document(signedInId).getDocument()
-        guard signedInSnap.exists, let signedInData = signedInSnap.data(), storedUserFlag(signedInData, "isSuperAdmin") else {
+        let signedInFlag = signedInSnap.exists && storedUserFlag(signedInSnap.data() ?? [:], "isSuperAdmin")
+        guard signedInIsCreator || signedInFlag else {
             throw ownershipTransferError("Only the Super Admin can transfer ownership.")
         }
 

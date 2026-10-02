@@ -1397,9 +1397,12 @@ struct EditUserView: View {
         user.isSuperAdmin || displayedUser.isSuperAdmin || userStore.isOrganizationCreator(userId: user.id)
     }
 
-    /// Change Super Admin is on a Super Admin profile, and only the signed-in Super Admin can use it.
+    /// Change Super Admin is only on the signed-in Super Admin's own profile.
     private var canOfferChangeSuperAdmin: Bool {
-        isViewingSuperAdminProfile && userStore.currentUser?.isSuperAdmin == true
+        guard isViewingSuperAdminProfile, let me = userStore.currentUser else { return false }
+        let ownsThisProfile = me.id == user.id || me.id == displayedUser.id
+        let signedInIsSuperAdmin = me.isSuperAdmin || userStore.isOrganizationCreator(userId: me.id)
+        return ownsThisProfile && signedInIsSuperAdmin
     }
 
     private var superAdminTransferCandidates: [AppUser] {
