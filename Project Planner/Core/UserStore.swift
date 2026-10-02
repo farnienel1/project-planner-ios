@@ -469,10 +469,8 @@ class UserStore: ObservableObject {
         for user in RosterRetention.users(for: organizationId) where user.isStoredUserDocument && !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
             byId[user.id] = user
         }
-        let inMemoryMatchesOrg = !organizationUsers.isEmpty && organizationUsers.allSatisfy { user in
-            let stored = normalizedOrganizationId(user.organizationId)
-            return stored.isEmpty || organizationIdsMatch(stored, organizationId)
-        }
+        let inMemoryMatchesOrg = !organizationUsers.isEmpty
+            && organizationUsersLoadOrganizationId == normalizedOrganizationId(organizationId)
         if inMemoryMatchesOrg {
             for user in organizationUsers where user.isStoredUserDocument && !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
                 byId[user.id] = user

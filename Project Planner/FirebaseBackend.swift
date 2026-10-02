@@ -3611,7 +3611,9 @@ class FirebaseBackend: ObservableObject {
     /// `confirmedMissing` is only a successful server snapshot that does not exist.
     /// A timeout, a rules error, or an offline failure is `unconfirmed` — the roster must keep that person.
     func probeOrganizationUser(userId: String, organizationId: String) async -> OrganizationUserProbe {
-        let orgId = normalizedOrganizationId(organizationId)
+        // `organizationId` is the roster being shown. It is not used to delete someone whose
+        // user document points at another company: that field is the company they last opened.
+        _ = organizationId
         let trimmedId = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedId.isEmpty else { return .unconfirmed }
         do {
@@ -3620,15 +3622,7 @@ class FirebaseBackend: ObservableObject {
                 timeoutSeconds: 4
             )
             guard doc.exists, let data = doc.data() else { return .confirmedMissing }
-            var user = Self.parseAppUserDocument(userId: trimmedId, data: data)
-            let docOrg = organizationIdFromFirestore(data["organizationId"]) ?? ""
-            if !docOrg.isEmpty, !orgId.isEmpty, !organizationIdsMatch(docOrg, orgId) {
-                return .confirmedMissing
-            }
-            if !orgId.isEmpty {
-                user.organizationId = orgId
-            }
-            return .present(user)
+            return .present(Self.parseAppUserDocument(userId: trimmedId, data: data))
         } catch {
             return .unconfirmed
         }
@@ -3770,22 +3764,17 @@ class FirebaseBackend: ObservableObject {
 
     private enum LinkedUserLookup {
         case missing
-        case otherOrganization
         case usable([String: Any])
     }
 
-    /// `missing` is only a snapshot that is not there. A timeout or rules error stays unresolved by trying cache, then `missing` so the roster fetch does not invent a row.
+    /// `missing` is only a snapshot that is not there. A user document whose organizationId is another company is still usable: that field is the company they last opened, and this organisation can also list them.
     private func lookupLinkedUser(userId: String, organizationId: String) async -> LinkedUserLookup {
         let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .missing }
+        _ = organizationId
         let ref = db.collection("users").document(trimmed)
         let snap = (try? await ref.getDocument(source: .server)) ?? (try? await ref.getDocument(source: .cache))
         guard let snap, snap.exists, let data = snap.data() else { return .missing }
-        if let storedOrg = organizationIdFromFirestore(data["organizationId"]),
-           !storedOrg.isEmpty,
-           !organizationIdsMatch(storedOrg, organizationId) {
-            return .otherOrganization
-        }
         return .usable(data)
     }
 
@@ -3830,10 +3819,6 @@ class FirebaseBackend: ObservableObject {
         var documentsById: [String: CollectedUserDocument] = [:]
         func absorb(_ documents: [QueryDocumentSnapshot], matchedOrganizationQuery: Bool) {
             for doc in documents {
-                let storedOrg = organizationIdFromFirestore(doc.data()["organizationId"])
-                if let storedOrg, !storedOrg.isEmpty, !organizationIdsMatch(storedOrg, orgId), !matchedOrganizationQuery {
-                    continue
-                }
                 if var existing = documentsById[doc.documentID] {
                     if matchedOrganizationQuery { existing.matchedOrganizationQuery = true }
                     documentsById[doc.documentID] = existing
@@ -3868,9 +3853,8 @@ class FirebaseBackend: ObservableObject {
         for link in staffLinks {
             candidateIds.formUnion(link.candidateIds)
         }
-        var rejectedBecauseOtherOrg = Set<String>()
         var fetched = 0
-        for userId in candidateIds where documentsById[userId] == nil && !rejectedBecauseOtherOrg.contains(userId) {
+        for userId in candidateIds where documentsById[userId] == nil {
             fetched += 1
             if fetched % 20 == 0 {
                 await Task.yield()
@@ -3878,20 +3862,17 @@ class FirebaseBackend: ObservableObject {
             switch await lookupLinkedUser(userId: userId, organizationId: orgId) {
             case .usable(let data):
                 documentsById[userId] = CollectedUserDocument(data: data, matchedOrganizationQuery: false)
-            case .otherOrganization:
-                rejectedBecauseOtherOrg.insert(userId)
             case .missing:
                 break
             }
         }
 
         var managersRecordUserIds = Set<String>()
+        var staffResolvedUserIds = Set<String>()
         for link in staffLinks {
             if let matchedId = link.candidateIds.first(where: { documentsById[$0] != nil }) {
+                staffResolvedUserIds.insert(matchedId)
                 if link.fromManagers { managersRecordUserIds.insert(matchedId) }
-                continue
-            }
-            if link.candidateIds.contains(where: { rejectedBecauseOtherOrg.contains($0) }) {
                 continue
             }
             guard !link.email.isEmpty else { continue }
@@ -3901,20 +3882,16 @@ class FirebaseBackend: ObservableObject {
                 emailIndexUserId = await userIdFromUserEmailsDocument(organizationId: orgId, email: link.email)
             }
             if let mappedId = emailIndexUserId {
-                if documentsById[mappedId] == nil && !rejectedBecauseOtherOrg.contains(mappedId) {
+                if documentsById[mappedId] == nil {
                     switch await lookupLinkedUser(userId: mappedId, organizationId: orgId) {
                     case .usable(let data):
                         documentsById[mappedId] = CollectedUserDocument(data: data, matchedOrganizationQuery: false)
-                    case .otherOrganization:
-                        rejectedBecauseOtherOrg.insert(mappedId)
                     case .missing:
                         break
                     }
                 }
                 if documentsById[mappedId] != nil {
                     resolvedIds.append(mappedId)
-                } else if rejectedBecauseOtherOrg.contains(mappedId) {
-                    continue
                 }
             }
             if resolvedIds.isEmpty {
@@ -3925,6 +3902,7 @@ class FirebaseBackend: ObservableObject {
                 absorb(emailDocs, matchedOrganizationQuery: false)
                 resolvedIds = Array(Set(emailDocs.map(\.documentID).filter { documentsById[$0] != nil }))
             }
+            staffResolvedUserIds.formUnion(resolvedIds)
             if link.fromManagers {
                 managersRecordUserIds.formUnion(resolvedIds)
             }
@@ -3942,11 +3920,14 @@ class FirebaseBackend: ObservableObject {
             let queryAlreadyMatched = collected.matchedOrganizationQuery
             let fieldMissing = storedOrganizationId == nil && !queryAlreadyMatched
             let belongsByField = organizationIdsMatch(docOrganizationId, orgId)
+            // members, userEmails, operatives, and managers are this company's list.
+            // organizationId on the user document is only the company they last opened.
+            let linkedToThisOrganisation = memberIndex.indexedUserIds.contains(userId) || staffResolvedUserIds.contains(userId)
 
             print("🔥🔥🔥 DEBUG: Processing user - DocumentID: \(userId), Email: \(email), DocOrgId: \(docOrganizationId), RequestedOrgId: \(orgId)")
 
-            guard belongsByField || fieldMissing || queryAlreadyMatched else {
-                print("🔥🔥🔥 DEBUG: Skipping user \(email) - organizationId mismatch")
+            guard belongsByField || fieldMissing || queryAlreadyMatched || linkedToThisOrganisation else {
+                print("🔥🔥🔥 DEBUG: Skipping user \(email) - not linked to this organisation")
                 continue
             }
 
