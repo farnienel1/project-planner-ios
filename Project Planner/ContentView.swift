@@ -235,7 +235,6 @@ struct ContentView: View {
             }
         }
         .background(ProjectWorksRevampColors.canvas)
-        .preferredColorScheme(appSettings.settings.theme.colorScheme)
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .tint(Color.theme.primary(for: appSettings.settings.colorScheme))
         .onPreferenceChange(HideBottomMenuKey.self) { value in
