@@ -208,12 +208,6 @@ struct ProjectPlannerRootView: View {
     @State private var firebaseAuthUID: String?
     /// Avoid flashing the login screen while Firebase session / profile are still resolving.
     @State private var hasResolvedInitialAuth = false
-    /// Home has drawn at least once. The logo stays up until then so a dark window is not the first thing on the glass.
-    @State private var homeHasDrawn = false
-    /// The logo's view has appeared. Home is not mounted until the frame after that.
-    @State private var hostWindowReady = false
-    /// Heavy Home is added only after the logo frame. Putting Home in the first frame left a blank window.
-    @State private var launchChromeReady = false
     /// Bumps only when the signed-in user moves from one organisation to another.
     /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
     @State private var contentShellEpoch = 0
@@ -227,7 +221,7 @@ struct ProjectPlannerRootView: View {
 
     private var isSessionLoading: Bool {
         if firebaseBackend.isSwitchingOrganization { return true }
-        if showMainExperience { return !launchChromeReady || !homeHasDrawn || !hostWindowReady }
+        if showMainExperience { return false }
         return !hasResolvedInitialAuth
     }
 
@@ -266,34 +260,22 @@ struct ProjectPlannerRootView: View {
     var body: some View {
         ZStack {
             ProjectWorksRevampColors.canvas.ignoresSafeArea()
-            // The logo is the first frame. Home is added on the next one. A first frame that
-            // is already Home stays blank on this iOS even after HOME_APPEARED.
-            if launchChromeReady && showMainExperience {
+            if showMainExperience {
                 authenticatedShell
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if launchChromeReady && hasResolvedInitialAuth {
+            } else if hasResolvedInitialAuth {
                 AuthenticationView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            LaunchWindowAnchor {
-                guard !hostWindowReady else { return }
-                hostWindowReady = true
-                launchChromeReady = true
+            if isSessionLoading {
+                AppLaunchSplashView()
+                    .zIndex(1)
             }
-            .frame(width: 1, height: 1)
-            .allowsHitTesting(false)
-            AppLaunchSplashView()
-                .opacity(isSessionLoading ? 1 : 0)
-                .allowsHitTesting(isSessionLoading)
-                .accessibilityHidden(!isSessionLoading)
-                .zIndex(1)
         }
         .background(ProjectWorksRevampColors.canvas)
         .onReceive(NotificationCenter.default.publisher(for: .plannerHomeDidDraw)) { _ in
-            guard !homeHasDrawn else { return }
-            homeHasDrawn = true
             print("🔥🔥🔥 DEBUG: PP_LAUNCH_VISIBLE home")
         }
         .preferredColorScheme(appSettings.settings.theme.colorScheme)
@@ -363,20 +345,7 @@ struct ProjectPlannerRootView: View {
                     userStore.unblockLaunchProfileIfNeeded()
                 }
                 hasResolvedInitialAuth = true
-                print("🔥🔥🔥 DEBUG: PP splash waiting for Home user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
-                if !launchChromeReady {
-                    launchChromeReady = true
-                }
-                if !hostWindowReady {
-                    hostWindowReady = true
-                    print("🔥🔥🔥 DEBUG: PP_LAUNCH_TIMEOUT window was not claimed")
-                }
-                if !homeHasDrawn {
-                    homeHasDrawn = true
-                    print("🔥🔥🔥 DEBUG: PP_LAUNCH_TIMEOUT Home had not reported a frame")
-                }
+                print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
             }
 
             // Profile and org data start together. A fixed 1.5s pause left Home empty, then the

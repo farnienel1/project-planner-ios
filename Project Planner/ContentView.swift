@@ -74,11 +74,7 @@ struct ContentView: View {
         let al = userStore.isAnnualLeaveFeatureEnabled() ? "1" : "0"
         return preset + "|" + keys.sorted().joined(separator: ",") + "|al" + al
     }
-    
-    init() {
-        UITabBar.appearance().isHidden = true
-    }
-    
+
     var body: some View {
         contentShellWithSheets
     }
@@ -238,7 +234,7 @@ struct ContentView: View {
                 bottomBar
             }
         }
-        .background(Color(.systemGroupedBackground))
+        .background(ProjectWorksRevampColors.canvas)
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .tint(Color.theme.primary(for: appSettings.settings.colorScheme))
         .onPreferenceChange(HideBottomMenuKey.self) { value in
@@ -466,7 +462,7 @@ struct ContentView: View {
     @ViewBuilder
     private var mainTabContent: some View {
         ZStack {
-            Color(.systemGroupedBackground).ignoresSafeArea()
+            ProjectWorksRevampColors.canvas.ignoresSafeArea()
             Group {
             switch selectedTab {
             case 0:
