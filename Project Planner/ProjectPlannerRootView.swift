@@ -206,8 +206,8 @@ struct ProjectPlannerRootView: View {
 
     /// Kept in sync with notifications only; routing uses `Auth` + `firebaseBackend` so we never sit on an empty “session” gate.
     @State private var firebaseAuthUID: String?
-    /// Avoid flashing the login screen while Firebase session / profile are still resolving.
-    @State private var hasResolvedInitialAuth = false
+    /// Logo covers the first frames. It is not removed from the tree — taking it out left a blank white window.
+    @State private var splashCoverVisible = true
     /// Bumps only when the signed-in user moves from one organisation to another.
     /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
     @State private var contentShellEpoch = 0
@@ -219,9 +219,9 @@ struct ProjectPlannerRootView: View {
         return Auth.auth().currentUser != nil
     }
 
-    private var isSessionLoading: Bool {
+    private var showSplash: Bool {
         if firebaseBackend.isSwitchingOrganization { return true }
-        return !hasResolvedInitialAuth
+        return splashCoverVisible
     }
 
     @ViewBuilder
@@ -259,10 +259,12 @@ struct ProjectPlannerRootView: View {
     var body: some View {
         ZStack {
             ProjectWorksRevampColors.canvas.ignoresSafeArea()
-            if hasResolvedInitialAuth && showMainExperience {
+            // The signed-in shell is in the first frame. Adding it later, after the
+            // window exists, is the blank white screen.
+            if showMainExperience {
                 authenticatedShell
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if hasResolvedInitialAuth {
+            } else if !splashCoverVisible {
                 AuthenticationView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
@@ -270,9 +272,9 @@ struct ProjectPlannerRootView: View {
             }
             AppLaunchSplashView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .opacity(isSessionLoading ? 1 : 0)
-                .allowsHitTesting(isSessionLoading)
-                .accessibilityHidden(!isSessionLoading)
+                .opacity(showSplash ? 1 : 0)
+                .allowsHitTesting(showSplash)
+                .accessibilityHidden(!showSplash)
                 .zIndex(1)
         }
         .background(ProjectWorksRevampColors.canvas)
@@ -300,7 +302,7 @@ struct ProjectPlannerRootView: View {
                     return
                 }
                 firebaseAuthUID = nil
-                hasResolvedInitialAuth = true
+                splashCoverVisible = false
                 userStore.clearOnSignOut()
                 print("🔥🔥🔥 DEBUG: RootView auth uid cleared (signed out)")
             }
@@ -340,34 +342,34 @@ struct ProjectPlannerRootView: View {
             if showMainExperience {
                 userStore.unblockLaunchProfileIfNeeded()
             }
-            // The logo already covered the first frame. Clear it before any Firestore work.
-            // Waiting for the next main-queue turn left "Loading your jobs" up when that
-            // queue was busy, until the system killed the app.
-            hasResolvedInitialAuth = true
-            print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
-
-            // Profile and org data start together. A fixed 1.5s pause left Home empty, then the
-            // organisation wait added another half second before disk jobs could show.
-            Task { @MainActor in
-                await firebaseBackend.syncAuthStateFromSessionIfNeeded()
-                if userStore.currentUser == nil {
-                    userStore.unblockLaunchProfileIfNeeded()
+            // Uncover Home on the next turn. It is already mounted, so this does not
+            // insert a new root. Firestore starts only after that turn is queued.
+            DispatchQueue.main.async {
+                splashCoverVisible = false
+                print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                Task { @MainActor in
+                    await firebaseBackend.syncAuthStateFromSessionIfNeeded()
+                    if userStore.currentUser == nil {
+                        userStore.unblockLaunchProfileIfNeeded()
+                    }
+                    async let profilePass: Void = loadLaunchProfile()
+                    async let bootstrapPass: Void = PlannerStoreWiring.bootstrapOrgDataIfNeeded(
+                        firebaseBackend: firebaseBackend,
+                        userStore: userStore,
+                        projectStore: projectStore,
+                        operativeStore: operativeStore,
+                        bookingStore: bookingStore,
+                        managerScheduleStore: managerScheduleStore,
+                        subcontractorStore: subcontractorStore,
+                        taskStore: taskStore,
+                        holidayStore: holidayStore,
+                        notificationService: notificationService
+                    )
+                    await profilePass
+                    await bootstrapPass
                 }
-                async let profilePass: Void = loadLaunchProfile()
-                async let bootstrapPass: Void = PlannerStoreWiring.bootstrapOrgDataIfNeeded(
-                    firebaseBackend: firebaseBackend,
-                    userStore: userStore,
-                    projectStore: projectStore,
-                    operativeStore: operativeStore,
-                    bookingStore: bookingStore,
-                    managerScheduleStore: managerScheduleStore,
-                    subcontractorStore: subcontractorStore,
-                    taskStore: taskStore,
-                    holidayStore: holidayStore,
-                    notificationService: notificationService
-                )
-                await profilePass
-                await bootstrapPass
             }
         }
         .onChange(of: firebaseBackend.currentOrganization?.firestoreDocumentId) { oldId, newId in

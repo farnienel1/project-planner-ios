@@ -19,21 +19,20 @@ enum AppBranding {
 
 struct AppLaunchSplashView: View {
     var body: some View {
-        ZStack {
-            Color.white.ignoresSafeArea()
-            VStack(spacing: 20) {
-                Image("AppLogo")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 120, height: 120)
-                    .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-                    .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
-                ProgressView()
-                    .controlSize(.regular)
-                Text("Loading your jobs")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.black.opacity(0.55))
-            }
+        VStack(spacing: 20) {
+            Image("AppLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 120, height: 120)
+                .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
+            ProgressView()
+                .controlSize(.regular)
+            Text("Loading your jobs")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.black.opacity(0.55))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.white)
     }
 }
