@@ -181,6 +181,28 @@ private nonisolated func installAuthUIDNotifications() -> AuthStateDidChangeList
     }
 }
 
+/// Makes the SwiftUI hosting view opaque after it is in a window.
+/// A clear hosting view leaves the white system launch screen on top even after Home has loaded.
+/// Does not create windows, call makeKeyAndVisible, or touch UIWindow.appearance.
+private struct LaunchHostingPin: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        DispatchQueue.main.async {
+            guard let host = uiView.window?.rootViewController?.view else { return }
+            host.isOpaque = true
+            if host.backgroundColor == nil || host.backgroundColor == .clear {
+                host.backgroundColor = UIColor(red: 0.969, green: 0.973, blue: 0.980, alpha: 1)
+            }
+        }
+    }
+}
+
 @main
 struct Project_PlannerApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -202,7 +224,7 @@ struct Project_PlannerApp: App {
         _ = FirebaseStartup.configureIfNeeded()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
-        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD no-actor-hop")
+        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD sized-root")
         // Do not touch UIWindow here. Doing it before the scene exists leaves a black window
         // and the log line "Ignoring activation message because no connection exists".
         let backend = FirebaseBackend()
@@ -224,23 +246,22 @@ struct Project_PlannerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ZStack {
-                ProjectWorksRevampColors.canvas.ignoresSafeArea()
-                ProjectPlannerRootView(appDelegate: appDelegate)
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(smartCache)
-                    .environmentObject(projectStore)
-                    .environmentObject(operativeStore)
-                    .environmentObject(bookingStore)
-                    .environmentObject(managerScheduleStore)
-                    .environmentObject(userStore)
-                    .environmentObject(taskStore)
-                    .environmentObject(holidayStore)
-                    .environmentObject(subcontractorStore)
-                    .environmentObject(appSettings)
-                    .environmentObject(notificationService)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ProjectPlannerRootView(appDelegate: appDelegate)
+                .environmentObject(firebaseBackend)
+                .environmentObject(smartCache)
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
+                .environmentObject(bookingStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(userStore)
+                .environmentObject(taskStore)
+                .environmentObject(holidayStore)
+                .environmentObject(subcontractorStore)
+                .environmentObject(appSettings)
+                .environmentObject(notificationService)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(ProjectWorksRevampColors.canvas)
+                .background(LaunchHostingPin())
             .onChange(of: appSettings.settings.theme) { _, theme in
                 theme.applyToKeyWindows()
             }

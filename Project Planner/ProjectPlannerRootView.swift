@@ -256,22 +256,19 @@ struct ProjectPlannerRootView: View {
 
     var body: some View {
         ZStack {
-            ProjectWorksRevampColors.canvas.ignoresSafeArea()
             if showMainExperience {
                 authenticatedShell
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 AuthenticationView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             if showSplash {
                 AppLaunchSplashView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .zIndex(1)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ProjectWorksRevampColors.canvas)
         .onReceive(NotificationCenter.default.publisher(for: .plannerHomeDidDraw)) { _ in
             print("🔥🔥🔥 DEBUG: PP_LAUNCH_VISIBLE home")
