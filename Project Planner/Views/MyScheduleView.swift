@@ -777,7 +777,7 @@ struct ManagerScheduleContentView: View {
     private func myHolidayBookings(on day: Date) -> [HolidayBooking] {
         guard let uid = firebaseBackend.currentUser?.uid else { return [] }
         let targetDay = calendar.startOfDay(for: day)
-        return holidayStore.myBookings(userId: uid, operativeId: nil)
+        return holidayStore.myBookings(userId: uid, operativeId: nil, email: firebaseBackend.currentUser?.email)
             .filter { $0.status != .rejected }
             .filter { booking in
                 let start = calendar.startOfDay(for: booking.startDate)
@@ -913,7 +913,11 @@ struct ManagerScheduleContentView: View {
                         ScheduleChangeNotifier.postBookingStoreDidChange()
                     }
                 },
-                onCancel: { operativeBookingEditTarget = nil }
+                onCancel: { operativeBookingEditTarget = nil },
+                onDelete: {
+                    operativeBookingEditTarget = nil
+                    Task { await bookingStore.deleteBooking(booking) }
+                }
             )
         }
         .confirmationDialog(

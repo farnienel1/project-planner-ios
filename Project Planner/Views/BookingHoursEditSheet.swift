@@ -343,6 +343,8 @@ struct OperativeCustomHoursSheet: View {
     let initialChoice: OperativeDayBookingChoice?
     let onSave: (String, String, Bool, Double?) -> Void
     let onCancel: () -> Void
+    /// Set when this sheet is editing a booking that already exists. Create flows leave it nil.
+    var onDelete: (() -> Void)?
 
     @State private var startHour: Int
     @State private var startMinute: Int
@@ -357,6 +359,7 @@ struct OperativeCustomHoursSheet: View {
     @State private var errorMessage: String?
     @State private var timeValidationBanner: String?
     @State private var bannerDismissTask: Task<Void, Never>?
+    @State private var confirmDelete = false
 
     init(
         policy: OrgPayrollTimePolicy,
@@ -373,7 +376,8 @@ struct OperativeCustomHoursSheet: View {
         embedsNavigation: Bool = true,
         initialChoice: OperativeDayBookingChoice?,
         onSave: @escaping (String, String, Bool, Double?) -> Void,
-        onCancel: @escaping () -> Void
+        onCancel: @escaping () -> Void,
+        onDelete: (() -> Void)? = nil
     ) {
         self.policy = policy
         self.referenceDay = Calendar.current.startOfDay(for: referenceDay)
@@ -390,6 +394,7 @@ struct OperativeCustomHoursSheet: View {
         self.initialChoice = initialChoice
         self.onSave = onSave
         self.onCancel = onCancel
+        self.onDelete = onDelete
 
         let ic = initialChoice
         let startHM: (Int, Int)
@@ -535,6 +540,21 @@ struct OperativeCustomHoursSheet: View {
                             .font(.system(size: 12))
                             .foregroundStyle(.red)
                     }
+                    if onDelete != nil {
+                        Button(role: .destructive) {
+                            confirmDelete = true
+                        } label: {
+                            Text("Delete booking")
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .foregroundStyle(.red)
+                                .background(Color.red.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 4)
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 16)
@@ -559,6 +579,18 @@ struct OperativeCustomHoursSheet: View {
                 Button("Save") { validateAndSave() }
                     .fontWeight(.semibold)
             }
+        }
+        .confirmationDialog(
+            "Delete this booking?",
+            isPresented: $confirmDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete booking", role: .destructive) {
+                onDelete?()
+            }
+            Button("Keep booking", role: .cancel) {}
+        } message: {
+            Text("This removes it from the schedule, daily overview, warnings, weekly report, timesheets, and My Schedule.")
         }
     }
 

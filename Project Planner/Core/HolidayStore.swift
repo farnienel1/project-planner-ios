@@ -218,9 +218,11 @@ class HolidayStore: ObservableObject {
         }
     }
 
-    func myBookings(userId: String?, operativeId: UUID?) -> [HolidayBooking] {
+    func myBookings(userId: String?, operativeId: UUID?, email: String? = nil) -> [HolidayBooking] {
         bookings.filter { b in
-            if let uid = userId, b.userId == uid { return true }
+            if AnnualLeavePolicy.holidayUserMatches(bookingUserId: b.userId, profileUserId: userId, profileEmail: email) {
+                return true
+            }
             if let oid = operativeId, b.operativeId == oid { return true }
             return false
         }

@@ -1295,7 +1295,11 @@ private extension DailyOverviewView {
                         otMultiplierOverride: otMult
                     )
                 },
-                onCancel: { bookingEditTarget = nil }
+                onCancel: { bookingEditTarget = nil },
+                onDelete: {
+                    bookingEditTarget = nil
+                    Task { await bookingStore.deleteBooking(booking) }
+                }
             )
         case .manager(let booking, let locationTitle, let personName):
             OperativeCustomHoursSheet(
@@ -1316,7 +1320,11 @@ private extension DailyOverviewView {
                         breakRemoved: breakRemoved
                     )
                 },
-                onCancel: { bookingEditTarget = nil }
+                onCancel: { bookingEditTarget = nil },
+                onDelete: {
+                    bookingEditTarget = nil
+                    Task { await managerScheduleStore.deleteBooking(booking) }
+                }
             )
         case .subcontractor(let booking, _, _):
             SubcontractorBookingEditSheet(booking: booking) {

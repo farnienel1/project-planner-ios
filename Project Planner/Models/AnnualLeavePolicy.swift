@@ -77,10 +77,26 @@ nonisolated enum AnnualLeavePolicy {
         return leaveYearRange(containing: dayBefore, startMonth: startMonth, endMonth: endMonth, calendar: calendar)
     }
 
+    static func holidayUserMatches(bookingUserId: String?, profileUserId: String?, profileEmail: String?) -> Bool {
+        guard let storedRaw = bookingUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !storedRaw.isEmpty else {
+            return false
+        }
+        if let profileUserId {
+            let profile = profileUserId.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !profile.isEmpty, storedRaw.caseInsensitiveCompare(profile) == .orderedSame { return true }
+        }
+        if let profileEmail {
+            let email = profileEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !email.isEmpty, storedRaw.caseInsensitiveCompare(email) == .orderedSame { return true }
+        }
+        return false
+    }
+
     static func consumedDays(
         bookings: [HolidayBooking],
         userId: String?,
         operativeId: UUID?,
+        profileEmail: String? = nil,
         statuses: Set<HolidayStatus>,
         rangeStart: Date,
         rangeEnd: Date,
@@ -90,7 +106,7 @@ nonisolated enum AnnualLeavePolicy {
         let re = calendar.startOfDay(for: rangeEnd)
         var total: Double = 0
         for b in bookings where statuses.contains(b.status) {
-            let matchesUser = userId != nil && b.userId == userId
+            let matchesUser = Self.holidayUserMatches(bookingUserId: b.userId, profileUserId: userId, profileEmail: profileEmail)
             let matchesOp = operativeId != nil && b.operativeId == operativeId
             guard matchesUser || matchesOp else { continue }
 
@@ -111,6 +127,7 @@ nonisolated enum AnnualLeavePolicy {
         bookings: [HolidayBooking],
         profileUserId: String,
         operativeId: UUID?,
+        profileEmail: String? = nil,
         daysPerYear: Double,
         startMonth: Int,
         endMonth: Int,
@@ -137,6 +154,7 @@ nonisolated enum AnnualLeavePolicy {
             bookings: bookings,
             userId: profileUserId,
             operativeId: operativeId,
+            profileEmail: profileEmail,
             statuses: [.approved],
             rangeStart: range.start,
             rangeEnd: range.end,
@@ -146,6 +164,7 @@ nonisolated enum AnnualLeavePolicy {
             bookings: bookings,
             userId: profileUserId,
             operativeId: operativeId,
+            profileEmail: profileEmail,
             statuses: [.pending],
             rangeStart: range.start,
             rangeEnd: range.end,
@@ -158,6 +177,7 @@ nonisolated enum AnnualLeavePolicy {
                 bookings: bookings,
                 userId: profileUserId,
                 operativeId: operativeId,
+                profileEmail: profileEmail,
                 statuses: [.approved],
                 rangeStart: prev.start,
                 rangeEnd: prev.end,
@@ -167,6 +187,7 @@ nonisolated enum AnnualLeavePolicy {
                 bookings: bookings,
                 userId: profileUserId,
                 operativeId: operativeId,
+                profileEmail: profileEmail,
                 statuses: [.pending],
                 rangeStart: prev.start,
                 rangeEnd: prev.end,

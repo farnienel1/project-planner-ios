@@ -90,6 +90,7 @@ struct HolidayView: View {
             bookings: holidayStore.bookings,
             profileUserId: u.id,
             operativeId: oid,
+            profileEmail: u.email,
             daysPerYear: u.annualLeaveDaysPerYear,
             startMonth: u.annualLeaveYearStartMonth,
             endMonth: u.annualLeaveYearEndMonth,
@@ -128,7 +129,7 @@ struct HolidayView: View {
             .filter {
                 $0.status == .approved &&
                 $0.cancellationRequestedAt == nil &&
-                $0.userId == uid &&
+                bookingMatchesSignedInUser($0, uid: uid) &&
                 !$0.isOperativeRequest
             }
             .sorted { $0.startDate > $1.startDate }
@@ -142,6 +143,14 @@ struct HolidayView: View {
         case pendingHalf(HolidayBooking)
     }
 
+    private func bookingMatchesSignedInUser(_ booking: HolidayBooking, uid: String) -> Bool {
+        AnnualLeavePolicy.holidayUserMatches(
+            bookingUserId: booking.userId,
+            profileUserId: uid,
+            profileEmail: firebaseBackend.currentUser?.email ?? holidayProfileUser?.email
+        )
+    }
+
     private func calendarDayKind(for day: Date) -> CalendarDayKind {
         let dayStart = calendar.startOfDay(for: day)
         guard let uid = firebaseBackend.currentUser?.uid else { return .none }
@@ -150,7 +159,7 @@ struct HolidayView: View {
         var approvedHalf: HolidayBooking?
         for booking in holidayStore.bookings {
             guard booking.status != .rejected else { continue }
-            let matchesUser = booking.userId == uid
+            let matchesUser = bookingMatchesSignedInUser(booking, uid: uid)
             let matchesOperative = oid != nil && booking.operativeId == oid
             guard matchesUser || matchesOperative else { continue }
             let start = calendar.startOfDay(for: booking.startDate)
@@ -1029,7 +1038,12 @@ struct HolidayView: View {
 
     private func teamPerson(for booking: HolidayBooking) -> AnnualLeavePerson? {
         teamPeople.first { person in
-            if let uid = person.userId, booking.userId == uid { return true }
+            let email = person.userId.flatMap { uid in
+                userStore.organizationUsers.first(where: { $0.id == uid })?.email
+            }
+            if AnnualLeavePolicy.holidayUserMatches(bookingUserId: booking.userId, profileUserId: person.userId, profileEmail: email) {
+                return true
+            }
             if let oid = person.operativeId, booking.operativeId == oid { return true }
             return false
         }
@@ -1041,6 +1055,7 @@ struct HolidayView: View {
             bookings: holidayStore.bookings,
             profileUserId: user.id,
             operativeId: person.operativeId,
+            profileEmail: user.email,
             daysPerYear: user.annualLeaveDaysPerYear,
             startMonth: user.annualLeaveYearStartMonth,
             endMonth: user.annualLeaveYearEndMonth,
@@ -1433,7 +1448,11 @@ struct HolidayView: View {
     private func hasExistingHoliday(on day: Date, userId: String?, operativeId: UUID?) -> Bool {
         holidayStore.bookings.contains { booking in
             guard booking.status != .rejected else { return false }
-            let matchesUser = userId != nil && booking.userId == userId
+            let matchesUser = AnnualLeavePolicy.holidayUserMatches(
+                bookingUserId: booking.userId,
+                profileUserId: userId,
+                profileEmail: holidayProfileUser?.email
+            )
             let matchesOperative = operativeId != nil && booking.operativeId == operativeId
             guard matchesUser || matchesOperative else {
                 return false

@@ -45,8 +45,16 @@ struct WeeklyReportView: View {
     /// Private export/scan service — never observe WarningsService.shared on open.
     @State private var exportWarningsService: WarningsService?
     @State private var showingWarningsDetail = false
+    private enum QuickRange: Equatable {
+        case thisWeek
+        case lastWeek
+        case invoicing
+        case custom
+    }
+
     @State private var startDate: Date
     @State private var endDate: Date
+    @State private var quickRange: QuickRange
     @State private var showStartPicker = false
     @State private var showEndPicker = false
     @State private var isGenerating = false
@@ -94,6 +102,7 @@ struct WeeklyReportView: View {
         let sunday = cal.date(byAdding: .day, value: 6, to: monday) ?? monday
         _startDate = State(initialValue: monday)
         _endDate = State(initialValue: sunday)
+        _quickRange = State(initialValue: .thisWeek)
     }
 
     private var organizationName: String {
@@ -138,7 +147,6 @@ struct WeeklyReportView: View {
                 }
                 .onAppear {
                     print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_FORM")
-                    setThisWeekRange()
                     // Logo loads on Generate / idle — not on open (Simulator jetsam).
                 }
         }
@@ -151,7 +159,6 @@ struct WeeklyReportView: View {
                 VStack(spacing: 24) {
                     brandHeader
                     quickSelectCard
-                    customRangeCard
                     invoicingPeriodCard
                     Text("Period warnings and pay breakdown are calculated when you tap Generate — this is separate from Home Warnings (live ops from today forward). Live bookings from projects, small works and daily overview feed this snapshot until a timesheet is counter-signed (or self-signed when the person has no line manager). Agreed timesheet figures then replace those days, including price work and expenses.")
                         .font(.system(size: 12))
@@ -277,25 +284,27 @@ struct WeeklyReportView: View {
     private var quickSelectCard: some View {
         reportSectionCard(title: "Quick Select", icon: "bolt.fill", iconColor: WeeklyReportColors.cyan) {
             VStack(spacing: 0) {
-                quickWeekRow(label: "This Week", subLabel: rangeLabel(thisWeekRange), range: thisWeekRange)
+                quickWeekRow(label: "This Week", subLabel: rangeLabel(thisWeekRange), selection: .thisWeek)
                 Divider().padding(.leading, 16)
-                quickWeekRow(label: "Last Week", subLabel: rangeLabel(lastWeekRange), range: lastWeekRange)
+                quickWeekRow(label: "Last Week", subLabel: rangeLabel(lastWeekRange), selection: .lastWeek)
                 Divider().padding(.leading, 16)
                 quickWeekRow(
                     label: "Current invoicing period",
                     subLabel: invoicingPeriod.currentPeriodLabel,
-                    range: (invoicingPeriod.currentPeriodStart, invoicingPeriod.currentPeriodEnd)
+                    selection: .invoicing
                 )
-            }
-        }
-    }
-
-    private var customRangeCard: some View {
-        reportSectionCard(title: "Custom Range", icon: "calendar", iconColor: WeeklyReportColors.blue) {
-            VStack(spacing: 0) {
-                dateRow(label: "Start", date: $startDate, isExpanded: $showStartPicker)
                 Divider().padding(.leading, 16)
-                dateRow(label: "End", date: $endDate, isExpanded: $showEndPicker)
+                quickWeekRow(
+                    label: "Custom range",
+                    subLabel: rangeLabel((start: startDate, end: endDate)),
+                    selection: .custom
+                )
+                if quickRange == .custom {
+                    Divider().padding(.leading, 16)
+                    dateRow(label: "Start", date: customDateBinding(isEnd: false), isExpanded: $showStartPicker)
+                    Divider().padding(.leading, 16)
+                    dateRow(label: "End", date: customDateBinding(isEnd: true), isExpanded: $showEndPicker)
+                }
             }
         }
     }
@@ -329,8 +338,7 @@ struct WeeklyReportView: View {
                 }
 
                 Button {
-                    startDate = invoicingPeriod.currentPeriodStart
-                    endDate = invoicingPeriod.currentPeriodEnd
+                    applyQuickRange(.invoicing)
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("CURRENT INVOICING PERIOD")
@@ -552,26 +560,23 @@ struct WeeklyReportView: View {
         }
     }
 
-    private func quickWeekRow(label: String, subLabel: String, range: (start: Date, end: Date)) -> some View {
+    private func quickWeekRow(label: String, subLabel: String, selection: QuickRange) -> some View {
         Button {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                startDate = range.start
-                endDate = range.end
-                showStartPicker = false
-                showEndPicker = false
+                applyQuickRange(selection)
             }
         } label: {
             HStack(spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8, style: .continuous).fill(WeeklyReportColors.light).frame(width: 36, height: 36)
-                    Image(systemName: "calendar").foregroundStyle(WeeklyReportColors.blue)
+                    Image(systemName: selection == .custom ? "calendar.badge.plus" : "calendar").foregroundStyle(WeeklyReportColors.blue)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(label).font(.system(size: 15, weight: .semibold))
                     Text(subLabel).font(.system(size: 12)).foregroundStyle(WeeklyReportColors.muted)
                 }
                 Spacer()
-                let selected = Calendar.current.isDate(startDate, inSameDayAs: range.start)
+                let selected = quickRange == selection
                 ZStack {
                     Circle().fill(selected ? WeeklyReportColors.blue : WeeklyReportColors.mid.opacity(0.4)).frame(width: 22, height: 22)
                     if selected {
@@ -584,6 +589,49 @@ struct WeeklyReportView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// Editing either date leaves the preset and uses exactly these two days.
+    private func customDateBinding(isEnd: Bool) -> Binding<Date> {
+        Binding(
+            get: { isEnd ? endDate : startDate },
+            set: { newValue in
+                if isEnd {
+                    endDate = newValue
+                } else {
+                    startDate = newValue
+                    if endDate < newValue {
+                        endDate = newValue
+                    }
+                }
+                quickRange = .custom
+            }
+        )
+    }
+
+    private func applyQuickRange(_ selection: QuickRange) {
+        switch selection {
+        case .thisWeek:
+            let range = thisWeekRange
+            startDate = range.start
+            endDate = range.end
+            showStartPicker = false
+            showEndPicker = false
+        case .lastWeek:
+            let range = lastWeekRange
+            startDate = range.start
+            endDate = range.end
+            showStartPicker = false
+            showEndPicker = false
+        case .invoicing:
+            startDate = invoicingPeriod.currentPeriodStart
+            endDate = invoicingPeriod.currentPeriodEnd
+            showStartPicker = false
+            showEndPicker = false
+        case .custom:
+            break
+        }
+        quickRange = selection
     }
 
     private func dateRow(label: String, date: Binding<Date>, isExpanded: Binding<Bool>) -> some View {
@@ -709,18 +757,6 @@ struct WeeklyReportView: View {
         periodSummaryReady = true
     }
 
-    private func setThisWeekRange() {
-        let thisWeek = thisWeekRange
-        startDate = thisWeek.start
-        endDate = thisWeek.end
-    }
-
-    private func setLastWeekRange() {
-        let lastWeek = lastWeekRange
-        startDate = lastWeek.start
-        endDate = lastWeek.end
-    }
-
     private var thisWeekRange: (start: Date, end: Date) {
         let cal = Calendar.current
         let now = Date()
@@ -746,6 +782,8 @@ struct WeeklyReportView: View {
         isGenerating = true
         message = nil
         showGeneratedSuccess = false
+        let range = reportDateRange
+        print("🔥🔥🔥 DEBUG: WEEKLY_REPORT generate \(String(describing: quickRange)) \(range.lowerBound) \(range.upperBound)")
         Task {
             // REBUILD: never period-scan on Generate. Use Warnings live cache only.
             await refreshReportWarnings()

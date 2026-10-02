@@ -216,23 +216,81 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
 
     static func fromFirestore(_ data: [String: Any]) -> OrgWarningDetectionSettings {
         var s = OrgWarningDetectionSettings.default
-        if let v = data["detectClashes"] as? Bool { s.detectClashes = v }
+        if let clashes = firestoreBool(data["detectClashes"]) { s.detectClashes = clashes }
         if let raw = data["clashLookaheadMode"] as? String,
            let mode = WarningClashLookaheadMode(rawValue: raw) {
             s.clashLookaheadMode = mode
         }
-        if let days = data["clashLookaheadDays"] as? Int {
+        if let days = firestoreInt(data["clashLookaheadDays"]) {
             s.clashLookaheadDays = days
-        } else if let days = data["clashLookaheadDays"] as? Double {
-            s.clashLookaheadDays = Int(days)
         }
-        if let v = data["includeWeekendsForUnbookedLabour"] as? Bool {
-            s.includeWeekendsForUnbookedLabour = v
+        if let weekends = firestoreBool(data["includeWeekendsForUnbookedLabour"]) {
+            s.includeWeekendsForUnbookedLabour = weekends
         }
-        if let ids = data["excludedUserIdsFromUnbookedWarnings"] as? [String] {
-            s.excludedUserIdsFromUnbookedWarnings = ids
-        }
+        s.excludedUserIdsFromUnbookedWarnings = excludedUserIds(from: data)
         return s
+    }
+
+    /// Canonical key wins when it is present, including an empty list. Older names are only a fallback.
+    static func excludedUserIds(from data: [String: Any]) -> [String] {
+        if data["excludedUserIdsFromUnbookedWarnings"] != nil {
+            return stringIds(from: data["excludedUserIdsFromUnbookedWarnings"])
+        }
+        let keys = [
+            "excludedUserIds",
+            "excludedUsers",
+            "excludedUserIdsFromWarnings",
+            "unbookedWarningExcludedUserIds",
+        ]
+        var ids: [String] = []
+        var seen = Set<String>()
+        for key in keys {
+            for id in stringIds(from: data[key]) where seen.insert(id).inserted {
+                ids.append(id)
+            }
+        }
+        return ids
+    }
+
+    private static func stringIds(from value: Any?) -> [String] {
+        if let ids = value as? [String] {
+            return ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        }
+        if let text = value as? String {
+            return text
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+        if let rows = value as? [Any] {
+            return rows.compactMap { item -> String? in
+                if let text = item as? String {
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed.isEmpty ? nil : trimmed
+                }
+                if let map = item as? [String: Any] {
+                    for key in ["id", "userId", "uid", "userID"] {
+                        if let text = map[key] as? String {
+                            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !trimmed.isEmpty { return trimmed }
+                        }
+                    }
+                }
+                return nil
+            }
+        }
+        return []
+    }
+
+    private static func firestoreInt(_ value: Any?) -> Int? {
+        if let days = value as? Int { return days }
+        if let days = value as? Int64 { return Int(days) }
+        if let days = value as? Double { return Int(days) }
+        if let days = value as? NSNumber { return days.intValue }
+        if let text = value as? String, let days = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return days
+        }
+        return nil
     }
 
     func asFirestoreDictionary() -> [String: Any] {

@@ -198,19 +198,19 @@ enum LaunchWindowReveal {
             print("🔥🔥🔥 DEBUG: PP_LAUNCH_REVEAL scene not active yet")
             return
         }
-        var host: UIWindow?
+        var candidates: [UIWindow] = []
         for scene in ready {
             print("🔥🔥🔥 DEBUG: PP_LAUNCH_WINDOWS total=\(scene.windows.count) state=\(scene.activationState.rawValue)")
             for window in scene.windows {
                 let hasRoot = window.rootViewController != nil
                 let wide = window.bounds.width > 1 && window.bounds.height > 1
                 print("🔥🔥🔥 DEBUG: PP_LAUNCH_WIN key=\(window.isKeyWindow) hidden=\(window.isHidden) rooted=\(hasRoot) \(Int(window.bounds.width))x\(Int(window.bounds.height))")
-                if hasRoot && wide && host == nil {
-                    host = window
+                if hasRoot && wide {
+                    candidates.append(window)
                 }
             }
         }
-        guard let host else { return }
+        guard let host = candidates.first(where: \.isKeyWindow) ?? candidates.first else { return }
         didReveal = true
         host.isHidden = false
         host.makeKeyAndVisible()
@@ -293,12 +293,18 @@ private struct LaunchSceneHost: View {
                     height: proxy.size.height > 1 ? proxy.size.height : nil
                 )
         }
-        .ignoresSafeArea()
-        .onAppear { LaunchWindowReveal.revealIfNeeded() }
+        // Keep the home indicator area for the tab bar. The top inset stays so
+        // "Hi" and the Home buttons sit below the status bar.
+        .ignoresSafeArea(edges: .bottom)
+        .onAppear {
+            LaunchWindowReveal.revealIfNeeded()
+            appSettings.settings.theme.applyToKeyWindows()
+        }
         .onChange(of: scenePhase) { _, phase in
             print("🔥🔥🔥 DEBUG: PP_LAUNCH_PHASE \(String(describing: phase))")
             if phase == .active {
                 LaunchWindowReveal.revealIfNeeded()
+                appSettings.settings.theme.applyToKeyWindows()
             }
         }
         .onChange(of: appSettings.settings.theme) { _, theme in

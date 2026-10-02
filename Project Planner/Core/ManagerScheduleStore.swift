@@ -171,6 +171,7 @@ class ManagerScheduleStore: ObservableObject {
         managerSiteBookings.removeAll { $0.id == booking.id }
         OfflineManagerScheduleLocalStore.remove(bookingId: booking.id, organizationId: orgId)
         NotificationCenter.default.post(name: didChangeNotificationName, object: nil)
+        ScheduleChangeNotifier.postBookingStoreDidChange()
 
         if smartCache?.isOnline == false {
             OfflineOutboxStore.shared.enqueueDeleteManagerSiteBooking(booking.id, organizationId: orgId)

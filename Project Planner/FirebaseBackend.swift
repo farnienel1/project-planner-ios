@@ -61,6 +61,53 @@ nonisolated func firestoreBool(_ value: Any?) -> Bool? {
     return nil
 }
 
+/// Firestore dates arrive as Timestamps, ISO strings, `yyyy-MM-dd`, epoch numbers, or `{seconds:}` maps.
+nonisolated func firestoreDate(_ value: Any?) -> Date? {
+    if let timestamp = value as? Timestamp { return timestamp.dateValue() }
+    if let date = value as? Date { return date }
+    if let map = value as? [String: Any] {
+        let seconds = (map["seconds"] as? NSNumber)?.doubleValue
+            ?? (map["_seconds"] as? NSNumber)?.doubleValue
+            ?? (map["seconds"] as? Double)
+            ?? (map["_seconds"] as? Double)
+        if let seconds {
+            return Date(timeIntervalSince1970: seconds)
+        }
+    }
+    if let number = value as? NSNumber {
+        return firestoreDate(fromEpoch: number.doubleValue)
+    }
+    if let number = value as? Double {
+        return firestoreDate(fromEpoch: number)
+    }
+    if let number = value as? Int {
+        return firestoreDate(fromEpoch: Double(number))
+    }
+    if let text = value as? String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        if let parsed = ISO8601DateFormatter().date(from: trimmed) { return parsed }
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsed = withFraction.date(from: trimmed) { return parsed }
+        let day = DateFormatter()
+        day.calendar = Calendar(identifier: .gregorian)
+        day.locale = Locale(identifier: "en_US_POSIX")
+        day.timeZone = TimeZone(secondsFromGMT: 0)
+        for format in ["yyyy-MM-dd", "yyyy/MM/dd", "dd/MM/yyyy", "dd-MM-yyyy"] {
+            day.dateFormat = format
+            if let parsed = day.date(from: trimmed) { return parsed }
+        }
+    }
+    return nil
+}
+
+private nonisolated func firestoreDate(fromEpoch value: Double) -> Date? {
+    guard value > 0 else { return nil }
+    let seconds = value > 10_000_000_000 ? value / 1000 : value
+    return Date(timeIntervalSince1970: seconds)
+}
+
 /// Result of reading one `users/{id}` document from the server while deciding whether they may leave the roster.
 enum OrganizationUserProbe {
     case present(AppUser)
@@ -912,8 +959,25 @@ class FirebaseBackend: ObservableObject {
             settings.workingHours.endTime = policy.standardDayEnd
             settings.workingHours.lunchBreak = policy.unpaidBreakMinutes
         }
-        if let warningDict = data["warningDetection"] as? [String: Any] {
+        let warningDict = data["warningDetection"] as? [String: Any]
+        if let warningDict {
             settings.warningDetection = OrgWarningDetectionSettings.fromFirestore(warningDict)
+        }
+        let canonicalExclusionPresent = warningDict?["excludedUserIdsFromUnbookedWarnings"] != nil
+        if !canonicalExclusionPresent {
+            if let settingsDict = data["settings"] as? [String: Any],
+               let nested = settingsDict["warningDetection"] as? [String: Any] {
+                let nestedIds = OrgWarningDetectionSettings.excludedUserIds(from: nested)
+                if !nestedIds.isEmpty {
+                    settings.warningDetection.excludedUserIdsFromUnbookedWarnings = nestedIds
+                }
+            }
+            if settings.warningDetection.excludedUserIdsFromUnbookedWarnings.isEmpty {
+                let siblingIds = OrgWarningDetectionSettings.excludedUserIds(from: data)
+                if !siblingIds.isEmpty {
+                    settings.warningDetection.excludedUserIdsFromUnbookedWarnings = siblingIds
+                }
+            }
         }
         if let invoicingDict = data["invoicing"] as? [String: Any] {
             settings.invoicing = organizationInvoicingFromFirestore(invoicingDict)
@@ -4176,18 +4240,46 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
             )
         }
-        try await db.collection("organizations").document(orgId).setData(
-            [
-                "warningDetection": settings.asFirestoreDictionary(),
-                "updatedAt": Timestamp(date: Date()),
-            ],
-            merge: true
-        )
+        // Dotted fields update this list without replacing other warningDetection keys the web app stores.
+        var payload: [String: Any] = ["updatedAt": Timestamp(date: Date())]
+        for (key, value) in settings.asFirestoreDictionary() {
+            payload["warningDetection.\(key)"] = value
+        }
+        let orgRef = db.collection("organizations").document(orgId)
+        do {
+            try await orgRef.updateData(payload)
+        } catch {
+            try await orgRef.setData(
+                [
+                    "warningDetection": settings.asFirestoreDictionary(),
+                    "updatedAt": Timestamp(date: Date()),
+                ],
+                merge: true
+            )
+        }
         guard var org = currentOrganization else { return }
         org.settings.warningDetection = settings
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
+    }
+
+    /// Re-reads the organisation document so Excluded Users matches the shared Firestore field, not a stale phone cache.
+    func refreshWarningDetectionFromServer() async {
+        guard let orgId = currentOrganization?.firestoreDocumentId else { return }
+        let snapshot: DocumentSnapshot
+        do {
+            snapshot = try await db.collection("organizations").document(orgId).getDocument(source: .server)
+        } catch {
+            print("🔥🔥🔥 DEBUG: warningDetection server read failed: \(error.localizedDescription)")
+            return
+        }
+        guard let data = snapshot.data(), var org = currentOrganization else { return }
+        let fresh = Self.organizationSettingsFromOrgDocument(data).warningDetection
+        org.settings.warningDetection = fresh
+        currentOrganization = org
+        storeOrganizationLocally(org)
+        print("🔥🔥🔥 DEBUG: warningDetection refreshed excluded=\(fresh.excludedUserIdsFromUnbookedWarnings.count)")
     }
 
     /// Date-aware payroll policy for bookings / timesheets on `day`.
@@ -6295,42 +6387,111 @@ class FirebaseBackend: ObservableObject {
                 throw error
             }
         }
-        return snapshot.documents.compactMap { doc -> HolidayBooking? in
-            let data = doc.data()
-            guard let startDate = (data["startDate"] as? Timestamp)?.dateValue(),
-                  let endDate = (data["endDate"] as? Timestamp)?.dateValue(),
-                  let statusRaw = data["status"] as? String,
-                  let status = HolidayStatus(rawValue: statusRaw) else { return nil }
-            let bookingOrgId = (data["organizationId"] as? String) ?? orgId
-            let id = UUID(uuidString: doc.documentID) ?? UUID()
-            let userId = data["userId"] as? String
-            let operativeId = (data["operativeId"] as? String).flatMap { UUID(uuidString: $0) }
-            let approvedByUserId = data["approvedByUserId"] as? String
-            let approvedAt = (data["approvedAt"] as? Timestamp)?.dateValue()
-            let timeSlotRaw = data["timeSlot"] as? String
-            let timeSlot = HolidayTimeSlot(rawValue: timeSlotRaw ?? "") ?? .fullDay
-            let cancellationRequestedAt = (data["cancellationRequestedAt"] as? Timestamp)?.dateValue()
-            let cancellationRequestedByUserId = data["cancellationRequestedByUserId"] as? String
-            let decisionNote = data["decisionNote"] as? String
-            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-            let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-            return HolidayBooking(
-                id: id,
-                organizationId: bookingOrgId,
-                userId: userId,
-                operativeId: operativeId,
-                startDate: startDate,
-                endDate: endDate,
-                status: status,
-                timeSlot: timeSlot,
-                approvedByUserId: approvedByUserId,
-                approvedAt: approvedAt,
-                cancellationRequestedAt: cancellationRequestedAt,
-                cancellationRequestedByUserId: cancellationRequestedByUserId,
-                decisionNote: decisionNote,
-                createdAt: createdAt,
-                updatedAt: updatedAt
-            )
+        var parsed: [HolidayBooking] = []
+        var skipped = 0
+        for doc in snapshot.documents {
+            if let booking = holidayBookingFromFirestore(doc, organizationId: orgId) {
+                parsed.append(booking)
+            } else {
+                skipped += 1
+            }
+        }
+        print("🔥🔥🔥 DEBUG: [HOLIDAY LOAD] docs=\(snapshot.documents.count) parsed=\(parsed.count) skipped=\(skipped)")
+        return parsed
+    }
+
+    private func holidayBookingFromFirestore(_ doc: QueryDocumentSnapshot, organizationId orgId: String) -> HolidayBooking? {
+        let data = doc.data()
+        let startDate = firstFirestoreDate(in: data, keys: ["startDate", "start_date", "start", "from", "dateFrom", "holidayStart", "date"])
+        let endDate = firstFirestoreDate(in: data, keys: ["endDate", "end_date", "end", "to", "dateTo", "holidayEnd"]) ?? startDate
+        guard let startDate, let endDate else {
+            print("🔥🔥🔥 DEBUG: [HOLIDAY LOAD] skip \(doc.documentID) — no start/end date")
+            return nil
+        }
+        let status = holidayStatus(from: data) ?? .approved
+        let bookingOrgId = firstFirestoreString(in: data, keys: ["organizationId"]) ?? orgId
+        let id = Manager.stableId(forFirestoreDocumentId: doc.documentID)
+        let userId = holidayUserId(from: data)
+        let operativeId = firstFirestoreString(in: data, keys: ["operativeId", "operative_id", "operativeID"]).flatMap { UUID(uuidString: $0) }
+        let approvedByUserId = firstFirestoreString(in: data, keys: ["approvedByUserId", "approvedBy"])
+        let approvedAt = firstFirestoreDate(in: data, keys: ["approvedAt"])
+        let timeSlot = holidayTimeSlot(from: firstFirestoreString(in: data, keys: ["timeSlot", "slot", "halfDay"]))
+        let cancellationRequestedAt = firstFirestoreDate(in: data, keys: ["cancellationRequestedAt"])
+        let cancellationRequestedByUserId = firstFirestoreString(in: data, keys: ["cancellationRequestedByUserId"])
+        let decisionNote = firstFirestoreString(in: data, keys: ["decisionNote", "note"])
+        let createdAt = firstFirestoreDate(in: data, keys: ["createdAt"]) ?? Date()
+        let updatedAt = firstFirestoreDate(in: data, keys: ["updatedAt"]) ?? createdAt
+        return HolidayBooking(
+            id: id,
+            organizationId: bookingOrgId,
+            userId: userId,
+            operativeId: operativeId,
+            startDate: min(startDate, endDate),
+            endDate: max(startDate, endDate),
+            status: status,
+            timeSlot: timeSlot,
+            approvedByUserId: approvedByUserId,
+            approvedAt: approvedAt,
+            cancellationRequestedAt: cancellationRequestedAt,
+            cancellationRequestedByUserId: cancellationRequestedByUserId,
+            decisionNote: decisionNote,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    private func firstFirestoreDate(in data: [String: Any], keys: [String]) -> Date? {
+        for key in keys {
+            if let date = firestoreDate(data[key]) { return date }
+        }
+        return nil
+    }
+
+    private func firstFirestoreString(in data: [String: Any], keys: [String]) -> String? {
+        for key in keys {
+            if let text = data[key] as? String {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+        }
+        return nil
+    }
+
+    private func holidayUserId(from data: [String: Any]) -> String? {
+        if let direct = firstFirestoreString(in: data, keys: ["userId", "user_id", "uid", "userID", "linkedUserId", "employeeUserId"]) {
+            return direct
+        }
+        if let user = data["user"] as? [String: Any] {
+            return firstFirestoreString(in: user, keys: ["id", "uid", "userId", "userID"])
+        }
+        return nil
+    }
+
+    private func holidayStatus(from data: [String: Any]) -> HolidayStatus? {
+        let raw = firstFirestoreString(in: data, keys: ["status", "holidayStatus", "approvalStatus"])?
+            .lowercased()
+        switch raw {
+        case nil, "":
+            return nil
+        case "pending", "requested", "awaiting", "awaiting approval", "submitted":
+            return .pending
+        case "approved", "approve", "accepted", "confirmed":
+            return .approved
+        case "rejected", "declined", "denied", "cancelled", "canceled":
+            return .rejected
+        default:
+            return nil
+        }
+    }
+
+    private func holidayTimeSlot(from raw: String?) -> HolidayTimeSlot {
+        switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "am", "morning", "a.m.":
+            return .morning
+        case "pm", "afternoon", "p.m.":
+            return .afternoon
+        default:
+            return .fullDay
         }
     }
 
@@ -8191,6 +8352,13 @@ extension FirebaseBackend {
             .collection("subcontractorBookings")
             .document(booking.id.uuidString)
             .setData(data)
+    }
+
+    func deleteSubcontractorBooking(_ booking: SubcontractorBooking, organizationId: String) async throws {
+        try await db.collection("organizations").document(organizationId)
+            .collection("subcontractorBookings")
+            .document(booking.id.uuidString)
+            .delete()
     }
     
     func loadSubcontractorBookings(organizationId: String) async throws -> [SubcontractorBooking] {

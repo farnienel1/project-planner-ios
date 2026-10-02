@@ -96,6 +96,10 @@ struct OrganisationWarningsSettingsView: View {
             }
         }
         .onAppear { syncDraftFromOrganization(force: true) }
+        .task {
+            await firebaseBackend.refreshWarningDetectionFromServer()
+            syncDraftFromOrganization(force: false)
+        }
         .onChange(of: firebaseBackend.currentOrganization?.firestoreDocumentId) { _, _ in
             syncDraftFromOrganization(force: false)
         }

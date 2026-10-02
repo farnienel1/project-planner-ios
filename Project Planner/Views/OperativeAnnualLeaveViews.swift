@@ -767,6 +767,7 @@ struct OperativeAnnualLeaveCalendarView: View {
             bookings: holidayStore.bookings,
             profileUserId: user?.id ?? person.userId ?? "",
             operativeId: person.operativeId,
+            profileEmail: user?.email,
             daysPerYear: user?.annualLeaveDaysPerYear ?? defaults.daysPerYear,
             startMonth: user?.annualLeaveYearStartMonth ?? defaults.startMonth,
             endMonth: user?.annualLeaveYearEndMonth ?? defaults.endMonth,
@@ -779,7 +780,8 @@ struct OperativeAnnualLeaveCalendarView: View {
     private var personHolidayBookings: [HolidayBooking] {
         holidayStore.myBookings(
             userId: person.userId ?? leaveProfileUser?.id,
-            operativeId: person.operativeId
+            operativeId: person.operativeId,
+            email: leaveProfileUser?.email
         )
     }
 
