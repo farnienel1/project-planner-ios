@@ -275,7 +275,7 @@ struct ProjectPlannerRootView: View {
                     .environmentObject(userStore)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            LaunchWindowAnchor {
+            LaunchWindowAnchor(coverVisible: isSessionLoading) {
                 guard !hostWindowReady else { return }
                 hostWindowReady = true
                 print("🔥🔥🔥 DEBUG: PP_LAUNCH_WINDOW claimed")
