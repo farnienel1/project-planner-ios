@@ -42,6 +42,9 @@ struct SwitchOrganisationView: View {
                     membershipList
                 }
 
+                webSetupNote
+                    .padding(.top, 16)
+
                 if let errorMessage, !errorMessage.isEmpty {
                     Text(errorMessage)
                         .font(.system(size: 12, weight: .medium))
@@ -77,6 +80,18 @@ struct SwitchOrganisationView: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .appChromeCardContainer(cornerRadius: 16)
+    }
+
+    private var webSetupNote: some View {
+        Text("New organisations are set up using the Project Planner web app, which can be reached at www.projectplanner.us.")
+            .font(.system(size: 12))
+            .foregroundStyle(ProjectWorksRevampColors.muted)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(ProjectWorksRevampColors.jobTypePillBg)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .allowsHitTesting(false)
     }
 
     private var emptyState: some View {
