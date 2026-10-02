@@ -188,6 +188,14 @@ enum PlannerStoreWiring {
     }
 }
 
+private struct LaunchShellSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        if next != .zero { value = next }
+    }
+}
+
 struct ProjectPlannerRootView: View {
     let appDelegate: AppDelegate
 
@@ -223,9 +231,8 @@ struct ProjectPlannerRootView: View {
 
     private var isSessionLoading: Bool {
         if firebaseBackend.isSwitchingOrganization { return true }
-        if !hasResolvedInitialAuth { return true }
-        if showMainExperience && !homeHasDrawn { return true }
-        return false
+        if showMainExperience { return !homeHasDrawn }
+        return !hasResolvedInitialAuth
     }
 
     @ViewBuilder
@@ -262,29 +269,34 @@ struct ProjectPlannerRootView: View {
 
     var body: some View {
         ZStack {
-            // White until Home has drawn. systemGroupedBackground is black in dark mode,
-            // and that was the screen people saw when the logo came off too early.
-            (homeHasDrawn ? Color(.systemGroupedBackground) : Color.white).ignoresSafeArea()
-            // Home stays in the hierarchy under the logo. Replacing the logo with a new
-            // root left the window blank after the logo had already gone.
+            ProjectWorksRevampColors.canvas.ignoresSafeArea()
+            // Home stays mounted. Removing the logo from the tree, or swapping it for a new
+            // root, leaves an empty white window on this iOS even after HOME_APPEARED.
             if showMainExperience {
                 authenticatedShell
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background {
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: LaunchShellSizeKey.self, value: proxy.size)
+                        }
+                    }
             } else if hasResolvedInitialAuth {
                 AuthenticationView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            if isSessionLoading {
-                AppLaunchSplashView()
-            }
+            AppLaunchSplashView()
+                .opacity(isSessionLoading ? 1 : 0)
+                .allowsHitTesting(isSessionLoading)
+                .accessibilityHidden(!isSessionLoading)
+                .zIndex(1)
         }
-        .background(homeHasDrawn ? Color(.systemGroupedBackground) : Color.white)
-        .onReceive(NotificationCenter.default.publisher(for: .plannerHomeDidDraw)) { _ in
-            guard !homeHasDrawn else { return }
+        .background(ProjectWorksRevampColors.canvas)
+        .onPreferenceChange(LaunchShellSizeKey.self) { size in
+            guard size.width > 40, size.height > 40, !homeHasDrawn else { return }
             homeHasDrawn = true
-            print("🔥🔥🔥 DEBUG: PP home drawn — splash can leave")
+            print("🔥🔥🔥 DEBUG: PP_LAUNCH_VISIBLE \(Int(size.width))x\(Int(size.height))")
         }
         .preferredColorScheme(appSettings.settings.theme.colorScheme)
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
@@ -353,13 +365,12 @@ struct ProjectPlannerRootView: View {
                     userStore.unblockLaunchProfileIfNeeded()
                 }
                 hasResolvedInitialAuth = true
-                print("🔥🔥🔥 DEBUG: PP splash waiting for Home user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
+                print("🔥🔥🔥 DEBUG: PP splash waiting for a laid-out Home user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                if !homeHasDrawn {
-                    homeHasDrawn = true
-                    print("🔥🔥🔥 DEBUG: PP splash off — Home had not reported a frame")
-                }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+                guard !homeHasDrawn else { return }
+                homeHasDrawn = true
+                print("🔥🔥🔥 DEBUG: PP_LAUNCH_TIMEOUT showing the shell without a measured frame")
             }
 
             // Profile and org data start together. A fixed 1.5s pause left Home empty, then the

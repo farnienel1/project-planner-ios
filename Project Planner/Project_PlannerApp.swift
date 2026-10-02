@@ -180,6 +180,7 @@ struct Project_PlannerApp: App {
         _ = FirebaseStartup.configureIfNeeded()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
+        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD overlay-splash")
         // Do not touch UIWindow here. Doing it before the scene exists leaves a black window
         // and the log line "Ignoring activation message because no connection exists".
         let backend = FirebaseBackend()
@@ -202,7 +203,7 @@ struct Project_PlannerApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack {
-                Color.white.ignoresSafeArea()
+                ProjectWorksRevampColors.canvas.ignoresSafeArea()
                 ProjectPlannerRootView(appDelegate: appDelegate)
                     .environmentObject(firebaseBackend)
                     .environmentObject(smartCache)
