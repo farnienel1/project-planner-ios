@@ -65,18 +65,21 @@ struct HomeView: View {
     @State private var isRefreshingHomeConnection = false
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                taskLimitWarningBanner
-                homeDashboardRoot
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 0) {
+                    taskLimitWarningBanner
+                    homeDashboardRoot
+                }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
+            .scrollContentBackground(.hidden)
+            .refreshable {
+                await refreshHomeConnection()
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(homeCanvasBackground.ignoresSafeArea())
-        .refreshable {
-            await refreshHomeConnection()
-        }
         .sheet(isPresented: $showingWarningsDetail, onDismiss: {
             WarningsRefreshHelper.isWarningsSheetVisible = false
             // REBUILD: no auto warm on dismiss.
