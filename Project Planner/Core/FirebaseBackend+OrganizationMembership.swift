@@ -502,8 +502,8 @@ extension FirebaseBackend {
             return (
                 .operative,
                 UserPermissions(
-                    manager: false,
                     adminAccess: false,
+                    manager: false,
                     materials: false,
                     operativeMode: true,
                     siteAudit: true,
