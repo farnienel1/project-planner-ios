@@ -1285,6 +1285,9 @@ struct EditUserView: View {
     @State private var resetPasswordMessage: String?
     @State private var isTransferringSuperAdmin = false
     @State private var transferSuperAdminMessage: String?
+    @State private var showingChangeSuperAdminPicker = false
+    @State private var showingChangeSuperAdminConfirmation = false
+    @State private var pendingSuperAdminUserId: String?
     @State private var isUpdatingActiveStatus = false
     @State private var activeStatusMessage: String?
     @State private var showingHolidayReport = false
@@ -1385,7 +1388,56 @@ struct EditUserView: View {
     }
     
     private var canEditPermissionsMatrix: Bool {
-        userStore.canEditTargetUserPermissions(user)
+        if isViewingSuperAdminProfile { return false }
+        return userStore.canEditTargetUserPermissions(displayedUser)
+    }
+
+    /// Super Admin profile: the flag, or the organisation creator when those ids have drifted apart.
+    private var isViewingSuperAdminProfile: Bool {
+        user.isSuperAdmin || displayedUser.isSuperAdmin || userStore.isOrganizationCreator(userId: user.id)
+    }
+
+    /// Change Super Admin is only on the signed-in Super Admin's own profile.
+    private var canOfferChangeSuperAdmin: Bool {
+        guard isViewingSuperAdminProfile, let me = userStore.currentUser else { return false }
+        let ownsThisProfile = me.id == user.id || me.id == displayedUser.id
+        let signedInIsSuperAdmin = me.isSuperAdmin || userStore.isOrganizationCreator(userId: me.id)
+        return ownsThisProfile && signedInIsSuperAdmin
+    }
+
+    private var superAdminTransferCandidates: [AppUser] {
+        userStore.organizationUsers
+            .filter { candidate in
+                candidate.isStoredUserDocument &&
+                candidate.id != user.id &&
+                candidate.id != displayedUser.id &&
+                !candidate.permissions.operativeMode &&
+                (candidate.permissions.adminAccess || candidate.role == .admin) &&
+                candidate.passwordSet &&
+                candidate.isActive
+            }
+            .sorted {
+                let left = $0.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? $0.email : $0.fullName
+                let right = $1.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? $1.email : $1.fullName
+                return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+            }
+    }
+
+    private var pendingSuperAdminCandidate: AppUser? {
+        guard let pendingSuperAdminUserId else { return nil }
+        return superAdminTransferCandidates.first(where: { $0.id == pendingSuperAdminUserId })
+            ?? userStore.organizationUsers.first(where: { $0.id == pendingSuperAdminUserId })
+    }
+
+    private var pendingSuperAdminConfirmationMessage: String {
+        let name = pendingSuperAdminCandidate?.fullName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let display = name.isEmpty ? (pendingSuperAdminCandidate?.email ?? "This administrator") : name
+        return "\(display) will become the Super Admin. You will stay an administrator. Other permission toggles stay as they are."
+    }
+
+    private func rosterDisplayName(_ candidate: AppUser) -> String {
+        let name = candidate.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? candidate.email : name
     }
     
     /// Admin-level account tools (status, delete, some emails).
@@ -1448,7 +1500,7 @@ struct EditUserView: View {
     }
 
     private var shouldShowAnnualLeaveAccessToggle: Bool {
-        if userStore.isOrganizationCreator(userId: user.id) { return false }
+        if isViewingSuperAdminProfile { return false }
         guard userStore.canEditTargetUserPermissions(displayedUser) else { return false }
         return permissions.operativeMode || user.role == .operative || permissions.manager || permissions.adminAccess
     }
@@ -1481,7 +1533,7 @@ struct EditUserView: View {
     }
 
     private var shouldShowAnnualLeaveEntitlementSection: Bool {
-        if userStore.isOrganizationCreator(userId: user.id) { return false }
+        if isViewingSuperAdminProfile { return false }
         guard userStore.canEditTargetUserPermissions(displayedUser) else { return false }
         guard annualLeaveEnabledDraft else { return false }
         return permissions.operativeMode || user.role == .operative || permissions.manager
@@ -1651,9 +1703,6 @@ struct EditUserView: View {
     
     // Check if any changes have been made
     private var hasChanges: Bool {
-        if userStore.isOrganizationCreator(userId: user.id) {
-            return permissions.annualLeaveSelfBook != user.permissions.annualLeaveSelfBook
-        }
         let dayRateEligible = permissions.operativeMode || permissions.manager || permissions.adminAccess
         let trimmedTradeP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTradeC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1669,9 +1718,10 @@ struct EditUserView: View {
         )
         let staffDayRateChanged = !permissions.operativeMode && (permissions.manager || permissions.adminAccess)
             && payrollRateDirty
+        let permissionsDirty = !isViewingSuperAdminProfile && permissions != user.permissions
         if canUseAdminAccountTools {
             return identityDirty ||
-                permissions != user.permissions ||
+                permissionsDirty ||
                 isActive != user.isActive ||
                 operativeProfileChanged ||
                 staffDayRateChanged ||
@@ -1684,7 +1734,7 @@ struct EditUserView: View {
         if canEditPermissionsMatrix && (identityDirty || operativeProfileChanged || tradeChanged || staffDayRateChanged || employmentTypeChanged || annualLeaveAccessDirty || annualLeaveEntitlementDirty || billingChanged) {
             return true
         }
-        if isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative) {
+        if isManagerOperativeOnly && !isViewingSuperAdminProfile && (user.permissions.operativeMode || user.role == .operative) {
             return identityDirty ||
                 permissions.materials != user.permissions.materials ||
                 permissions.siteAudit != user.permissions.siteAudit ||
@@ -1821,7 +1871,26 @@ struct EditUserView: View {
             calendarStartOfDay: { calendarStartOfDay($0) },
             calendarStartOfTomorrow: calendarStartOfTomorrow
         ))
-        .alert("Turn off Annual Leave Management?", isPresented: $showingSelfBookOffConfirmation) {
+            .sheet(isPresented: $showingChangeSuperAdminPicker, onDismiss: {
+                if pendingSuperAdminUserId != nil {
+                    showingChangeSuperAdminConfirmation = true
+                }
+            }) {
+                changeSuperAdminPicker
+            }
+            .alert("Change Super Admin?", isPresented: $showingChangeSuperAdminConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    pendingSuperAdminUserId = nil
+                }
+                Button("Change Super Admin") {
+                    if let candidate = pendingSuperAdminCandidate {
+                        transferSuperAdmin(to: candidate)
+                    }
+                }
+            } message: {
+                Text(pendingSuperAdminConfirmationMessage)
+            }
+            .alert("Turn off Annual Leave Management?", isPresented: $showingSelfBookOffConfirmation) {
             Button("Cancel", role: .cancel) {
                 selfBookOffConfirmationAccepted = false
             }
@@ -1868,7 +1937,7 @@ struct EditUserView: View {
             if shouldShowAnnualLeaveEntitlementSection {
                 annualLeaveEntitlementSection
             }
-            if canUseAdminAccountTools && !userStore.isOrganizationCreator(userId: user.id) {
+            if canUseAdminAccountTools && !isViewingSuperAdminProfile {
                 activeToggleChromeSection
             }
             permissionsSection
@@ -1878,7 +1947,7 @@ struct EditUserView: View {
                     .foregroundStyle(.red)
                     .padding(.horizontal, 4)
             }
-            if canShowCredentialActions || canUseAdminAccountTools {
+            if canShowCredentialActions || canUseAdminAccountTools || canOfferChangeSuperAdmin {
                 actionsChromeSection
             }
         }
@@ -2836,17 +2905,18 @@ struct EditUserView: View {
                     }
                 }
 
-                if canUseAdminAccountTools,
-                   userStore.currentUser?.isSuperAdmin == true,
-                   !user.isSuperAdmin,
-                   !user.permissions.operativeMode,
-                   (user.permissions.adminAccess || user.role == .admin) {
+                if canOfferChangeSuperAdmin {
                     ManageUserAccountActionButton(
                         iconName: "crown.fill",
                         iconBackground: ManageUserProfilePalette.chipPurpleBg,
                         iconForeground: ManageUserProfilePalette.chipPurpleFg,
-                        title: "Make Super Admin",
-                        action: { transferSuperAdmin() },
+                        title: "Change Super Admin",
+                        subtitle: "Pick another administrator to take over.",
+                        action: {
+                            transferSuperAdminMessage = nil
+                            pendingSuperAdminUserId = nil
+                            showingChangeSuperAdminPicker = true
+                        },
                         isBusy: isTransferringSuperAdmin
                     )
                 }
@@ -2891,7 +2961,7 @@ struct EditUserView: View {
                 }
 
                 if canUseAdminAccountTools,
-                   !userStore.isOrganizationCreator(userId: user.id) {
+                   !isViewingSuperAdminProfile {
                     ManageUserAccountActionButton(
                         iconName: "pause.circle.fill",
                         iconBackground: ManageUserProfilePalette.chipAmberBg,
@@ -2921,7 +2991,7 @@ struct EditUserView: View {
 
                 if canUseAdminAccountTools,
                    userStore.canDeleteUser(user),
-                   !userStore.isOrganizationCreator(userId: user.id) {
+                   !isViewingSuperAdminProfile {
                     ManageUserAccountActionButton(
                         iconName: "trash.fill",
                         iconBackground: ManageUserProfilePalette.chipRedBg,
@@ -2938,17 +3008,60 @@ struct EditUserView: View {
         }
     }
 
-    private func transferSuperAdmin() {
+    private func transferSuperAdmin(to newOwner: AppUser) {
         isTransferringSuperAdmin = true
         transferSuperAdminMessage = nil
+        pendingSuperAdminUserId = nil
         Task {
-            let success = await userStore.transferSuperAdmin(to: user.id)
+            let success = await userStore.transferSuperAdmin(to: newOwner.id)
             await MainActor.run {
                 isTransferringSuperAdmin = false
+                let name = newOwner.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let display = name.isEmpty ? newOwner.email : name
                 transferSuperAdminMessage = success
-                    ? "✅ Ownership transferred. \(user.fullName) is now Super Admin."
+                    ? "✅ Ownership transferred. \(display) is now Super Admin."
                     : (userStore.errorMessage ?? "❌ Failed to transfer ownership.")
                 if success { dismiss() }
+            }
+        }
+    }
+
+    private var changeSuperAdminPicker: some View {
+        NavigationStack {
+            Group {
+                if superAdminTransferCandidates.isEmpty {
+                    Text("You need another administrator first.")
+                        .font(.body)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        .padding(.horizontal, 24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List(superAdminTransferCandidates) { candidate in
+                        Button {
+                            pendingSuperAdminUserId = candidate.id
+                            showingChangeSuperAdminPicker = false
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(rosterDisplayName(candidate))
+                                    .font(.body)
+                                    .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                                if !candidate.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    Text(candidate.email)
+                                        .font(.caption)
+                                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Change Super Admin")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showingChangeSuperAdminPicker = false }
+                }
             }
         }
     }
@@ -2975,7 +3088,7 @@ struct EditUserView: View {
     
     private var permissionsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if userStore.isOrganizationCreator(userId: user.id) {
+            if isViewingSuperAdminProfile {
                 ManageUserSectionTitle(text: "Permissions")
                 ManageUserCard {
                     HStack(alignment: .top, spacing: 12) {
@@ -2988,37 +3101,12 @@ struct EditUserView: View {
                             Text("Super Admin")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(Color.orange)
-                            Text("This user is the organization creator. Core permissions cannot be changed.")
+                            Text("The Super Admin's permissions cannot be changed. Super Admin is passed on with Change Super Admin.")
                                 .font(.system(size: 11))
                                 .foregroundStyle(ManageUserProfilePalette.textSecondary)
                         }
                     }
                     .padding(16)
-                }
-                if permissions.manager || permissions.adminAccess {
-                    ManageUserCard {
-                        ManageUserExpandablePermissionToggleRow(
-                            iconName: "beach.umbrella.fill",
-                            iconBackground: ManageUserProfilePalette.chipBlueBg,
-                            iconForeground: ManageUserProfilePalette.chipBlueFg,
-                            title: "Annual Leave Management",
-                            description: "Can book their own annual leave. If off, this user requests leave for approval.",
-                            isOn: $permissions.annualLeaveSelfBook,
-                            isDisabled: hasNoLineManagerDraft
-                        )
-                        .onChange(of: permissions.annualLeaveSelfBook) { oldValue, newValue in
-                            if oldValue && !newValue && !hasNoLineManagerDraft {
-                                selfBookOffConfirmationAccepted = false
-                            }
-                        }
-                        if hasNoLineManagerDraft {
-                            Text("No line manager is selected, so this user books their own annual leave without approval routing.")
-                                .font(.caption)
-                                .foregroundStyle(ManageUserProfilePalette.textSecondary)
-                                .padding(.horizontal, 14)
-                                .padding(.bottom, 8)
-                        }
-                    }
                 }
             } else if !canEditPermissionsMatrix {
                 Text("You do not have permission to change access for this user. Ask an organisation admin.")
@@ -3301,20 +3389,7 @@ struct EditUserView: View {
         var didPersistPermissions = false
         let previousPermissions = subjectUser.permissions
         let previousHasNoLineManager = subjectUser.hasNoLineManager
-        if canEditPermissionsMatrix && userStore.isOrganizationCreator(userId: user.id) {
-            if permissions.annualLeaveSelfBook != subjectUser.permissions.annualLeaveSelfBook {
-                didPersistPermissions = true
-                var outgoing = subjectUser.permissions
-                outgoing.annualLeaveSelfBook = permissions.annualLeaveSelfBook
-                outgoing.skills = false
-                permissionsSuccess = await userStore.updateUserPermissions(
-                    userId: user.id,
-                    permissions: outgoing,
-                    holidayStore: holidayStore,
-                    linkedOperativeUUID: linkedOpId
-                )
-            }
-        } else if canEditPermissionsMatrix && !userStore.isOrganizationCreator(userId: user.id) {
+        if canEditPermissionsMatrix && !isViewingSuperAdminProfile {
             if canUseAdminAccountTools && permissions != subjectUser.permissions {
                 didPersistPermissions = true
                 var outgoing = permissions
@@ -3353,7 +3428,7 @@ struct EditUserView: View {
         }
 
         var activeSuccess = true
-        if canUseAdminAccountTools && isActive != subjectUser.isActive {
+        if canUseAdminAccountTools && !isViewingSuperAdminProfile && isActive != subjectUser.isActive {
             activeSuccess = await userStore.updateUserActiveStatus(for: subjectUser, isActive: isActive)
         }
 

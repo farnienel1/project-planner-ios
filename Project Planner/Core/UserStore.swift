@@ -277,6 +277,8 @@ class UserStore: ObservableObject {
                 }
 
                 if let loaded = userData {
+                    // Paint with the profile already read. The phone-session overlay must not hold Home blank.
+                    self.currentUser = loaded
                     userData = await firebaseBackend.applyDeviceSessionIfNeeded(to: loaded)
                 }
                 self.currentUser = userData
@@ -460,8 +462,6 @@ class UserStore: ObservableObject {
             let managers = published.filter(\.appearsOnManagersList).count
             let operatives = published.filter(\.appearsOnOperativesList).count
             print("🔥🔥🔥 DEBUG: ROSTER_PUBLISHED count=\(published.count) admins=\(admins) managers=\(managers) operatives=\(operatives)")
-            
-            await enforceSingleSuperAdminInFirestoreIfNeeded()
         } catch {
             errorMessage = "Failed to load organization users: \(error.localizedDescription)"
             print("🔥🔥🔥 DEBUG: Error loading organization users: \(error)")
@@ -909,34 +909,13 @@ class UserStore: ObservableObject {
     /// Whether the signed-in user may change permissions for `target` in **Manage / edit user**.
     func canEditTargetUserPermissions(_ target: AppUser) -> Bool {
         guard let acting = currentUser else { return false }
-        if isOrganizationCreator(userId: target.id) { return false }
+        if target.isSuperAdmin || isOrganizationCreator(userId: target.id) { return false }
         if acting.permissions.operativeMode { return false }
         if hasAdminAccess() { return true }
         if isActingManagerOperativeManagementOnly() {
             return target.permissions.operativeMode || target.role == .operative
         }
         return false
-    }
-    
-    /// Demotes mistaken `isSuperAdmin` flags so only the organisation creator remains super admin.
-    private func enforceSingleSuperAdminInFirestoreIfNeeded() async {
-        guard let firebaseBackend,
-              let creatorId = firebaseBackend.currentOrganization?.creatorUserId,
-              hasAdminAccess() else { return }
-        for index in organizationUsers.indices where organizationUsers[index].isSuperAdmin && organizationUsers[index].id != creatorId {
-            let userId = organizationUsers[index].id
-            let email = organizationUsers[index].email
-            do {
-                try await firebaseBackend.clearMistakenSuperAdminFlag(userId: userId)
-                organizationUsers[index].isSuperAdmin = false
-                print("🔥🔥🔥 DEBUG: Demoted mistaken super admin for \(email) without rewriting the rest of their profile")
-            } catch {
-                print("🔥🔥🔥 DEBUG: Failed to demote super admin for \(email): \(error.localizedDescription)")
-            }
-        }
-        if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? organizationUsers.first?.organizationId {
-            RosterRetention.save(organizationUsers, organizationId: orgId)
-        }
     }
     
     func canViewReports() -> Bool {
@@ -948,9 +927,8 @@ class UserStore: ObservableObject {
     /// - Super Admin: can delete any non-creator user (including admins)
     /// - Admin (non-super): can delete only non-admin/non-super users
     private func canDeleteUser(targetUser: AppUser, actingUser: AppUser) -> Bool {
-        let creatorUserId = firebaseBackend?.currentOrganization?.creatorUserId
-        let isCreatorTarget = creatorUserId != nil && creatorUserId == targetUser.id
-        if isCreatorTarget { return false }
+        if targetUser.isSuperAdmin { return false }
+        if isProtectedSuperAdmin(targetUser) { return false }
 
         if actingUser.isSuperAdmin {
             return actingUser.id != targetUser.id
@@ -973,6 +951,11 @@ class UserStore: ObservableObject {
     func isOrganizationCreator(userId: String) -> Bool {
         guard let creatorUserId = firebaseBackend?.currentOrganization?.creatorUserId else { return false }
         return creatorUserId == userId
+    }
+
+    /// The organisation creator, or anyone still flagged super admin. Their toggles stay locked.
+    func isProtectedSuperAdmin(_ user: AppUser) -> Bool {
+        user.isSuperAdmin || isOrganizationCreator(userId: user.id)
     }
     
     /// Summary of what the current user can and cannot see (for debugging / Settings).
@@ -1271,12 +1254,12 @@ class UserStore: ObservableObject {
 
     // MARK: - Ownership transfer (Super Admin reassignment)
 
-    /// Transfers organization ownership (Super Admin) to another admin user.
-    /// Updates `organizations/{orgId}.creatorUserId` and flips `isSuperAdmin` flags accordingly.
+    /// Transfers organization ownership (Super Admin) to another administrator.
+    /// Updates `organizations/{orgId}.creatorUserId` and the super-admin flags only.
     func transferSuperAdmin(to newOwnerUserId: String) async -> Bool {
         guard let firebaseBackend else { return false }
         guard let currentUser else { return false }
-        guard currentUser.isSuperAdmin else {
+        guard currentUser.isSuperAdmin || isOrganizationCreator(userId: currentUser.id) else {
             errorMessage = "Only the Super Admin can transfer ownership."
             return false
         }
@@ -1288,11 +1271,12 @@ class UserStore: ObservableObject {
             errorMessage = "Organization not loaded."
             return false
         }
-        if newOwnerUserId == currentUser.id {
+        let newId = newOwnerUserId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if newId.isEmpty || newId == currentUser.id {
             errorMessage = "You are already the Super Admin."
             return false
         }
-        guard let newOwner = organizationUsers.first(where: { $0.id == newOwnerUserId }) else {
+        guard let newOwner = organizationUsers.first(where: { $0.id == newId }), newOwner.isStoredUserDocument else {
             errorMessage = "User not found."
             return false
         }
@@ -1300,15 +1284,24 @@ class UserStore: ObservableObject {
             errorMessage = "Cannot make an operative the Super Admin."
             return false
         }
-        guard newOwner.permissions.adminAccess || newOwner.isSuperAdmin || newOwner.role == .admin else {
+        guard newOwner.permissions.adminAccess || newOwner.role == .admin else {
             errorMessage = "Only an Admin can be made Super Admin."
             return false
         }
+        guard newOwner.isActive, newOwner.passwordSet else {
+            errorMessage = "Choose an active administrator who has finished setting up their account."
+            return false
+        }
+
+        let alsoDemoteUserIds = organizationUsers
+            .filter { $0.isSuperAdmin && $0.id != newId }
+            .map(\.id)
 
         do {
             try await firebaseBackend.transferOrganizationOwnership(
                 organizationId: organizationId,
-                newCreatorUserId: newOwnerUserId
+                newCreatorUserId: newId,
+                alsoDemoteUserIds: alsoDemoteUserIds
             )
             await loadCurrentUser()
             await loadOrganizationUsers()
@@ -1332,6 +1325,8 @@ class UserStore: ObservableObject {
              
              func deactivateUser(userId: String) async {
                  guard let firebaseBackend = firebaseBackend else { return }
+                 if isOrganizationCreator(userId: userId) { return }
+                 if organizationUsers.first(where: { $0.id == userId })?.isSuperAdmin == true { return }
                  
                  do {
                      // Update user in Firebase to set isActive to false
@@ -1377,7 +1372,9 @@ class UserStore: ObservableObject {
                 guard canDeleteUser(targetUser: user, actingUser: currentUser) else {
                     print("🔥🔥🔥 DEBUG: ❌ Delete blocked by role policy")
                      await MainActor.run {
-                        if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
+                        if user.isSuperAdmin || isOrganizationCreator(userId: user.id) {
+                            errorMessage = "The Super Admin cannot be deleted."
+                        } else if user.permissions.adminAccess || user.role == .admin {
                             errorMessage = "Only the Super Admin can delete admin users."
                         } else {
                             errorMessage = "You do not have permission to delete this user."
@@ -1734,8 +1731,8 @@ class UserStore: ObservableObject {
                          var updatedUser = organizationUsers[index]
                          let previousPermissions = updatedUser.permissions
 
-                         if updatedUser.isSuperAdmin && isOrganizationCreator(userId: updatedUser.id) {
-                             print("🔥🔥🔥 DEBUG: Cannot update permissions for organization creator super admin")
+                         if updatedUser.isSuperAdmin || isOrganizationCreator(userId: updatedUser.id) {
+                             print("🔥🔥🔥 DEBUG: Cannot update permissions for the Super Admin")
                              return false
                          }
 
@@ -1805,7 +1802,7 @@ class UserStore: ObservableObject {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
         var updated = organizationUsers[index]
-        if updated.isSuperAdmin && isOrganizationCreator(userId: updated.id) {
+        if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
             return false
         }
         let clampedDays = AnnualLeavePolicy.clampDaysPerYear(daysPerYear)
@@ -1854,7 +1851,7 @@ class UserStore: ObservableObject {
         guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
         if isOrganizationCreator(userId: userId) { return false }
         var updated = organizationUsers[index]
-        if updated.isSuperAdmin && isOrganizationCreator(userId: updated.id) {
+        if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
             return false
         }
 
@@ -1887,7 +1884,7 @@ class UserStore: ObservableObject {
         guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
         if isOrganizationCreator(userId: userId) { return false }
         var updated = organizationUsers[index]
-        if updated.isSuperAdmin && isOrganizationCreator(userId: updated.id) {
+        if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
             return false
         }
         let calendar = Calendar.current
@@ -2239,6 +2236,10 @@ class UserStore: ObservableObject {
                  }
                  guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else {
                      errorMessage = "Organization not loaded."
+                     return false
+                 }
+                 if !isActive && isProtectedSuperAdmin(user) {
+                     errorMessage = "The Super Admin cannot be deactivated."
                      return false
                  }
                  
