@@ -278,7 +278,6 @@ struct ProjectPlannerRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .plannerHomeDidDraw)) { _ in
             print("🔥🔥🔥 DEBUG: PP_LAUNCH_VISIBLE home")
         }
-        .preferredColorScheme(appSettings.settings.theme.colorScheme)
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
             guard !signedIn else { return }
             guard FirebaseApp.app() != nil else { return }
