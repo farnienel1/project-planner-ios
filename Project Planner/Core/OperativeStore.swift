@@ -129,6 +129,33 @@ class OperativeStore: ObservableObject {
         allManagers.filter { $0.isActive }
     }
     
+    /// An empty or shorter fetch must not delete people already on screen.
+    private static func keepingKnownPeople(existing: [Operative], incoming: [Operative]) -> [Operative] {
+        if incoming.isEmpty && !existing.isEmpty {
+            print("🔥🔥🔥 DEBUG: OPERATIVES_KEPT \(existing.count) — refused an empty fetch")
+            return existing
+        }
+        if incoming.count >= existing.count { return incoming }
+        var byId = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        for person in incoming { byId[person.id] = person }
+        let merged = Array(byId.values)
+        print("🔥🔥🔥 DEBUG: OPERATIVES_KEPT merged \(merged.count) (fetch had \(incoming.count))")
+        return merged
+    }
+
+    private static func keepingKnownManagers(existing: [Manager], incoming: [Manager]) -> [Manager] {
+        if incoming.isEmpty && !existing.isEmpty {
+            print("🔥🔥🔥 DEBUG: MANAGERS_KEPT \(existing.count) — refused an empty fetch")
+            return existing
+        }
+        if incoming.count >= existing.count { return incoming }
+        var byId = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        for person in incoming { byId[person.id] = person }
+        let merged = Array(byId.values)
+        print("🔥🔥🔥 DEBUG: MANAGERS_KEPT merged \(merged.count) (fetch had \(incoming.count))")
+        return merged
+    }
+
     /// Returns true if the manager is a legacy/placeholder entry (e.g. "Initial manager placeholder system") and should not be shown in the app.
     private static func isPlaceholderManager(_ manager: Manager) -> Bool {
         let name = manager.fullName.lowercased()
@@ -194,6 +221,17 @@ class OperativeStore: ObservableObject {
             }
             
             do {
+                if operatives.isEmpty, let smartCache {
+                    let cachedOperatives = smartCache.getCachedOperatives()
+                    let cachedManagers = smartCache.getCachedManagers().filter { !Self.isPlaceholderManager($0) }
+                    if !cachedOperatives.isEmpty {
+                        operatives = cachedOperatives
+                        print("🔥🔥🔥 DEBUG: OPERATIVES_RESTORED \(cachedOperatives.count) from cache before fetch")
+                    }
+                    if managers.isEmpty, !cachedManagers.isEmpty {
+                        managers = cachedManagers
+                    }
+                }
                 // Try to load from Firebase if authenticated (don't require smartCache to be online)
                 if let firebaseBackend = firebaseBackend, 
                    firebaseBackend.isAuthenticated {
@@ -235,9 +273,10 @@ class OperativeStore: ObservableObject {
                         }
                         let realManagers = firebaseManagers.filter { !Self.isPlaceholderManager($0) }
                         guard loadGeneration == generation else { return }
-                        self.managers = realManagers
+                        let keptManagers = Self.keepingKnownManagers(existing: self.managers, incoming: realManagers)
+                        self.managers = keptManagers
                         if let smartCache = smartCache {
-                            smartCache.cacheManagers(realManagers)
+                            smartCache.cacheManagers(keptManagers)
                         }
                         
                         // Load qualifications from Firebase
@@ -269,16 +308,16 @@ class OperativeStore: ObservableObject {
                         let realOperatives = firebaseOperatives.filter { operative in
                             let name = operative.name.lowercased()
                             let email = operative.email.lowercased()
-                            return !name.contains("placeholder") && !email.contains("placeholder") && !name.contains("initial")
+                            return !name.contains("placeholder") && !email.contains("placeholder") && !name.contains("initial operative")
                         }
                         guard loadGeneration == generation else { return }
-                        self.operatives = realOperatives
+                        self.operatives = Self.keepingKnownPeople(existing: self.operatives, incoming: realOperatives)
                         if let smartCache = smartCache {
                             smartCache.cacheOrganizationSkills([])
-                            smartCache.cacheOperatives(realOperatives)
+                            smartCache.cacheOperatives(self.operatives)
                         }
                         
-                        print("🔥🔥🔥 DEBUG: ✅ Loaded \(realOperatives.count) operatives, \(realManagers.count) managers from Firebase (filtered from \(firebaseOperatives.count) docs)")
+                        print("🔥🔥🔥 DEBUG: ✅ Loaded \(self.operatives.count) operatives, \(self.managers.count) managers from Firebase (filtered from \(firebaseOperatives.count) docs)")
                         isOffline = false
                     } else {
                         // Organization still nil after recovery attempt - use cached data

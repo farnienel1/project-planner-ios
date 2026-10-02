@@ -2835,12 +2835,11 @@ class FirebaseBackend: ObservableObject {
                 return nil
             }
             
-            guard let startDate = (data["startDate"] as? Timestamp)?.dateValue(),
-                  let skillsArray = data["skills"] as? [String] else {
-                return nil
-            }
-            
-            let skills = Set(skillsArray)
+            // A missing start date or skills list used to drop the whole person, which then hid their bookings.
+            let startDate = (data["startDate"] as? Timestamp)?.dateValue()
+                ?? (data["createdAt"] as? Timestamp)?.dateValue()
+                ?? Date()
+            let skills = Set(data["skills"] as? [String] ?? [])
             
             // Parse qualifications
             var qualifications: Set<Qualification> = []
@@ -2927,7 +2926,7 @@ class FirebaseBackend: ObservableObject {
                     qualifications: Array(qualifications),
                     qualificationExpiryDates: qualificationExpiryDates,
                     qualificationCertificateURLs: qualificationCertificateURLs,
-                    isActive: data["isActive"] as? Bool ?? true,
+                    isActive: firestoreBool(data["isActive"]) ?? true,
                     hourlyRate: loadedHourly,
                     dayRate: loadedDay ?? loadedHourly,
                     currencySymbol: data["currencySymbol"] as? String,
@@ -3179,13 +3178,13 @@ class FirebaseBackend: ObservableObject {
                 
                 guard let firstName = data["firstName"] as? String,
                       let lastName = data["lastName"] as? String,
-                      let email = data["email"] as? String,
-                      let isActive = data["isActive"] as? Bool,
-                      let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
-                      let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() else {
+                      let email = data["email"] as? String else {
                     print("🔥🔥🔥 DEBUG: Failed to parse manager data for document: \(doc.documentID)")
                     continue
                 }
+                let isActive = firestoreBool(data["isActive"]) ?? true
+                let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+                let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
                 let mobileNumber = (data["mobileNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 
                 let id = UUID(uuidString: doc.documentID) ?? UUID()
@@ -3463,7 +3462,7 @@ class FirebaseBackend: ObservableObject {
         }
     }
     
-    private static func parseAppUserDocument(userId: String, data: [String: Any], memberRole: String? = nil) -> AppUser {
+    private static func parseAppUserDocument(userId: String, data: [String: Any]) -> AppUser {
         let email = data["email"] as? String ?? ""
         let organizationId = organizationIdFromFirestore(data["organizationId"]) ?? ""
         let role = Self.roleFromStoredToken(data["role"] as? String)
@@ -3472,37 +3471,17 @@ class FirebaseBackend: ObservableObject {
 
         // Top-level flag wins when it is actually stored. Nested `permissions` covers website / older writes.
         // `as? Bool` is not used: Firestore may return 0/1 or "true", and that used to zero every flag.
+        // Role text and operative/manager records do not invent these flags.
         func flag(_ key: String, default defaultValue: Bool) -> Bool {
             if let top = firestoreBool(data[key]) { return top }
             if let nested = firestoreBool(nestedPermissions[key]) { return nested }
             return defaultValue
         }
 
-        var operativeMode = flag("operativeMode", default: false)
-        var adminAccess = flag("adminAccess", default: false)
-        var manager = flag("manager", default: false)
-        var isSuperAdmin = flag("isSuperAdmin", default: false)
-        var matchesARoleList = operativeMode || isSuperAdmin || adminAccess || manager
-        if !matchesARoleList {
-            let hinted = (role == .basic || role == .viewer) ? Self.roleFromStoredToken(memberRole) : role
-            switch hinted {
-            case .operative:
-                operativeMode = true
-            case .admin:
-                adminAccess = true
-                isSuperAdmin = false
-            case .manager:
-                manager = true
-            case .basic, .viewer:
-                break
-            }
-            matchesARoleList = operativeMode || isSuperAdmin || adminAccess || manager
-        }
-        if operativeMode {
-            adminAccess = false
-            manager = false
-            isSuperAdmin = false
-        }
+        let operativeMode = flag("operativeMode", default: false)
+        let adminAccess = flag("adminAccess", default: false)
+        let manager = flag("manager", default: false)
+        let isSuperAdmin = flag("isSuperAdmin", default: false)
 
         let permissions = UserPermissions(
             adminAccess: adminAccess,
@@ -3523,7 +3502,7 @@ class FirebaseBackend: ObservableObject {
         )
         let policyAccepted = flag("policyAccepted", default: false)
         let policyAcceptedAt = (data["policyAcceptedAt"] as? Timestamp)?.dateValue()
-        let resolvedRole: UserRole = operativeMode ? .operative : role
+        let resolvedRole = role
         
         let assignedManagerUserId = data["assignedManagerUserId"] as? String
         let assignedManagerUserIdsRaw = data["assignedManagerUserIds"] as? [String] ?? []
@@ -3632,7 +3611,9 @@ class FirebaseBackend: ObservableObject {
     /// `confirmedMissing` is only a successful server snapshot that does not exist.
     /// A timeout, a rules error, or an offline failure is `unconfirmed` — the roster must keep that person.
     func probeOrganizationUser(userId: String, organizationId: String) async -> OrganizationUserProbe {
-        let orgId = normalizedOrganizationId(organizationId)
+        // `organizationId` is the roster being shown. It is not used to delete someone whose
+        // user document points at another company: that field is the company they last opened.
+        _ = organizationId
         let trimmedId = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedId.isEmpty else { return .unconfirmed }
         do {
@@ -3641,17 +3622,24 @@ class FirebaseBackend: ObservableObject {
                 timeoutSeconds: 4
             )
             guard doc.exists, let data = doc.data() else { return .confirmedMissing }
-            var user = Self.parseAppUserDocument(userId: trimmedId, data: data)
-            let docOrg = organizationIdFromFirestore(data["organizationId"]) ?? ""
-            if !docOrg.isEmpty, !orgId.isEmpty, !organizationIdsMatch(docOrg, orgId) {
-                return .confirmedMissing
-            }
-            if !orgId.isEmpty {
-                user.organizationId = orgId
-            }
-            return .present(user)
+            return .present(Self.parseAppUserDocument(userId: trimmedId, data: data))
         } catch {
             return .unconfirmed
+        }
+    }
+
+    /// Writes only `organizationId` when that field is missing and the id is on this organisation's members map.
+    private func patchMissingOrganizationId(userId: String, organizationId: String) async {
+        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !trimmed.isEmpty, !orgId.isEmpty else { return }
+        do {
+            try await db.collection("users").document(trimmed).updateData([
+                "organizationId": orgId
+            ])
+            print("🔥🔥🔥 DEBUG: Patched users/\(trimmed) organizationId only")
+        } catch {
+            print("🔥🔥🔥 DEBUG: organizationId patch skipped for \(trimmed): \(error.localizedDescription)")
         }
     }
 
@@ -3680,8 +3668,12 @@ class FirebaseBackend: ObservableObject {
     }
 
     private struct OrgMemberIndex {
-        var ids = Set<String>()
-        var rolesByUserId: [String: String] = [:]
+        /// Keys of `organizations/{orgId}.members`. Only these may receive an `organizationId` patch.
+        var memberIds = Set<String>()
+        /// Member keys plus `userEmails.userId`.
+        var indexedUserIds = Set<String>()
+        /// `userEmails/{email}` document id → `userId`.
+        var userIdByEmail: [String: String] = [:]
     }
 
     private func loadOrgMemberIndex(organizationId: String) async -> OrgMemberIndex {
@@ -3694,49 +3686,122 @@ class FirebaseBackend: ObservableObject {
             orgSnap = try? await orgRef.getDocument(source: .cache)
         }
         if let members = orgSnap?.data()?["members"] as? [String: Any] {
-            for (userId, roleValue) in members {
+            for (userId, _) in members {
                 let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
-                index.ids.insert(trimmed)
-                if let role = roleValue as? String {
-                    let token = role.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !token.isEmpty { index.rolesByUserId[trimmed] = token }
-                }
+                index.memberIds.insert(trimmed)
+                index.indexedUserIds.insert(trimmed)
             }
         }
-        let emailQuery = orgRef.collection("userEmails").limit(to: 500)
+        let emailQuery = orgRef.collection("userEmails")
         let emailSnap = (try? await emailQuery.getDocuments(source: .server))
             ?? (try? await emailQuery.getDocuments())
         if let emailSnap {
             for doc in emailSnap.documents {
-                guard let userId = doc.data()["userId"] as? String else { continue }
-                let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { index.ids.insert(trimmed) }
+                guard let userId = Self.firestoreLinkedUserId(doc.data()["userId"]) else { continue }
+                index.indexedUserIds.insert(userId)
+                let emailKey = doc.documentID.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                if !emailKey.isEmpty {
+                    index.userIdByEmail[emailKey] = userId
+                }
             }
         }
         return index
     }
 
-    /// Emails already stored on the managers / operatives records. Used only to find the real `users` document the equality query missed.
-    private func emailsInOrgPeopleCollection(_ name: String, organizationId: String) async -> Set<String> {
-        let ref = db.collection("organizations").document(organizationId).collection(name)
-        let snap = (try? await ref.getDocuments(source: .server)) ?? (try? await ref.getDocuments())
-        guard let snap else { return [] }
-        var emails = Set<String>()
-        for doc in snap.documents {
-            let raw = (doc.data()["email"] as? String) ?? ""
-            let norm = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            if !norm.isEmpty { emails.insert(norm) }
+    /// `userId`, `userID`, `uid`, `linkedUserId`, or a `users/{id}` reference / path.
+    private static func firestoreLinkedUserId(_ value: Any?) -> String? {
+        if let ref = value as? DocumentReference {
+            let id = ref.documentID.trimmingCharacters(in: .whitespacesAndNewlines)
+            return id.isEmpty ? nil : id
         }
-        return emails
+        if let s = value as? String {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t.isEmpty { return nil }
+            if t.contains("/") {
+                let last = String(t.split(separator: "/").last ?? Substring(t))
+                return last.isEmpty ? nil : last
+            }
+            return t
+        }
+        return nil
     }
 
-    private func userDocumentData(userId: String) async -> [String: Any]? {
-        let ref = db.collection("users").document(userId)
-        if let data = try? await ref.getDocument(source: .server).data() {
-            return data
+    private struct StaffDirectoryLink {
+        var candidateIds: [String]
+        var email: String
+        var rawEmail: String
+        var fromManagers: Bool
+    }
+
+    /// Operative and manager documents are indexes. They are not user rows.
+    private func loadStaffDirectoryLinks(organizationId: String) async -> [StaffDirectoryLink] {
+        var links: [StaffDirectoryLink] = []
+        for name in ["operatives", "managers"] {
+            let fromManagers = name == "managers"
+            let ref = db.collection("organizations").document(organizationId).collection(name)
+            let snap = (try? await ref.getDocuments(source: .server)) ?? (try? await ref.getDocuments())
+            guard let snap else { continue }
+            for doc in snap.documents {
+                let data = doc.data()
+                var ids: [String] = []
+                for key in ["userId", "userID", "uid", "linkedUserId"] {
+                    if let linked = Self.firestoreLinkedUserId(data[key]), !ids.contains(linked) {
+                        ids.append(linked)
+                    }
+                }
+                let docId = doc.documentID.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !docId.isEmpty, !ids.contains(docId) {
+                    ids.append(docId)
+                }
+                let rawEmail = ((data["email"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let email = rawEmail.lowercased()
+                links.append(StaffDirectoryLink(candidateIds: ids, email: email, rawEmail: rawEmail, fromManagers: fromManagers))
+            }
         }
-        return try? await ref.getDocument(source: .cache).data()
+        return links
+    }
+
+    private enum LinkedUserLookup {
+        case missing
+        case usable([String: Any])
+    }
+
+    /// `missing` is only a snapshot that is not there. A user document whose organizationId is another company is still usable: that field is the company they last opened, and this organisation can also list them.
+    private func lookupLinkedUser(userId: String, organizationId: String) async -> LinkedUserLookup {
+        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .missing }
+        _ = organizationId
+        let ref = db.collection("users").document(trimmed)
+        let snap = (try? await ref.getDocument(source: .server)) ?? (try? await ref.getDocument(source: .cache))
+        guard let snap, snap.exists, let data = snap.data() else { return .missing }
+        return .usable(data)
+    }
+
+    private func userIdFromUserEmailsDocument(organizationId: String, email: String) async -> String? {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let ref = db.collection("organizations").document(organizationId).collection("userEmails").document(trimmed)
+        let snap = (try? await ref.getDocument(source: .server)) ?? (try? await ref.getDocument(source: .cache))
+        guard let snap, snap.exists else { return nil }
+        return Self.firestoreLinkedUserId(snap.data()?["userId"])
+    }
+
+    private func userDocuments(whereEmailEquals email: String) async -> [QueryDocumentSnapshot] {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let query = db.collection("users").whereField("email", isEqualTo: trimmed).limit(to: 5)
+        if let docs = try? await query.getDocuments(source: .server).documents {
+            return docs
+        }
+        return (try? await query.getDocuments().documents) ?? []
+    }
+
+    /// A managers-collection link may place this account on Managers only when the user document has no role flags.
+    private static func qualifiesForManagersRecordPlacement(_ user: AppUser) -> Bool {
+        if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin { return false }
+        if user.permissions.operativeMode || user.permissions.manager { return false }
+        return true
     }
 
     func getOrganizationUsers(organizationId: String) async throws -> [AppUser] {
@@ -3783,27 +3848,64 @@ class FirebaseBackend: ObservableObject {
         }
 
         let memberIndex = await loadOrgMemberIndex(organizationId: orgId)
-        let missingIds = memberIndex.ids.subtracting(documentsById.keys).prefix(400)
-        for userId in missingIds {
-            if let data = await userDocumentData(userId: userId) {
+        let staffLinks = await loadStaffDirectoryLinks(organizationId: orgId)
+        var candidateIds = memberIndex.indexedUserIds
+        for link in staffLinks {
+            candidateIds.formUnion(link.candidateIds)
+        }
+        var fetched = 0
+        for userId in candidateIds where documentsById[userId] == nil {
+            fetched += 1
+            if fetched % 20 == 0 {
+                await Task.yield()
+            }
+            switch await lookupLinkedUser(userId: userId, organizationId: orgId) {
+            case .usable(let data):
                 documentsById[userId] = CollectedUserDocument(data: data, matchedOrganizationQuery: false)
+            case .missing:
+                break
             }
         }
 
-        let knownEmails = Set(documentsById.values.compactMap { collected -> String? in
-            let raw = (collected.data["email"] as? String) ?? ""
-            let norm = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            return norm.isEmpty ? nil : norm
-        })
-        var recoveryEmails = await emailsInOrgPeopleCollection("managers", organizationId: orgId)
-        recoveryEmails.formUnion(await emailsInOrgPeopleCollection("operatives", organizationId: orgId))
-        recoveryEmails.subtract(knownEmails)
-        for email in recoveryEmails.prefix(200) {
-            let query = db.collection("users").whereField("email", isEqualTo: email).limit(to: 5)
-            let docs = (try? await query.getDocuments(source: .server).documents)
-                ?? (try? await query.getDocuments().documents)
-                ?? []
-            absorb(docs, matchedOrganizationQuery: false)
+        var managersRecordUserIds = Set<String>()
+        var staffResolvedUserIds = Set<String>()
+        for link in staffLinks {
+            if let matchedId = link.candidateIds.first(where: { documentsById[$0] != nil }) {
+                staffResolvedUserIds.insert(matchedId)
+                if link.fromManagers { managersRecordUserIds.insert(matchedId) }
+                continue
+            }
+            guard !link.email.isEmpty else { continue }
+            var resolvedIds: [String] = []
+            var emailIndexUserId = memberIndex.userIdByEmail[link.email]
+            if emailIndexUserId == nil {
+                emailIndexUserId = await userIdFromUserEmailsDocument(organizationId: orgId, email: link.email)
+            }
+            if let mappedId = emailIndexUserId {
+                if documentsById[mappedId] == nil {
+                    switch await lookupLinkedUser(userId: mappedId, organizationId: orgId) {
+                    case .usable(let data):
+                        documentsById[mappedId] = CollectedUserDocument(data: data, matchedOrganizationQuery: false)
+                    case .missing:
+                        break
+                    }
+                }
+                if documentsById[mappedId] != nil {
+                    resolvedIds.append(mappedId)
+                }
+            }
+            if resolvedIds.isEmpty {
+                var emailDocs = await userDocuments(whereEmailEquals: link.email)
+                if !link.rawEmail.isEmpty, link.rawEmail != link.email {
+                    emailDocs.append(contentsOf: await userDocuments(whereEmailEquals: link.rawEmail))
+                }
+                absorb(emailDocs, matchedOrganizationQuery: false)
+                resolvedIds = Array(Set(emailDocs.map(\.documentID).filter { documentsById[$0] != nil }))
+            }
+            staffResolvedUserIds.formUnion(resolvedIds)
+            if link.fromManagers {
+                managersRecordUserIds.formUnion(resolvedIds)
+            }
         }
 
         print("🔥🔥🔥 DEBUG: Found \(documentsById.count) user documents for organisation \(orgId)")
@@ -3813,27 +3915,36 @@ class FirebaseBackend: ObservableObject {
         for (userId, collected) in documentsById {
             let data = collected.data
             let email = data["email"] as? String ?? ""
-            let docOrganizationId = organizationIdFromFirestore(data["organizationId"]) ?? ""
-            let belongsByField = organizationIdsMatch(docOrganizationId, orgId)
-            let indexedWithoutOrgField = memberIndex.ids.contains(userId) && docOrganizationId.isEmpty
+            let storedOrganizationId = organizationIdFromFirestore(data["organizationId"])
+            let docOrganizationId = storedOrganizationId ?? ""
             let queryAlreadyMatched = collected.matchedOrganizationQuery
+            let fieldMissing = storedOrganizationId == nil && !queryAlreadyMatched
+            let belongsByField = organizationIdsMatch(docOrganizationId, orgId)
+            // members, userEmails, operatives, and managers are this company's list.
+            // organizationId on the user document is only the company they last opened.
+            let linkedToThisOrganisation = memberIndex.indexedUserIds.contains(userId) || staffResolvedUserIds.contains(userId)
 
             print("🔥🔥🔥 DEBUG: Processing user - DocumentID: \(userId), Email: \(email), DocOrgId: \(docOrganizationId), RequestedOrgId: \(orgId)")
 
-            guard belongsByField || indexedWithoutOrgField || queryAlreadyMatched else {
-                print("🔥🔥🔥 DEBUG: Skipping user \(email) - organizationId mismatch")
+            guard belongsByField || fieldMissing || queryAlreadyMatched || linkedToThisOrganisation else {
+                print("🔥🔥🔥 DEBUG: Skipping user \(email) - not linked to this organisation")
                 continue
             }
 
-            var user = Self.parseAppUserDocument(
-                userId: userId,
-                data: data,
-                memberRole: memberIndex.rolesByUserId[userId]
-            )
-            user.organizationId = orgId
+            if fieldMissing && memberIndex.memberIds.contains(userId) {
+                await patchMissingOrganizationId(userId: userId, organizationId: orgId)
+            }
+
+            var user = Self.parseAppUserDocument(userId: userId, data: data)
+            if fieldMissing {
+                user.organizationId = orgId
+            }
+            if managersRecordUserIds.contains(userId), Self.qualifiesForManagersRecordPlacement(user) {
+                user.placedByManagersRecord = true
+            }
 
             users.append(user)
-            print("🔥🔥🔥 DEBUG: Added user to list: \(user.email) (\(user.firstName) \(user.surname)) role=\(user.role.rawValue) manager=\(user.appearsOnManagersList) operative=\(user.appearsOnOperativesList) passwordSet=\(user.passwordSet)")
+            print("🔥🔥🔥 DEBUG: Added user to list: \(user.email) (\(user.firstName) \(user.surname)) role=\(user.role.rawValue) admin=\(user.appearsOnAdminsList) manager=\(user.appearsOnManagersList) operative=\(user.appearsOnOperativesList) passwordSet=\(user.passwordSet) active=\(user.isActive)")
         }
 
         // Same email, two documents: keep the account they actually sign in with.
@@ -3844,8 +3955,14 @@ class FirebaseBackend: ObservableObject {
             let key = emailKey.isEmpty ? "id:\(user.id)" : emailKey
             if let existing = byKey[key] {
                 if Self.rosterDocumentRank(user) > Self.rosterDocumentRank(existing) {
-                    byKey[key] = user
+                    var chosen = user
+                    if existing.placedByManagersRecord { chosen.placedByManagersRecord = true }
+                    byKey[key] = chosen
                     print("🔥🔥🔥 DEBUG: Preferring user doc \(user.id) over \(existing.id) for \(key)")
+                } else if user.placedByManagersRecord {
+                    var kept = existing
+                    kept.placedByManagersRecord = true
+                    byKey[key] = kept
                 }
             } else {
                 byKey[key] = user
@@ -4378,9 +4495,11 @@ class FirebaseBackend: ObservableObject {
     }
     
     func saveUser(_ user: AppUser) async throws {
-        // CRITICAL: Operative mode is the single source of truth – never persist admin/super-admin for operatives
-        let isSuperAdminToSave = user.permissions.operativeMode ? false : user.isSuperAdmin
-        let roleToSave: UserRole = user.permissions.operativeMode ? .operative : user.role
+        // Operative mode does not demote an admin. Tab order is admin, then operativeMode, then manager.
+        let keepAdmin = user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin
+        let operativeOnly = user.permissions.operativeMode && !keepAdmin
+        let isSuperAdminToSave = operativeOnly ? false : user.isSuperAdmin
+        let roleToSave: UserRole = operativeOnly ? .operative : user.role
         var userData: [String: Any] = [
             "email": user.email,
             "organizationId": user.organizationId,
@@ -4390,12 +4509,12 @@ class FirebaseBackend: ObservableObject {
             "surname": user.surname,
             "isActive": user.isActive,
             "passwordSet": user.passwordSet,
-            "adminAccess": user.permissions.operativeMode ? false : user.permissions.adminAccess,
-            "manager": user.permissions.operativeMode ? false : user.permissions.manager,
-            "operatives": user.permissions.operativeMode ? false : user.permissions.operatives,
+            "adminAccess": operativeOnly ? false : user.permissions.adminAccess,
+            "manager": operativeOnly ? false : user.permissions.manager,
+            "operatives": operativeOnly ? false : user.permissions.operatives,
             "skills": false,
-            "qualifications": user.permissions.operativeMode ? false : user.permissions.qualifications,
-            "materials": user.permissions.operativeMode ? user.permissions.materials : true,
+            "qualifications": operativeOnly ? false : user.permissions.qualifications,
+            "materials": operativeOnly ? user.permissions.materials : true,
             "projects": user.permissions.projects,
             "smallWorks": user.permissions.smallWorks,
             "operativeMode": user.permissions.operativeMode,
@@ -5677,7 +5796,7 @@ class FirebaseBackend: ObservableObject {
             )
     }
 
-    func listenBookings(organizationId: String, onChange: @escaping ([Booking]) -> Void) {
+    func listenBookings(organizationId: String, onChange: @escaping (_ bookings: [Booking], _ fromCache: Bool) -> Void) {
         bookingsLiveListener?.remove()
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
@@ -5688,10 +5807,15 @@ class FirebaseBackend: ObservableObject {
                     return
                 }
                 guard let snapshot else { return }
+                let fromCache = snapshot.metadata.isFromCache
                 Task { @MainActor in
                     guard let self else { return }
+                    if fromCache && snapshot.documents.isEmpty {
+                        print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT — ignored an empty cache snapshot")
+                        return
+                    }
                     let list = snapshot.documents.compactMap { self.bookingFromFirestoreDocument($0) }
-                    onChange(list)
+                    onChange(list, fromCache)
                 }
             }
     }

@@ -177,7 +177,7 @@ struct ManageUsersView: View {
             if initialTab >= 0 && initialTab <= 2 {
                 selectedTab = initialTab
             }
-            if let userToHighlight {
+            if let userToHighlight, userToHighlight.isStoredUserDocument {
                 selectedUser = userToHighlight
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
@@ -364,6 +364,7 @@ struct ManageUsersView: View {
             LazyVStack(spacing: 11) {
                 ForEach(filteredUsers) { user in
                     ManageUserRowView(user: user, showAdminBadge: selectedTab == 1 && (user.permissions.adminAccess || user.isSuperAdmin)) {
+                        guard user.isStoredUserDocument else { return }
                         selectedUser = user
                     }
                     .environmentObject(userStore)
@@ -597,6 +598,7 @@ struct ManageUsersView: View {
         return List {
             ForEach(admins) { user in
                 ManageUserRowView(user: user, showAdminBadge: false) {
+                    guard user.isStoredUserDocument else { return }
                     selectedUser = user
                 }
                 .environmentObject(userStore)
@@ -622,6 +624,7 @@ struct ManageUsersView: View {
         return List {
             ForEach(managers) { user in
                 ManageUserRowView(user: user, showAdminBadge: user.permissions.adminAccess || user.isSuperAdmin) {
+                    guard user.isStoredUserDocument else { return }
                     selectedUser = user
                 }
                 .environmentObject(userStore)
@@ -647,6 +650,7 @@ struct ManageUsersView: View {
         return List {
             ForEach(operatives) { user in
                 ManageUserRowView(user: user, showAdminBadge: false) {
+                    guard user.isStoredUserDocument else { return }
                     selectedUser = user
                 }
                 .environmentObject(userStore)

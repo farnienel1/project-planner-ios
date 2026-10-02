@@ -30,6 +30,9 @@ struct AppLaunchSplashView: View {
                     .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
                 ProgressView()
                     .controlSize(.regular)
+                Text("Loading your jobs")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.black.opacity(0.55))
             }
         }
     }
