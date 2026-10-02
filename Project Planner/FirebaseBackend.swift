@@ -1106,7 +1106,7 @@ class FirebaseBackend: ObservableObject {
         case timedOut
     }
 
-    private func getDocumentWithServerTimeoutAndCacheFallback(
+    func getDocumentWithServerTimeoutAndCacheFallback(
         _ ref: DocumentReference,
         timeoutSeconds: Double = 8.0
     ) async throws -> DocumentSnapshot {
@@ -5038,36 +5038,174 @@ class FirebaseBackend: ObservableObject {
 
     // MARK: - Ownership transfer (Super Admin reassignment)
 
-    /// Transfers organization ownership by updating `creatorUserId` and flipping `isSuperAdmin` between old and new owners.
-    /// - Important: Callers must ensure `newCreatorUserId` is an admin and not an operative.
-    func transferOrganizationOwnership(organizationId: String, newCreatorUserId: String) async throws {
-        // Determine current owner
-        let oldCreatorUserId = currentOrganization?.creatorUserId ?? currentUser?.uid
-
-        // Update org ownership
-        try await db.collection("organizations").document(organizationId).updateData([
-            "creatorUserId": newCreatorUserId,
-            "updatedAt": Timestamp(date: Date())
-        ])
-
-        // Flip super admin flags
-        if let oldId = oldCreatorUserId, oldId != newCreatorUserId {
-            try? await db.collection("users").document(oldId).updateData([
-                "isSuperAdmin": false,
-                "updatedAt": Timestamp(date: Date())
-            ])
+    /// Transfers organisation ownership to another administrator.
+    /// Writes `creatorUserId`, `isSuperAdmin`, `adminAccess`, and `role` only. Other permission toggles stay as they are.
+    /// - Parameter alsoDemoteUserIds: Roster users who already have `isSuperAdmin`, including people whose `organizationId` is another company.
+    func transferOrganizationOwnership(
+        organizationId: String,
+        newCreatorUserId: String,
+        alsoDemoteUserIds: [String] = []
+    ) async throws {
+        let orgId = normalizedOrganizationId(organizationId)
+        let newId = newCreatorUserId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !orgId.isEmpty, !newId.isEmpty else {
+            throw ownershipTransferError("Organization or new Super Admin is missing.")
+        }
+        guard let signedInId = currentUser?.uid.trimmingCharacters(in: .whitespacesAndNewlines), !signedInId.isEmpty else {
+            throw ownershipTransferError("You need to be signed in to change the Super Admin.")
+        }
+        guard signedInId != newId else {
+            throw ownershipTransferError("You are already the Super Admin.")
         }
 
-        try await db.collection("users").document(newCreatorUserId).updateData([
+        let orgRef = db.collection("organizations").document(orgId)
+        let orgSnap = try await orgRef.getDocument()
+        guard orgSnap.exists else {
+            throw ownershipTransferError("Organization not loaded.")
+        }
+        let previousCreatorId = (orgSnap.data()?["creatorUserId"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let signedInIsCreator = organizationIdsMatch(previousCreatorId, signedInId)
+
+        let signedInSnap = try await db.collection("users").document(signedInId).getDocument()
+        let signedInFlag = signedInSnap.exists && storedUserFlag(signedInSnap.data() ?? [:], "isSuperAdmin")
+        guard signedInIsCreator || signedInFlag else {
+            throw ownershipTransferError("Only the Super Admin can transfer ownership.")
+        }
+
+        let newOwnerSnap = try await db.collection("users").document(newId).getDocument()
+        guard newOwnerSnap.exists, let newOwnerData = newOwnerSnap.data() else {
+            throw ownershipTransferError("That administrator could not be found.")
+        }
+        guard !storedUserFlag(newOwnerData, "operativeMode") else {
+            throw ownershipTransferError("Cannot make an operative the Super Admin.")
+        }
+        guard storedUserIsAdmin(newOwnerData) else {
+            throw ownershipTransferError("Only an Admin can be made Super Admin.")
+        }
+
+        var outgoing = await currentSuperAdminUserIds(
+            organizationId: orgId,
+            previousCreatorUserId: previousCreatorId,
+            signedInUserId: signedInId,
+            alsoDemoteUserIds: alsoDemoteUserIds
+        )
+        outgoing.remove(newId)
+
+        let now = Timestamp(date: Date())
+        try await orgRef.updateData([
+            "creatorUserId": newId,
+            "updatedAt": now
+        ])
+
+        for userId in outgoing {
+            let fields = outgoingAdministratorFields(at: now)
+            try await writeSuperAdminTransferFields(userId: userId, fields: fields)
+            await patchOrgMembershipSuperAdminFields(userId: userId, organizationId: orgId, fields: fields)
+        }
+        let ownerFields = incomingSuperAdminFields(at: now)
+        try await writeSuperAdminTransferFields(userId: newId, fields: ownerFields)
+        await patchOrgMembershipSuperAdminFields(userId: newId, organizationId: orgId, fields: ownerFields)
+
+        if organizationIdsMatch(currentOrganization?.firestoreDocumentId, orgId) {
+            currentOrganization?.creatorUserId = newId
+        }
+    }
+
+    private func ownershipTransferError(_ message: String) -> NSError {
+        NSError(domain: "OwnershipTransfer", code: 403, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    /// Top-level flag wins. Nested `permissions` covers website writes. Missing is false.
+    private func storedUserFlag(_ data: [String: Any], _ key: String) -> Bool {
+        let nested = data["permissions"] as? [String: Any] ?? [:]
+        if let top = firestoreBool(data[key]) { return top }
+        if let nestedValue = firestoreBool(nested[key]) { return nestedValue }
+        return false
+    }
+
+    private func storedUserIsAdmin(_ data: [String: Any]) -> Bool {
+        if storedUserFlag(data, "adminAccess") { return true }
+        let role = (data["role"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        return role == UserRole.admin.rawValue || role.contains("admin")
+    }
+
+    /// People who must leave the super-admin role: every `isSuperAdmin` user linked to this organisation, the signed-in super admin, and the previous creator.
+    private func currentSuperAdminUserIds(
+        organizationId: String,
+        previousCreatorUserId: String?,
+        signedInUserId: String,
+        alsoDemoteUserIds: [String]
+    ) async -> Set<String> {
+        var ids = Set<String>()
+        func add(_ raw: String?) {
+            let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !trimmed.isEmpty else { return }
+            ids.insert(trimmed)
+        }
+        add(previousCreatorUserId)
+        add(signedInUserId)
+        for userId in alsoDemoteUserIds { add(userId) }
+
+        let orgUsers = (try? await userDocuments(whereOrganizationIdEquals: organizationId, required: false)) ?? []
+        for doc in orgUsers where storedUserFlag(doc.data(), "isSuperAdmin") {
+            add(doc.documentID)
+        }
+        return ids
+    }
+
+    private func outgoingAdministratorFields(at now: Timestamp) -> [String: Any] {
+        [
+            "isSuperAdmin": false,
+            "adminAccess": true,
+            "role": UserRole.admin.rawValue,
+            "permissions.adminAccess": true,
+            "updatedAt": now
+        ]
+    }
+
+    private func incomingSuperAdminFields(at now: Timestamp) -> [String: Any] {
+        [
             "isSuperAdmin": true,
             "adminAccess": true,
             "role": UserRole.admin.rawValue,
-            "updatedAt": Timestamp(date: Date())
-        ])
+            "permissions.adminAccess": true,
+            "updatedAt": now
+        ]
+    }
 
-        // Update in-memory org cache
-        if currentOrganization?.firestoreDocumentId == organizationId {
-            currentOrganization?.creatorUserId = newCreatorUserId
+    /// Keeps an existing phone-session snapshot in step with the transfer. Does not create a membership document.
+    private func patchOrgMembershipSuperAdminFields(userId: String, organizationId: String, fields: [String: Any]) async {
+        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !trimmed.isEmpty, !orgId.isEmpty else { return }
+        let ref = db.collection("users").document(trimmed).collection("orgMemberships").document(orgId)
+        do {
+            let snap = try await ref.getDocument()
+            guard snap.exists else { return }
+            var topLevel = fields
+            topLevel.removeValue(forKey: "permissions.adminAccess")
+            try await ref.updateData(topLevel)
+        } catch {
+            print("🔥🔥🔥 DEBUG: membership super-admin flag patch skipped for \(trimmed): \(error.localizedDescription)")
+        }
+    }
+
+    /// Partial update. A nested `permissions.adminAccess` write keeps every other toggle. If that map is not a map, the top-level fields still save.
+    private func writeSuperAdminTransferFields(userId: String, fields: [String: Any]) async throws {
+        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let ref = db.collection("users").document(trimmed)
+        let snap = try await ref.getDocument()
+        guard snap.exists else { return }
+        do {
+            try await ref.updateData(fields)
+        } catch {
+            var topLevel = fields
+            topLevel.removeValue(forKey: "permissions.adminAccess")
+            try await ref.updateData(topLevel)
         }
     }
     
