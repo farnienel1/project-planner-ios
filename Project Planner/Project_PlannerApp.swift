@@ -48,8 +48,9 @@ private enum FirebaseStartup {
     }
 }
 
-/// Use `UIResponder` + `UIApplicationDelegate` for clean app-delegate discovery with Firebase Messaging.
-final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+/// NSObject, not MainActor. The app default is MainActor, and that hid this class from
+/// UIKit. Firebase then reported the delegate did not conform and crashed after the white window.
+nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     var onPushToken: ((String) -> Void)?
     private var firebaseAuthStateHandle: AuthStateDidChangeListenerHandle?
 
@@ -132,25 +133,6 @@ final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationC
         completionHandler(.newData)
     }
 
-    /// Runs after the scene is connected. Hides an empty window left in front of Home.
-    /// Does not call makeKeyAndVisible — that crashed during launch.
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        for scene in application.connectedScenes {
-            guard let windowScene = scene as? UIWindowScene else { continue }
-            print("🔥🔥🔥 DEBUG: PP_LAUNCH_SCENE windows=\(windowScene.windows.count)")
-            for window in windowScene.windows {
-                let rooted = window.rootViewController != nil
-                print("🔥🔥🔥 DEBUG: PP_LAUNCH_WIN key=\(window.isKeyWindow) hidden=\(window.isHidden) rooted=\(rooted)")
-                if rooted {
-                    window.isHidden = false
-                    window.backgroundColor = UIColor(red: 0.969, green: 0.973, blue: 0.980, alpha: 1)
-                } else {
-                    window.isHidden = true
-                }
-            }
-        }
-    }
-
     private func requestRemoteNotificationRegistration(application: UIApplication) {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
             if let error {
@@ -199,7 +181,7 @@ struct Project_PlannerApp: App {
         _ = FirebaseStartup.configureIfNeeded()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
-        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD plain-home")
+        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD open-home")
         // Do not touch UIWindow here. Doing it before the scene exists leaves a black window
         // and the log line "Ignoring activation message because no connection exists".
         let backend = FirebaseBackend()
@@ -238,7 +220,6 @@ struct Project_PlannerApp: App {
                     .environmentObject(notificationService)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .preferredColorScheme(appSettings.settings.theme.colorScheme)
             .onChange(of: appSettings.settings.theme) { _, theme in
                 theme.applyToKeyWindows()
             }
