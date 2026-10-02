@@ -181,6 +181,35 @@ private nonisolated func installAuthUIDNotifications() -> AuthStateDidChangeList
     }
 }
 
+/// The simulator keeps an empty window in front of Home. That empty window is the white screen.
+/// Only the window that already has a root controller is brought forward. Empty windows are left alone.
+/// UIWindow.appearance is not used. makeKeyAndVisible is not called on every window.
+enum LaunchWindowReveal {
+    private static var didReveal = false
+
+    @MainActor
+    static func revealIfNeeded() {
+        guard !didReveal else { return }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard !scenes.isEmpty else { return }
+        didReveal = true
+        for scene in scenes {
+            print("🔥🔥🔥 DEBUG: PP_LAUNCH_WINDOWS total=\(scene.windows.count)")
+            for window in scene.windows {
+                let rooted = window.rootViewController != nil
+                print("🔥🔥🔥 DEBUG: PP_LAUNCH_WIN key=\(window.isKeyWindow) hidden=\(window.isHidden) rooted=\(rooted) \(Int(window.bounds.width))x\(Int(window.bounds.height))")
+            }
+            let rooted = scene.windows.filter { $0.rootViewController != nil }
+            guard let host = rooted.first(where: \.isKeyWindow) ?? rooted.first else { continue }
+            host.isHidden = false
+            host.backgroundColor = UIColor(red: 0.969, green: 0.973, blue: 0.980, alpha: 1)
+            if !host.isKeyWindow {
+                host.makeKey()
+            }
+        }
+    }
+}
+
 @main
 struct Project_PlannerApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -202,7 +231,7 @@ struct Project_PlannerApp: App {
         _ = FirebaseStartup.configureIfNeeded()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
-        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD no-actor-hop")
+        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD key-host splash-overlay")
         // Do not touch UIWindow here. Doing it before the scene exists leaves a black window
         // and the log line "Ignoring activation message because no connection exists".
         let backend = FirebaseBackend()
@@ -224,8 +253,7 @@ struct Project_PlannerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ZStack {
-                ProjectWorksRevampColors.canvas.ignoresSafeArea()
+            GeometryReader { proxy in
                 ProjectPlannerRootView(appDelegate: appDelegate)
                     .environmentObject(firebaseBackend)
                     .environmentObject(smartCache)
@@ -239,8 +267,14 @@ struct Project_PlannerApp: App {
                     .environmentObject(subcontractorStore)
                     .environmentObject(appSettings)
                     .environmentObject(notificationService)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
+            .onAppear {
+                DispatchQueue.main.async {
+                    LaunchWindowReveal.revealIfNeeded()
+                }
+            }
             .onChange(of: appSettings.settings.theme) { _, theme in
                 theme.applyToKeyWindows()
             }

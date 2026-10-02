@@ -461,9 +461,7 @@ struct ContentView: View {
     /// Single visible root (no `TabView`). Hiding the system tab bar + `TabView` left the main area blank on recent iOS SDKs; we already use a custom bottom bar.
     @ViewBuilder
     private var mainTabContent: some View {
-        ZStack {
-            ProjectWorksRevampColors.canvas.ignoresSafeArea()
-            Group {
+        Group {
             switch selectedTab {
             case 0:
                 // Home is not the root of a navigation stack. That stack stayed a blank
@@ -535,10 +533,10 @@ struct ContentView: View {
             default:
                 NavigationStack { HomeView() }
             }
-            }
-            .id("main-tab-\(selectedTab)")
         }
+        .id("main-tab-\(selectedTab)")
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ProjectWorksRevampColors.canvas)
         // Avoid `.id(tabViewIdentity)` here: when the profile loads, permissions change and rebuilding the entire
         // `NavigationStack` for every tab can freeze the home shell on iOS 18+ (we no longer use `TabView`).
     }

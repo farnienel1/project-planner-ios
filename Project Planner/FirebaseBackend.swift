@@ -3198,11 +3198,47 @@ class FirebaseBackend: ObservableObject {
                 "updatedAt": Timestamp(date: Date())
             ]
             
-            print("🔥🔥🔥 DEBUG: Saving manager to organizations/\(organizationId)/managers/\(manager.id.uuidString)")
+            let documentId = manager.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines)
+            let storageId = documentId.isEmpty ? manager.id.uuidString : documentId
+            print("🔥🔥🔥 DEBUG: Saving manager to organizations/\(organizationId)/managers/\(storageId)")
             
-            try await db.collection("organizations").document(organizationId).collection("managers").document(manager.id.uuidString).setData(data)
+            try await db.collection("organizations").document(organizationId).collection("managers").document(storageId).setData(data)
             
             print("🔥🔥🔥 DEBUG: Manager saved successfully to Firebase")
+        }
+
+        /// Updates manager index documents that already use this email. Does not create a document.
+        func updateManagerIdentityInPlace(
+            organizationId: String,
+            previousEmail: String,
+            firstName: String,
+            lastName: String,
+            email: String,
+            mobileNumber: String
+        ) async throws {
+            let orgId = normalizedOrganizationId(organizationId)
+            let previous = previousEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let next = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !orgId.isEmpty, !previous.isEmpty, !next.isEmpty else { return }
+            let snapshot = try await getDocumentsPreferringServer(
+                db.collection("organizations").document(orgId).collection("managers")
+            )
+            var updated = 0
+            for doc in snapshot.documents {
+                let stored = ((doc.data()["email"] as? String) ?? "")
+                    .lowercased()
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard stored == previous || stored == next else { continue }
+                try await doc.reference.updateData([
+                    "firstName": firstName,
+                    "lastName": lastName,
+                    "email": next,
+                    "mobileNumber": mobileNumber,
+                    "updatedAt": Timestamp(date: Date())
+                ])
+                updated += 1
+            }
+            print("🔥🔥🔥 DEBUG: Updated \(updated) existing manager document(s) for \(previous)")
         }
         
         func loadManagers(organizationId: String) async throws -> [Manager] {
@@ -3229,7 +3265,8 @@ class FirebaseBackend: ObservableObject {
                 let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
                 let mobileNumber = (data["mobileNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 
-                let id = UUID(uuidString: doc.documentID) ?? UUID()
+                let documentId = doc.documentID.trimmingCharacters(in: .whitespacesAndNewlines)
+                let id = Manager.stableId(forFirestoreDocumentId: documentId)
                 let department = data["department"] as? String
                 let notes = data["notes"] as? String
                 
@@ -3245,7 +3282,10 @@ class FirebaseBackend: ObservableObject {
                     isActive: isActive,
                     notes: notes,
                     tradeTypePreset: (mtp?.isEmpty == false) ? mtp : nil,
-                    tradeTypeCustom: (mtc?.isEmpty == false) ? mtc : nil
+                    tradeTypeCustom: (mtc?.isEmpty == false) ? mtc : nil,
+                    createdAt: createdAt,
+                    updatedAt: updatedAt,
+                    firestoreDocumentId: documentId
                 )
                 
                 // Set the actual dates from Firebase
@@ -3265,7 +3305,9 @@ class FirebaseBackend: ObservableObject {
     
     func deleteManager(_ manager: Manager, organizationId: String) async throws {
         print("🔥🔥🔥 DEBUG: deleteManager called for manager: \(manager.fullName), organization: \(organizationId)")
-        try await db.collection("organizations").document(organizationId).collection("managers").document(manager.id.uuidString).delete()
+        let documentId = manager.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let storageId = documentId.isEmpty ? manager.id.uuidString : documentId
+        try await db.collection("organizations").document(organizationId).collection("managers").document(storageId).delete()
         print("🔥🔥🔥 DEBUG: Manager deleted successfully from Firebase")
     }
     
@@ -5094,11 +5136,9 @@ class FirebaseBackend: ObservableObject {
         }
         let previousCreatorId = (orgSnap.data()?["creatorUserId"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let signedInIsCreator = organizationIdsMatch(previousCreatorId, signedInId)
-
         let signedInSnap = try await db.collection("users").document(signedInId).getDocument()
         let signedInFlag = signedInSnap.exists && storedUserFlag(signedInSnap.data() ?? [:], "isSuperAdmin")
-        guard signedInIsCreator || signedInFlag else {
+        guard signedInFlag else {
             throw ownershipTransferError("Only the Super Admin can transfer ownership.")
         }
 

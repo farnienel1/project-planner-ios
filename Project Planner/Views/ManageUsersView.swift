@@ -1398,11 +1398,10 @@ struct EditUserView: View {
     }
 
     /// Change Super Admin is only on the signed-in Super Admin's own profile.
+    /// Being the organisation creator is not enough once that role has been passed on.
     private var canOfferChangeSuperAdmin: Bool {
-        guard isViewingSuperAdminProfile, let me = userStore.currentUser else { return false }
-        let ownsThisProfile = me.id == user.id || me.id == displayedUser.id
-        let signedInIsSuperAdmin = me.isSuperAdmin || userStore.isOrganizationCreator(userId: me.id)
-        return ownsThisProfile && signedInIsSuperAdmin
+        guard let me = userStore.currentUser, me.isSuperAdmin else { return false }
+        return me.id == user.id || me.id == displayedUser.id
     }
 
     private var superAdminTransferCandidates: [AppUser] {
