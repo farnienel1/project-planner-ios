@@ -260,8 +260,20 @@ enum WarningsComputation {
         }
 
         let holidayBookings: [WarningsComputationSnapshot.HolidaySnapshot] = input.holidayBookings.map { booking in
-            WarningsComputationSnapshot.HolidaySnapshot(
-                userId: booking.userId?.trimmingCharacters(in: .whitespacesAndNewlines),
+            let rawUserId = booking.userId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedUserId: String? = {
+                guard let rawUserId, !rawUserId.isEmpty else { return nil }
+                if let user = input.users.first(where: { $0.id.caseInsensitiveCompare(rawUserId) == .orderedSame }) {
+                    return user.id
+                }
+                if rawUserId.contains("@"),
+                   let user = input.users.first(where: { $0.email.caseInsensitiveCompare(rawUserId) == .orderedSame }) {
+                    return user.id
+                }
+                return rawUserId
+            }()
+            return WarningsComputationSnapshot.HolidaySnapshot(
+                userId: resolvedUserId,
                 operativeId: booking.operativeId,
                 startDay: cal.startOfDay(for: booking.startDate),
                 endDay: cal.startOfDay(for: booking.endDate),
@@ -910,7 +922,7 @@ private struct WarningsScheduleIndex {
 
         func isExcluded(userId: String?) -> Bool {
             guard let userId, !userId.isEmpty else { return false }
-            return excludedUserIds.contains(userId)
+            return excludedUserIds.contains { $0.caseInsensitiveCompare(userId) == .orderedSame }
         }
 
         func hasHoliday(userId: String?, operativeId: UUID?) -> Bool {

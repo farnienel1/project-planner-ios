@@ -82,13 +82,9 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         MainActor.assumeIsolated {
             _ = FirebaseStartup.configureIfNeeded()
             print("🔥🔥🔥 DEBUG: Firebase ready in didFinishLaunching (defaultApp: \(FirebaseApp.app() != nil))")
-            LaunchWindowReveal.revealIfNeeded()
         }
 
         firebaseAuthStateHandle = installAuthUIDNotifications()
-
-        // Scene is often still connecting in didFinish. Become-active is the moment a window can be keyed.
-        // This does not hide windows and does not call makeKeyAndVisible.
 
         UNUserNotificationCenter.current().delegate = self
         requestRemoteNotificationRegistration(application: application)
@@ -96,14 +92,6 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         Messaging.messaging().delegate = self
 #endif
         return true
-    }
-
-    nonisolated func applicationDidBecomeActive(_ application: UIApplication) {
-        DispatchQueue.main.async {
-            MainActor.assumeIsolated {
-                LaunchWindowReveal.revealIfNeeded()
-            }
-        }
     }
 
     nonisolated func userNotificationCenter(
@@ -193,46 +181,34 @@ private nonisolated func installAuthUIDNotifications() -> AuthStateDidChangeList
     }
 }
 
-/// The simulator keeps an empty window in front of Home. That empty window is the white screen.
+/// Working launch shell. Do not replace this with a key-and-visible call, a splash, or a scene-phase gate.
+/// Those three each left a white window after Home had already appeared.
 /// Only the window that already has a root controller is brought forward. Empty windows are left alone.
-/// UIWindow.appearance is not used. makeKeyAndVisible is not called on every window.
-/// The first attempt often runs before a scene exists. That used to return with no log and leave the white window.
+/// UIWindow appearance proxies are not used. Do not set a color scheme on this WindowGroup.
+/// scripts/verify-launch-shell.sh fails the Xcode build if this shell is replaced.
 enum LaunchWindowReveal {
     private static var didReveal = false
-    private static var attempts = 0
 
     @MainActor
     static func revealIfNeeded() {
         guard !didReveal else { return }
-        attempts += 1
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        var rooted: [UIWindow] = []
-        for scene in scenes {
-            print("🔥🔥🔥 DEBUG: PP_LAUNCH_WINDOWS total=\(scene.windows.count) attempt=\(attempts)")
-            for window in scene.windows {
-                let hasRoot = window.rootViewController != nil
-                print("🔥🔥🔥 DEBUG: PP_LAUNCH_WIN key=\(window.isKeyWindow) hidden=\(window.isHidden) rooted=\(hasRoot) \(Int(window.bounds.width))x\(Int(window.bounds.height))")
-                if hasRoot { rooted.append(window) }
-            }
-        }
-        guard let host = rooted.first(where: \.isKeyWindow) ?? rooted.first else {
-            guard attempts < 40 else {
-                print("🔥🔥🔥 DEBUG: PP_LAUNCH_REVEAL gave up after \(attempts) attempts")
-                return
-            }
-            print("🔥🔥🔥 DEBUG: PP_LAUNCH_REVEAL waiting scenes=\(scenes.count) attempt=\(attempts)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                revealIfNeeded()
-            }
-            return
-        }
+        guard !scenes.isEmpty else { return }
         didReveal = true
-        host.isHidden = false
-        host.backgroundColor = UIColor(red: 0.969, green: 0.973, blue: 0.980, alpha: 1)
-        if !host.isKeyWindow {
-            host.makeKey()
+        for scene in scenes {
+            print("🔥🔥🔥 DEBUG: PP_LAUNCH_WINDOWS total=\(scene.windows.count)")
+            for window in scene.windows {
+                let rooted = window.rootViewController != nil
+                print("🔥🔥🔥 DEBUG: PP_LAUNCH_WIN key=\(window.isKeyWindow) hidden=\(window.isHidden) rooted=\(rooted) \(Int(window.bounds.width))x\(Int(window.bounds.height))")
+            }
+            let rooted = scene.windows.filter { $0.rootViewController != nil }
+            guard let host = rooted.first(where: \.isKeyWindow) ?? rooted.first else { continue }
+            host.isHidden = false
+            host.backgroundColor = UIColor(red: 0.969, green: 0.973, blue: 0.980, alpha: 1)
+            if !host.isKeyWindow {
+                host.makeKey()
+            }
         }
-        print("🔥🔥🔥 DEBUG: PP_LAUNCH_REVEAL keyed \(Int(host.bounds.width))x\(Int(host.bounds.height))")
     }
 }
 
@@ -257,7 +233,7 @@ struct Project_PlannerApp: App {
         _ = FirebaseStartup.configureIfNeeded()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
-        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD key-host reveal-retry")
+        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD key-host")
         // Do not touch UIWindow here. Doing it before the scene exists leaves a black window
         // and the log line "Ignoring activation message because no connection exists".
         let backend = FirebaseBackend()

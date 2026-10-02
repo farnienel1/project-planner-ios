@@ -65,6 +65,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 27090EC62E8ADF3100528ADD /* Build configuration list for PBXNativeTarget "Project Planner" */;
 			buildPhases = (
+				27F1A0B12F9A100100A1D1F2 /* Lock launch shell */,
 				27090EB72E8ADF3000528ADD /* Sources */,
 				27090EB82E8ADF3000528ADD /* Frameworks */,
 				27090EB92E8ADF3000528ADD /* Resources */,
@@ -138,6 +139,21 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		27F1A0B12F9A100100A1D1F2 /* Lock launch shell */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Lock launch shell";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/bin/sh \"${SRCROOT}/scripts/verify-launch-shell.sh\"\n";
+		};
 		27F1A0B12F9A100100A1D1F1 /* Disable Firebase App Delegate Proxy */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;

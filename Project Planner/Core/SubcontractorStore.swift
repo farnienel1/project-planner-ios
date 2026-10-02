@@ -81,4 +81,21 @@ class SubcontractorStore: ObservableObject {
             errorMessage = error.localizedDescription
         }
     }
+
+    func deleteBooking(_ booking: SubcontractorBooking) async {
+        guard let firebaseBackend,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            errorMessage = "Organization is not loaded yet. Please try again."
+            return
+        }
+        bookings.removeAll { $0.id == booking.id }
+        ScheduleChangeNotifier.postBookingStoreDidChange()
+        do {
+            try await firebaseBackend.deleteSubcontractorBooking(booking, organizationId: orgId)
+        } catch {
+            bookings.append(booking)
+            ScheduleChangeNotifier.postBookingStoreDidChange()
+            errorMessage = error.localizedDescription
+        }
+    }
 }

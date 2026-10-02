@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 import FirebaseAuth
 
 struct HomeView: View {
@@ -63,6 +64,7 @@ struct HomeView: View {
     @State private var hasLoadedAdminOverviewMetrics = false
     @State private var showingHomeProfileCard = false
     @State private var isRefreshingHomeConnection = false
+    @State private var homeTopInset: CGFloat = 0
     
     var body: some View {
         VStack(spacing: 0) {
@@ -552,13 +554,21 @@ struct HomeView: View {
             }
         }
         .padding(.horizontal, 18)
-        .padding(.top, 8)
+        .padding(.top, 8 + homeTopInset)
         .padding(.bottom, 28)
         .onAppear {
             loadPersistedAdminOverviewMetricsIfNeeded()
-            print("🔥🔥🔥 DEBUG: HOME_APPEARED")
+            let inset = Self.topSafeInset()
+            if inset > 1 {
+                homeTopInset = inset
+            }
+            print("🔥🔥🔥 DEBUG: HOME_APPEARED inset=\(Int(inset))")
             NotificationCenter.default.post(name: .plannerHomeDidDraw, object: nil)
             homeWarningCount = WarningsService.shared.warningCount
+            // Saved Light/Dark is applied after Home is on screen. The launch shell does not touch it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                appSettings.settings.theme.applyToKeyWindows()
+            }
         }
         .task(id: homeDataRefreshTrigger) {
             // Coalesce rapid store updates while Firebase batches load.
@@ -635,6 +645,18 @@ struct HomeView: View {
         homeWarningCount = WarningsService.shared.warningCount
     }
 
+
+    /// Status-bar / Dynamic Island height. The root fills the whole window, so Home adds this itself.
+    private static func topSafeInset() -> CGFloat {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        var best: CGFloat = 0
+        for scene in scenes {
+            for window in scene.windows where window.bounds.width > 1 && window.bounds.height > 1 {
+                best = max(best, window.safeAreaInsets.top)
+            }
+        }
+        return best
+    }
 
     private var homeGreetingHeader: some View {
         HStack(alignment: .top) {

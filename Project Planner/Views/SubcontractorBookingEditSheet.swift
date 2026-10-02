@@ -59,7 +59,8 @@ struct SubcontractorBookingEditSheet: View {
                 onSave: { start, end, breakRemoved, _ in
                     saveBooking(start: start, end: end, breakRemoved: breakRemoved)
                 },
-                onCancel: onDismiss
+                onCancel: onDismiss,
+                onDelete: { deleteBooking() }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -125,6 +126,20 @@ struct SubcontractorBookingEditSheet: View {
             await MainActor.run {
                 isSaving = false
                 onDismiss()
+            }
+        }
+    }
+
+    private func deleteBooking() {
+        if isSaving { return }
+        isSaving = true
+        Task {
+            await subcontractorStore.deleteBooking(booking)
+            await MainActor.run {
+                isSaving = false
+                if !subcontractorStore.bookings.contains(where: { $0.id == booking.id }) {
+                    onDismiss()
+                }
             }
         }
     }

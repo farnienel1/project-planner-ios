@@ -257,6 +257,22 @@ extension Operative: Hashable {
     }
 }
 
+/// Name for a labour booking. Bookings store an operative id, not a user account.
+/// When that id is not on the roster, the row is leftover data, not a person called Operative.
+func rosterNameForLabourBooking(operativeId: UUID, operatives: [Operative], users: [AppUser]) -> String {
+    if let operative = operatives.first(where: { $0.id == operativeId }) {
+        let trimmed = operative.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+    }
+    if let user = users.first(where: { $0.id == operativeId.uuidString }) {
+        let trimmed = user.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        let email = user.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !email.isEmpty { return email }
+    }
+    return "Not on the roster"
+}
+
 enum TradeSkill: String, CaseIterable, Identifiable, Codable, Hashable {
     case secondFix = "2nd Fix"
     case accessControl = "Access Control"
