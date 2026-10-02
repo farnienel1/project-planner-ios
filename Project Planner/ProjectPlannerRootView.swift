@@ -188,14 +188,6 @@ enum PlannerStoreWiring {
     }
 }
 
-private struct LaunchShellSizeKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
-        let next = nextValue()
-        if next != .zero { value = next }
-    }
-}
-
 struct ProjectPlannerRootView: View {
     let appDelegate: AppDelegate
 
@@ -218,6 +210,8 @@ struct ProjectPlannerRootView: View {
     @State private var hasResolvedInitialAuth = false
     /// Home has drawn at least once. The logo stays up until then so a dark window is not the first thing on the glass.
     @State private var homeHasDrawn = false
+    /// The window that hosts this view is the one on screen. An empty window in front stays white.
+    @State private var hostWindowReady = false
     /// Bumps only when the signed-in user moves from one organisation to another.
     /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
     @State private var contentShellEpoch = 0
@@ -231,7 +225,7 @@ struct ProjectPlannerRootView: View {
 
     private var isSessionLoading: Bool {
         if firebaseBackend.isSwitchingOrganization { return true }
-        if showMainExperience { return !homeHasDrawn }
+        if showMainExperience { return !homeHasDrawn || !hostWindowReady }
         return !hasResolvedInitialAuth
     }
 
@@ -275,17 +269,19 @@ struct ProjectPlannerRootView: View {
             if showMainExperience {
                 authenticatedShell
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background {
-                        GeometryReader { proxy in
-                            Color.clear.preference(key: LaunchShellSizeKey.self, value: proxy.size)
-                        }
-                    }
             } else if hasResolvedInitialAuth {
                 AuthenticationView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            LaunchWindowAnchor {
+                guard !hostWindowReady else { return }
+                hostWindowReady = true
+                print("🔥🔥🔥 DEBUG: PP_LAUNCH_WINDOW claimed")
+            }
+            .frame(width: 1, height: 1)
+            .allowsHitTesting(false)
             AppLaunchSplashView()
                 .opacity(isSessionLoading ? 1 : 0)
                 .allowsHitTesting(isSessionLoading)
@@ -293,10 +289,10 @@ struct ProjectPlannerRootView: View {
                 .zIndex(1)
         }
         .background(ProjectWorksRevampColors.canvas)
-        .onPreferenceChange(LaunchShellSizeKey.self) { size in
-            guard size.width > 40, size.height > 40, !homeHasDrawn else { return }
+        .onReceive(NotificationCenter.default.publisher(for: .plannerHomeDidDraw)) { _ in
+            guard !homeHasDrawn else { return }
             homeHasDrawn = true
-            print("🔥🔥🔥 DEBUG: PP_LAUNCH_VISIBLE \(Int(size.width))x\(Int(size.height))")
+            print("🔥🔥🔥 DEBUG: PP_LAUNCH_VISIBLE home")
         }
         .preferredColorScheme(appSettings.settings.theme.colorScheme)
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
@@ -365,12 +361,17 @@ struct ProjectPlannerRootView: View {
                     userStore.unblockLaunchProfileIfNeeded()
                 }
                 hasResolvedInitialAuth = true
-                print("🔥🔥🔥 DEBUG: PP splash waiting for a laid-out Home user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
+                print("🔥🔥🔥 DEBUG: PP splash waiting for Home and its window user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
-                guard !homeHasDrawn else { return }
-                homeHasDrawn = true
-                print("🔥🔥🔥 DEBUG: PP_LAUNCH_TIMEOUT showing the shell without a measured frame")
+                if !hostWindowReady {
+                    hostWindowReady = true
+                    print("🔥🔥🔥 DEBUG: PP_LAUNCH_TIMEOUT window was not claimed")
+                }
+                if !homeHasDrawn {
+                    homeHasDrawn = true
+                    print("🔥🔥🔥 DEBUG: PP_LAUNCH_TIMEOUT Home had not reported a frame")
+                }
             }
 
             // Profile and org data start together. A fixed 1.5s pause left Home empty, then the
