@@ -277,8 +277,6 @@ class UserStore: ObservableObject {
                 }
 
                 if let loaded = userData {
-                    // Paint with the profile already read. The phone-session overlay must not hold Home blank.
-                    self.currentUser = loaded
                     userData = await firebaseBackend.applyDeviceSessionIfNeeded(to: loaded)
                 }
                 self.currentUser = userData
@@ -1259,7 +1257,7 @@ class UserStore: ObservableObject {
     func transferSuperAdmin(to newOwnerUserId: String) async -> Bool {
         guard let firebaseBackend else { return false }
         guard let currentUser else { return false }
-        guard currentUser.isSuperAdmin || isOrganizationCreator(userId: currentUser.id) else {
+        guard currentUser.isSuperAdmin else {
             errorMessage = "Only the Super Admin can transfer ownership."
             return false
         }

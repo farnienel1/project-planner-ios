@@ -283,17 +283,13 @@ extension FirebaseBackend {
     }
 
     /// Phone session wins when this person still belongs to the company saved on the device.
-    /// When that company is already the shared one, launch must not wait on another server read.
     @MainActor
     func preferredSessionOrganizationId(userId: String, sharedOrganizationId: String?) async -> String? {
         let device = normalizedOrganizationId(cachedOrganizationIdString() ?? "")
-        let shared = normalizedOrganizationId(sharedOrganizationId ?? "")
-        if !device.isEmpty, shared.isEmpty || organizationIdsMatch(device, shared) {
-            return device
-        }
         if !device.isEmpty, await userBelongsToOrganization(userId: userId, organizationId: device) {
             return device
         }
+        let shared = normalizedOrganizationId(sharedOrganizationId ?? "")
         return shared.isEmpty ? nil : shared
     }
 
@@ -302,17 +298,13 @@ extension FirebaseBackend {
         let orgId = normalizedOrganizationId(organizationId)
         guard !userId.isEmpty, !orgId.isEmpty else { return false }
         do {
-            // Off the main actor, with a cache fallback. A server read that never returns used to leave a white window.
-            let doc = try await getDocumentWithServerTimeoutAndCacheFallback(
-                db.collection("organizations").document(orgId),
-                timeoutSeconds: 4
-            )
+            let doc = try await db.collection("organizations").document(orgId).getDocument(source: .server)
             guard doc.exists, let data = doc.data() else { return false }
             let members = data["members"] as? [String: String] ?? [:]
             if members[userId] != nil { return true }
             return (data["creatorUserId"] as? String) == userId
         } catch {
-            // Offline or timed out: keep the company already stored on this phone.
+            // Offline: keep the company already stored on this phone.
             return organizationIdsMatch(orgId, cachedOrganizationIdString())
         }
     }
@@ -335,23 +327,12 @@ extension FirebaseBackend {
             userRole = base.role
             return base.isActive
         }
-        let membershipSnap: DocumentSnapshot
-        do {
-            membershipSnap = try await getDocumentWithServerTimeoutAndCacheFallback(
-                orgMembershipsCollection(userId: userId).document(orgId),
-                timeoutSeconds: 4
-            )
-        } catch {
-            print("🔥🔥🔥 DEBUG: Device session membership read failed — keeping the signed-in profile")
-            deviceSessionProfile = nil
-            userRole = base.role
-            return base.isActive
-        }
+        let membershipSnap = try? await orgMembershipsCollection(userId: userId).document(orgId).getDocument(source: .server)
         let isCreator = creatorUserId == userId
-        let accountActive = firestoreAccountActive(from: membershipSnap.data())
+        let accountActive = firestoreAccountActive(from: membershipSnap?.data())
 
         var profile: AppUser
-        if let data = membershipSnap.data(), membershipSnap.exists {
+        if let data = membershipSnap?.data(), membershipSnap?.exists == true {
             profile = Self.parseAppUserDocument(userId: userId, data: data)
             profile.organizationId = orgId
             profile.isActive = accountActive
@@ -396,17 +377,8 @@ extension FirebaseBackend {
         guard await userBelongsToOrganization(userId: user.id, organizationId: sessionOrg) else {
             return user
         }
-        let orgDoc: DocumentSnapshot
-        do {
-            orgDoc = try await getDocumentWithServerTimeoutAndCacheFallback(
-                db.collection("organizations").document(sessionOrg),
-                timeoutSeconds: 4
-            )
-        } catch {
-            return user
-        }
-        guard orgDoc.exists else { return user }
-        let orgData = orgDoc.data() ?? [:]
+        let orgDoc = try? await db.collection("organizations").document(sessionOrg).getDocument(source: .server)
+        let orgData = orgDoc?.data() ?? [:]
         let members = orgData["members"] as? [String: String] ?? [:]
         let creator = orgData["creatorUserId"] as? String
         let role = members[user.id] ?? (creator == user.id ? "admin" : "member")
