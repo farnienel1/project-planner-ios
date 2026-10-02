@@ -1209,7 +1209,12 @@ class FirebaseBackend: ObservableObject {
                 
                 self.currentOrganization = nil
                 let deviceOrg = cachedOrganizationIdString() ?? ""
-                let deviceStillMember = !deviceOrg.isEmpty && await userBelongsToOrganization(userId: userId, organizationId: deviceOrg)
+                let deviceStillMember: Bool
+                if deviceOrg.isEmpty {
+                    deviceStillMember = false
+                } else {
+                    deviceStillMember = await userBelongsToOrganization(userId: userId, organizationId: deviceOrg)
+                }
                 if !deviceStillMember {
                     clearLocalOrganizationCache()
                 }
@@ -3741,8 +3746,12 @@ class FirebaseBackend: ObservableObject {
             }
         }
         let emailQuery = orgRef.collection("userEmails")
-        let emailSnap = (try? await emailQuery.getDocuments(source: .server))
-            ?? (try? await emailQuery.getDocuments())
+        let emailSnap: QuerySnapshot?
+        if let server = try? await emailQuery.getDocuments(source: .server) {
+            emailSnap = server
+        } else {
+            emailSnap = try? await emailQuery.getDocuments()
+        }
         if let emailSnap {
             for doc in emailSnap.documents {
                 guard let userId = Self.firestoreLinkedUserId(doc.data()["userId"]) else { continue }
@@ -3787,7 +3796,12 @@ class FirebaseBackend: ObservableObject {
         for name in ["operatives", "managers"] {
             let fromManagers = name == "managers"
             let ref = db.collection("organizations").document(organizationId).collection(name)
-            let snap = (try? await ref.getDocuments(source: .server)) ?? (try? await ref.getDocuments())
+            let snap: QuerySnapshot?
+            if let server = try? await ref.getDocuments(source: .server) {
+                snap = server
+            } else {
+                snap = try? await ref.getDocuments()
+            }
             guard let snap else { continue }
             for doc in snap.documents {
                 let data = doc.data()
@@ -3820,7 +3834,12 @@ class FirebaseBackend: ObservableObject {
         guard !trimmed.isEmpty else { return .missing }
         _ = organizationId
         let ref = db.collection("users").document(trimmed)
-        let snap = (try? await ref.getDocument(source: .server)) ?? (try? await ref.getDocument(source: .cache))
+        let snap: DocumentSnapshot?
+        if let server = try? await ref.getDocument(source: .server) {
+            snap = server
+        } else {
+            snap = try? await ref.getDocument(source: .cache)
+        }
         guard let snap, snap.exists, let data = snap.data() else { return .missing }
         return .usable(data)
     }
@@ -3829,7 +3848,12 @@ class FirebaseBackend: ObservableObject {
         let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let ref = db.collection("organizations").document(organizationId).collection("userEmails").document(trimmed)
-        let snap = (try? await ref.getDocument(source: .server)) ?? (try? await ref.getDocument(source: .cache))
+        let snap: DocumentSnapshot?
+        if let server = try? await ref.getDocument(source: .server) {
+            snap = server
+        } else {
+            snap = try? await ref.getDocument(source: .cache)
+        }
         guard let snap, snap.exists else { return nil }
         return Self.firestoreLinkedUserId(snap.data()?["userId"])
     }
