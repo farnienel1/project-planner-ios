@@ -340,13 +340,11 @@ struct ProjectPlannerRootView: View {
             if showMainExperience {
                 userStore.unblockLaunchProfileIfNeeded()
             }
-            DispatchQueue.main.async {
-                if showMainExperience {
-                    userStore.unblockLaunchProfileIfNeeded()
-                }
-                hasResolvedInitialAuth = true
-                print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
-            }
+            // The logo already covered the first frame. Clear it before any Firestore work.
+            // Waiting for the next main-queue turn left "Loading your jobs" up when that
+            // queue was busy, until the system killed the app.
+            hasResolvedInitialAuth = true
+            print("🔥🔥🔥 DEBUG: PP splash off user=\(userStore.currentUser != nil) showMain=\(showMainExperience)")
 
             // Profile and org data start together. A fixed 1.5s pause left Home empty, then the
             // organisation wait added another half second before disk jobs could show.

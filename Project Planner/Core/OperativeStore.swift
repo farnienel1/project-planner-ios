@@ -195,7 +195,7 @@ class OperativeStore: ObservableObject {
         Task {
             // Add timeout to prevent infinite loading
             let timeoutTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                try? await Task.sleep(nanoseconds: 18_000_000_000)
                 if isLoading && loadGeneration == generation {
                     print("🔥🔥🔥 DEBUG: ⚠️ OperativeStore load timeout - forcing completion")
                     isLoading = false
@@ -388,8 +388,10 @@ class OperativeStore: ObservableObject {
                 throw NSError(domain: "TimeoutError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Operation timed out after \(seconds) seconds"])
             }
             
-            let result = try await group.next()!
-            group.cancelAll()
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw NSError(domain: "TimeoutError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Operation finished without a result"])
+            }
             return result
         }
     }

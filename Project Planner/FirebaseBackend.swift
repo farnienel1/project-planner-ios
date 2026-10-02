@@ -1147,6 +1147,28 @@ class FirebaseBackend: ObservableObject {
             return value
         }
     }
+
+    /// Off the main actor. Loading every project on the main actor left the Projects
+    /// spinner up until the system killed the app.
+    private nonisolated static func readCollectionFromServer(
+        _ collection: CollectionReference,
+        timeoutSeconds: Double
+    ) async throws -> QuerySnapshot {
+        try await withThrowingTaskGroup(of: QuerySnapshot.self) { group in
+            group.addTask {
+                try await collection.getDocuments(source: .server)
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                throw ServerReadTimeoutError.timedOut
+            }
+            defer { group.cancelAll() }
+            guard let value = try await group.next() else {
+                throw ServerReadTimeoutError.timedOut
+            }
+            return value
+        }
+    }
     
     /// Load organization from Firebase
     @MainActor
@@ -1635,11 +1657,16 @@ class FirebaseBackend: ObservableObject {
     
     /// Server-first collection read. An empty Firestore persistence cache is NOT treated as
     /// "this organisation has zero documents" — that is what made TestFlight lists vanish.
+    /// The server attempt is off the main actor and gives up after 8 seconds.
     private func getDocumentsPreferringServer(_ collection: CollectionReference) async throws -> QuerySnapshot {
         do {
-            return try await collection.getDocuments(source: .server)
+            return try await Self.readCollectionFromServer(collection, timeoutSeconds: 8)
         } catch {
-            guard isFirestorePermissionDenied(error) || isOfflineNetworkError(error) else { throw error }
+            let timedOut = error is ServerReadTimeoutError
+            guard timedOut || isFirestorePermissionDenied(error) || isOfflineNetworkError(error) else { throw error }
+            if timedOut {
+                print("🔥🔥🔥 DEBUG: ⏱️ Firestore collection read timed out for \(collection.path) — trying cache")
+            }
             let cached: QuerySnapshot
             do {
                 cached = try await collection.getDocuments(source: .cache)
@@ -1668,8 +1695,10 @@ class FirebaseBackend: ObservableObject {
         for doc in snapshot.documents {
             let data = doc.data()
             let docId = doc.documentID
-            print("🔥🔥🔥 DEBUG: [LOAD] Processing project document: \(docId)")
-            
+            if loadedProjects.count % 40 == 0 {
+                await Task.yield()
+            }
+
             // Skip placeholder documents
             if docId == "INITIAL-PLACEHOLDER" {
                 print("🔥🔥🔥 DEBUG: [LOAD] Skipping placeholder document")
@@ -1774,7 +1803,6 @@ class FirebaseBackend: ObservableObject {
             }
             
             loadedProjects.append(project)
-            print("🔥🔥🔥 DEBUG: [LOAD] ✅ Successfully loaded project: \(project.siteName) (ID: \(project.id.uuidString))")
         }
         
         print("🔥🔥🔥 DEBUG: [LOAD] ✅ Loaded \(loadedProjects.count) projects, skipped \(skippedCount) documents")
@@ -2010,8 +2038,10 @@ class FirebaseBackend: ObservableObject {
         for doc in snapshot.documents {
             let data = doc.data()
             let docId = doc.documentID
-            print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Processing small works document: \(docId)")
-            
+            if loadedSmallWorks.count % 40 == 0 {
+                await Task.yield()
+            }
+
             // Skip placeholder documents
             if docId == "INITIAL-PLACEHOLDER" {
                 print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Skipping placeholder document")
@@ -2116,7 +2146,6 @@ class FirebaseBackend: ObservableObject {
             }
             
             loadedSmallWorks.append(smallWork)
-            print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] ✅ Successfully loaded small works: \(smallWork.siteName) (ID: \(smallWork.id.uuidString))")
         }
         
         print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] ✅ Loaded \(loadedSmallWorks.count) small works, skipped \(skippedCount) documents")
@@ -2222,17 +2251,7 @@ class FirebaseBackend: ObservableObject {
         let orgId = try await ensureReadableOrganization(organizationId)
         print("🔥🔥🔥 DEBUG: Loading tasks from Firebase for organization: \(orgId)")
         let tasksRef = db.collection("organizations").document(orgId).collection("tasks")
-        let snapshot: QuerySnapshot
-        do {
-            snapshot = try await tasksRef.getDocuments(source: .server)
-        } catch {
-            print("🔥🔥🔥 DEBUG: [TASK LOAD] Server tasks read failed for \(orgId) - trying cache/default: \(error.localizedDescription)")
-            do {
-                snapshot = try await tasksRef.getDocuments(source: .cache)
-            } catch {
-                snapshot = try await tasksRef.getDocuments()
-            }
-        }
+        let snapshot = try await getDocumentsPreferringServer(tasksRef)
         print("🔥🔥🔥 DEBUG: Found \(snapshot.documents.count) task documents in Firebase")
         
         return snapshot.documents.compactMap { doc in
@@ -2838,20 +2857,7 @@ class FirebaseBackend: ObservableObject {
         let orgId = try await ensureReadableOrganization(organizationId)
         print("🔥🔥🔥 DEBUG: [LOAD OPERATIVES] Starting load for organization: \(orgId)")
         let operativesRef = db.collection("organizations").document(orgId).collection("operatives")
-        let snapshot: QuerySnapshot
-        do {
-            snapshot = try await operativesRef.getDocuments(source: .server)
-        } catch {
-            if isFirestorePermissionDenied(error) {
-                print("🔥🔥🔥 DEBUG: [LOAD OPERATIVES] Server denied operatives read for \(orgId) - trying cache fallback")
-                snapshot = try await operativesRef.getDocuments(source: .cache)
-            } else if isOfflineNetworkError(error) {
-                print("🔥🔥🔥 DEBUG: [LOAD OPERATIVES] Offline while loading operatives for \(orgId) - trying cache fallback")
-                snapshot = try await operativesRef.getDocuments(source: .cache)
-            } else {
-                throw error
-            }
-        }
+        let snapshot = try await getDocumentsPreferringServer(operativesRef)
         print("🔥🔥🔥 DEBUG: [LOAD OPERATIVES] Found \(snapshot.documents.count) operative documents")
         
         // Filter out legacy INITIAL-PLACEHOLDER documents and junk seed rows
@@ -3202,7 +3208,9 @@ class FirebaseBackend: ObservableObject {
         func loadManagers(organizationId: String) async throws -> [Manager] {
             let orgId = try await ensureReadableOrganization(organizationId)
             print("🔥🔥🔥 DEBUG: [LOAD MANAGERS] Starting load for organization: \(orgId)")
-            let snapshot = try await db.collection("organizations").document(orgId).collection("managers").getDocuments(source: .server)
+            let snapshot = try await getDocumentsPreferringServer(
+                db.collection("organizations").document(orgId).collection("managers")
+            )
             print("🔥🔥🔥 DEBUG: [LOAD MANAGERS] Found \(snapshot.documents.count) manager documents")
             
             var managers: [Manager] = []
@@ -3343,12 +3351,9 @@ class FirebaseBackend: ObservableObject {
     
     func loadQualifications(organizationId: String) async throws -> [Qualification] {
         let orgId = try await ensureReadableOrganization(organizationId)
-        let snapshot: QuerySnapshot
-        do {
-            snapshot = try await db.collection("organizations").document(orgId).collection("qualifications").getDocuments(source: .server)
-        } catch {
-            snapshot = try await db.collection("organizations").document(orgId).collection("qualifications").getDocuments(source: .cache)
-        }
+        let snapshot = try await getDocumentsPreferringServer(
+            db.collection("organizations").document(orgId).collection("qualifications")
+        )
         
         var qualifications: [Qualification] = []
         

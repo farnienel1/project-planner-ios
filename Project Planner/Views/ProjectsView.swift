@@ -26,6 +26,8 @@ struct ProjectsView: View {
     @State private var searchText = ""
     @State private var showingCreateProject = false
     @State private var deadlineAssignedProjectIds: Set<UUID> = []
+    /// A hung project read must not leave this screen on the spinner until the system kills the app.
+    @State private var stoppedBlockingLoader = false
 
     private var listCounts: WorksListStatusCounts {
         WorksListStatusCounts.from(projectsBeforeStatusFilter)
@@ -111,6 +113,17 @@ struct ProjectsView: View {
             .task {
                 await refreshDeadlineAssignedProjectIds()
             }
+            .task(id: projectStore.isLoading) {
+                guard projectStore.isLoading else {
+                    stoppedBlockingLoader = false
+                    return
+                }
+                stoppedBlockingLoader = false
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                if projectStore.isLoading {
+                    stoppedBlockingLoader = true
+                }
+            }
             .sheet(isPresented: $showingCreateProject) {
                 CreateProjectView()
                     .environmentObject(projectStore)
@@ -129,6 +142,7 @@ struct ProjectsView: View {
     }
 
     private var showsBlockingLoader: Bool {
+        if stoppedBlockingLoader { return false }
         let storeHasProjects = projectStore.projects.contains { $0.jobType != .smallWorks }
         if projectStore.isLoading && !storeHasProjects && projectsBeforeStatusFilter.isEmpty {
             return true
