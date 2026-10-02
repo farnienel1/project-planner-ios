@@ -239,7 +239,7 @@ struct Project_PlannerApp: App {
         _ = FirebaseStartup.configureIfNeeded()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
-        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD scene-active")
+        print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD scene-active safe-full")
         // Do not touch UIWindow here. Doing it before the scene exists leaves a black window
         // and the log line "Ignoring activation message because no connection exists".
         let backend = FirebaseBackend()
@@ -293,18 +293,12 @@ private struct LaunchSceneHost: View {
                     height: proxy.size.height > 1 ? proxy.size.height : nil
                 )
         }
-        // Keep the home indicator area for the tab bar. The top inset stays so
-        // "Hi" and the Home buttons sit below the status bar.
-        .ignoresSafeArea(edges: .bottom)
-        .onAppear {
-            LaunchWindowReveal.revealIfNeeded()
-            appSettings.settings.theme.applyToKeyWindows()
-        }
+        .ignoresSafeArea()
+        .onAppear { LaunchWindowReveal.revealIfNeeded() }
         .onChange(of: scenePhase) { _, phase in
             print("🔥🔥🔥 DEBUG: PP_LAUNCH_PHASE \(String(describing: phase))")
             if phase == .active {
                 LaunchWindowReveal.revealIfNeeded()
-                appSettings.settings.theme.applyToKeyWindows()
             }
         }
         .onChange(of: appSettings.settings.theme) { _, theme in
