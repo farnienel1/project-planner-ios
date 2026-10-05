@@ -147,22 +147,12 @@ struct QuickMenuSheet: View {
             family: PPMidnightAppearance.menuFamily(rowId: spec.id),
             detail: subtitle ?? badge
         )
-        if spec.id == "general_app" {
-            NavigationLink {
-                GeneralAppSettingsView()
-                    .environmentObject(appSettings)
-            } label: {
-                rowLabel
-            }
-            .buttonStyle(.plain)
-        } else {
-            Button {
-                dismissAfterEmit(spec.action)
-            } label: {
-                rowLabel
-            }
-            .buttonStyle(PPMenuRowButtonStyle())
+        Button {
+            dismissAfterEmit(spec.action)
+        } label: {
+            rowLabel
         }
+        .buttonStyle(PPMenuRowButtonStyle())
     }
 
     private var signOutArea: some View {

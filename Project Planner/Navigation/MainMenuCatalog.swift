@@ -380,7 +380,19 @@ enum MainMenuCatalog {
         projectStore: ProjectStore,
         operativeStore: OperativeStore
     ) -> [MainMenuRowSpec] {
-        allRowSpecs().filter { $0.isEligible(userStore, projectStore, operativeStore) }
+        allRowSpecs().filter {
+            $0.isEligible(userStore, projectStore, operativeStore) && !isGeneralAppRow($0, userStore: userStore)
+        }
+    }
+
+    /// Home Main Menu and the tab-bar More sheet share this list. General app is not an entry.
+    private static func isGeneralAppRow(_ spec: MainMenuRowSpec, userStore: UserStore) -> Bool {
+        if spec.id == "general_app" { return true }
+        if case .openSurface(let route) = spec.action, route == .generalAppSettings { return true }
+        let title = displayTitle(for: spec, userStore: userStore)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return title == "general" || title == "general app"
     }
 
     static func toolBadge(for rowId: String, operativeStore: OperativeStore) -> String? {
@@ -395,9 +407,11 @@ enum MainMenuCatalog {
         operativeStore: OperativeStore
     ) -> [(section: MainMenuShellSection, rows: [MainMenuRowSpec])] {
         MainMenuShellSection.allCases.compactMap { sec in
-            let rows = allRowSpecs().filter {
-                $0.section == sec && $0.isEligible(userStore, projectStore, operativeStore)
-            }
+            let rows = visibleRows(
+                userStore: userStore,
+                projectStore: projectStore,
+                operativeStore: operativeStore
+            ).filter { $0.section == sec }
             return rows.isEmpty ? nil : (sec, rows)
         }
     }
