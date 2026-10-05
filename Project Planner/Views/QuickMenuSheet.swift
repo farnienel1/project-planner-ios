@@ -226,21 +226,6 @@ struct QuickMenuSheet: View {
             ) {
                 dismissAfterEmit(spec.action)
             }
-        } else if spec.id == "general_app" {
-            NavigationLink {
-                GeneralAppSettingsView()
-                    .environmentObject(appSettings)
-            } label: {
-                polishedToolRowLabel(
-                    icon: spec.icon,
-                    iconBackground: spec.iconBackground,
-                    iconTint: spec.iconTint,
-                    title: MainMenuCatalog.displayTitle(for: spec, userStore: userStore),
-                    badge: badge
-                )
-            }
-            .buttonStyle(.plain)
-            Divider().overlay(ProjectWorksRevampColors.border)
         } else {
             polishedToolRow(
                 icon: spec.icon,

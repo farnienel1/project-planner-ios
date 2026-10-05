@@ -54,7 +54,8 @@ enum HomeQuickActionID: String, CaseIterable {
         "account-reset-password",
         "account-sign-out",
         "staff-holiday",
-        "staff-skills"
+        "staff-skills",
+        "staff-general-app"
     ]
 }
 
@@ -224,7 +225,8 @@ enum HomeQuickActionRegistry {
         case HomeQuickActionID.staffHoliday.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "sun.max.fill", title: "Holiday", tint: rust)
         case HomeQuickActionID.staffGeneralAppSettings.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "slider.horizontal.3", title: "General\napp", tint: purple)
+            // Kept so an old saved home layout drops the tile. Do not show a title.
+            return nil
         case HomeQuickActionID.staffTasks.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "plus.rectangle.on.rectangle", title: "Tasks", tint: blue)
         case HomeQuickActionID.staffInvoicing.rawValue:
@@ -302,7 +304,7 @@ enum HomeQuickActionRegistry {
         case HomeQuickActionID.staffHoliday.rawValue:
             return userStore.isAnnualLeaveFeatureEnabled()
         case HomeQuickActionID.staffGeneralAppSettings.rawValue:
-            return !userStore.isOperativeMode() && userStore.hasAdminAccess()
+            return false
         case HomeQuickActionID.staffTasks.rawValue:
             return !userStore.isOperativeMode()
         case HomeQuickActionID.staffInvoicing.rawValue:
