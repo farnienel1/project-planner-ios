@@ -314,7 +314,8 @@ struct HomeView: View {
             case .addUser: showingAddUser = true
             case .manageUsers: showingManageUsers = true
             case .tasksDetail: presentTasksDetail()
-            case .generalAppSettings: showingGeneralAppSettings = true
+            case .generalAppSettings:
+                break
             case .orgSitesMap: showingOrgSitesMap = true
             case .siteAudit: showingSiteAudit = true
             case .invoicing:
@@ -961,10 +962,20 @@ struct HomeView: View {
         }
     }
 
+    private func isGeneralAppQuickActionTitle(_ title: String) -> Bool {
+        let normalized = title
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalized == "general" || normalized == "general app"
+    }
+
     private var addableQuickActionIds: [String] {
         let onHome = Set(persistedQuickActionIds)
         return HomeQuickActionRegistry.allEligibleIds(userStore: userStore)
-            .filter { !onHome.contains($0) }
+            .filter { id in
+                !onHome.contains(id) && !isGeneralAppQuickActionTitle(displayTitleForQuickAction(id: id))
+            }
             .sorted()
     }
 
@@ -1108,7 +1119,7 @@ struct HomeView: View {
         case HomeQuickActionID.staffHoliday.rawValue:
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 8])
         case HomeQuickActionID.staffGeneralAppSettings.rawValue:
-            showingGeneralAppSettings = true
+            break
         case HomeQuickActionID.staffTasks.rawValue:
             presentTasksDetail()
         case HomeQuickActionID.staffInvoicing.rawValue:
@@ -1195,7 +1206,10 @@ struct HomeView: View {
     }
 
     private var displayedQuickActionIds: [String] {
-        persistedQuickActionIds.filter { HomeQuickActionRegistry.isEligible(id: $0, userStore: userStore) }
+        persistedQuickActionIds.filter { id in
+            HomeQuickActionRegistry.isEligible(id: id, userStore: userStore)
+                && !isGeneralAppQuickActionTitle(displayTitleForQuickAction(id: id))
+        }
     }
 
     private let quickGrid = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
