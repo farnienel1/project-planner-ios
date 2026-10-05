@@ -81,7 +81,8 @@ struct HomeView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(homeCanvasBackground.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
+        // TODO(UI): status bar style — Home is not inside a NavigationStack, so toolbarColorScheme cannot turn the status bar white without changing navigation.
         .sheet(isPresented: $showingWarningsDetail, onDismiss: {
             WarningsRefreshHelper.isWarningsSheetVisible = false
             // REBUILD: no auto warm on dismiss.
@@ -399,12 +400,8 @@ struct HomeView: View {
 
     // MARK: - Home dashboard (HTML / design reference)
 
-    private var homeCanvasBackground: Color { ProjectWorksRevampColors.canvas }
-
-    private var homeInk: Color { ProjectWorksRevampColors.ink }
     private var homeMuted: Color { ProjectWorksRevampColors.muted }
     private var homeBlue: Color { ProjectWorksRevampColors.blue }
-    private var homeBlueLight: Color { ProjectWorksRevampColors.blueLight }
 
     private var greetingFirstName: String {
         if let appUser = userStore.currentUser {
@@ -543,20 +540,10 @@ struct HomeView: View {
     }
 
     private var homeDashboardRoot: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            homeGreetingHeader
-            todayOverviewCard
-            homeSecondaryStatusRow
-            quickActionsHeaderRow
-            quickActionsIconGrid
-            upNextSection
-            if userStore.canViewProjects() && !userStore.isOperativeMode() {
-                maintenanceTeaserCompact
-            }
+        VStack(spacing: 0) {
+            homeNavyHeader
+            homeLightSheet
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 8 + homeTopInset)
-        .padding(.bottom, 28)
         .onAppear {
             loadPersistedAdminOverviewMetricsIfNeeded()
             let inset = Self.topSafeInset()
@@ -659,17 +646,34 @@ struct HomeView: View {
         return best
     }
 
+    private var homeNavyHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            homeGreetingHeader
+            todayOverviewCard
+            homeSecondaryStatusRow
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 8 + homeTopInset)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .ppNavyHeader()
+    }
+
+    private var homeLightSheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            quickActionsHeaderRow
+            quickActionsIconGrid
+            upNextSection
+            if userStore.canViewProjects() && !userStore.isOperativeMode() {
+                maintenanceTeaserCompact
+            }
+        }
+        .padding(.bottom, 28)
+        .ppContentSheet()
+    }
+
     private var homeGreetingHeader: some View {
         HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(todayWeekdayLine)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(homeMuted)
-                Text("Hi, \(greetingFirstName)")
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(homeInk)
-                    .tracking(-0.3)
-            }
+            PPGreetingLabel(dateText: todayWeekdayLine, greeting: "Hi, \(greetingFirstName)")
             Spacer()
             HStack(spacing: 8) {
                 Button {
@@ -681,16 +685,10 @@ struct HomeView: View {
                                 .progressViewStyle(.circular)
                         } else {
                             Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 16, weight: .semibold))
                         }
                     }
-                    .foregroundStyle(homeInk)
-                    .frame(width: 44, height: 44)
-                    .background(ProjectWorksRevampColors.card)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PPOnNavyCircleButtonStyle())
                 .disabled(isRefreshingHomeConnection)
                 .accessibilityLabel("Refresh")
                 .accessibilityHint("Checks your connection and syncs changes waiting on this device")
@@ -700,22 +698,12 @@ struct HomeView: View {
                 } label: {
                     ZStack(alignment: .topTrailing) {
                         Image(systemName: "bell.fill")
-                            .font(.system(size: 18))
-                            .foregroundStyle(homeInk)
-                            .frame(width: 44, height: 44)
-                            .background(ProjectWorksRevampColors.surface)
-                            .clipShape(Circle())
-                            .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
                         if notificationService.unreadCount > 0 {
-                            Circle()
-                                .fill(Color(red: 0.89, green: 0.29, blue: 0.29))
-                                .frame(width: 9, height: 9)
-                                .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
-                                .offset(x: 3, y: -3)
+                            PPBellDot()
                         }
                     }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PPOnNavyCircleButtonStyle())
                 .accessibilityLabel("Notifications")
                 .accessibilityHint("Opens your notification list")
                 Button {
@@ -724,10 +712,10 @@ struct HomeView: View {
                     Text(profileInitials)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.white)
-                        .frame(width: 38, height: 38)
+                        .frame(width: 40, height: 40)
                         .background(homeBlue)
                         .clipShape(Circle())
-                        .overlay(Circle().stroke(Color(red: 0.9, green: 0.91, blue: 0.93), lineWidth: 0.5))
+                        .overlay(Circle().stroke(Color.white.opacity(0.22), lineWidth: 0.5))
                 }
                 .buttonStyle(.plain)
             }
@@ -745,18 +733,13 @@ struct HomeView: View {
 
     private var todayOverviewCard: some View {
         let headsUp = todayOverviewIsHeadsUp
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Today's overview")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .textCase(.uppercase)
-                        .tracking(0.3)
-                    Text("\(liveProjectCount) active project\(liveProjectCount == 1 ? "" : "s")")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.white)
-                }
+                PPOverviewTitle(
+                    eyebrow: "Today's overview",
+                    count: "\(liveProjectCount)",
+                    countLabel: liveProjectCount == 1 ? "active project" : "active projects"
+                )
                 Spacer(minLength: 8)
                 if userStore.hasAdminAccess() {
                     Button {
@@ -767,80 +750,78 @@ struct HomeView: View {
                         showingAdminOverviewCustomize = true
                     } label: {
                         Image(systemName: "gearshape.fill")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.95))
-                            .padding(8)
-                            .background(.white.opacity(0.14))
-                            .clipShape(Circle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PPOnNavyCircleButtonStyle(size: PPMetrics.smallHeaderButton))
                     .accessibilityLabel("Customize dashboard metrics")
                 }
-                Text(headsUp ? "Heads up" : "On track")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(.white.opacity(0.18))
-                    .clipShape(Capsule())
+                // TODO(UI): Heads up is a status label, not a button, so PPHeadsUpButtonStyle is not applied.
+                headsUpStatusLabel(isHeadsUp: headsUp)
             }
             overviewMetricPillsRow
         }
-        .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
-        .background(
-            LinearGradient(
-                colors: [homeBlue, homeBlueLight],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .padding(.bottom, 14)
+        .padding(.top, 16)
+    }
+
+    private func headsUpStatusLabel(isHeadsUp: Bool) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(PPColor.hiVisInk).frame(width: 6, height: 6)
+            Text(isHeadsUp ? "Heads up" : "On track")
+        }
+        .font(.footnote.weight(.semibold))
+        .foregroundStyle(PPColor.hiVisInk)
+        .padding(.horizontal, 12)
+        .frame(height: PPMetrics.smallHeaderButton)
+        .background(PPColor.hiVis, in: Capsule())
     }
 
     @ViewBuilder
     private var overviewMetricPillsRow: some View {
         if userStore.isOperativeMode() {
-            HStack(spacing: 10) {
+            overviewStatRow {
                 overviewStatPill(value: "\(tasksDueTodayCount)", label: "Tasks Due Today")
+                PPStatDivider()
                 overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "Tasks Due This Week")
+                PPStatDivider()
                 overviewStatPill(value: "\(tasksOverdueCount)", label: "My Tasks Overdue")
             }
         } else if userStore.hasAdminAccess() {
-            HStack(spacing: 10) {
-                ForEach(adminResolvedOverviewMetricIds, id: \.self) { mid in
+            overviewStatRow {
+                ForEach(Array(adminResolvedOverviewMetricIds.enumerated()), id: \.element) { index, mid in
+                    if index > 0 {
+                        PPStatDivider()
+                    }
                     overviewStatPill(
                         value: overviewMetricValueString(mid),
-                        label: mid.compactPillTitle
+                        label: mid.compactPillTitle,
+                        highlight: mid == .warnings
                     )
                 }
             }
         } else {
-            HStack(spacing: 10) {
+            overviewStatRow {
                 overviewStatPill(value: "\(tasksDueTodayCount)", label: "Tasks Due Today")
+                PPStatDivider()
                 overviewStatPill(value: "\(tasksDueThisWeekCount)", label: "Tasks Due This Week")
+                PPStatDivider()
                 overviewStatPill(value: "\(assignedTasksCount)", label: "Open Tasks (My Tasks)")
             }
         }
     }
 
-    private func overviewStatPill(value: String, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value)
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(.white)
-            Text(label)
-                .font(.system(size: 11, weight: .regular))
-                .foregroundStyle(.white.opacity(0.85))
+    private func overviewStatRow<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            content()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(.white.opacity(0.14))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.top, 16)
+    }
+
+    private func overviewStatPill(value: String, label: String, highlight: Bool = false) -> some View {
+        PPStat(value: value, label: label, highlight: highlight || label == "Warnings")
     }
 
     private var homeSecondaryStatusRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             if userStore.hasAdminAccess() || userStore.isHomeProfileLoading {
                 secondaryPill(
                     icon: "exclamationmark.triangle.fill",
@@ -866,7 +847,7 @@ struct HomeView: View {
             }
             .frame(maxWidth: .infinity)
         }
-        .padding(.bottom, 18)
+        .padding(.top, 18)
     }
 
     private func secondaryPill(
@@ -877,37 +858,27 @@ struct HomeView: View {
         value: String,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(iconBackground)
-                        .frame(width: 32, height: 32)
-                    Image(systemName: icon)
-                        .font(.system(size: 15))
-                        .foregroundStyle(iconTint)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(homeMuted)
-                    Text(value)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(homeInk)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
+        _ = (iconTint, iconBackground)
+        let parts = value.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        let chipValue: String
+        let chipUnit: String
+        if parts.count == 2, Int(parts[0]) != nil {
+            chipValue = String(parts[0])
+            chipUnit = String(parts[1])
+        } else {
+            chipValue = value
+            chipUnit = ""
+        }
+        return Button(action: action) {
+            PPStatusChipLabel(
+                symbol: icon,
+                family: title == "Warnings" ? .alert : .plan,
+                title: title,
+                value: chipValue,
+                unit: chipUnit
             )
         }
-        .buttonStyle(.plain)
-        .contentShape(Rectangle())
+        .buttonStyle(PPOnNavyChipButtonStyle())
     }
 
     private var quickActionStorageKeyUserId: String? {
@@ -1131,59 +1102,32 @@ struct HomeView: View {
 
     @ViewBuilder
     private func quickActionTileContents(meta: HomeQuickActionMeta, title: String) -> some View {
-        let tint = meta.color
-        VStack(spacing: 7) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(tint.opacity(0.22))
-                    .frame(width: 40, height: 40)
-                Image(systemName: meta.symbol)
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(tint)
-            }
-            Text(title)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(homeInk)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .minimumScaleFactor(0.88)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, minHeight: 104, maxHeight: 104)
-        .padding(.horizontal, 5)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
+        PPQuickActionLabel(
+            title: title,
+            symbol: PPMidnightAppearance.quickActionSymbol(id: meta.id, fallback: meta.symbol),
+            family: PPMidnightAppearance.quickActionFamily(id: meta.id)
         )
     }
 
     private var quickActionsHeaderRow: some View {
-        HStack {
-            Text("Quick actions")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(homeInk)
-            Spacer()
+        PPSectionHeader("Quick actions") {
             if isCustomisingQuickActions, !addableQuickActionIds.isEmpty {
                 Button {
                     showingAddQuickActionPicker = true
                 } label: {
                     Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(homeBlue)
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(PPColor.brand)
                 .accessibilityLabel("Add quick action")
             }
             Button {
                 showingQuickMenu = true
             } label: {
                 Label("Main Menu", systemImage: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(homeBlue)
             }
             .buttonStyle(.plain)
+            .foregroundStyle(PPColor.brand)
             Button {
                 if isCustomisingQuickActions {
                     isCustomisingQuickActions = false
@@ -1197,12 +1141,11 @@ struct HomeView: View {
                 }
             } label: {
                 Text(isCustomisingQuickActions ? "Done" : "Customise")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(homeMuted)
+                    .fontWeight(.medium)
             }
             .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
         }
-        .padding(.bottom, 10)
     }
 
     private var displayedQuickActionIds: [String] {
@@ -1212,10 +1155,8 @@ struct HomeView: View {
         }
     }
 
-    private let quickGrid = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
-
     private var quickActionsIconGrid: some View {
-        LazyVGrid(columns: quickGrid, spacing: 10) {
+        LazyVGrid(columns: PPQuickActionGrid.columns, spacing: PPQuickActionGrid.rowSpacing) {
             ForEach(displayedQuickActionIds, id: \.self) { id in
                 if let meta = HomeQuickActionRegistry.meta(for: id, userStore: userStore) {
                     if isCustomisingQuickActions {
@@ -1226,7 +1167,7 @@ struct HomeView: View {
                         } label: {
                             quickActionTileContents(meta: meta, title: displayTitleForQuickAction(id: id))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PPPressableButtonStyle())
                     }
                 }
             }
@@ -1238,7 +1179,8 @@ struct HomeView: View {
     @ViewBuilder
     private func quickActionCustomizeTile(id: String, meta: HomeQuickActionMeta) -> some View {
         let title = displayTitleForQuickAction(id: id)
-        ZStack(alignment: .topTrailing) {
+        // TODO(UI): Customise mode has no jiggle animation today; none was added.
+        ZStack(alignment: .topLeading) {
             quickActionTileContents(meta: meta, title: title)
                 .draggable(id) {
                     quickActionTileContents(meta: meta, title: title)
@@ -1254,30 +1196,20 @@ struct HomeView: View {
             Button {
                 removeQuickAction(id: id)
             } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 18, height: 18)
-                    .background(Circle().fill(Color.black.opacity(0.42)))
+                PPRemoveBadgeLabel()
             }
             .buttonStyle(.plain)
-            .offset(x: 4, y: -4)
+            .offset(x: -4, y: -4)
             .accessibilityLabel("Remove \(title) from quick actions")
         }
     }
 
     private var upNextSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Up next")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(homeInk)
-                Spacer()
+            PPSectionHeader("Up next") {
                 Button("See all") { showingMySchedule = true }
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(homeBlue)
+                    .foregroundStyle(PPColor.brand)
             }
-            .padding(.bottom, 12)
 
             let sections = cachedUpNextSections
             if sections.isEmpty {
@@ -1287,44 +1219,21 @@ struct HomeView: View {
                     .padding(.vertical, 10)
             } else {
                 ForEach(sections) { section in
-                    Text(section.heading)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(homeInk)
+                    PPDayHeading(text: section.heading)
                         .padding(.top, section.id == sections.first?.id ? 0 : 8)
-                        .padding(.bottom, 8)
 
                     ForEach(section.rows) { row in
                         Button {
                             showingMySchedule = true
                         } label: {
-                            HStack(spacing: 14) {
-                                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                                    .fill(row.accentColor)
-                                    .frame(width: 5, height: 48)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(row.title)
-                                        .font(.system(size: 16, weight: .semibold))
-                                        .foregroundStyle(homeInk)
-                                        .lineLimit(2)
-                                        .multilineTextAlignment(.leading)
-                                    Text(row.subtitle)
-                                        .font(.system(size: 13))
-                                        .foregroundStyle(homeMuted)
-                                }
-                                Spacer(minLength: 0)
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(Color(red: 0.77, green: 0.79, blue: 0.82))
-                            }
-                            .padding(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16))
-                            .background(ProjectWorksRevampColors.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
+                            PPUpNextRowLabel(
+                                weekday: row.sortDate.formatted(.dateTime.weekday(.abbreviated)),
+                                day: row.sortDate.formatted(.dateTime.day()),
+                                title: row.title,
+                                time: row.subtitle
                             )
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PPPressableButtonStyle())
                         .padding(.bottom, 12)
                     }
                 }
@@ -1334,41 +1243,12 @@ struct HomeView: View {
     }
 
     private var maintenanceTeaserCompact: some View {
-        HStack(spacing: 16) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color(red: 0.98, green: 0.933, blue: 0.855))
-                    .frame(width: 52, height: 52)
-                Image(systemName: "wrench.and.screwdriver.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(Color(red: 0.522, green: 0.31, blue: 0.043))
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text("Maintenance")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(homeInk)
-                    Text("Soon")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.522, green: 0.31, blue: 0.043))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color(red: 0.98, green: 0.933, blue: 0.855))
-                        .clipShape(Capsule())
-                }
-                Text("Coming in a future update")
-                    .font(.system(size: 14))
-                    .foregroundStyle(homeMuted)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(18)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color(red: 0.933, green: 0.941, blue: 0.953), lineWidth: 0.5)
+        PPComingSoonCard(
+            title: "Maintenance",
+            subtitle: "Coming in a future update",
+            badge: "Soon"
         )
+        .padding(.top, 8)
     }
 
     // MARK: - Helper Functions
