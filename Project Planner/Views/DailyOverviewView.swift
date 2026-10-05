@@ -42,7 +42,7 @@ struct DailyOverviewView: View {
     @State private var showingPastBookings = false
     @State private var showingBookLabour = false
     @State private var bookingEditTarget: DailyOverviewEditTarget?
-    @State private var scheduleRefreshTick = UUID()
+    @State private var scheduleRefreshTask: Task<Void, Never>?
     /// When `displayDate` is nil, the user can change the day from the strip (today’s overview sheet).
     @State private var selectedCalendarDay: Date = Calendar.current.startOfDay(for: Date())
     
@@ -1179,14 +1179,11 @@ struct DailyOverviewView: View {
                 .environmentObject(notificationService)
         }
         .onReceive(NotificationCenter.default.publisher(for: .bookingStoreDidChange)) { _ in
-            scheduleRefreshTick = UUID()
-            Task { await refreshScheduleAfterExternalBooking() }
+            scheduleCoalescedWarningsRefresh()
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
-            scheduleRefreshTick = UUID()
-            Task { await refreshScheduleAfterExternalBooking() }
+            scheduleCoalescedWarningsRefresh()
         }
-        .id(scheduleRefreshTick)
         .sheet(item: $bookingEditTarget) { target in
             dailyOverviewEditSheet(for: target)
         }
@@ -1339,9 +1336,19 @@ private extension DailyOverviewView {
         }
     }
 
+    /// Bookings already live on the observable stores, so the list updates without a new view identity.
+    /// Replacing this screen's identity while a finger is down leaves the gesture system with a nil target
+    /// ("cannot add handler to 0 from 0") after the app has been idle and Firestore reconnects.
+    private func scheduleCoalescedWarningsRefresh() {
+        scheduleRefreshTask?.cancel()
+        scheduleRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            await refreshScheduleAfterExternalBooking()
+        }
+    }
+
     private func refreshScheduleAfterExternalBooking() async {
-        managerScheduleStore.loadData()
-        scheduleRefreshTick = UUID()
         _ = await WarningsRefreshHelper.refreshSharedWarnings(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
