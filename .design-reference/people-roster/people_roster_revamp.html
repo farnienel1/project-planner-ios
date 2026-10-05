@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Project Planner — Operatives &amp; Managers roster redesign</title>
+<style>
+:root {
+  --c-bg-page: #F7F8FA;
+  --c-bg-card: #FFFFFF;
+  --c-text: #0B1020;
+  --c-text-secondary: #6B7280;
+  --c-text-disabled: #C5C9D2;
+  --c-border: #EEF0F3;
+  --c-border-strong: #E5E7EB;
+  --c-primary: #185FA5;
+  --c-primary-tint: #E6F1FB;
+  --c-success: #0F6E56;
+  --c-success-tint: #E1F5EE;
+  --c-warn: #854F0B;
+  --c-warn-tint: #FAEEDA;
+  --c-danger: #A32D2D;
+  --c-danger-tint: #FCEBEB;
+  --c-purple: #534AB7;
+  --c-purple-tint: #EEEDFE;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #E8EAEF; color: var(--c-text); }
+.icon { stroke-width: 2; stroke: currentColor; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+
+.phone { width: 320px; background: #0B1020; border-radius: 36px; padding: 10px; box-shadow: 0 12px 36px rgba(11,16,32,0.10); }
+.screen { background: var(--c-bg-page); border-radius: 28px; overflow: hidden; position: relative; min-height: 640px; }
+.status-bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 22px 6px; font-size: 12px; font-weight: 600; color: var(--c-text); }
+.status-notch { width: 84px; height: 22px; background: #0B1020; border-radius: 12px; }
+.status-right { display: flex; gap: 4px; align-items: center; }
+
+.app-header { display: flex; justify-content: space-between; align-items: center; padding: 6px 16px 10px; }
+.icon-btn { width: 32px; height: 32px; border-radius: 50%; background: #FFFFFF; border: 0.5px solid var(--c-border-strong); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+.title { font-size: 15px; font-weight: 600; margin: 0; color: var(--c-text); }
+.body-pad { padding: 0 16px 16px; }
+
+.segmented { display: flex; background: #ECEEF1; border-radius: 11px; padding: 3px; margin: 0 16px 10px; }
+.segmented .seg { flex: 1; text-align: center; font-size: 12px; font-weight: 500; padding: 7px 0; border-radius: 9px; color: var(--c-text-secondary); cursor: pointer; }
+.segmented .seg.active { background: #FFFFFF; color: var(--c-text); box-shadow: 0 1px 2px rgba(11,16,32,0.08); font-weight: 600; }
+
+.search-row { display: flex; align-items: center; gap: 8px; margin: 0 16px 10px; padding: 9px 12px; background: var(--c-bg-card); border-radius: 12px; border: 0.5px solid var(--c-border-strong); }
+.search-row input-fake { flex: 1; font-size: 12px; color: var(--c-text-disabled); }
+
+.filter-row { display: flex; align-items: center; justify-content: space-between; margin: 0 16px 10px; padding: 6px 10px; background: var(--c-primary-tint); border-radius: 8px; }
+.filter-row .txt { font-size: 10px; color: var(--c-primary); font-weight: 500; }
+.filter-row .clear { font-size: 10px; color: var(--c-primary); font-weight: 600; }
+
+.roster-card { display: flex; align-items: center; gap: 11px; background: var(--c-bg-card); border: 0.5px solid var(--c-border); border-radius: 14px; padding: 10px 12px; margin: 0 16px 8px; }
+.avatar { width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 13px; font-weight: 600; flex-shrink: 0; }
+.roster-text { flex: 1; min-width: 0; }
+.roster-text .name { font-size: 13px; font-weight: 600; color: var(--c-text); margin: 0 0 1px; }
+.roster-text .sub { font-size: 11px; color: var(--c-text-secondary); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.roster-meta { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+
+.pill { display: inline-flex; align-items: center; gap: 4px; font-size: 9px; font-weight: 600; padding: 2px 7px; border-radius: 5px; }
+.pill-amber { background: var(--c-warn-tint); color: var(--c-warn); }
+.pill-green { background: var(--c-success-tint); color: var(--c-success); }
+.pill-grey { background: #F2F3F5; color: var(--c-text-secondary); }
+.pill-red { background: var(--c-danger-tint); color: var(--c-danger); }
+.pill-purple { background: var(--c-purple-tint); color: var(--c-purple); }
+
+.swipe-hint { text-align: center; font-size: 10px; color: var(--c-text-disabled); margin-top: 10px; }
+
+/* Filter sheet */
+.sheet-card { background: var(--c-bg-card); border-radius: 16px 16px 0 0; position: absolute; bottom: 0; left: 0; right: 0; box-shadow: 0 -8px 24px rgba(11,16,32,0.12); padding-bottom: 14px; }
+.sheet-handle { width: 36px; height: 4px; background: var(--c-border-strong); border-radius: 2px; margin: 8px auto 4px; }
+.sheet-header { display: flex; justify-content: space-between; align-items: center; padding: 6px 16px 10px; border-bottom: 0.5px solid var(--c-border); }
+.sheet-title { font-size: 14px; font-weight: 600; }
+.sheet-done { font-size: 13px; font-weight: 600; color: var(--c-primary); }
+.sheet-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; font-size: 13px; border-bottom: 0.5px solid var(--c-border); }
+.sheet-row.selected { color: var(--c-primary); font-weight: 600; }
+.sheet-section-label { font-size: 10px; color: var(--c-text-secondary); text-transform: uppercase; letter-spacing: 0.4px; padding: 12px 16px 4px; }
+.sheet-input { margin: 0 16px; padding: 10px 12px; background: var(--c-bg-page); border-radius: 10px; border: 0.5px solid var(--c-border-strong); font-size: 12px; color: var(--c-text-disabled); }
+
+/* Delete confirm */
+.dim { position: absolute; inset: 0; background: rgba(11,16,32,0.35); }
+.confirm-card { position: absolute; left: 24px; right: 24px; top: 220px; background: var(--c-bg-card); border-radius: 16px; padding: 18px 16px; text-align: center; box-shadow: 0 12px 30px rgba(11,16,32,0.2); }
+.confirm-card h3 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+.confirm-card p { font-size: 11px; color: var(--c-text-secondary); line-height: 1.5; margin: 0 0 16px; }
+.confirm-actions { display: flex; gap: 8px; }
+.btn-confirm-cancel { flex: 1; padding: 9px; border-radius: 10px; background: var(--c-bg-page); border: 0.5px solid var(--c-border-strong); font-size: 12px; font-weight: 600; color: var(--c-text); }
+.btn-confirm-delete { flex: 1; padding: 9px; border-radius: 10px; background: var(--c-danger); border: none; font-size: 12px; font-weight: 600; color: #FFFFFF; }
+
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; padding: 32px; }
+.cell { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.cell-label { color: #34394A; font-size: 13px; font-weight: 600; text-align: center; margin: 0; }
+.cell-sub { color: #8A93A6; font-size: 11px; text-align: center; margin: 2px 0 0; max-width: 280px; line-height: 1.4; }
+
+.page-heading { padding: 32px 32px 8px; }
+.page-heading h1 { color: #1A1F33; font-size: 26px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.3px; }
+.page-heading p { color: #5A6275; font-size: 13px; margin: 0; max-width: 640px; line-height: 1.5; }
+
+.divider { padding: 16px 32px 0; }
+.divider h2 { color: #1A1F33; font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+.divider p { color: #6B7280; font-size: 12px; margin: 0; max-width: 640px; line-height: 1.5; }
+
+.note-box { margin: 0 32px 16px; padding: 14px 18px; background: #FFF8E8; border: 1px solid #F2AE45; border-radius: 10px; font-size: 12px; color: #6B4A0B; line-height: 1.6; }
+.note-box b { color: #4A3406; }
+</style>
+</head>
+<body>
+
+<div class="page-heading">
+  <h1>Operatives &amp; Managers — roster redesign</h1>
+  <p>These two roster screens are the last ones still using the pre-revamp look (plain list rows, underline tabs, old avatar circles) while Projects, Small Works, Site Audit, Settings and the operative profile detail have already moved to the current card-based system. This mockup restyles the roster list only — every button, tab, filter option and action below is identical to what exists today, just re-skinned to match.</p>
+</div>
+
+<div class="note-box">
+  <b>Nothing functional changes:</b> same 3 tabs (Active / Inactive / Pending), same filter sheet with the same fields, same tap-to-open-profile behaviour, same swipe-left-to-delete on operative rows, same delete confirmation copy. Only the visual treatment (cards, spacing, pills, segmented control) is new.
+</div>
+
+<div class="divider">
+  <h2>Operatives</h2>
+  <p>Roster tab, pending invitees, and the shared filter sheet / delete confirmation.</p>
+</div>
+
+<div class="grid">
+
+  <!-- SCREEN 1: Operatives — Active -->
+  <div class="cell">
+    <p class="cell-label">1 · Operatives — Active</p>
+    <p class="cell-sub">Segmented tabs, search, roster cards</p>
+    <div class="phone"><div class="screen">
+      <div class="status-bar">
+        <span>13:01</span><div class="status-notch"></div>
+        <span class="status-right">
+          <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+          <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg>
+        </span>
+      </div>
+      <div class="app-header">
+        <button class="icon-btn"><svg viewBox="0 0 24 24" class="icon" style="width:16px;height:16px;color:#0B1020"><polyline points="15 18 9 12 15 6"/></svg></button>
+        <p class="title">Manage Operatives</p>
+        <button class="icon-btn"><svg viewBox="0 0 24 24" class="icon" style="width:16px;height:16px;color:#0B1020"><line x1="4" y1="6" x2="20" y2="6"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="10" y1="18" x2="14" y2="18"/></svg></button>
+      </div>
+
+      <div class="segmented">
+        <div class="seg active">Active</div>
+        <div class="seg">Inactive</div>
+        <div class="seg">Pending</div>
+      </div>
+
+      <div class="search-row">
+        <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:var(--c-primary)"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input-fake>Search operatives by name</input-fake>
+      </div>
+
+      <div class="roster-card">
+        <div class="avatar" style="background:#4F46E5">JS</div>
+        <div class="roster-text">
+          <p class="name">Jamie Sutton</p>
+          <p class="sub">jamie.sutton@site.co.uk</p>
+          <div class="roster-meta">
+            <span class="pill pill-grey">£210/day</span>
+            <span class="pill pill-green">2 quals</span>
+          </div>
+        </div>
+        <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:var(--c-text-disabled)"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+
+      <div class="roster-card">
+        <div class="avatar" style="background:#4F46E5">RK</div>
+        <div class="roster-text">
+          <p class="name">Ravi Kaur</p>
+          <p class="sub">ravi.kaur@site.co.uk</p>
+          <div class="roster-meta">
+            <span class="pill pill-grey">£185/day</span>
+          </div>
+        </div>
+        <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:var(--c-text-disabled)"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+
+      <div class="roster-card">
+        <div class="avatar" style="background:#4F46E5">TB</div>
+        <div class="roster-text">
+          <p class="name">Tom Bracken</p>
+          <p class="sub">tom.bracken@site.co.uk</p>
+          <div class="roster-meta">
+            <span class="pill pill-amber">1 expiring qual</span>
+          </div>
+        </div>
+        <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:var(--c-text-disabled)"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+
+      <p class="swipe-hint">Swipe a row left to delete — unchanged</p>
+    </div></div>
+  </div>
+
+  <!-- SCREEN 2: Operatives — Pending -->
+  <div class="cell">
+    <p class="cell-label">2 · Operatives — Pending</p>
+    <p class="cell-sub">Invited, not yet signed in</p>
+    <div class="phone"><div class="screen">
+      <div class="status-bar">
+        <span>13:01</span><div class="status-notch"></div>
+        <span class="status-right">
+          <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+          <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg>
+        </span>
+      </div>
+      <div class="app-header">
+        <button class="icon-btn"><svg viewBox="0 0 24 24" class="icon" style="width:16px;height:16px;color:#0B1020"><polyline points="15 18 9 12 15 6"/></svg></button>
+        <p class="title">Manage Operatives</p>
+        <button class="icon-btn"><svg viewBox="0 0 24 24" class="icon" style="width:16px;height:16px;color:#0B1020"><line x1="4" y1="6" x2="20" y2="6"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="10" y1="18" x2="14" y2="18"/></svg></button>
+      </div>
+
+      <div class="segmented">
+        <div class="seg">Active</div>
+        <div class="seg">Inactive</div>
+        <div class="seg active">Pending</div>
+      </div>
+
+      <div class="search-row">
+        <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:var(--c-primary)"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input-fake>Search operatives by name</input-fake>
+      </div>
+
+      <div class="roster-card">
+        <div class="avatar" style="background:#D97706">AM</div>
+        <div class="roster-text">
+          <p class="name">Aidan Marsh</p>
+          <p class="sub">aidan.marsh@site.co.uk</p>
+          <div class="roster-meta"><span class="pill pill-amber">Pending — hasn't signed in</span></div>
+        </div>
+        <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:var(--c-text-disabled)"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+
+      <div class="roster-card">
+        <div class="avatar" style="background:#D97706">LF</div>
+        <div class="roster-text">
+          <p class="name">Lauren Fry</p>
+          <p class="sub">lauren.fry@site.co.uk</p>
+          <div class="roster-meta"><span class="pill pill-amber">Pending — hasn't signed in</span></div>
+        </div>
+        <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:var(--c-text-disabled)"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- SCREEN 3: Filter sheet -->
+  <div class="cell">
+    <p class="cell-label">3 · Filter sheet</p>
+    <p class="cell-sub">Same fields, same options — restyled bottom sheet</p>
+    <div class="phone"><div class="screen">
+      <div class="status-bar">
+        <span>13:01</span><div class="status-notch"></div>
+        <span class="status-right">
+          <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+          <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg>
+        </span>
+      </div>
+      <div class="dim"></div>
+      <div class="sheet-card" style="top:150px; bottom:0; position:absolute;">
+        <div class="sheet-handle"></div>
+        <div class="sheet-header"><span style="width:40px"></span><span class="sheet-title">Filter</span><span class="sheet-done">Done</span></div>
+        <div class="sheet-row selected">First Name <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:var(--c-primary)"><polyline points="20 6 9 17 4 12"/></svg></div>
+        <div class="sheet-row">Surname</div>
+        <div class="sheet-row">Email</div>
+        <div class="sheet-row">Start Date</div>
+        <div class="sheet-row">Qualifications</div>
+        <div class="sheet-row">Day Rate</div>
+        <div class="sheet-section-label">Search text</div>
+        <div class="sheet-input">Filter by First Name</div>
+      </div>
+    </div></div>
+  </div>
+
+</div>
+
+<div class="divider">
+  <h2>Managers</h2>
+  <p>Same roster treatment applied — no live search bar here (matches current behaviour: filter icon only), plus the delete confirmation used on the Operatives roster.</p>
+</div>
+
+<div class="grid">
+
+  <!-- SCREEN 4: Managers — Active -->
+  <div class="cell">
+    <p class="cell-label">4 · Managers — Active</p>
+    <p class="cell-sub">Filter icon only, no persistent search — matches current behaviour</p>
+    <div class="phone"><div class="screen">
+      <div class="status-bar">
+        <span>13:01</span><div class="status-notch"></div>
+        <span class="status-right">
+          <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+          <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg>
+        </span>
+      </div>
+      <div class="app-header">
+        <button class="icon-btn"><svg viewBox="0 0 24 24" class="icon" style="width:16px;height:16px;color:#0B1020"><polyline points="15 18 9 12 15 6"/></svg></button>
+        <p class="title">Managers</p>
+        <button class="icon-btn"><svg viewBox="0 0 24 24" class="icon" style="width:16px;height:16px;color:#0B1020"><line x1="4" y1="6" x2="20" y2="6"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="10" y1="18" x2="14" y2="18"/></svg></button>
+      </div>
+
+      <div class="segmented">
+        <div class="seg active">Active</div>
+        <div class="seg">Inactive</div>
+        <div class="seg">Pending</div>
+      </div>
+
+      <div class="roster-card" style="margin-top:6px;">
+        <div class="avatar" style="background:#534AB7">EH</div>
+        <div class="roster-text">
+          <p class="name">Ellie Hopkirk</p>
+          <p class="sub">ellie.hopkirk@site.co.uk</p>
+          <div class="roster-meta"><span class="pill pill-purple">Manager</span></div>
+        </div>
+        <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:var(--c-text-disabled)"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+
+      <div class="roster-card">
+        <div class="avatar" style="background:#534AB7">DP</div>
+        <div class="roster-text">
+          <p class="name">Daniel Pryce</p>
+          <p class="sub">daniel.pryce@site.co.uk</p>
+          <div class="roster-meta"><span class="pill pill-purple">Manager</span></div>
+        </div>
+        <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:var(--c-text-disabled)"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+
+      <div class="filter-row" style="margin-top:10px;">
+        <span class="txt">Filter: Surname · pryce</span>
+        <span class="clear">Clear</span>
+      </div>
+      <p class="cell-sub" style="margin:6px 16px 0; text-align:left; max-width:none;">↑ this bar only appears once a filter is applied, same as today.</p>
+    </div></div>
+  </div>
+
+  <!-- SCREEN 5: Delete confirmation -->
+  <div class="cell">
+    <p class="cell-label">5 · Delete confirmation</p>
+    <p class="cell-sub">Same alert copy, restyled as a card instead of a system alert box</p>
+    <div class="phone"><div class="screen">
+      <div class="status-bar">
+        <span>13:01</span><div class="status-notch"></div>
+        <span class="status-right">
+          <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+          <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg>
+        </span>
+      </div>
+      <div class="app-header">
+        <button class="icon-btn"><svg viewBox="0 0 24 24" class="icon" style="width:16px;height:16px;color:#0B1020"><polyline points="15 18 9 12 15 6"/></svg></button>
+        <p class="title">Manage Operatives</p>
+        <button class="icon-btn"><svg viewBox="0 0 24 24" class="icon" style="width:16px;height:16px;color:#0B1020"><line x1="4" y1="6" x2="20" y2="6"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="10" y1="18" x2="14" y2="18"/></svg></button>
+      </div>
+      <div class="segmented"><div class="seg active">Active</div><div class="seg">Inactive</div><div class="seg">Pending</div></div>
+      <div class="roster-card" style="opacity:0.4;">
+        <div class="avatar" style="background:#4F46E5">TB</div>
+        <div class="roster-text"><p class="name">Tom Bracken</p><p class="sub">tom.bracken@site.co.uk</p></div>
+      </div>
+      <div class="dim"></div>
+      <div class="confirm-card">
+        <h3>Delete Operative</h3>
+        <p>Are you sure you want to delete Tom Bracken? This will also delete 4 bookings. This cannot be undone.</p>
+        <div class="confirm-actions">
+          <button class="btn-confirm-cancel">Cancel</button>
+          <button class="btn-confirm-delete">Delete</button>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+</div>
+
+</body>
+</html>

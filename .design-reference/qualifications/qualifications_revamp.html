@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Qualifications & Line Managers — Revamp</title>
+<style>
+  :root{
+    --c-bg-page:#F7F8FA;
+    --c-bg-card:#FFFFFF;
+    --c-text:#12161C;
+    --c-text-secondary:#6B7280;
+    --c-border:#E7EAEF;
+    --c-primary:#185FA5;
+    --c-primary-tint:#E7F0FA;
+    --c-purple:#534AB7;
+    --c-purple-tint:#EDEBFA;
+    --c-success:#1E9E6B;
+    --c-success-tint:#E4F6EE;
+    --c-warn:#C77F1A;
+    --c-warn-tint:#FBF0DE;
+    --c-danger:#D1453B;
+    --c-danger-tint:#FBEAE9;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:#EDEEF2;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",Helvetica,Arial,sans-serif;padding:40px;color:var(--c-text);}
+  h1{font-size:22px;margin:0 0 24px;}
+  .grid{display:flex;flex-wrap:wrap;gap:36px;align-items:flex-start;}
+  .cell{display:flex;flex-direction:column;align-items:center;gap:10px;}
+  .cell-label{font-size:13px;font-weight:600;color:#444;}
+  .phone{width:375px;height:812px;background:#000;border-radius:52px;padding:14px;box-shadow:0 20px 60px rgba(0,0,0,0.25);}
+  .screen{width:100%;height:100%;background:var(--c-bg-page);border-radius:38px;overflow:hidden;position:relative;display:flex;flex-direction:column;}
+  .status-bar{height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;font-size:14px;font-weight:600;flex-shrink:0;}
+  .status-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:120px;height:28px;background:#000;border-radius:0 0 16px 16px;}
+  .scroll{flex:1;overflow-y:auto;-ms-overflow-style:none;scrollbar-width:none;}
+  .scroll::-webkit-scrollbar{display:none;}
+  .app-header{display:flex;align-items:center;justify-content:space-between;padding:6px 16px 14px;flex-shrink:0;}
+  .cancel-btn,.xmark-btn{font-size:15px;color:var(--c-text-secondary);font-weight:500;}
+  .xmark-btn{width:32px;height:32px;border-radius:9px;background:var(--c-bg-card);border:1px solid var(--c-border);display:flex;align-items:center;justify-content:center;}
+  .xmark-btn svg{width:14px;height:14px;stroke:var(--c-primary);}
+  .save-btn{font-size:15px;color:var(--c-primary);font-weight:700;}
+  .save-btn.disabled{color:#B9BFC8;}
+  .title{font-size:16px;font-weight:700;}
+
+  .segmented{display:flex;background:#EDEFF3;border-radius:11px;padding:3px;margin:0 16px 12px;}
+  .seg{flex:1;text-align:center;font-size:12.5px;font-weight:600;padding:7px 4px;border-radius:8px;color:var(--c-text-secondary);}
+  .seg.active{background:var(--c-bg-card);color:var(--c-text);box-shadow:0 1px 3px rgba(0,0,0,0.08);}
+
+  .section-head{padding:14px 16px 8px;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;color:var(--c-text-secondary);}
+  .list-card{background:var(--c-bg-card);border:1px solid var(--c-border);border-radius:16px;margin:0 16px 14px;overflow:hidden;}
+  .list-row{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--c-border);}
+  .list-row:last-child{border-bottom:none;}
+  .row-name{font-size:15px;font-weight:600;}
+  .row-sub{font-size:12px;color:var(--c-text-secondary);margin-top:2px;}
+  .check{width:22px;height:22px;border-radius:50%;border:2px solid #C7CCD3;flex-shrink:0;}
+  .check.on{border-color:var(--c-primary);background:var(--c-primary);position:relative;}
+  .check.on::after{content:"";position:absolute;left:6px;top:2px;width:5px;height:10px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg);}
+  .plus-badge{width:22px;height:22px;border-radius:50%;background:var(--c-primary-tint);display:flex;align-items:center;justify-content:center;}
+  .plus-badge svg{width:12px;height:12px;stroke:var(--c-primary);}
+  .chev{width:14px;height:14px;stroke:#B9BFC8;}
+
+  .clear-row{display:flex;align-items:center;justify-content:center;padding:13px;margin:0 16px 14px;background:var(--c-danger-tint);border-radius:14px;color:var(--c-danger);font-size:14.5px;font-weight:700;}
+
+  .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;flex:1;padding:40px 28px;}
+  .empty-icon{width:64px;height:64px;border-radius:20px;background:var(--c-primary-tint);display:flex;align-items:center;justify-content:center;margin-bottom:16px;}
+  .empty-icon svg{width:30px;height:30px;stroke:var(--c-primary);fill:none;stroke-width:1.6;}
+  .empty-state h3{font-size:17px;font-weight:700;margin:0 0 8px;}
+  .empty-state p{font-size:13.5px;color:var(--c-text-secondary);line-height:1.5;margin:0 0 18px;}
+
+  .primary-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#1E6FBF,#124B87);color:#fff;font-size:14.5px;font-weight:700;border-radius:12px;padding:12px 22px;box-shadow:0 8px 20px rgba(24,95,165,0.28);}
+
+  .qual-card{background:var(--c-bg-card);border:1px solid var(--c-border);border-radius:16px;margin:0 16px 12px;padding:14px;}
+  .qual-top{display:flex;align-items:center;justify-content:space-between;}
+  .qual-name{font-size:15px;font-weight:700;}
+  .qual-expiry-row{display:flex;align-items:center;justify-content:space-between;margin-top:12px;font-size:13.5px;}
+  .cert-row{display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding-top:10px;border-top:1px solid var(--c-border);}
+  .cert-status{font-size:12.5px;color:var(--c-success);font-weight:600;}
+  .cert-status.none{color:var(--c-text-secondary);font-weight:500;}
+  .link-btn{font-size:12.5px;font-weight:700;color:var(--c-primary);}
+  .link-btn.danger{color:var(--c-danger);}
+  .hint{font-size:11px;color:var(--c-text-secondary);margin-top:6px;}
+  .add-qual-row{display:flex;align-items:center;gap:8px;color:var(--c-primary);font-size:14.5px;font-weight:700;padding:13px 16px;margin:0 16px 14px;background:var(--c-primary-tint);border-radius:14px;}
+  .add-qual-row svg{width:18px;height:18px;stroke:var(--c-primary);}
+
+  .field-group{background:var(--c-bg-card);border:1px solid var(--c-border);border-radius:16px;padding:4px 16px;margin:0 16px 14px;}
+  .field-row{padding:12px 0;border-bottom:1px solid var(--c-border);}
+  .field-row:last-child{border-bottom:none;}
+  .field-label{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;color:var(--c-text-secondary);margin-bottom:4px;}
+  .field-input{font-size:15.5px;color:var(--c-text);}
+  .field-input.placeholder{color:#A6ACB6;}
+  .field-caption{font-size:12px;color:var(--c-text-secondary);padding:0 16px 14px;line-height:1.5;}
+  .danger-btn{display:flex;align-items:center;justify-content:center;gap:8px;background:var(--c-danger-tint);color:var(--c-danger);font-size:15px;font-weight:700;border-radius:14px;padding:14px;margin:0 16px 8px;}
+
+  .note-box{margin:80px auto 0;max-width:1200px;background:#FFF8E6;border:1px solid #F0DFA8;border-radius:14px;padding:18px 22px;font-size:13.5px;line-height:1.6;color:#5C4B14;}
+  .note-box b{color:#3D3106;}
+</style>
+</head>
+<body>
+
+<h1>Qualifications & Line Managers — Revamp</h1>
+
+<div class="grid">
+
+  <!-- 1. Line managers select -->
+  <div class="cell">
+    <div class="cell-label">Line Managers (multi-select)</div>
+    <div class="phone"><div class="screen">
+      <div class="status-notch"></div>
+      <div class="status-bar"><span>9:41</span><span>●●●●  📶  🔋</span></div>
+      <div class="app-header"><span style="width:52px"></span><span class="title">Line managers</span><span class="save-btn">Done</span></div>
+      <div class="scroll">
+        <div class="list-card">
+          <div class="list-row"><span class="row-name">No line manager</span><div class="check"></div></div>
+        </div>
+        <div class="field-caption" style="padding-top:0;margin-top:-8px;">For directors or senior staff who book their own annual leave without approval routing.</div>
+        <div class="clear-row">Clear all</div>
+        <div class="section-head">Line managers</div>
+        <div class="list-card">
+          <div class="list-row"><span class="row-name">Priya Anand</span><div class="check on"></div></div>
+          <div class="list-row"><span class="row-name">Tom Whitfield</span><div class="check"></div></div>
+          <div class="list-row"><span class="row-name">Grace Muturi</span><div class="check on"></div></div>
+          <div class="list-row"><span class="row-name">Dan Referrals</span><div class="check"></div></div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- 2. Assign qualifications picker -->
+  <div class="cell">
+    <div class="cell-label">Add Qualifications (picker)</div>
+    <div class="phone"><div class="screen">
+      <div class="status-notch"></div>
+      <div class="status-bar"><span>9:41</span><span>●●●●  📶  🔋</span></div>
+      <div class="app-header"><span class="save-btn">Done</span><span class="title">Add qualifications</span><span style="font-size:15px;color:var(--c-primary);font-weight:700;">Add</span></div>
+      <div class="scroll">
+        <div class="field-caption" style="padding-top:14px;">Tap + to add a qualification. Set expiry dates and certificates when you return.</div>
+        <div class="list-card">
+          <div class="list-row"><span class="row-name">First Aid at Work</span><div class="plus-badge"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg></div></div>
+          <div class="list-row"><span class="row-name">CSCS Card</span><div class="plus-badge"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg></div></div>
+          <div class="list-row"><span class="row-name">Working at Height</span><div class="plus-badge"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg></div></div>
+          <div class="list-row"><span class="row-name">Manual Handling</span><div class="plus-badge"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg></div></div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- 3. Qualifications hub -->
+  <div class="cell">
+    <div class="cell-label">Qualifications Hub</div>
+    <div class="phone"><div class="screen">
+      <div class="status-notch"></div>
+      <div class="status-bar"><span>9:41</span><span>●●●●  📶  🔋</span></div>
+      <div class="app-header"><div class="xmark-btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg></div><span class="title">Qualifications</span><span style="font-size:15px;color:var(--c-primary);font-weight:700;">Add</span></div>
+      <div class="segmented"><div class="seg active">Organisation Qualifications</div><div class="seg">My Qualifications</div></div>
+      <div class="scroll">
+        <div class="list-card">
+          <div class="list-row"><span class="row-name">First Aid at Work</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="#B9BFC8" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></div>
+          <div class="list-row"><span class="row-name">CSCS Card</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="#B9BFC8" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></div>
+          <div class="list-row"><span class="row-name">IPAF Licence</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="#B9BFC8" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></div>
+          <div class="list-row"><span class="row-name">Manual Handling</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="#B9BFC8" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- 4. My Qualifications editor -->
+  <div class="cell">
+    <div class="cell-label">My Qualifications (editor)</div>
+    <div class="phone"><div class="screen">
+      <div class="status-notch"></div>
+      <div class="status-bar"><span>9:41</span><span>●●●●  📶  🔋</span></div>
+      <div class="app-header">
+        <span class="save-btn disabled">Cancel</span>
+        <span class="title">My Qualifications</span>
+        <div style="display:flex;gap:14px;align-items:center;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-secondary)" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--c-primary)" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
+        </div>
+      </div>
+      <div class="section-head" style="padding-top:2px;">My qualifications</div>
+      <div class="scroll">
+        <div class="qual-card">
+          <div class="qual-top"><span class="qual-name">First Aid at Work</span><div class="check on"></div></div>
+          <div class="qual-expiry-row"><span>Expiry date</span>
+            <div class="segmented" style="margin:0;width:110px;"><div class="seg">No</div><div class="seg active">Yes</div></div>
+          </div>
+          <div class="qual-expiry-row"><span>Expires</span><span class="field-input">14 Mar 2026</span></div>
+          <div class="cert-row">
+            <span class="cert-status">✓ Certificate uploaded</span>
+            <span class="link-btn">View</span>
+          </div>
+          <div class="hint">PDF or JPEG only · max 10MB</div>
+        </div>
+        <div class="qual-card">
+          <div class="qual-top"><span class="qual-name">Manual Handling</span><div class="check on"></div></div>
+          <div class="qual-expiry-row"><span>Expiry date</span>
+            <div class="segmented" style="margin:0;width:110px;"><div class="seg active">No</div><div class="seg">Yes</div></div>
+          </div>
+          <div class="cert-row">
+            <span class="cert-status none">No certificate uploaded</span>
+            <span class="link-btn">Upload</span>
+          </div>
+          <div class="hint">PDF or JPEG only · max 10MB</div>
+        </div>
+        <div class="add-qual-row">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
+          Add qualifications
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- 5. Add / Edit Qualification -->
+  <div class="cell">
+    <div class="cell-label">Add / Edit Qualification</div>
+    <div class="phone"><div class="screen">
+      <div class="status-notch"></div>
+      <div class="status-bar"><span>9:41</span><span>●●●●  📶  🔋</span></div>
+      <div class="app-header"><span class="cancel-btn">Cancel</span><span class="title">Edit Qualification</span><span class="save-btn">Save</span></div>
+      <div class="scroll">
+        <div style="height:8px"></div>
+        <div class="field-group">
+          <div class="field-row"><div class="field-label">Name</div><div class="field-input">IPAF Licence</div></div>
+        </div>
+        <div class="field-caption" style="padding-top:0;">Expiration dates and certificates are set when someone assigns this qualification on My Qualifications.</div>
+        <div class="danger-btn">Delete Qualification</div>
+        <div class="field-caption">Deleting removes this template from the organisation list. Existing assignments on staff profiles are not automatically removed.</div>
+      </div>
+    </div></div>
+  </div>
+
+</div>
+
+<div class="note-box">
+  <b>No functional changes.</b>
+  <br><b>Line managers:</b> same "No line manager" option, multi-select checklist, "Clear all", and Done validation requiring a valid selection before dismissing.
+  <br><b>Add qualifications (picker):</b> same list of unassigned organisation qualification templates with tap-to-add (+), same admin-only "Add" (create new template) button, same Done to close.
+  <br><b>Qualifications Hub:</b> same Organisation/My Qualifications segmented tabs (tabs hidden for non-managers), same empty state + "Create New Qualification", same tap-row-to-edit, same swipe-to-delete.
+  <br><b>My Qualifications editor:</b> same per-qualification checkbox toggle, expiry Yes/No + date picker, upload/view/remove certificate (PDF/JPEG, 10MB limit) actions, same "Add qualifications" entry point, same Cancel (revert)/Save (disabled until changes) logic, same filter icon.
+  <br><b>Add/Edit Qualification:</b> same Name field, same Save/Cancel, same Delete confirmation with the same warning copy.
+</div>
+
+</body>
+</html>

@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Project Planner — Home dashboard redesign</title>
+<style>
+:root {
+  --c-bg-page: #F7F8FA;
+  --c-bg-card: #FFFFFF;
+  --c-text: #0B1020;
+  --c-text-secondary: #6B7280;
+  --c-text-disabled: #C5C9D2;
+  --c-border: #EEF0F3;
+  --c-border-strong: #E5E7EB;
+  --c-primary: #185FA5;
+  --c-primary-light: #378ADD;
+  --c-primary-tint: #E6F1FB;
+  --c-success: #0F6E56;
+  --c-success-tint: #E1F5EE;
+  --c-warn: #854F0B;
+  --c-warn-tint: #FAEEDA;
+  --c-danger: #A32D2D;
+  --c-danger-tint: #FCEBEB;
+  --c-purple: #534AB7;
+  --c-purple-tint: #EEEDFE;
+  --c-green: #0F6E56;
+  --c-green-tint: #E1F5EE;
+  --c-rust: #B4530E;
+  --c-rust-tint: #FCEADB;
+  --c-brown: #7A5230;
+  --c-brown-tint: #F1E7DC;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #E8EAEF; color: var(--c-text); }
+.icon { stroke-width: 2; stroke: currentColor; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+
+.phone { width: 320px; background: #0B1020; border-radius: 36px; padding: 10px; box-shadow: 0 12px 36px rgba(11,16,32,0.10); }
+.screen { background: var(--c-bg-page); border-radius: 28px; overflow: hidden; position: relative; min-height: 640px; }
+.screen.scrolly { height: 800px; overflow-y: auto; }
+.status-bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 22px 6px; font-size: 12px; font-weight: 600; color: #FFFFFF; position: relative; z-index: 2; }
+.status-bar.dark-on-light { color: var(--c-text); }
+.status-notch { width: 84px; height: 22px; background: #0B1020; border-radius: 12px; }
+.status-right { display: flex; gap: 4px; align-items: center; }
+
+/* Hero */
+.hero { background: linear-gradient(135deg, #0B1F3A 0%, var(--c-primary) 55%, var(--c-primary-light) 100%); padding: 4px 18px 20px; border-radius: 0 0 28px 28px; position: relative; }
+.hero::after { content: ""; position: absolute; inset: 0; border-radius: 0 0 28px 28px; background: radial-gradient(120px 90px at 90% -10%, rgba(255,255,255,0.16), transparent 70%); pointer-events: none; }
+.hero-top { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 6px; }
+.hero-weekday { font-size: 10px; color: rgba(255,255,255,0.72); font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase; margin: 0 0 2px; }
+.hero-hi { font-size: 21px; font-weight: 700; color: #FFFFFF; margin: 0; letter-spacing: -0.3px; }
+.hero-btns { display: flex; gap: 8px; }
+.hero-icon-btn { width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,0.16); border: 0.5px solid rgba(255,255,255,0.28); display: flex; align-items: center; justify-content: center; position: relative; }
+.hero-avatar { width: 36px; height: 36px; border-radius: 50%; background: #FFFFFF; color: var(--c-primary); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2px solid rgba(255,255,255,0.5); }
+.dot-badge { position: absolute; top: -1px; right: -1px; width: 9px; height: 9px; border-radius: 50%; background: #FF5A5F; border: 1.5px solid var(--c-primary); }
+
+.overview-row { display: flex; justify-content: space-between; align-items: center; margin: 18px 0 4px; }
+.overview-label { font-size: 10px; color: rgba(255,255,255,0.75); font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; margin: 0 0 2px; }
+.overview-sub { font-size: 14px; color: #FFFFFF; font-weight: 600; margin: 0; }
+.overview-status { font-size: 10px; font-weight: 700; color: #FFFFFF; background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 20px; }
+.overview-gear { width: 26px; height: 26px; border-radius: 50%; background: rgba(255,255,255,0.16); display: flex; align-items: center; justify-content: center; margin-right: 6px; }
+
+.pill-row { display: flex; gap: 8px; margin-top: 12px; }
+.metric-pill { flex: 1; background: rgba(255,255,255,0.14); border: 0.5px solid rgba(255,255,255,0.2); border-radius: 14px; padding: 10px 6px; text-align: center; }
+.metric-pill .val { font-size: 19px; font-weight: 700; color: #FFFFFF; display: block; }
+.metric-pill .lbl { font-size: 9px; color: rgba(255,255,255,0.8); font-weight: 600; margin-top: 2px; display: block; line-height: 1.25; }
+
+/* Floating secondary status row — overlaps hero bottom edge */
+.floating-row { display: flex; gap: 10px; margin: -22px 16px 16px; position: relative; z-index: 3; }
+.status-card { flex: 1; background: var(--c-bg-card); border-radius: 16px; padding: 12px; display: flex; align-items: center; gap: 8px; box-shadow: 0 8px 20px rgba(11,16,32,0.10); border: 0.5px solid var(--c-border); }
+.status-card .ico { width: 30px; height: 30px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.status-card .txt .t { font-size: 10px; color: var(--c-text-secondary); font-weight: 600; margin: 0; }
+.status-card .txt .v { font-size: 13px; color: var(--c-text); font-weight: 700; margin: 0; }
+
+.body-pad { padding: 0 16px 20px; }
+
+/* Section header */
+.sec-head { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 12px; }
+.sec-head h2 { font-size: 15px; font-weight: 700; margin: 0; color: var(--c-text); position: relative; padding-left: 10px; }
+.sec-head h2::before { content: ""; position: absolute; left: 0; top: 2px; bottom: 2px; width: 4px; border-radius: 3px; background: linear-gradient(180deg, var(--c-primary), var(--c-primary-light)); }
+.sec-actions { display: flex; align-items: center; gap: 12px; }
+.link-btn { font-size: 11px; font-weight: 700; color: var(--c-primary); }
+.link-btn.muted { color: var(--c-text-secondary); }
+.plus-btn { width: 20px; height: 20px; border-radius: 50%; background: var(--c-primary); color: #FFFFFF; display: flex; align-items: center; justify-content: center; }
+
+/* Quick actions grid */
+.qa-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin-bottom: 22px; }
+.qa-tile { background: var(--c-bg-card); border-radius: 16px; border: 0.5px solid var(--c-border); padding: 12px 4px 10px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; position: relative; box-shadow: 0 2px 6px rgba(11,16,32,0.04); }
+.qa-icon { width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center; justify-content: center; }
+.qa-tile .lbl { font-size: 11px; font-weight: 600; color: var(--c-text); line-height: 1.2; }
+.qa-remove { position: absolute; top: -5px; right: -5px; width: 18px; height: 18px; border-radius: 50%; background: rgba(11,16,32,0.5); display: flex; align-items: center; justify-content: center; }
+.qa-remove svg { width: 8px; height: 8px; stroke: #FFFFFF; stroke-width: 3; }
+.qa-drag-dot { position: absolute; top: 6px; left: 6px; width: 5px; height: 5px; border-radius: 50%; background: var(--c-text-disabled); box-shadow: 6px 0 0 var(--c-text-disabled), 0 6px 0 var(--c-text-disabled), 6px 6px 0 var(--c-text-disabled); }
+.qa-tile.add-tile { border: 1.5px dashed var(--c-border-strong); background: transparent; box-shadow: none; justify-content: center; min-height: 78px; }
+.qa-tile.add-tile .qa-icon { background: var(--c-primary-tint); color: var(--c-primary); }
+
+/* Up next timeline */
+.timeline-heading { font-size: 12px; font-weight: 700; color: var(--c-text-secondary); text-transform: uppercase; letter-spacing: 0.4px; margin: 4px 0 8px; }
+.up-next-card { display: flex; align-items: center; gap: 12px; background: var(--c-bg-card); border-radius: 16px; border: 0.5px solid var(--c-border); padding: 13px 14px; margin-bottom: 10px; box-shadow: 0 2px 8px rgba(11,16,32,0.04); }
+.up-next-card .bar { width: 5px; height: 40px; border-radius: 3px; flex-shrink: 0; }
+.up-next-card .info .t { font-size: 13px; font-weight: 700; color: var(--c-text); margin: 0 0 2px; }
+.up-next-card .info .s { font-size: 11px; color: var(--c-text-secondary); margin: 0; }
+
+/* Sheet / modal (admin overview customise) */
+.dim { position: absolute; inset: 0; background: rgba(11,16,32,0.4); z-index: 5; }
+.sheet-card { background: var(--c-bg-card); border-radius: 20px 20px 0 0; position: absolute; bottom: 0; left: 0; right: 0; box-shadow: 0 -8px 24px rgba(11,16,32,0.14); padding-bottom: 16px; z-index: 6; }
+.sheet-handle { width: 36px; height: 4px; background: var(--c-border-strong); border-radius: 2px; margin: 8px auto 4px; }
+.sheet-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px 12px; border-bottom: 0.5px solid var(--c-border); }
+.sheet-title { font-size: 14px; font-weight: 700; }
+.sheet-done { font-size: 13px; font-weight: 700; color: var(--c-primary); }
+.metric-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; font-size: 12px; font-weight: 600; border-bottom: 0.5px solid var(--c-border); color: var(--c-text); }
+.check { width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--c-border-strong); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.check.on { background: var(--c-primary); border-color: var(--c-primary); }
+.check.on svg { width: 12px; height: 12px; stroke: #FFFFFF; stroke-width: 3; }
+.sheet-note { font-size: 10px; color: var(--c-text-secondary); padding: 10px 16px 0; line-height: 1.5; }
+
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; padding: 32px; }
+.cell { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.cell-label { color: #34394A; font-size: 13px; font-weight: 600; text-align: center; margin: 0; }
+.cell-sub { color: #8A93A6; font-size: 11px; text-align: center; margin: 2px 0 0; max-width: 280px; line-height: 1.4; }
+
+.page-heading { padding: 32px 32px 8px; }
+.page-heading h1 { color: #1A1F33; font-size: 26px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.3px; }
+.page-heading p { color: #5A6275; font-size: 13px; margin: 0; max-width: 640px; line-height: 1.5; }
+
+.divider { padding: 16px 32px 0; }
+.divider h2 { color: #1A1F33; font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+.divider p { color: #6B7280; font-size: 12px; margin: 0; max-width: 640px; line-height: 1.5; }
+
+.note-box { margin: 0 32px 16px; padding: 14px 18px; background: #FFF8E8; border: 1px solid #F2AE45; border-radius: 10px; font-size: 12px; color: #6B4A0B; line-height: 1.6; }
+.note-box b { color: #4A3406; }
+</style>
+</head>
+<body>
+
+<div class="page-heading">
+  <h1>Home dashboard — full revamp</h1>
+  <p>This is the screen almost every user sees first, so it gets the boldest treatment: the greeting and "Today's overview" are merged into one gradient hero (was two flat white cards), the two status pills now float and overlap the hero for depth, and the quick actions / up next sections keep every existing tile, label and behaviour but in a bigger, punchier card style.</p>
+</div>
+
+<div class="note-box">
+  <b>Nothing functional changes:</b> same refresh / notifications / profile buttons, same admin-only gear to customise the 3 overview metrics, same Warnings and Tasks pills (only shown when relevant), same Quick Actions grid — every tile, the Customise/Add/Remove/drag-to-reorder flow, and the Main Menu button — and the same Up Next list linking to My Schedule. Only the visual treatment changes.
+</div>
+
+<div class="divider">
+  <h2>Home — default state</h2>
+  <p>Greeting + Today's overview merged into a single gradient hero; secondary pills float below it; quick actions and up next restyled underneath.</p>
+</div>
+
+<div class="grid">
+
+  <!-- SCREEN 1: Home default (full scroll) -->
+  <div class="cell">
+    <p class="cell-label">1 · Home — dashboard</p>
+    <p class="cell-sub">Gradient hero replaces the two flat cards; everything below is the same content, bolder cards</p>
+    <div class="phone"><div class="screen scrolly">
+      <div class="hero">
+        <div class="status-bar">
+          <span>13:01</span><div class="status-notch"></div>
+          <span class="status-right">
+            <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+            <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg>
+          </span>
+        </div>
+        <div class="hero-top">
+          <div>
+            <p class="hero-weekday">Monday, 22 September</p>
+            <p class="hero-hi">Hi, Sarah</p>
+          </div>
+          <div class="hero-btns">
+            <div class="hero-icon-btn"><svg viewBox="0 0 24 24" class="icon" style="width:15px;height:15px;color:#fff"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></div>
+            <div class="hero-icon-btn"><svg viewBox="0 0 24 24" class="icon" style="width:15px;height:15px;color:#fff"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><div class="dot-badge"></div></div>
+            <div class="hero-avatar">SM</div>
+          </div>
+        </div>
+
+        <div class="overview-row">
+          <div>
+            <p class="overview-label">Today's overview</p>
+            <p class="overview-sub">6 active projects</p>
+          </div>
+          <div style="display:flex;align-items:center;">
+            <div class="overview-gear"><svg viewBox="0 0 24 24" class="icon" style="width:13px;height:13px;color:#fff"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+            <span class="overview-status">On track</span>
+          </div>
+        </div>
+
+        <div class="pill-row">
+          <div class="metric-pill"><span class="val">8</span><span class="lbl">Live<br>projects</span></div>
+          <div class="metric-pill"><span class="val">3</span><span class="lbl">On site<br>today</span></div>
+          <div class="metric-pill"><span class="val">14</span><span class="lbl">Tasks due<br>this week</span></div>
+        </div>
+      </div>
+
+      <div class="floating-row">
+        <div class="status-card">
+          <div class="ico" style="background:var(--c-danger-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:15px;height:15px;color:var(--c-danger)"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+          <div class="txt"><p class="t">Warnings</p><p class="v">2 active</p></div>
+        </div>
+        <div class="status-card">
+          <div class="ico" style="background:var(--c-primary-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:15px;height:15px;color:var(--c-primary)"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+          <div class="txt"><p class="t">Tasks</p><p class="v">5 pending</p></div>
+        </div>
+      </div>
+
+      <div class="body-pad">
+        <div class="sec-head">
+          <h2>Quick actions</h2>
+          <div class="sec-actions">
+            <span class="link-btn">Main Menu</span>
+            <span class="link-btn muted">Customise</span>
+          </div>
+        </div>
+        <div class="qa-grid">
+          <div class="qa-tile"><div class="qa-icon" style="background:var(--c-primary-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:19px;height:19px;color:var(--c-primary)"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div><span class="lbl">Projects</span></div>
+          <div class="qa-tile"><div class="qa-icon" style="background:var(--c-brown-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:19px;height:19px;color:var(--c-brown)"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></div><span class="lbl">Small works</span></div>
+          <div class="qa-tile"><div class="qa-icon" style="background:var(--c-rust-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:19px;height:19px;color:var(--c-rust)"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/></svg></div><span class="lbl">Annual leave</span></div>
+          <div class="qa-tile"><div class="qa-icon" style="background:var(--c-green-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:19px;height:19px;color:var(--c-green)"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div><span class="lbl">Site audit</span></div>
+          <div class="qa-tile"><div class="qa-icon" style="background:var(--c-primary-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:19px;height:19px;color:var(--c-primary)"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div><span class="lbl">My Schedule</span></div>
+          <div class="qa-tile"><div class="qa-icon" style="background:#F2F3F5"><svg viewBox="0 0 24 24" class="icon" style="width:19px;height:19px;color:var(--c-text-secondary)"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div><span class="lbl">Settings</span></div>
+        </div>
+
+        <div class="sec-head" style="margin-top:0;">
+          <h2>Up next</h2>
+          <span class="link-btn">See all</span>
+        </div>
+        <p class="timeline-heading">Today</p>
+        <div class="up-next-card">
+          <div class="bar" style="background:var(--c-primary)"></div>
+          <div class="info"><p class="t">42 Riverside Court — re-wire</p><p class="s">08:00 – 16:30 · Jamie Sutton</p></div>
+        </div>
+        <p class="timeline-heading">Tomorrow</p>
+        <div class="up-next-card">
+          <div class="bar" style="background:var(--c-success)"></div>
+          <div class="info"><p class="t">Kitchen extension — snag list</p><p class="s">09:00 – 12:00 · Ravi Kaur</p></div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- SCREEN 2: Customise quick actions -->
+  <div class="cell">
+    <p class="cell-label">2 · Quick actions — Customise mode</p>
+    <p class="cell-sub">Same drag-to-reorder + remove + add flow, restyled tiles</p>
+    <div class="phone"><div class="screen">
+      <div class="status-bar dark-on-light">
+        <span>13:01</span><div class="status-notch"></div>
+        <span class="status-right">
+          <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+          <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg>
+        </span>
+      </div>
+      <div class="body-pad" style="padding-top:14px;">
+        <div class="sec-head">
+          <h2>Quick actions</h2>
+          <div class="sec-actions">
+            <div class="plus-btn"><svg viewBox="0 0 24 24" style="width:11px;height:11px;stroke:#fff;stroke-width:3;fill:none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></div>
+            <span class="link-btn">Main Menu</span>
+            <span class="link-btn" style="color:var(--c-text)">Done</span>
+          </div>
+        </div>
+        <div class="qa-grid">
+          <div class="qa-tile"><div class="qa-drag-dot"></div><div class="qa-icon" style="background:var(--c-primary-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:19px;height:19px;color:var(--c-primary)"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div><span class="lbl">Projects</span><div class="qa-remove"><svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div></div>
+          <div class="qa-tile"><div class="qa-drag-dot"></div><div class="qa-icon" style="background:var(--c-brown-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:19px;height:19px;color:var(--c-brown)"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></div><span class="lbl">Small works</span><div class="qa-remove"><svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div></div>
+          <div class="qa-tile"><div class="qa-drag-dot"></div><div class="qa-icon" style="background:var(--c-rust-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:19px;height:19px;color:var(--c-rust)"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/></svg></div><span class="lbl">Annual leave</span><div class="qa-remove"><svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div></div>
+          <div class="qa-tile"><div class="qa-drag-dot"></div><div class="qa-icon" style="background:var(--c-green-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:19px;height:19px;color:var(--c-green)"><path d="M9 11l3 3L22 4"/></svg></div><span class="lbl">Site audit</span><div class="qa-remove"><svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div></div>
+          <div class="qa-tile"><div class="qa-drag-dot"></div><div class="qa-icon" style="background:var(--c-primary-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:19px;height:19px;color:var(--c-primary)"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/></svg></div><span class="lbl">My Schedule</span><div class="qa-remove"><svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div></div>
+          <div class="qa-tile add-tile"><div class="qa-icon"><svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;stroke-width:2.5;fill:none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></div><span class="lbl">Add tile</span></div>
+        </div>
+        <p class="cell-sub" style="text-align:left;max-width:none;margin-top:0;">↑ tap the top-left "+" to add a tile back, drag a tile to reorder, tap the × to remove — same as today.</p>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- SCREEN 3: Admin overview customise sheet -->
+  <div class="cell">
+    <p class="cell-label">3 · Admin — customise overview metrics</p>
+    <p class="cell-sub">Gear icon on the hero opens this — same picker, up to 3 metrics</p>
+    <div class="phone"><div class="screen">
+      <div class="status-bar dark-on-light">
+        <span>13:01</span><div class="status-notch"></div>
+        <span class="status-right">
+          <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+          <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg>
+        </span>
+      </div>
+      <div class="hero" style="border-radius:0 0 28px 28px; padding-bottom:36px;">
+        <div class="hero-top">
+          <div><p class="hero-weekday">Monday, 22 September</p><p class="hero-hi">Hi, Sarah</p></div>
+          <div class="hero-btns"><div class="hero-avatar">SM</div></div>
+        </div>
+      </div>
+      <div class="dim"></div>
+      <div class="sheet-card" style="top:160px; bottom:0; position:absolute;">
+        <div class="sheet-handle"></div>
+        <div class="sheet-header"><span style="width:40px"></span><span class="sheet-title">Overview metrics</span><span class="sheet-done">Done</span></div>
+        <p class="sheet-note">Choose up to 3 metrics to show on your Today's overview card.</p>
+        <div class="metric-row"><span>Live projects</span><div class="check on"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div></div>
+        <div class="metric-row"><span>People on site today</span><div class="check on"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div></div>
+        <div class="metric-row"><span>Tasks due this week</span><div class="check on"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div></div>
+        <div class="metric-row"><span>Tasks overdue</span><div class="check"></div></div>
+        <div class="metric-row"><span>Outstanding tasks (all users)</span><div class="check"></div></div>
+        <div class="metric-row" style="border-bottom:none;"><span>Operatives on annual leave</span><div class="check"></div></div>
+      </div>
+    </div></div>
+  </div>
+
+</div>
+
+</body>
+</html>

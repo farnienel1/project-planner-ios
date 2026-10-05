@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Project Planner — Clients &amp; Help redesign</title>
+<style>
+:root {
+  --c-bg-page: #F7F8FA;
+  --c-bg-card: #FFFFFF;
+  --c-text: #0B1020;
+  --c-text-secondary: #6B7280;
+  --c-text-disabled: #C5C9D2;
+  --c-border: #EEF0F3;
+  --c-border-strong: #E5E7EB;
+  --c-primary: #185FA5;
+  --c-primary-light: #378ADD;
+  --c-primary-tint: #E6F1FB;
+  --c-success: #0F6E56;
+  --c-success-tint: #E1F5EE;
+  --c-warn: #854F0B;
+  --c-warn-tint: #FAEEDA;
+  --c-purple: #534AB7;
+  --c-purple-tint: #EEEDFE;
+  --c-rust: #B4530E;
+  --c-rust-tint: #FCEADB;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #E8EAEF; color: var(--c-text); }
+.icon { stroke-width: 2; stroke: currentColor; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+
+.phone { width: 320px; background: #0B1020; border-radius: 36px; padding: 10px; box-shadow: 0 12px 36px rgba(11,16,32,0.10); }
+.screen { background: var(--c-bg-page); border-radius: 28px; overflow: hidden; position: relative; min-height: 640px; }
+.screen.scrolly { height: 800px; overflow-y: auto; }
+.status-bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 22px 6px; font-size: 12px; font-weight: 600; color: var(--c-text); }
+.status-notch { width: 84px; height: 22px; background: #0B1020; border-radius: 12px; }
+.status-right { display: flex; gap: 4px; align-items: center; }
+
+.app-header { display: flex; justify-content: space-between; align-items: center; padding: 6px 16px 10px; }
+.icon-btn { width: 32px; height: 32px; border-radius: 50%; background: #FFFFFF; border: 0.5px solid var(--c-border-strong); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+.title { font-size: 15px; font-weight: 600; margin: 0; color: var(--c-text); }
+.title-btn { font-size: 12px; font-weight: 700; color: var(--c-primary); }
+.body-pad { padding: 0 16px 16px; }
+
+/* Client card */
+.client-card { display: flex; align-items: flex-start; gap: 11px; background: var(--c-bg-card); border: 0.5px solid var(--c-border); border-radius: 16px; padding: 13px; margin: 0 16px 10px; box-shadow: 0 2px 8px rgba(11,16,32,0.04); }
+.client-avatar { width: 42px; height: 42px; border-radius: 12px; background: linear-gradient(135deg, var(--c-primary), var(--c-primary-light)); color: #fff; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.client-name { font-size: 13px; font-weight: 700; color: var(--c-text); margin: 0 0 4px; }
+.client-meta-row { display: flex; align-items: center; gap: 5px; margin-bottom: 2px; }
+.client-meta-row svg { width: 11px; height: 11px; }
+.client-meta-row span { font-size: 10px; color: var(--c-text-secondary); }
+.client-projects-pill { font-size: 9px; font-weight: 700; color: var(--c-primary); background: var(--c-primary-tint); padding: 2px 8px; border-radius: 6px; margin-top: 4px; display: inline-block; }
+
+/* Forms */
+.field-group { margin: 0 16px 12px; }
+.field-label { font-size: 11px; font-weight: 700; color: var(--c-text-secondary); margin: 0 0 6px; text-transform: uppercase; letter-spacing: 0.3px; }
+.field-input { background: var(--c-bg-card); border: 0.5px solid var(--c-border-strong); border-radius: 12px; padding: 11px 13px; font-size: 12px; color: var(--c-text-disabled); }
+.field-input.filled { color: var(--c-text); font-weight: 600; }
+.primary-btn { margin: 8px 16px 0; text-align: center; padding: 13px; border-radius: 13px; background: linear-gradient(135deg, var(--c-primary), var(--c-primary-light)); color: #fff; font-size: 13px; font-weight: 700; }
+
+/* Details hero */
+.detail-hero { background: linear-gradient(135deg, #0B1F3A 0%, var(--c-primary) 55%, var(--c-primary-light) 100%); padding: 16px; border-radius: 0 0 24px 24px; }
+.detail-hero .name { font-size: 20px; font-weight: 700; color: #fff; margin: 8px 0 10px; }
+.detail-contact-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.detail-contact-row svg { width: 13px; height: 13px; color: rgba(255,255,255,0.85); }
+.detail-contact-row span { font-size: 12px; color: #fff; }
+
+.proj-row { display: flex; align-items: center; gap: 10px; background: var(--c-bg-card); border: 0.5px solid var(--c-border); border-radius: 14px; padding: 11px 12px; margin: 0 16px 8px; }
+.proj-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.proj-row .n { font-size: 12px; font-weight: 700; color: var(--c-text); margin: 0; }
+.proj-row .s { font-size: 10px; color: var(--c-text-secondary); margin: 0; }
+
+/* Help */
+.help-hero { text-align: center; margin: 16px 16px 14px; padding: 22px 16px; border-radius: 18px; background: linear-gradient(135deg, var(--c-primary-tint), #F3EEFB); }
+.help-hero .badge { width: 52px; height: 52px; border-radius: 16px; background: linear-gradient(135deg, var(--c-primary), var(--c-purple)); display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; }
+.help-hero h2 { font-size: 15px; font-weight: 700; margin: 0 0 4px; }
+.help-hero p { font-size: 11px; color: var(--c-text-secondary); margin: 0; line-height: 1.4; }
+
+.quick-links { display: grid; grid-template-columns: repeat(2,1fr); gap: 9px; margin: 0 16px 16px; }
+.ql-tile { background: var(--c-bg-card); border: 0.5px solid var(--c-border); border-radius: 14px; padding: 14px 8px; text-align: center; box-shadow: 0 2px 6px rgba(11,16,32,0.04); }
+.ql-icon { width: 36px; height: 36px; border-radius: 11px; display: flex; align-items: center; justify-content: center; margin: 0 auto 6px; }
+.ql-tile .lbl { font-size: 11px; font-weight: 700; color: var(--c-text); }
+
+.cat-row { display: flex; align-items: center; gap: 11px; background: var(--c-bg-card); border: 0.5px solid var(--c-border); border-radius: 14px; padding: 12px; margin: 0 16px 8px; }
+.cat-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.cat-row .n { font-size: 12px; font-weight: 700; color: var(--c-text); margin: 0 0 2px; }
+.cat-row .s { font-size: 10px; color: var(--c-text-secondary); margin: 0; }
+
+.faq-card { background: var(--c-bg-card); border: 0.5px solid var(--c-border); border-radius: 14px; padding: 12px 14px; margin: 0 16px 8px; }
+.faq-q { font-size: 12px; font-weight: 700; color: var(--c-text); }
+
+.step-row { display: flex; gap: 11px; background: var(--c-bg-card); border: 0.5px solid var(--c-border); border-radius: 14px; padding: 12px; margin: 0 16px 8px; }
+.step-num { width: 26px; height: 26px; border-radius: 50%; background: var(--c-primary); color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.step-row .n { font-size: 12px; font-weight: 700; color: var(--c-text); margin: 0 0 2px; }
+.step-row .s { font-size: 10px; color: var(--c-text-secondary); margin: 0; }
+
+.tip-row { display: flex; gap: 8px; background: var(--c-warn-tint); border-radius: 10px; padding: 10px 12px; margin: 0 16px 8px; }
+.tip-row span { font-size: 10px; color: #6B4A0B; line-height: 1.4; }
+
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; padding: 32px; }
+.cell { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.cell-label { color: #34394A; font-size: 13px; font-weight: 600; text-align: center; margin: 0; }
+.cell-sub { color: #8A93A6; font-size: 11px; text-align: center; margin: 2px 0 0; max-width: 280px; line-height: 1.4; }
+.page-heading { padding: 32px 32px 8px; }
+.page-heading h1 { color: #1A1F33; font-size: 26px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.3px; }
+.page-heading p { color: #5A6275; font-size: 13px; margin: 0; max-width: 640px; line-height: 1.5; }
+.divider { padding: 16px 32px 0; }
+.divider h2 { color: #1A1F33; font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+.divider p { color: #6B7280; font-size: 12px; margin: 0; max-width: 640px; line-height: 1.5; }
+.note-box { margin: 0 32px 16px; padding: 14px 18px; background: #FFF8E8; border: 1px solid #F2AE45; border-radius: 10px; font-size: 12px; color: #6B4A0B; line-height: 1.6; }
+.note-box b { color: #4A3406; }
+</style>
+</head>
+<body>
+
+<div class="page-heading">
+  <h1>Clients &amp; Help — redesign</h1>
+  <p>Clients was using plain white cards on the default system background with a bare "Done / New Client" nav bar. Help was a reasonable layout already but with default iOS card shadows rather than the app's hairline-border card system. Both now match the established look.</p>
+</div>
+
+<div class="note-box">
+  <b>Nothing functional changes:</b> Clients — same empty state / Create Client button, same client card tap-to-view-details, same New Client + Done buttons, same Edit flow. Help — same Quick Links grid, same category browse list, same expandable FAQ cards, same category detail steps/tips content.
+</div>
+
+<div class="divider"><h2>Clients</h2><p>List, create form, and client details with linked projects.</p></div>
+
+<div class="grid">
+
+  <div class="cell">
+    <p class="cell-label">1 · Clients — list</p>
+    <p class="cell-sub">Card list restyled to the app's hairline-border cards</p>
+    <div class="phone"><div class="screen scrolly">
+      <div class="status-bar"><span>13:01</span><div class="status-notch"></div><span class="status-right"><svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg></span></div>
+      <div class="app-header"><span class="title-btn">Done</span><p class="title">Clients</p><span class="title-btn">New Client</span></div>
+      <div class="client-card">
+        <div class="client-avatar">TH</div>
+        <div>
+          <p class="client-name">Thames Holdings</p>
+          <div class="client-meta-row"><svg viewBox="0 0 24 24" class="icon" style="color:var(--c-primary)"><path d="M4 4h16v16H4z" opacity="0"/><path d="M22 6l-10 7L2 6"/><path d="M2 6h20v12H2z"/></svg><span>info@thamesholdings.co.uk</span></div>
+          <div class="client-meta-row"><svg viewBox="0 0 24 24" class="icon" style="color:var(--c-success)"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg><span>020 7946 0958</span></div>
+          <span class="client-projects-pill">3 Projects</span>
+        </div>
+      </div>
+      <div class="client-card">
+        <div class="client-avatar" style="background:linear-gradient(135deg,var(--c-purple),#7A72D6)">CG</div>
+        <div>
+          <p class="client-name">Chelsea Gardens Ltd</p>
+          <div class="client-meta-row"><svg viewBox="0 0 24 24" class="icon" style="color:var(--c-rust)"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg><span>142 King's Road, London</span></div>
+          <span class="client-projects-pill">1 Project</span>
+        </div>
+      </div>
+      <div class="client-card">
+        <div class="client-avatar" style="background:linear-gradient(135deg,var(--c-success),#2ED18D)">RM</div>
+        <div>
+          <p class="client-name">Riverside Management</p>
+          <div class="client-meta-row"><svg viewBox="0 0 24 24" class="icon" style="color:var(--c-primary)"><path d="M22 6l-10 7L2 6"/><path d="M2 6h20v12H2z"/></svg><span>ops@riverside-mgmt.com</span></div>
+          <span class="client-projects-pill">2 Projects</span>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="cell">
+    <p class="cell-label">2 · Create Client</p>
+    <p class="cell-sub">Was a plain system Form — now uses the app's input-field cards</p>
+    <div class="phone"><div class="screen">
+      <div class="status-bar"><span>13:01</span><div class="status-notch"></div><span class="status-right"><svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg></span></div>
+      <div class="app-header"><span class="title-btn">Cancel</span><p class="title">New Client</p><span style="width:40px"></span></div>
+      <div class="field-group"><p class="field-label">Client name</p><div class="field-input filled">Thames Holdings</div></div>
+      <div class="field-group"><p class="field-label">Email</p><div class="field-input">client@example.com</div></div>
+      <div class="field-group"><p class="field-label">Phone</p><div class="field-input">07000 000000</div></div>
+      <div class="field-group"><p class="field-label">Address</p><div class="field-input">Site or billing address</div></div>
+      <div class="primary-btn">Create Client</div>
+    </div></div>
+  </div>
+
+  <div class="cell">
+    <p class="cell-label">3 · Client details</p>
+    <p class="cell-sub">Gradient hero + linked projects list, Edit in header</p>
+    <div class="phone"><div class="screen scrolly">
+      <div class="detail-hero">
+        <div class="status-bar" style="color:#fff;padding-top:0;"><span>13:01</span><div class="status-notch"></div><span class="status-right"><svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:#fff"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:#fff"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg></span></div>
+        <div style="display:flex;justify-content:space-between;"><span style="font-size:12px;font-weight:700;color:#fff;">Done</span><span style="font-size:12px;font-weight:700;color:#fff;">Edit</span></div>
+        <p class="name">Thames Holdings</p>
+        <div class="detail-contact-row"><svg viewBox="0 0 24 24" class="icon"><path d="M22 6l-10 7L2 6"/><path d="M2 6h20v12H2z"/></svg><span>info@thamesholdings.co.uk</span></div>
+        <div class="detail-contact-row"><svg viewBox="0 0 24 24" class="icon"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg><span>020 7946 0958</span></div>
+      </div>
+      <p class="cell-sub" style="text-align:left;margin:14px 16px 8px;max-width:none;">Projects (3)</p>
+      <div class="proj-row"><div class="proj-dot" style="background:var(--c-success)"></div><div><p class="n">JB-0142 Riverside Court</p><p class="s">Active · ends 12 Dec</p></div></div>
+      <div class="proj-row"><div class="proj-dot" style="background:var(--c-warn)"></div><div><p class="n">JB-0138 Kingston Depot</p><p class="s">Upcoming · starts 4 Oct</p></div></div>
+      <div class="proj-row"><div class="proj-dot" style="background:var(--c-text-disabled)"></div><div><p class="n">JB-0119 Harbour View</p><p class="s">Completed</p></div></div>
+    </div></div>
+  </div>
+
+</div>
+
+<div class="divider"><h2>Help &amp; FAQs</h2><p>Quick links, browse-by-category, expandable FAQs, and a category detail with numbered steps + tips.</p></div>
+
+<div class="grid">
+
+  <div class="cell">
+    <p class="cell-label">4 · Help — home</p>
+    <p class="cell-sub">Same content, restyled hero + cards</p>
+    <div class="phone"><div class="screen scrolly">
+      <div class="status-bar"><span>13:01</span><div class="status-notch"></div><span class="status-right"><svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg></span></div>
+      <div class="app-header"><button class="icon-btn"><svg viewBox="0 0 24 24" class="icon" style="width:16px;height:16px"><polyline points="15 18 9 12 15 6"/></svg></button><p class="title">Help &amp; FAQs</p><span style="width:32px"></span></div>
+      <div class="help-hero">
+        <div class="badge"><svg viewBox="0 0 24 24" class="icon" style="width:24px;height:24px;color:#fff"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+        <h2>Welcome to Project Planner Help</h2>
+        <p>Find answers to common questions and learn how to use all features of the app</p>
+      </div>
+      <p class="cell-sub" style="text-align:left;margin:0 16px 8px;max-width:none;font-weight:700;color:var(--c-text);">Quick links</p>
+      <div class="quick-links">
+        <div class="ql-tile"><div class="ql-icon" style="background:var(--c-primary-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:18px;height:18px;color:var(--c-primary)"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div><span class="lbl">Projects</span></div>
+        <div class="ql-tile"><div class="ql-icon" style="background:var(--c-rust-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:18px;height:18px;color:var(--c-rust)"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></div><span class="lbl">Small Works</span></div>
+        <div class="ql-tile"><div class="ql-icon" style="background:var(--c-success-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:18px;height:18px;color:var(--c-success)"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div><span class="lbl">Operatives</span></div>
+        <div class="ql-tile"><div class="ql-icon" style="background:var(--c-purple-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:18px;height:18px;color:var(--c-purple)"><path d="M20 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M12 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8" cy="7" r="4"/></svg></div><span class="lbl">Managers</span></div>
+      </div>
+      <p class="cell-sub" style="text-align:left;margin:0 16px 8px;max-width:none;font-weight:700;color:var(--c-text);">Browse by category</p>
+      <div class="cat-row"><div class="cat-icon" style="background:var(--c-primary-tint)"><svg viewBox="0 0 24 24" class="icon" style="width:17px;height:17px;color:var(--c-primary)"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div><div><p class="n">Bookings</p><p class="s">Schedule operatives to projects and manage bookings</p></div></div>
+      <div class="faq-card"><p class="faq-q">How do I create a new project? ⌄</p></div>
+    </div></div>
+  </div>
+
+  <div class="cell">
+    <p class="cell-label">5 · Help — category detail</p>
+    <p class="cell-sub">Numbered steps + tips, same copy</p>
+    <div class="phone"><div class="screen scrolly">
+      <div class="status-bar"><span>13:01</span><div class="status-notch"></div><span class="status-right"><svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg></span></div>
+      <div class="app-header"><span style="width:32px"></span><p class="title">Operatives</p><span class="title-btn">Done</span></div>
+      <div class="help-hero" style="text-align:left;">
+        <h2>Operatives</h2>
+        <p>Add and manage operatives and qualifications</p>
+      </div>
+      <p class="cell-sub" style="text-align:left;margin:0 16px 8px;max-width:none;font-weight:700;color:var(--c-text);">How to use</p>
+      <div class="step-row"><div class="step-num">1</div><div><p class="n">View Operatives</p><p class="s">Go to the More menu, then tap Operatives to see all your operatives.</p></div></div>
+      <div class="step-row"><div class="step-num">2</div><div><p class="n">Add New Operative</p><p class="s">Tap the + button, fill in name, email, phone, start date and trade.</p></div></div>
+      <p class="cell-sub" style="text-align:left;margin:12px 16px 8px;max-width:none;font-weight:700;color:var(--c-text);">Tips &amp; tricks</p>
+      <div class="tip-row"><span>💡 Track qualification expiry dates to ensure compliance</span></div>
+      <div class="tip-row"><span>💡 Deactivate operatives instead of deleting to preserve history</span></div>
+    </div></div>
+  </div>
+
+</div>
+
+</body>
+</html>

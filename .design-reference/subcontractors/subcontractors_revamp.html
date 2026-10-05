@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Project Planner — Subcontractors redesign</title>
+<style>
+:root {
+  --c-bg-page: #F7F8FA;
+  --c-bg-card: #FFFFFF;
+  --c-text: #0B1020;
+  --c-text-secondary: #6B7280;
+  --c-text-disabled: #C5C9D2;
+  --c-border: #EEF0F3;
+  --c-border-strong: #E5E7EB;
+  --c-primary: #185FA5;
+  --c-purple: #534AB7;
+  --c-purple-light: #7A72D6;
+  --c-purple-tint: #EEEDFE;
+  --c-success: #0F6E56;
+  --c-success-tint: #E1F5EE;
+  --c-warn: #854F0B;
+  --c-warn-tint: #FAEEDA;
+  --c-danger: #A32D2D;
+  --c-danger-tint: #FCEBEB;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #E8EAEF; color: var(--c-text); }
+.icon { stroke-width: 2; stroke: currentColor; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+
+.phone { width: 320px; background: #0B1020; border-radius: 36px; padding: 10px; box-shadow: 0 12px 36px rgba(11,16,32,0.10); }
+.screen { background: var(--c-bg-page); border-radius: 28px; overflow: hidden; position: relative; min-height: 640px; }
+.screen.scrolly { height: 800px; overflow-y: auto; }
+.status-bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 22px 6px; font-size: 12px; font-weight: 600; color: var(--c-text); }
+.status-bar.on-hero { color: #FFFFFF; position: relative; z-index: 2; }
+.status-notch { width: 84px; height: 22px; background: #0B1020; border-radius: 12px; }
+.status-right { display: flex; gap: 4px; align-items: center; }
+
+.app-header { display: flex; justify-content: space-between; align-items: center; padding: 6px 16px 10px; }
+.icon-btn { width: 32px; height: 32px; border-radius: 50%; background: #FFFFFF; border: 0.5px solid var(--c-border-strong); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+.title { font-size: 15px; font-weight: 600; margin: 0; color: var(--c-text); }
+.body-pad { padding: 0 16px 16px; }
+
+/* Hero */
+.hero { background: linear-gradient(135deg, #241F45 0%, var(--c-purple) 55%, var(--c-purple-light) 100%); padding: 4px 16px 22px; border-radius: 0 0 26px 26px; position: relative; margin-bottom: -14px; }
+.hero-top { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
+.hero-back { width: 30px; height: 30px; border-radius: 50%; background: rgba(255,255,255,0.16); display: flex; align-items: center; justify-content: center; }
+.hero-title { font-size: 14px; font-weight: 700; color: #FFFFFF; margin: 0; }
+.hero-add { width: 30px; height: 30px; border-radius: 50%; background: rgba(255,255,255,0.16); display: flex; align-items: center; justify-content: center; }
+.hero-stat-label { font-size: 10px; color: rgba(255,255,255,0.72); font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin: 14px 0 2px; }
+.hero-stat-value { font-size: 21px; font-weight: 700; color: #FFFFFF; margin: 0; }
+
+.search-row { display: flex; align-items: center; gap: 8px; margin: 0 16px 10px; padding: 10px 12px; background: var(--c-bg-card); border-radius: 13px; border: 0.5px solid var(--c-border-strong); box-shadow: 0 6px 16px rgba(11,16,32,0.06); position: relative; z-index: 3; }
+.search-row input-fake { flex: 1; font-size: 12px; color: var(--c-text-disabled); }
+
+.chip-row { display: flex; gap: 7px; margin: 0 16px 12px; overflow-x: auto; }
+.chip { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 6px 13px; border-radius: 20px; background: var(--c-bg-card); color: var(--c-text-secondary); border: 0.5px solid var(--c-border-strong); }
+.chip.active { background: var(--c-purple); color: #FFFFFF; border-color: transparent; }
+.chip.trade-elec { background: #E6F1FB; color: var(--c-primary); border-color: transparent; }
+.chip.trade-plumb { background: var(--c-success-tint); color: var(--c-success); border-color: transparent; }
+.chip.trade-roof { background: var(--c-warn-tint); color: var(--c-warn); border-color: transparent; }
+
+.firm-card { background: var(--c-bg-card); border: 0.5px solid var(--c-border); border-radius: 16px; padding: 12px; margin: 0 16px 10px; box-shadow: 0 2px 8px rgba(11,16,32,0.04); }
+.firm-top { display: flex; align-items: flex-start; gap: 10px; }
+.firm-avatar { width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+.firm-name { font-size: 13px; font-weight: 700; color: var(--c-text); margin: 0 0 3px; }
+.firm-meta { display: flex; align-items: center; gap: 6px; }
+.firm-trade-pill { font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 5px; }
+.firm-op-count { font-size: 10px; color: var(--c-text-secondary); }
+.contact-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.contact-avatar { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 8px; font-weight: 700; flex-shrink: 0; }
+.contact-name { font-size: 10px; font-weight: 600; color: var(--c-text-secondary); }
+.contact-email { font-size: 10px; color: var(--c-text-disabled); }
+.more-link { font-size: 10px; font-weight: 700; color: var(--c-purple); margin-top: 6px; margin-left: 28px; }
+.contacts-wrap { margin-top: 8px; padding-top: 8px; border-top: 0.5px solid var(--c-border); }
+
+/* Schedule flow */
+.sf-card { background: var(--c-bg-card); border: 0.5px solid var(--c-border); border-radius: 16px; padding: 14px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(11,16,32,0.04); }
+.sf-card h3 { font-size: 13px; font-weight: 700; margin: 0 0 10px; color: var(--c-text); }
+.sf-project-tag { font-size: 12px; font-weight: 700; color: var(--c-purple); margin: 0 0 3px; }
+.sf-project-sub { font-size: 10px; color: var(--c-text-secondary); margin: 0; }
+.sf-firm-row { display: flex; align-items: center; gap: 9px; padding: 9px; border-radius: 11px; margin-bottom: 6px; }
+.sf-firm-row.selected { background: var(--c-purple-tint); }
+.sf-firm-row.unselected { background: #F5F5F7; }
+.sf-firm-badge { width: 28px; height: 28px; border-radius: 8px; background: var(--c-purple); color: #fff; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.sf-firm-txt .n { font-size: 12px; font-weight: 700; color: var(--c-text); margin: 0; }
+.sf-firm-txt .t { font-size: 10px; color: var(--c-text-secondary); margin: 0; }
+.sf-radio { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--c-border-strong); flex-shrink: 0; margin-left: auto; }
+.sf-radio.on { border-color: var(--c-purple); background: var(--c-purple); position: relative; }
+.sf-radio.on::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: #fff; }
+
+.toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.toggle-row .n { font-size: 12px; font-weight: 700; color: var(--c-text); margin: 0; }
+.toggle-row .s { font-size: 10px; color: var(--c-text-secondary); margin: 0; }
+.toggle { width: 40px; height: 24px; border-radius: 12px; background: var(--c-purple); position: relative; flex-shrink: 0; }
+.toggle::after { content: ""; position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; }
+
+.check-row { display: flex; align-items: center; justify-content: space-between; padding: 9px; background: #F5F5F7; border-radius: 10px; margin-bottom: 6px; }
+.check-row .n { font-size: 12px; font-weight: 600; color: var(--c-text); margin: 0; }
+.check-row .t { font-size: 10px; color: var(--c-text-secondary); margin: 0; }
+.check-box { width: 18px; height: 18px; border-radius: 5px; border: 2px solid var(--c-border-strong); }
+.check-box.on { background: var(--c-purple); border-color: var(--c-purple); position: relative; }
+.check-box.on::after { content: ""; position: absolute; inset: 3px; border: 2px solid #fff; border-top: none; border-right: none; transform: rotate(-45deg) translate(0,-1px); }
+
+.cal-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.cal-arrow { width: 28px; height: 28px; border-radius: 50%; background: var(--c-purple); display: flex; align-items: center; justify-content: center; }
+.cal-month { font-size: 12px; font-weight: 700; color: var(--c-text); }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; text-align: center; }
+.cal-hd { font-size: 9px; color: var(--c-text-secondary); font-weight: 700; padding-bottom: 4px; }
+.cal-day { font-size: 10px; padding: 6px 0; border-radius: 8px; color: var(--c-text); }
+.cal-day.selected { background: var(--c-purple); color: #fff; font-weight: 700; }
+.cal-day.dim { color: var(--c-text-disabled); }
+
+.qs-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.qs-btn { flex: 1; text-align: center; font-size: 11px; font-weight: 700; padding: 10px 0; border-radius: 11px; background: var(--c-purple-tint); color: var(--c-purple); }
+.qs-btn.active { background: var(--c-purple); color: #fff; }
+
+.date-pill { display: flex; align-items: center; justify-content: space-between; padding: 9px 11px; background: #F5F5F7; border-radius: 10px; margin-bottom: 6px; }
+.date-pill .d { font-size: 11px; font-weight: 600; color: var(--c-text); }
+.slot-seg { display: flex; background: #ECEEF1; border-radius: 8px; padding: 2px; }
+.slot-seg span { font-size: 9px; font-weight: 700; padding: 4px 8px; border-radius: 6px; color: var(--c-text-secondary); }
+.slot-seg span.on { background: #fff; color: var(--c-purple); }
+
+.footer-bar { position: absolute; left: 0; right: 0; bottom: 0; background: var(--c-bg-card); border-top: 0.5px solid var(--c-border); padding: 10px 16px 14px; }
+.footer-summary { display: flex; justify-content: space-between; font-size: 10px; color: var(--c-text-secondary); margin-bottom: 8px; }
+.footer-summary b { color: var(--c-purple); }
+.confirm-btn { width: 100%; text-align: center; padding: 12px; border-radius: 12px; background: linear-gradient(135deg, var(--c-purple), var(--c-purple-light)); color: #fff; font-size: 13px; font-weight: 700; }
+
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; padding: 32px; }
+.cell { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.cell-label { color: #34394A; font-size: 13px; font-weight: 600; text-align: center; margin: 0; }
+.cell-sub { color: #8A93A6; font-size: 11px; text-align: center; margin: 2px 0 0; max-width: 280px; line-height: 1.4; }
+
+.page-heading { padding: 32px 32px 8px; }
+.page-heading h1 { color: #1A1F33; font-size: 26px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.3px; }
+.page-heading p { color: #5A6275; font-size: 13px; margin: 0; max-width: 640px; line-height: 1.5; }
+
+.divider { padding: 16px 32px 0; }
+.divider h2 { color: #1A1F33; font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+.divider p { color: #6B7280; font-size: 12px; margin: 0; max-width: 640px; line-height: 1.5; }
+
+.note-box { margin: 0 32px 16px; padding: 14px 18px; background: #FFF8E8; border: 1px solid #F2AE45; border-radius: 10px; font-size: 12px; color: #6B4A0B; line-height: 1.6; }
+.note-box b { color: #4A3406; }
+</style>
+</head>
+<body>
+
+<div class="page-heading">
+  <h1>Subcontractors — roster + booking redesign</h1>
+  <p>Same idea as the operatives/managers pass: the subcontractors list already had a purple gradient header, but sat on the plain system background with a mismatched back button. The booking flow (Schedule Sub Contractor) was still fully unstyled — system fonts, plain grey backgrounds, no card system. Both now share the same purple hero + card language, using the app's existing purple token, just bolder.</p>
+</div>
+
+<div class="note-box">
+  <b>Nothing functional changes:</b> same search + trade filter chips, same firm cards with contact previews and "+N more", same Add button (admins only), same booking flow — choose sub contractor, general attendance toggle vs named operative checklist, calendar multi-select, quick-select (Today / 3 Days / 5 Days), per-date AM/PM/Full day picker, and Confirm booking button with the same disabled/loading states.
+</div>
+
+<div class="grid">
+
+  <!-- SCREEN 1: Subcontractors roster -->
+  <div class="cell">
+    <p class="cell-label">1 · Subcontractors — roster</p>
+    <p class="cell-sub">Purple hero (was a flat card), search, trade chips, firm cards</p>
+    <div class="phone"><div class="screen scrolly">
+      <div class="hero">
+        <div class="status-bar on-hero">
+          <span>13:01</span><div class="status-notch"></div>
+          <span class="status-right">
+            <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:#fff"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+            <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:#fff"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg>
+          </span>
+        </div>
+        <div class="hero-top">
+          <div class="hero-back"><svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:#fff"><polyline points="15 18 9 12 15 6"/></svg></div>
+          <p class="hero-title">Sub Contractors</p>
+          <div class="hero-add"><svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:#fff"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></div>
+        </div>
+        <p class="hero-stat-label">Your sub contractors</p>
+        <p class="hero-stat-value">8 Firms · 21 Operatives</p>
+      </div>
+
+      <div class="search-row">
+        <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px;color:var(--c-purple)"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input-fake>Search firms or trades…</input-fake>
+      </div>
+
+      <div class="chip-row">
+        <span class="chip active">All</span>
+        <span class="chip trade-elec">Electrical</span>
+        <span class="chip trade-plumb">Plumbing</span>
+        <span class="chip trade-roof">Roofing</span>
+      </div>
+
+      <div class="firm-card">
+        <div class="firm-top">
+          <div class="firm-avatar" style="background:linear-gradient(135deg,#185FA5,#378ADD)">BE</div>
+          <div style="flex:1;">
+            <p class="firm-name">Brightline Electrical</p>
+            <div class="firm-meta">
+              <span class="firm-trade-pill" style="background:#E6F1FB;color:var(--c-primary)">ELECTRICAL</span>
+              <span class="firm-op-count">3 Operatives</span>
+            </div>
+          </div>
+          <svg viewBox="0 0 24 24" class="icon" style="width:13px;height:13px;color:var(--c-text-disabled)"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+        <div class="contacts-wrap">
+          <div class="contact-row"><div class="contact-avatar" style="background:#185FA5">DM</div><span class="contact-name">Dan Mercer</span><span class="contact-email">dan@brightline.co.uk</span></div>
+          <div class="contact-row"><div class="contact-avatar" style="background:#0F6E56">JW</div><span class="contact-name">Jess Wren</span></div>
+          <p class="more-link">More (+1) ›</p>
+        </div>
+      </div>
+
+      <div class="firm-card">
+        <div class="firm-top">
+          <div class="firm-avatar" style="background:linear-gradient(135deg,#0F6E56,#2ED18D)">CP</div>
+          <div style="flex:1;">
+            <p class="firm-name">Coastal Plumbing Co</p>
+            <div class="firm-meta">
+              <span class="firm-trade-pill" style="background:var(--c-success-tint);color:var(--c-success)">PLUMBING</span>
+              <span class="firm-op-count">2 Operatives</span>
+            </div>
+          </div>
+          <svg viewBox="0 0 24 24" class="icon" style="width:13px;height:13px;color:var(--c-text-disabled)"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+      </div>
+
+      <div class="firm-card">
+        <div class="firm-top">
+          <div class="firm-avatar" style="background:linear-gradient(135deg,#854F0B,#F2AE45)">RS</div>
+          <div style="flex:1;">
+            <p class="firm-name">Ridgeline Roofing</p>
+            <div class="firm-meta">
+              <span class="firm-trade-pill" style="background:var(--c-warn-tint);color:var(--c-warn)">ROOFING</span>
+              <span class="firm-op-count">4 Operatives</span>
+            </div>
+          </div>
+          <svg viewBox="0 0 24 24" class="icon" style="width:13px;height:13px;color:var(--c-text-disabled)"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- SCREEN 2: Schedule Sub Contractor -->
+  <div class="cell">
+    <p class="cell-label">2 · Schedule Sub Contractor</p>
+    <p class="cell-sub">Fully unstyled before — now uses the same card + purple system</p>
+    <div class="phone"><div class="screen scrolly">
+      <div class="status-bar">
+        <span>13:01</span><div class="status-notch"></div>
+        <span class="status-right">
+          <svg viewBox="0 0 24 24" class="icon" style="width:14px;height:14px"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+          <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><rect x="2" y="7" width="18" height="10" rx="2" ry="2"/><rect x="22" y="11" width="1.5" height="2" rx="0.5"/></svg>
+        </span>
+      </div>
+      <div class="app-header">
+        <button class="icon-btn"><svg viewBox="0 0 24 24" class="icon" style="width:16px;height:16px;color:#0B1020"><polyline points="15 18 9 12 15 6"/></svg></button>
+        <p class="title">Schedule Sub Contractor</p>
+        <span style="width:32px"></span>
+      </div>
+      <div class="body-pad" style="padding-bottom:110px;">
+        <div class="sf-card">
+          <p class="sf-project-tag">JB-0142 Riverside Court</p>
+          <p class="sf-project-sub">Thames Holdings · 42 Riverside Court, London</p>
+        </div>
+
+        <div class="sf-card">
+          <h3>Choose sub contractor</h3>
+          <div class="sf-firm-row selected">
+            <div class="sf-firm-badge">BE</div>
+            <div class="sf-firm-txt"><p class="n">Brightline Electrical</p><p class="t">Electrical · 3 ops</p></div>
+            <div class="sf-radio on"></div>
+          </div>
+          <div class="sf-firm-row unselected">
+            <div class="sf-firm-badge" style="background:#0F6E56">CP</div>
+            <div class="sf-firm-txt"><p class="n">Coastal Plumbing Co</p><p class="t">Plumbing · 2 ops</p></div>
+            <div class="sf-radio"></div>
+          </div>
+        </div>
+
+        <div class="sf-card">
+          <h3>Who's attending</h3>
+          <div class="toggle-row">
+            <div><p class="n">Brightline Electrical (General)</p><p class="s">Use if named operatives aren't confirmed yet</p></div>
+            <div class="toggle"></div>
+          </div>
+        </div>
+
+        <div class="sf-card">
+          <h3>Select dates</h3>
+          <div class="cal-nav">
+            <div class="cal-arrow"><svg viewBox="0 0 24 24" class="icon" style="width:12px;height:12px;color:#fff"><polyline points="15 18 9 12 15 6"/></svg></div>
+            <span class="cal-month">September 2026</span>
+            <div class="cal-arrow"><svg viewBox="0 0 24 24" class="icon" style="width:12px;height:12px;color:#fff"><polyline points="9 18 15 12 9 6"/></svg></div>
+          </div>
+          <div class="cal-grid">
+            <span class="cal-hd">M</span><span class="cal-hd">T</span><span class="cal-hd">W</span><span class="cal-hd">T</span><span class="cal-hd">F</span><span class="cal-hd">S</span><span class="cal-hd">S</span>
+            <span class="cal-day dim">31</span><span class="cal-day">1</span><span class="cal-day">2</span><span class="cal-day">3</span><span class="cal-day">4</span><span class="cal-day">5</span><span class="cal-day">6</span>
+            <span class="cal-day">7</span><span class="cal-day">8</span><span class="cal-day">9</span><span class="cal-day">10</span><span class="cal-day">11</span><span class="cal-day">12</span><span class="cal-day">13</span>
+            <span class="cal-day">14</span><span class="cal-day">15</span><span class="cal-day">16</span><span class="cal-day">17</span><span class="cal-day">18</span><span class="cal-day">19</span><span class="cal-day">20</span>
+            <span class="cal-day">21</span><span class="cal-day selected">22</span><span class="cal-day selected">23</span><span class="cal-day">24</span><span class="cal-day">25</span><span class="cal-day">26</span><span class="cal-day">27</span>
+          </div>
+        </div>
+
+        <div class="qs-row">
+          <span class="qs-btn">Today</span>
+          <span class="qs-btn active">3 Days</span>
+          <span class="qs-btn">5 Days</span>
+        </div>
+
+        <div class="sf-card">
+          <h3>Selected dates</h3>
+          <div class="date-pill">
+            <span class="d">Tue 22 Sep</span>
+            <div class="slot-seg"><span>AM</span><span>PM</span><span class="on">FULL</span></div>
+          </div>
+          <div class="date-pill">
+            <span class="d">Wed 23 Sep</span>
+            <div class="slot-seg"><span>AM</span><span>PM</span><span class="on">FULL</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer-bar">
+        <div class="footer-summary"><span>Brightline Electrical · Full day</span><b>2 days</b></div>
+        <div class="confirm-btn">Confirm booking</div>
+      </div>
+    </div></div>
+  </div>
+
+</div>
+
+</body>
+</html>

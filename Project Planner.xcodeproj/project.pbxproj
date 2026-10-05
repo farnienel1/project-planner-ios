@@ -139,7 +139,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		27F1A0B12F9A100100A1D1F2 /* Lock launch shell */ = {
+		27F1A0B12F9A100100A1D1F0 /* Generate Third-Party Framework dSYMs */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -147,12 +147,12 @@
 			);
 			inputPaths = (
 			);
-			name = "Lock launch shell";
+			name = "Generate Third-Party Framework dSYMs";
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "/bin/sh \"${SRCROOT}/scripts/verify-launch-shell.sh\"\n";
+			shellScript = "\"${SRCROOT}/scripts/generate-third-party-dsyms.sh\"\n";
 		};
 		27F1A0B12F9A100100A1D1F1 /* Disable Firebase App Delegate Proxy */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -169,7 +169,7 @@
 			shellPath = /bin/sh;
 			shellScript = "set +e\nPLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -f \"$PLIST\" ]; then\n  /usr/libexec/PlistBuddy -c \"Delete :FirebaseAppDelegateProxyEnabled\" \"$PLIST\" >/dev/null 2>&1\n  /usr/libexec/PlistBuddy -c \"Add :FirebaseAppDelegateProxyEnabled bool false\" \"$PLIST\"\n  echo \"FirebaseAppDelegateProxyEnabled=false in $PLIST\"\nfi\nexit 0\n";
 		};
-		27F1A0B12F9A100100A1D1F0 /* Generate Third-Party Framework dSYMs */ = {
+		27F1A0B12F9A100100A1D1F2 /* Lock launch shell */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -177,12 +177,12 @@
 			);
 			inputPaths = (
 			);
-			name = "Generate Third-Party Framework dSYMs";
+			name = "Lock launch shell";
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"${SRCROOT}/scripts/generate-third-party-dsyms.sh\"\n";
+			shellScript = "/bin/sh \"${SRCROOT}/scripts/verify-launch-shell.sh\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
