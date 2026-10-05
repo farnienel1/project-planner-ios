@@ -51,6 +51,9 @@ struct BookLabourFlowView: View {
     /// User ids from an unbooked-labour warning — always listed first so the flow
     /// opened from Warnings is never empty for the people on that card.
     var focusedUserIds: [String] = []
+    /// Daily Overview already has a navigation stack. A second stack inside a cover
+    /// crashes when Close is tapped, because both stacks fight over the same gesture.
+    var embedsNavigationStack: Bool = true
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var appSettings: AppSettingsStore
@@ -168,7 +171,11 @@ struct BookLabourFlowView: View {
     }
 
     var body: some View {
-        bookFlowNavigationStack
+        if embedsNavigationStack {
+            NavigationStack { bookFlowRoot }
+        } else {
+            bookFlowRoot
+        }
     }
 
     private var isAtRootPhase: Bool {
@@ -183,54 +190,52 @@ struct BookLabourFlowView: View {
         }
     }
 
-    private var bookFlowNavigationStack: some View {
-        NavigationStack {
-            phaseContent
-                .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
-                .navigationTitle(isCustomHoursPhase ? "Custom hours" : "Book labour")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbarBackground(ProjectWorksRevampColors.canvas, for: .navigationBar)
-                .toolbarBackground(.visible, for: .navigationBar)
-                .toolbar {
-                    if !isCustomHoursPhase {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button(isAtRootPhase ? "Close" : "Back") {
-                                if isAtRootPhase {
-                                    dismiss()
-                                } else {
-                                    goBack()
-                                }
+    private var bookFlowRoot: some View {
+        phaseContent
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .navigationTitle(isCustomHoursPhase ? "Custom hours" : "Book labour")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(ProjectWorksRevampColors.canvas, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar {
+                if !isCustomHoursPhase {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(isAtRootPhase ? "Close" : "Back") {
+                            if isAtRootPhase {
+                                dismiss()
+                            } else {
+                                goBack()
                             }
                         }
                     }
                 }
-                .alert("Could not book", isPresented: Binding(
-                    get: { errorBanner != nil },
-                    set: { if !$0 { errorBanner = nil } }
-                )) {
-                    Button("OK") { errorBanner = nil }
-                } message: {
-                    Text(errorBanner ?? "")
-                }
-                .overlay {
-                    if let pending = pendingOperativeOverlap {
-                        ZStack {
-                            Color.black.opacity(0.28).ignoresSafeArea()
-                            ScheduleOverlapWarningPanel(
-                                message: pending.message,
-                                detailLines: pending.detailLines,
-                                onCancel: { pendingOperativeOverlap = nil },
-                                onConfirm: {
-                                    let run = pending.onConfirm
-                                    pendingOperativeOverlap = nil
-                                    run()
-                                }
-                            )
-                            .padding(18)
-                        }
+            }
+            .alert("Could not book", isPresented: Binding(
+                get: { errorBanner != nil },
+                set: { if !$0 { errorBanner = nil } }
+            )) {
+                Button("OK") { errorBanner = nil }
+            } message: {
+                Text(errorBanner ?? "")
+            }
+            .overlay {
+                if let pending = pendingOperativeOverlap {
+                    ZStack {
+                        Color.black.opacity(0.28).ignoresSafeArea()
+                        ScheduleOverlapWarningPanel(
+                            message: pending.message,
+                            detailLines: pending.detailLines,
+                            onCancel: { pendingOperativeOverlap = nil },
+                            onConfirm: {
+                                let run = pending.onConfirm
+                                pendingOperativeOverlap = nil
+                                run()
+                            }
+                        )
+                        .padding(18)
                     }
                 }
-        }
+            }
     }
 
     @ViewBuilder
