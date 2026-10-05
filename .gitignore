@@ -1,5 +1,6 @@
-# Local tooling and editor state
-.cursor/
+# Local tooling and editor state. Keep the shared MCP config.
+.cursor/*
+!.cursor/mcp.json
 .build/
 Project Planner.xcodeproj/xcuserdata/
 Project Planner.xcodeproj/project.xcworkspace/
