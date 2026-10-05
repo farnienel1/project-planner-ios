@@ -408,6 +408,18 @@ struct DailyOverviewView: View {
             .padding(.bottom, 28)
         }
         .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .navigationDestination(isPresented: $showingBookLabour) {
+            BookLabourFlowView(bookDate: overviewDate, embedsNavigationStack: false)
+                .environmentObject(appSettings)
+                .environmentObject(bookingStore)
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
+                .environmentObject(holidayStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
+        }
     }
 
     private var topActionsRow: some View {
@@ -1164,20 +1176,6 @@ struct DailyOverviewView: View {
                 .environmentObject(taskStore)
                 .environmentObject(notificationService)
         }
-        .fullScreenCover(isPresented: $showingBookLabour, onDismiss: {
-            Task { await refreshScheduleAfterExternalBooking() }
-        }) {
-            BookLabourFlowView(bookDate: overviewDate)
-                .environmentObject(appSettings)
-                .environmentObject(bookingStore)
-                .environmentObject(projectStore)
-                .environmentObject(operativeStore)
-                .environmentObject(userStore)
-                .environmentObject(holidayStore)
-                .environmentObject(managerScheduleStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(notificationService)
-        }
         .onReceive(NotificationCenter.default.publisher(for: .bookingStoreDidChange)) { _ in
             scheduleCoalescedWarningsRefresh()
         }
@@ -1342,8 +1340,8 @@ private extension DailyOverviewView {
     private func scheduleCoalescedWarningsRefresh() {
         scheduleRefreshTask?.cancel()
         scheduleRefreshTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 600_000_000)
-            guard !Task.isCancelled else { return }
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard !Task.isCancelled, !showingBookLabour else { return }
             await refreshScheduleAfterExternalBooking()
         }
     }
