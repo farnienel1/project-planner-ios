@@ -201,6 +201,7 @@ struct HolidayView: View {
                         Button("Retry") {
                             Task { await holidayStore.loadData() }
                         }
+                        .accessibilityIdentifier("leave.retry")
                         .buttonStyle(.borderedProminent)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -218,6 +219,7 @@ struct HolidayView: View {
                                         Button("Retry") {
                                             Task { await holidayStore.loadData() }
                                         }
+                                        .accessibilityIdentifier("leave.retry2")
                                         .buttonStyle(.bordered)
                                     }
                                     .padding(12)
@@ -271,6 +273,7 @@ struct HolidayView: View {
                                 .foregroundStyle(HolidayChrome.accent)
                                 .font(.system(size: 17, weight: .semibold))
                         }
+                        .accessibilityIdentifier("leave.back")
                         .accessibilityLabel("Back")
                     }
                 }
@@ -318,6 +321,7 @@ struct HolidayView: View {
                     .font(.body)
                     .foregroundStyle(AnnualLeavePalette.ink2)
                 Button("Close") { bankHolidayTooltip = nil }
+                    .accessibilityIdentifier("leave.close")
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
@@ -334,6 +338,7 @@ struct HolidayView: View {
         }
         .alert("Error", isPresented: $showError) {
             Button("OK") { showError = false }
+                .accessibilityIdentifier("leave.ok")
         } message: {
             if let msg = errorMessage { Text(msg) }
         }
@@ -363,6 +368,7 @@ struct HolidayView: View {
                         .font(.subheadline)
                         .foregroundStyle(AnnualLeavePalette.ink2)
                     TextField("Reason", text: $declineReason, axis: .vertical)
+                        .accessibilityIdentifier("leave.reason")
                         .lineLimit(3...5)
                         .padding(12)
                         .background(AnnualLeavePalette.soft)
@@ -375,6 +381,7 @@ struct HolidayView: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { declineDraft = nil }
+                            .accessibilityIdentifier("leave.cancel")
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Decline") {
@@ -383,6 +390,7 @@ struct HolidayView: View {
                             declineReason = ""
                             declineRequest(request, reason: reason)
                         }
+                        .accessibilityIdentifier("leave.decline")
                         .foregroundStyle(AnnualLeavePalette.red)
                     }
                 }
@@ -487,6 +495,7 @@ struct HolidayView: View {
                                         .symbolRenderingMode(.hierarchical)
                                         .foregroundStyle(Color.red.opacity(0.85))
                                 }
+                                .accessibilityIdentifier("leave.row.\(booking.id).removeBooking")
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("Remove booking")
                             }
@@ -506,6 +515,7 @@ struct HolidayView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { showSelfServeBookedAnnualLeaveSheet = false }
+                        .accessibilityIdentifier("leave.done")
                         .fontWeight(.semibold)
                 }
             }
@@ -545,6 +555,7 @@ struct HolidayView: View {
             .background(leavePage == page ? AnnualLeavePalette.card : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
+        .accessibilityIdentifier("leave.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
     }
 
@@ -722,6 +733,7 @@ struct HolidayView: View {
             HStack(spacing: 8) {
                 if !isCancellation {
                     Button("Decline") { declineDraft = request }
+                        .accessibilityIdentifier("leave.decline2")
                         .buttonStyle(.plain)
                         .font(.subheadline.weight(.bold))
                         .frame(maxWidth: .infinity)
@@ -731,6 +743,7 @@ struct HolidayView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
                 }
                 Button("Approve") { approveRequest(request) }
+                    .accessibilityIdentifier("leave.approve")
                     .buttonStyle(.plain)
                     .font(.subheadline.weight(.bold))
                     .frame(maxWidth: .infinity)
@@ -766,6 +779,7 @@ struct HolidayView: View {
                     } label: {
                         Image(systemName: "chevron.left").frame(width: 36, height: 36)
                     }
+                    .accessibilityIdentifier("leave.back2")
                     .buttonStyle(.plain)
                     Spacer()
                     Text(monthYearString(teamDisplayedMonth)).font(.headline)
@@ -777,6 +791,7 @@ struct HolidayView: View {
                     } label: {
                         Image(systemName: "chevron.right").frame(width: 36, height: 36)
                     }
+                    .accessibilityIdentifier("leave.chevronRight")
                     .buttonStyle(.plain)
                 }
                 .foregroundStyle(AnnualLeavePalette.ink2)
@@ -871,6 +886,7 @@ struct HolidayView: View {
             Text("Your team")
                 .font(.title3.weight(.bold))
             TextField("Search name or trade", text: $teamSearch)
+                .accessibilityIdentifier("leave.searchNameOrTrade")
                 .padding(12)
                 .background(AnnualLeavePalette.card)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -880,6 +896,7 @@ struct HolidayView: View {
                         Text(mode.rawValue).tag(mode)
                     }
                 }
+                .accessibilityIdentifier("leave.sortBy")
                 .pickerStyle(.menu)
                 if !teamTradeChoices.isEmpty {
                     Picker("Trade", selection: Binding(
@@ -891,6 +908,7 @@ struct HolidayView: View {
                             Text(trade).tag(trade)
                         }
                     }
+                    .accessibilityIdentifier("leave.trade")
                     .pickerStyle(.menu)
                 }
             }
@@ -911,6 +929,7 @@ struct HolidayView: View {
                     } label: {
                         teamPersonRow(person)
                     }
+                    .accessibilityIdentifier("leave.row.\(person.id)")
                     .buttonStyle(.plain)
                 }
             }
@@ -1277,6 +1296,7 @@ struct HolidayView: View {
                     .font(.title3)
                     .frame(width: 44, height: 44)
             }
+                .accessibilityIdentifier("leave.back3")
             Spacer()
             Text(monthYearString(displayedMonth))
                 .font(.headline)
@@ -1291,6 +1311,7 @@ struct HolidayView: View {
                     .font(.title3)
                     .frame(width: 44, height: 44)
             }
+                .accessibilityIdentifier("leave.chevronRight2")
         }
         .foregroundStyle(HolidayChrome.accent)
     }
@@ -1387,6 +1408,7 @@ struct HolidayView: View {
             )
             .opacity(isInMonth ? 1 : 0.35)
         }
+        .accessibilityIdentifier("leave.weekend")
         .buttonStyle(.plain)
         .disabled(!isInMonth)
     }
@@ -1694,6 +1716,7 @@ struct HolidayView: View {
                 .foregroundStyle(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
+            .accessibilityIdentifier("leave.paperplaneFill")
             .disabled(selectedDates.isEmpty || isSaving)
         }
     }
@@ -2016,6 +2039,7 @@ private struct HalfDayHolidayBookingEditorSheet: View {
                             Text(slot.rawValue).tag(slot)
                         }
                     }
+                    .accessibilityIdentifier("halfDayHolidayBookingEditor.duration")
                     .pickerStyle(.inline)
                 } footer: {
                     Text("Choose full day, AM, or PM. Full days appear solid green on the calendar; half days are orange until you switch to a full day.")
@@ -2027,6 +2051,7 @@ private struct HalfDayHolidayBookingEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
+                        .accessibilityIdentifier("halfDayHolidayBookingEditor.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
@@ -2034,6 +2059,7 @@ private struct HalfDayHolidayBookingEditorSheet: View {
                         updated.timeSlot = draftSlot
                         onSave(updated)
                     }
+                    .accessibilityIdentifier("halfDayHolidayBookingEditor.save")
                     .fontWeight(.semibold)
                 }
             }
@@ -2064,6 +2090,7 @@ struct HolidayRowView: View {
                     Button(actionTitle) {
                         onRequestCancellation()
                     }
+                    .accessibilityIdentifier("holidayRow.\(AccessibilityID.token(actionTitle))")
                     .font(.caption.weight(.semibold))
                     .buttonStyle(.bordered)
                 } else if booking.cancellationRequestedAt != nil && booking.status == .approved {
@@ -2126,6 +2153,7 @@ struct HolidayRequestRowView: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundColor(.orange)
                     }
+                        .accessibilityIdentifier("holidayRequestRow.exclamationmarkTriangleFill")
                 }
             }
             Text(AnnualLeaveDateFormat.bookingTitle(request))
@@ -2149,6 +2177,7 @@ struct HolidayRequestRowView: View {
                             .background(Color.green)
                             .cornerRadius(10)
                     }
+                        .accessibilityIdentifier("holidayRequestRow.approve")
                     if request.cancellationRequestedAt == nil {
                         Button(action: onDecline) {
                             Label("Decline", systemImage: "xmark.circle.fill")
@@ -2159,6 +2188,7 @@ struct HolidayRequestRowView: View {
                                 .background(Color.red)
                                 .cornerRadius(10)
                         }
+                            .accessibilityIdentifier("holidayRequestRow.decline")
                     }
                 }
             } else {
@@ -2172,6 +2202,7 @@ struct HolidayRequestRowView: View {
         .cornerRadius(12)
         .alert("Annual Leave Overlap", isPresented: $showConflicts) {
             Button("OK", role: .cancel) {}
+                .accessibilityIdentifier("holidayRequestRow.ok")
         } message: {
             Text(conflictingApprovedOperatives.joined(separator: "\n"))
         }

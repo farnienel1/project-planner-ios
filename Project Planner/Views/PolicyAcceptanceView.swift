@@ -69,6 +69,7 @@ struct PolicyAcceptanceView: View {
                             Text("I confirm that I am authorised to accept these terms on behalf of the organisation named in this account (\(orgName)).")
                                 .font(.footnote)
                         }
+                        .accessibilityIdentifier("policyAcceptance.iConfirmThatIAmAuthorised")
                         .padding(12)
                         .background(Color(.secondarySystemBackground))
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -83,6 +84,7 @@ struct PolicyAcceptanceView: View {
                             .background(canWelcome ? Color.blue : Color.gray)
                             .cornerRadius(12)
                     }
+                    .accessibilityIdentifier("policyAcceptance.saving")
                     .disabled(!canWelcome)
                     .padding(.bottom, 24)
                 }
@@ -107,6 +109,7 @@ struct PolicyAcceptanceView: View {
             set: { if !$0 { acceptError = nil } }
         )) {
             Button("OK", role: .cancel) { acceptError = nil }
+                .accessibilityIdentifier("policyAcceptance.ok")
         } message: {
             Text(acceptError ?? "Please try again.")
         }
@@ -194,6 +197,7 @@ struct LegalDocumentCard: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .accessibilityIdentifier("legalDocumentCard.acknowledgement")
             .buttonStyle(.plain)
 
             if expanded {
@@ -219,6 +223,7 @@ struct LegalDocumentCard: View {
                         .foregroundStyle(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
+                .accessibilityIdentifier("legalDocumentCard.button")
                 .buttonStyle(.plain)
             }
         }

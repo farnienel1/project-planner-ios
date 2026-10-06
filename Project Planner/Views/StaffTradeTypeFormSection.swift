@@ -48,10 +48,12 @@ struct StaffTradeTypeFormSection: View {
                     Text(t.rawValue).tag(Optional(t))
                 }
             }
+            .accessibilityIdentifier("staffTradeTypeFormSection.\(AccessibilityID.token(title))")
             .pickerStyle(.menu)
 
             if presetRaw == StaffTradeType.other.rawValue {
                 TextField("Enter trade type here", text: $customText)
+                    .accessibilityIdentifier("staffTradeTypeFormSection.enterTradeTypeHere")
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: customText) { _, newValue in
                         let value = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -74,6 +76,7 @@ struct StaffTradeTypeFormSection: View {
                                         .background(Color.theme.primary.opacity(0.1))
                                         .clipShape(Capsule())
                                 }
+                                .accessibilityIdentifier("staffTradeTypeFormSection.row.\(suggestion).\(AccessibilityID.token(suggestion))")
                                 .buttonStyle(.plain)
                             }
                         }

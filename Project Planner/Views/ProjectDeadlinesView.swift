@@ -70,10 +70,13 @@ struct ProjectDeadlinesView: View {
             set: { if !$0 { errorMessage = nil } }
         )) {
             Button("OK", role: .cancel) { errorMessage = nil }
+                .accessibilityIdentifier("projectDeadlines.ok")
         } message: {
             Text(errorMessage ?? "")
         }
-        .task {
+        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId ?? "") {
+            let orgReady = !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId ?? "").isEmpty
+            guard orgReady else { return }
             store.bindPersistence { items in
                 await persistDeadlines(items)
             } syncNotifications: { items in

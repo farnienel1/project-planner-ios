@@ -95,6 +95,7 @@ enum SettingsHubChrome {
             .background(ProjectWorksRevampColors.blue)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
+        .accessibilityIdentifier("settingsHubChrome.saving")
         .buttonStyle(.plain)
         .disabled(isSaving || !enabled)
         .opacity(enabled ? 1 : 0.6)

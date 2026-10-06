@@ -68,6 +68,7 @@ struct ChangePasswordView: View {
                         .background(ProjectWorksRevampColors.blue)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
+                    .accessibilityIdentifier("changePassword.changePassword")
                     .buttonStyle(.plain)
                     .disabled(firebaseBackend.isLoading || !isFormValid)
                     .opacity(isFormValid ? 1.0 : 0.6)
@@ -82,6 +83,7 @@ struct ChangePasswordView: View {
                     Button("Cancel") {
                         presentationMode.wrappedValue.dismiss()
                     }
+                        .accessibilityIdentifier("changePassword.cancel")
                 }
             }
         }

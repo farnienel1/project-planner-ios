@@ -48,17 +48,21 @@ struct CreateOperativeView: View {
                     // Form
                     VStack(spacing: 15) {
                         TextField("First Name *", text: $operativeFirstName)
+                            .accessibilityIdentifier("createOperative.firstName")
                             .textFieldStyle(.roundedBorder)
                         
                         TextField("Surname *", text: $operativeSurname)
+                            .accessibilityIdentifier("createOperative.surname")
                             .textFieldStyle(.roundedBorder)
                         
                         TextField("Email *", text: $operativeEmail)
+                            .accessibilityIdentifier("createOperative.email")
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.emailAddress)
                             .autocapitalization(.none)
                         
                         TextField("Phone *", text: $operativePhone)
+                            .accessibilityIdentifier("createOperative.phone")
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.phonePad)
                         
@@ -70,6 +74,7 @@ struct CreateOperativeView: View {
                         )
                         
                         TextField("Day Rate (Optional)", text: $operativeDayRate)
+                            .accessibilityIdentifier("createOperative.dayRateOptional")
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.decimalPad)
                     }
@@ -86,6 +91,7 @@ struct CreateOperativeView: View {
                     Button(isSaving ? "Creating..." : "Create Operative") {
                         createOperative()
                     }
+                    .accessibilityIdentifier("createOperative.creating")
                     .buttonStyle(.borderedProminent)
                     .disabled(isLoading || isSaving || !isFormValid)
                     .padding()
@@ -99,6 +105,7 @@ struct CreateOperativeView: View {
                     Button("Cancel") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("createOperative.cancel")
                 }
             }
         }

@@ -145,6 +145,7 @@ struct OperativeProfileView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .accessibilityIdentifier("operativeProfile.close")
                 }
                 if canOpenOperativeSettings {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -155,6 +156,7 @@ struct OperativeProfileView: View {
                                 .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(ManageUserProfilePalette.listBlue)
                         }
+                        .accessibilityIdentifier("operativeProfile.settings")
                         .accessibilityLabel("Settings")
                     }
                 }
@@ -387,6 +389,7 @@ struct OperativeProfileView: View {
                                         Button("View certificate") {
                                             certificateViewerURL = IdentifiableURL(certificateURL)
                                         }
+                                        .accessibilityIdentifier("operativeProfile.row.\(row.id).viewCertificate")
                                         .font(.system(size: 12, weight: .medium))
                                     }
                                 }

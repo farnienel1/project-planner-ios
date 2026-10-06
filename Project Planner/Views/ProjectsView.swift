@@ -61,6 +61,7 @@ struct ProjectsView: View {
                             .background(WorksDashboardPalette.soft)
                             .clipShape(Circle())
                     }
+                        .accessibilityIdentifier("projects.gobacktoprevioustab")
                 }
                 if canCreateProjects {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -74,6 +75,7 @@ struct ProjectsView: View {
                                 .background(WorksDashboardListStyle.projects.accent)
                                 .clipShape(Circle())
                         }
+                        .accessibilityIdentifier("projects.add")
                         .accessibilityLabel("New project")
                     }
                 }
@@ -164,14 +166,19 @@ struct ProjectsView: View {
                         WorksDashboardSearchRow(text: $searchText, placeholder: WorksDashboardListStyle.projects.searchPlaceholder) {
                             Menu {
                                 Button("All · \(listCounts.all)") { selectedStatus = nil }
+                                    .accessibilityIdentifier("projects.filter.all")
                                 Button("Active · \(listCounts.active)") { selectedStatus = .active }
+                                    .accessibilityIdentifier("projects.filter.active")
                                 Button("Upcoming · \(listCounts.upcoming)") { selectedStatus = .upcoming }
+                                    .accessibilityIdentifier("projects.filter.upcoming")
                                 Button("Completed · \(listCounts.completed)") { selectedStatus = .completed }
+                                    .accessibilityIdentifier("projects.filter.completed")
                             } label: {
                                 Image(systemName: "line.3.horizontal.decrease.circle")
                                     .font(.body.weight(.medium))
                                     .foregroundStyle(WorksDashboardListStyle.projects.accent)
                             }
+                                .accessibilityIdentifier("projects.all")
                         }
                         .padding(.bottom, 12)
                         filterChipsRow
@@ -199,6 +206,7 @@ struct ProjectsView: View {
                                         )
                                         .environmentObject(operativeStore)
                                     }
+                                    .accessibilityIdentifier("projects.row.\(project.id)")
                                     .buttonStyle(.plain)
                                 }
                             }
@@ -226,7 +234,10 @@ struct ProjectsView: View {
                     titleFont: .subheadline.weight(.semibold),
                     horizontalPadding: 15,
                     verticalPadding: 9
-                ) { selectedStatus = nil }
+                ,
+                    accessibilityIdentifier: "projects.filter.all",
+                    action: { selectedStatus = nil }
+                )
                 WorksRevampFilterChip(
                     title: "Active · \(listCounts.active)",
                     isSelected: selectedStatus == .active,
@@ -235,7 +246,10 @@ struct ProjectsView: View {
                     titleFont: .subheadline.weight(.semibold),
                     horizontalPadding: 15,
                     verticalPadding: 9
-                ) { selectedStatus = .active }
+                ,
+                    accessibilityIdentifier: "projects.filter.active",
+                    action: { selectedStatus = .active }
+                )
                 WorksRevampFilterChip(
                     title: "Upcoming · \(listCounts.upcoming)",
                     isSelected: selectedStatus == .upcoming,
@@ -244,7 +258,10 @@ struct ProjectsView: View {
                     titleFont: .subheadline.weight(.semibold),
                     horizontalPadding: 15,
                     verticalPadding: 9
-                ) { selectedStatus = .upcoming }
+                ,
+                    accessibilityIdentifier: "projects.filter.upcoming",
+                    action: { selectedStatus = .upcoming }
+                )
                 WorksRevampFilterChip(
                     title: "Completed · \(listCounts.completed)",
                     isSelected: selectedStatus == .completed,
@@ -253,7 +270,10 @@ struct ProjectsView: View {
                     titleFont: .subheadline.weight(.semibold),
                     horizontalPadding: 15,
                     verticalPadding: 9
-                ) { selectedStatus = .completed }
+                ,
+                    accessibilityIdentifier: "projects.filter.completed",
+                    action: { selectedStatus = .completed }
+                )
             }
         }
     }
@@ -297,11 +317,13 @@ struct ProjectsView: View {
                 Button("Show all projects") {
                     selectedStatus = nil
                 }
+                .accessibilityIdentifier("projects.showAll")
                 .buttonStyle(.borderedProminent)
             } else if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil || isUnmatchedOperativeWithJobs {
                 Button("Retry") {
                     projectStore.loadData()
                 }
+                .accessibilityIdentifier("projects.retry")
                 .buttonStyle(.borderedProminent)
             }
         }
@@ -670,8 +692,11 @@ struct AddProjectView: View {
             Form {
                 Section("Project Details") {
                     TextField("Job Number", text: $jobNumber)
+                        .accessibilityIdentifier("addProject.jobNumber")
                     TextField("Site Name", text: $siteName)
+                        .accessibilityIdentifier("addProject.siteName")
                     TextField("Site Address", text: $siteAddress, axis: .vertical)
+                        .accessibilityIdentifier("addProject.siteAddress")
                         .lineLimit(3...6)
                 }
                 
@@ -682,29 +707,36 @@ struct AddProjectView: View {
                             Text(client.name).tag(client as Client?)
                         }
                     }
+                        .accessibilityIdentifier("addProject.client")
                     
                     Picker("Job Type", selection: $selectedJobType) {
                         ForEach(JobType.allCases) { type in
                             Text(type.rawValue).tag(type)
                         }
                     }
+                        .accessibilityIdentifier("addProject.jobType")
                 }
                 
                 Section("Schedule") {
                     DatePicker("Start Date", selection: $startDate, displayedComponents: .date)
+                        .accessibilityIdentifier("addProject.startDate")
                     DatePicker("End Date", selection: $endDate, displayedComponents: .date)
+                        .accessibilityIdentifier("addProject.endDate")
                     
                     Picker("Manager", selection: $selectedManager) {
                         ForEach(ManagerLegacy.allCases) { manager in
                             Text(manager.displayName).tag(manager)
                         }
                     }
+                        .accessibilityIdentifier("addProject.manager")
                 }
                 
                 Section("Additional Info") {
                     TextField("Description", text: $description, axis: .vertical)
+                        .accessibilityIdentifier("addProject.description")
                         .lineLimit(3...6)
                     TextField("Notes", text: $notes, axis: .vertical)
+                        .accessibilityIdentifier("addProject.notes")
                         .lineLimit(2...4)
                 }
             }
@@ -715,12 +747,14 @@ struct AddProjectView: View {
                     Button("Cancel") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("addProject.cancel")
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
                         saveProject()
                     }
+                    .accessibilityIdentifier("addProject.save")
                     .disabled(!isFormValid)
                 }
             }

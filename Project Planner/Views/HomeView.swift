@@ -385,6 +385,7 @@ struct HomeView: View {
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Done") { showingGeneralAppSettings = false }
+                                .accessibilityIdentifier("home.done")
                         }
                     }
             }
@@ -393,6 +394,7 @@ struct HomeView: View {
             Button("OK") {
                 UserDefaults.standard.set(true, forKey: quickActionCustomizeHintKey)
             }
+                .accessibilityIdentifier("home.ok")
         } message: {
             Text("Drag the icons to your desired layout.")
         }
@@ -552,7 +554,12 @@ struct HomeView: View {
             }
             print("🔥🔥🔥 DEBUG: HOME_APPEARED inset=\(Int(inset))")
             NotificationCenter.default.post(name: .plannerHomeDidDraw, object: nil)
-            homeWarningCount = WarningsService.shared.warningCount
+            // Do not touch WarningsService.shared here. This onAppear runs inside the
+            // first layout commit. Creating the shared service then publishes warning
+            // counts and the window stays white. The next turn is after that commit.
+            DispatchQueue.main.async {
+                homeWarningCount = WarningsService.shared.warningCount
+            }
             // Saved Light/Dark is applied after Home is on screen. The launch shell does not touch it.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 appSettings.settings.theme.applyToKeyWindows()
@@ -688,6 +695,7 @@ struct HomeView: View {
                         }
                     }
                 }
+                .accessibilityIdentifier("home.refresh")
                 .buttonStyle(PPOnNavyCircleButtonStyle())
                 .disabled(isRefreshingHomeConnection)
                 .accessibilityLabel("Refresh")
@@ -703,6 +711,7 @@ struct HomeView: View {
                         }
                     }
                 }
+                .accessibilityIdentifier("home.notifications")
                 .buttonStyle(PPOnNavyCircleButtonStyle())
                 .accessibilityLabel("Notifications")
                 .accessibilityHint("Opens your notification list")
@@ -717,6 +726,7 @@ struct HomeView: View {
                         .clipShape(Circle())
                         .overlay(Circle().stroke(Color.white.opacity(0.22), lineWidth: 0.5))
                 }
+                .accessibilityIdentifier("home.\(AccessibilityID.token(profileInitials))")
                 .buttonStyle(.plain)
             }
         }
@@ -751,6 +761,7 @@ struct HomeView: View {
                     } label: {
                         Image(systemName: "gearshape.fill")
                     }
+                    .accessibilityIdentifier("home.customize")
                     .buttonStyle(PPOnNavyCircleButtonStyle(size: PPMetrics.smallHeaderButton))
                     .accessibilityLabel("Customize dashboard metrics")
                 }
@@ -878,6 +889,7 @@ struct HomeView: View {
                 unit: chipUnit
             )
         }
+        .accessibilityIdentifier("home.warnings")
         .buttonStyle(PPOnNavyChipButtonStyle())
     }
 
@@ -1117,6 +1129,7 @@ struct HomeView: View {
                 } label: {
                     Image(systemName: "plus.circle.fill")
                 }
+                .accessibilityIdentifier("home.addQuickAction")
                 .buttonStyle(.plain)
                 .foregroundStyle(PPColor.brand)
                 .accessibilityLabel("Add quick action")
@@ -1126,6 +1139,7 @@ struct HomeView: View {
             } label: {
                 Label("Main Menu", systemImage: "arrow.up.left.and.arrow.down.right")
             }
+            .accessibilityIdentifier("home.mainMenu")
             .buttonStyle(.plain)
             .foregroundStyle(PPColor.brand)
             Button {
@@ -1143,6 +1157,7 @@ struct HomeView: View {
                 Text(isCustomisingQuickActions ? "Done" : "Customise")
                     .fontWeight(.medium)
             }
+            .accessibilityIdentifier("home.done2")
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
         }
@@ -1167,6 +1182,7 @@ struct HomeView: View {
                         } label: {
                             quickActionTileContents(meta: meta, title: displayTitleForQuickAction(id: id))
                         }
+                        .accessibilityIdentifier("home.row.\(id)")
                         .buttonStyle(PPPressableButtonStyle())
                     }
                 }
@@ -1198,6 +1214,7 @@ struct HomeView: View {
             } label: {
                 PPRemoveBadgeLabel()
             }
+            .accessibilityIdentifier("home.removeFromQuickActions")
             .buttonStyle(.plain)
             .offset(x: -4, y: -4)
             .accessibilityLabel("Remove \(title) from quick actions")
@@ -1208,6 +1225,7 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 0) {
             PPSectionHeader("Up next") {
                 Button("See all") { showingMySchedule = true }
+                    .accessibilityIdentifier("home.seeAll")
                     .foregroundStyle(PPColor.brand)
             }
 
@@ -1233,6 +1251,7 @@ struct HomeView: View {
                                 time: row.subtitle
                             )
                         }
+                        .accessibilityIdentifier("home.row.\(row.id)")
                         .buttonStyle(PPPressableButtonStyle())
                         .padding(.bottom, 12)
                     }
@@ -1269,8 +1288,23 @@ struct HomeView: View {
             userCount: userStore.organizationUsers.count,
             taskIncompleteCount: taskStore.tasks.filter { !$0.isCompleted }.count,
             isHomeProfileLoading: userStore.isHomeProfileLoading,
-            currentUserId: userStore.currentUser?.id
+            currentUserId: userStore.currentUser?.id,
+            worksRevision: worksRevision,
+            orgDataReady: firebaseBackend.hasBootstrappedOrgDataLoad && !firebaseBackend.isBootstrappingOrgDataLoad
         )
+    }
+
+    /// Changes when a project or small work date, live flag, or type changes, so Home recounts active jobs.
+    private var worksRevision: Int {
+        var hash = 0
+        for project in projectStore.projects {
+            hash = hash &+ project.startDate.hashValue
+            hash = hash &+ project.endDate.hashValue
+            hash = hash &+ project.updatedAt.hashValue
+            hash = hash &+ (project.isLive ? 1 : 0)
+            hash = hash &+ project.jobType.hashValue
+        }
+        return hash
     }
 
     private func presentTasksDetail() {
@@ -1312,8 +1346,17 @@ struct HomeView: View {
         let tasks = taskStore.tasks
         let managers = operativeStore.allManagers
         let holidays = holidayStore.bookings
-        let liveProjects = projectStore.liveProjects
-        let smallWorks = projectStore.smallWorks
+        let signedIn = userStore.displayUser ?? userStore.currentUser
+        let activeProjectCount = WorkAccess.homeActiveProjectCount(
+            projects: projects,
+            user: signedIn,
+            isOperativeMode: isOperativeMode,
+            seesEveryJob: userStore.hasAdminAccess(),
+            isManager: signedIn?.permissions.manager == true,
+            operatives: operatives,
+            bookings: bookings,
+            managerBookings: managerBookings
+        )
 
         async let upNextTask = HomeUpNextSupport.upcomingDaySections(
             minDistinctDays: 2,
@@ -1321,6 +1364,8 @@ struct HomeView: View {
             now: Date(),
             authUserId: authUserId,
             currentUserEmail: userEmail,
+            currentUserFirstName: signedIn?.firstName,
+            currentUserSurname: signedIn?.surname,
             operatives: operatives,
             bookings: bookings,
             managerBookings: managerBookings,
@@ -1341,7 +1386,7 @@ struct HomeView: View {
             managerBookings: managerBookings,
             holidays: holidays,
             organizationUsers: users,
-            liveProjectCount: liveProjects.count + smallWorks.count
+            liveProjectCount: activeProjectCount
         )
 
         // Paint Home first. Warnings are heavy (main-actor snapshot + scan) — never block first frame on them.
@@ -1739,6 +1784,7 @@ struct OperativeQualificationsReadOnlyView: View {
                     Button(isRepairingLink ? "Repairing..." : "Repair link now") {
                         Task { await repairOperativeLinkIfNeeded() }
                     }
+                    .accessibilityIdentifier("operativeQualificationsReadOnly.repairing")
                     .buttonStyle(.borderedProminent)
                     .disabled(isRepairingLink)
                     .navigationTitle("My Qualifications")
@@ -1746,6 +1792,7 @@ struct OperativeQualificationsReadOnlyView: View {
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Done") { dismiss() }
+                                .accessibilityIdentifier("operativeQualificationsReadOnly.done")
                         }
                     }
                 }
@@ -1928,10 +1975,12 @@ private struct HomeProfileCardSheet: View {
                     } label: {
                         Image(systemName: "gearshape.fill")
                     }
+                    .accessibilityIdentifier("homeProfileCard.settings")
                     .accessibilityLabel("Settings")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("homeProfileCard.done")
                 }
             }
         }
@@ -1982,6 +2031,7 @@ struct HomeQuickActionAddSheet: View {
                                 }
                             }
                         }
+                            .accessibilityIdentifier("homeQuickActionAdd.button")
                     }
                 }
             }
@@ -1989,6 +2039,7 @@ struct HomeQuickActionAddSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("homeQuickActionAdd.cancel")
                 }
             }
         }
@@ -2007,6 +2058,8 @@ private struct HomeDataRefreshTrigger: Equatable {
     var taskIncompleteCount: Int
     var isHomeProfileLoading: Bool
     var currentUserId: String?
+    var worksRevision: Int
+    var orgDataReady: Bool
 }
 
 private struct HomeOverviewMetrics: Equatable {

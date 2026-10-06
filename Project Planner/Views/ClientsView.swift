@@ -39,6 +39,7 @@ struct ClientsView: View {
                         Button("Create Client") {
                             showingCreateClient = true
                         }
+                        .accessibilityIdentifier("clients.createClient")
                         .buttonStyle(.borderedProminent)
                     }
                     .padding()
@@ -48,7 +49,8 @@ struct ClientsView: View {
                         VStack(spacing: 16) {
                             ForEach(projectStore.clients) { client in
                                 ClientCardView(client: client)
-                                    .onTapGesture {
+                                    
+                                    .accessibilityIdentifier("clients.tap").onTapGesture {
                                         selectedClient = client
                                         showingClientDetails = true
                                     }
@@ -67,11 +69,13 @@ struct ClientsView: View {
                     Button("Done") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("clients.done")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("New Client") {
                         showingCreateClient = true
                     }
+                        .accessibilityIdentifier("clients.newClient")
                 }
             }
             .sheet(isPresented: $showingCreateClient) {
@@ -252,11 +256,13 @@ struct ClientDetailsView: View {
                     Button("Done") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("clientDetails.done")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Edit") {
                         showingEditClient = true
                     }
+                        .accessibilityIdentifier("clientDetails.edit")
                 }
             }
             .sheet(isPresented: $showingEditClient) {

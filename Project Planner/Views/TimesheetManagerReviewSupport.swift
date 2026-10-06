@@ -210,6 +210,7 @@ struct TimesheetManagerReviewActionBar: View {
                                 .stroke(Color.blue.opacity(0.25), lineWidth: 1)
                         )
                 }
+                .accessibilityIdentifier("timesheets.edit")
                 .buttonStyle(.plain)
                 .accessibilityLabel("Edit")
             }
@@ -242,6 +243,7 @@ struct TimesheetManagerReviewActionBar: View {
                         )
                 )
         }
+        .accessibilityIdentifier("timesheets.review")
         .buttonStyle(.plain)
         .accessibilityLabel(systemName)
     }
@@ -495,6 +497,7 @@ struct TimesheetManagerAmountEditSheet: View {
                     HStack {
                         Text("£")
                         TextField("Amount", text: $amountText)
+                            .accessibilityIdentifier("timesheetManagerAmountEdit.amount")
                             .keyboardType(.decimalPad)
                     }
                     Text("Original: £\(String(format: "%.2f", originalAmount))")
@@ -507,6 +510,7 @@ struct TimesheetManagerAmountEditSheet: View {
                             onDelete()
                             dismiss()
                         }
+                            .accessibilityIdentifier("timesheetManagerAmountEdit.deleteThisDayFromTimesheet")
                     }
                 }
             }
@@ -515,6 +519,7 @@ struct TimesheetManagerAmountEditSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("timesheetManagerAmountEdit.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
@@ -524,6 +529,7 @@ struct TimesheetManagerAmountEditSheet: View {
                             dismiss()
                         }
                     }
+                        .accessibilityIdentifier("timesheetManagerAmountEdit.save")
                 }
             }
         }

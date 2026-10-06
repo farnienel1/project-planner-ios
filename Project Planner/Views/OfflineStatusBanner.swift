@@ -33,6 +33,7 @@ struct OfflineStatusBanner: View {
                     showsChevron: true
                 )
             }
+            .accessibilityIdentifier("offlineStatusBanner.arrowTriangle2Circlepath")
             .buttonStyle(.plain)
         } else if !smartCache.isOnline {
             Button {
@@ -45,6 +46,7 @@ struct OfflineStatusBanner: View {
                     showsChevron: true
                 )
             }
+            .accessibilityIdentifier("offlineStatusBanner.wifiSlash")
             .buttonStyle(.plain)
         } else if smartCache.pendingSyncCount > 0 {
             Button {
@@ -57,6 +59,7 @@ struct OfflineStatusBanner: View {
                     showsChevron: true
                 )
             }
+            .accessibilityIdentifier("offlineStatusBanner.icloudAndArrowUp")
             .buttonStyle(.plain)
         } else if smartCache.failedSyncCount > 0 {
             Button {
@@ -69,6 +72,7 @@ struct OfflineStatusBanner: View {
                     showsChevron: true
                 )
             }
+            .accessibilityIdentifier("offlineStatusBanner.exclamationmarkTriangleFill")
             .buttonStyle(.plain)
         }
     }
@@ -157,11 +161,13 @@ struct OfflineSyncQueueSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("offlineSyncQueue.done")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Retry now") {
                         Task { await smartCache.refreshConnectionAndSync() }
                     }
+                    .accessibilityIdentifier("offlineSyncQueue.retryNow")
                     .disabled(smartCache.isSyncing)
                 }
             }

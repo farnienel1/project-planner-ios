@@ -172,6 +172,7 @@ struct WarningsDetailView: View {
     private var warningsNavBar: some View {
         HStack(spacing: 12) {
             Button("Done") { dismiss() }
+                .accessibilityIdentifier("warnings.done")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(WarningsUI.doneBlue)
                 .padding(.horizontal, 16)
@@ -211,6 +212,7 @@ struct WarningsDetailView: View {
                     .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 0.5))
                     .shadow(color: Color.black.opacity(0.07), radius: 3, x: 0, y: 1)
                 }
+                .accessibilityIdentifier("warnings.refresh")
                 .disabled(isRefreshingWarnings)
                 .accessibilityLabel("Refresh warnings")
 
@@ -227,6 +229,7 @@ struct WarningsDetailView: View {
                             .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 0.5))
                             .shadow(color: Color.black.opacity(0.07), radius: 3, x: 0, y: 1)
                     }
+                    .accessibilityIdentifier("warnings.settings")
                     .accessibilityLabel("Warning settings")
                 }
             }
@@ -267,6 +270,7 @@ struct WarningsDetailView: View {
                             .font(.system(size: 56))
                             .foregroundStyle(WarningsUI.textMuted)
                     }
+                    .accessibilityIdentifier("warnings.arrowClockwiseCircle")
                     .buttonStyle(.plain)
                     .accessibilityHidden(true)
                     Text("Check for warnings")
@@ -299,6 +303,7 @@ struct WarningsDetailView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
                         .contentShape(Rectangle())
                     }
+                    .accessibilityIdentifier("warnings.refresh2")
                     .buttonStyle(.plain)
                     .padding(.horizontal, 32)
                     .padding(.top, 8)
@@ -506,6 +511,7 @@ struct WarningsDetailView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
                         .shadow(color: WarningsUI.blue.opacity(0.28), radius: 12, x: 0, y: 3)
                     }
+                    .accessibilityIdentifier("warnings.calendarBadgePlus")
                     .buttonStyle(.plain)
                 }
 
@@ -519,6 +525,7 @@ struct WarningsDetailView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                     }
+                    .accessibilityIdentifier("warnings.openDailyOverview")
                     .buttonStyle(.plain)
 
                     Rectangle()
@@ -535,6 +542,7 @@ struct WarningsDetailView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                     }
+                    .accessibilityIdentifier("warnings.dismiss")
                     .buttonStyle(.plain)
                 }
                 .background(ProjectWorksRevampColors.surface)
@@ -606,6 +614,7 @@ struct WarningsDetailView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }
+                .accessibilityIdentifier("warnings.dismiss2")
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 14)
@@ -655,6 +664,7 @@ struct WarningsDetailView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
             }
+            .accessibilityIdentifier("warnings.dismiss3")
             .buttonStyle(.plain)
             .padding(.horizontal, 14)
             .padding(.bottom, 14)
@@ -866,6 +876,7 @@ private struct WarningDismissConfirmationSheet: View {
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
+                .accessibilityIdentifier("warningDismissConfirmation.dismissPermanently")
                 .buttonStyle(.plain)
 
                 Button(action: onCancel) {
@@ -877,6 +888,7 @@ private struct WarningDismissConfirmationSheet: View {
                         .background(Color(red: 0.949, green: 0.949, blue: 0.969))
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
+                .accessibilityIdentifier("warningDismissConfirmation.keepWarning")
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 24)

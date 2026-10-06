@@ -42,6 +42,7 @@ struct SendToWholesalerView: View {
                             .background(Color.blue)
                             .cornerRadius(10)
                     }
+                    .accessibilityIdentifier("sendToWholesaler.sendForQuote")
                     .disabled(selectedMaterials.isEmpty || selectedContacts.isEmpty || isSending)
                     
                     Button(action: {
@@ -64,6 +65,7 @@ struct SendToWholesalerView: View {
                             .background(Color.green)
                             .cornerRadius(10)
                     }
+                    .accessibilityIdentifier("sendToWholesaler.sendOrder")
                     .disabled(selectedMaterials.isEmpty || selectedContacts.isEmpty || isSending)
                 }
                 .padding()
@@ -112,6 +114,7 @@ struct SendToWholesalerView: View {
                                         .foregroundColor(.secondary)
                                 }
                             }
+                                .accessibilityIdentifier("sendToWholesaler.row.\(material.id).toggle")
                         }
                     }
                     
@@ -147,6 +150,7 @@ struct SendToWholesalerView: View {
                                             }
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                         }
+                                        .accessibilityIdentifier("sendToWholesaler.row.\(contact.id).toggle")
                                         .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
                                     }
                                 }
@@ -162,6 +166,7 @@ struct SendToWholesalerView: View {
                     Button("Cancel") {
                         isPresented = false
                     }
+                        .accessibilityIdentifier("sendToWholesaler.cancel")
                 }
             }
             .sheet(isPresented: $showingDeliveryDate) {
@@ -174,6 +179,7 @@ struct SendToWholesalerView: View {
             }
             .alert("Multiple Wholesalers Selected", isPresented: $showingMultipleWholesalerAlert) {
                 Button("OK", role: .cancel) { }
+                    .accessibilityIdentifier("sendToWholesaler.ok")
             } message: {
                 Text("You can only send an order to one wholesaler at a time. Please select contacts from only one wholesaler.")
             }
@@ -322,6 +328,7 @@ private struct MaterialOrderDeliveryDateSheet: View {
                     in: Calendar.current.startOfDay(for: Date())...,
                     displayedComponents: .date
                 )
+                .accessibilityIdentifier("materialOrderDeliveryDate.requiredDeliveryDate")
                 .datePickerStyle(.graphical)
                 Spacer(minLength: 0)
             }
@@ -331,9 +338,11 @@ private struct MaterialOrderDeliveryDateSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
+                        .accessibilityIdentifier("materialOrderDeliveryDate.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Send order", action: onConfirm)
+                        .accessibilityIdentifier("materialOrderDeliveryDate.sendOrder")
                         .fontWeight(.semibold)
                 }
             }

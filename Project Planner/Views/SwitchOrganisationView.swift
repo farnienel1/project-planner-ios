@@ -200,6 +200,7 @@ struct SwitchOrganisationView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
+        .accessibilityIdentifier("switchOrganisation.building2Fill")
         .buttonStyle(.plain)
         .disabled(isActive || isSwitching || !membership.isActive)
     }

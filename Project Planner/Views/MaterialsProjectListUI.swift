@@ -17,6 +17,7 @@ struct MaterialsWeekNavigator: View {
                     Image(systemName: "chevron.left")
                         .foregroundStyle(MaterialsOrderingTheme.muted)
                 }
+                    .accessibilityIdentifier("materialsWeekNavigator.back")
                 Spacer()
                 VStack(spacing: 2) {
                     Text(weekRangeLabel)
@@ -30,6 +31,7 @@ struct MaterialsWeekNavigator: View {
                     Image(systemName: "chevron.right")
                         .foregroundStyle(MaterialsOrderingTheme.muted)
                 }
+                    .accessibilityIdentifier("materialsWeekNavigator.chevronRight")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -91,6 +93,7 @@ struct MaterialsDayStrip: View {
                         }
                     }
                 }
+                .accessibilityIdentifier("materialsDayStrip.row.\(day)")
                 .buttonStyle(.plain)
             }
         }
@@ -140,6 +143,7 @@ struct MaterialsLineCard: View {
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(MaterialsOrderingTheme.border, lineWidth: 0.5))
         }
+        .accessibilityIdentifier("materialsLineCard.\(AccessibilityID.token(metaLine))")
         .buttonStyle(.plain)
         .allowsHitTesting(canManage)
         .opacity(canManage ? 1 : 0.92)
@@ -182,6 +186,7 @@ struct MaterialsDraftSendBanner: View {
             .background(MaterialsOrderingTheme.primaryGradient)
             .clipShape(RoundedRectangle(cornerRadius: 13))
         }
+        .accessibilityIdentifier("materialsDraftSendBanner.paperplaneFill")
         .buttonStyle(.plain)
         .padding(.horizontal, 16)
     }
@@ -236,6 +241,7 @@ struct OperativeMaterialsPanel: View {
                     Button("Quote/Order History") {
                         showingHistory = true
                     }
+                    .accessibilityIdentifier("operativeMaterialsPanel.quoteOrderHistory")
                     .font(.system(size: 11, weight: .medium))
                     .buttonStyle(.bordered)
                     .tint(MaterialsOrderingTheme.muted)
@@ -244,6 +250,7 @@ struct OperativeMaterialsPanel: View {
                     Label("Add", systemImage: "plus")
                         .font(.system(size: 11, weight: .medium))
                 }
+                .accessibilityIdentifier("operativeMaterialsPanel.add")
                 .buttonStyle(.borderedProminent)
                 .tint(MaterialsOrderingTheme.primary)
             }
@@ -270,6 +277,7 @@ struct OperativeMaterialsPanel: View {
                                     } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
+                                        .accessibilityIdentifier("operativeMaterialsPanel.row.\(material.id).delete")
                                 }
                             }
                         }
@@ -294,6 +302,7 @@ struct OperativeMaterialsPanel: View {
         }
         .alert("Could Not Delete Material", isPresented: $showingDeleteErrorAlert) {
             Button("OK", role: .cancel) { }
+                .accessibilityIdentifier("operativeMaterialsPanel.ok")
         } message: {
             Text(deleteErrorMessage)
         }
@@ -423,6 +432,7 @@ struct MaterialsOrderHistorySheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .accessibilityIdentifier("materialsOrderHistory.close")
                 }
             }
             .task { await loadHistory() }
@@ -518,6 +528,7 @@ struct MaterialsOrderHistorySheet: View {
                 }
                 .padding(14)
             }
+            .accessibilityIdentifier("materialsOrderHistory.quote")
             .buttonStyle(.plain)
 
             if isExpanded {
@@ -606,6 +617,7 @@ struct MaterialsLengthInputRow: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(MaterialsOrderingTheme.muted)
                 TextField("e.g. 3", text: $lengthValue)
+                    .accessibilityIdentifier("materialsLengthInput.eG3")
                     .keyboardType(.decimalPad)
                     .font(.system(size: 14, weight: .medium))
                     .padding(10)
@@ -626,6 +638,7 @@ struct MaterialsLengthInputRow: View {
                         Text(u.displayName).tag(u)
                     }
                 }
+                .accessibilityIdentifier("materialsLengthInput.lengthUnit")
                 .pickerStyle(.menu)
                 .padding(10)
                 .frame(maxWidth: .infinity)
@@ -654,6 +667,7 @@ struct MaterialsQuantityTypeRow: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(MaterialsOrderingTheme.muted)
                 TextField("1", value: $quantity, format: .number)
+                    .accessibilityIdentifier("materialsQuantityType.n1")
                     .keyboardType(.numberPad)
                     .font(.system(size: 14, weight: .medium))
                     .padding(10)
@@ -669,6 +683,7 @@ struct MaterialsQuantityTypeRow: View {
                         Text(u.rawValue).tag(u)
                     }
                 }
+                .accessibilityIdentifier("materialsQuantityType.picker")
                 .pickerStyle(.menu)
                 .padding(10)
                 .frame(maxWidth: .infinity)

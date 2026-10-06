@@ -29,6 +29,25 @@ extension EnvironmentValues {
     }
 }
 
+
+private enum TabAccessibility {
+    static func identifier(for title: String) -> String {
+        switch title.replacingOccurrences(of: "\n", with: " ") {
+        case "Home": return "tab.home"
+        case "Projects": return "tab.projects"
+        case "Small Works": return "tab.smallWorks"
+        case "Manage Operatives": return "tab.operatives"
+        case "Annual Leave": return "tab.leave"
+        case "Settings": return "tab.settings"
+        case "Managers": return "tab.managers"
+        case "Wholesalers": return "tab.wholesalers"
+        case "Sub Contractors": return "tab.subcontractors"
+        case "Help": return "tab.help"
+        default: return "tab.\(AccessibilityID.token(title))"
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var projectStore: ProjectStore
@@ -614,6 +633,7 @@ struct ContentView: View {
                     .background(Color.white.opacity(0.22))
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
+            .accessibilityIdentifier("shell.stopRolePreview")
             .accessibilityLabel("Stop role preview")
         }
         .padding(.horizontal, 14)
@@ -682,6 +702,7 @@ extension ContentView {
                     .padding(.vertical, 8)
                     .foregroundColor(isReorderingTabs ? PPColor.brand : .primary)
                 }
+                    .accessibilityIdentifier("tab.edit")
             } else {
                 if !showsMoreToggle || secondaryTabItems.isEmpty {
                     Spacer(minLength: 0)
@@ -706,6 +727,7 @@ extension ContentView {
                                 : Color.primary.opacity(0.85)
                         )
                     }
+                        .accessibilityIdentifier("tab.more")
                 }
             }
         }
@@ -751,6 +773,7 @@ extension ContentView {
                 }
             )
         }
+        .accessibilityIdentifier(TabAccessibility.identifier(for: config.title))
         .simultaneousGesture(
             DragGesture(minimumDistance: 6, coordinateSpace: .named("tabReorderArea"))
                 .onChanged { value in

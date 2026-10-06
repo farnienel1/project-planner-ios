@@ -156,6 +156,7 @@ struct ProjectActiveOperativesView: View {
                         } label: {
                             bookedPersonRow(summary)
                         }
+                        .accessibilityIdentifier("projectActiveOperatives.row.\(summary.id)")
                         .buttonStyle(.plain)
                     }
                 }

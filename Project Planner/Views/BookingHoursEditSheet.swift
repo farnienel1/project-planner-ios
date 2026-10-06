@@ -282,6 +282,134 @@ private struct BookingHoursTimelineBar: View {
 
 // MARK: - Wheel time picker
 
+/// UIKit wheel so a finger on the time does not scroll the page, and Save reads the row on screen.
+private struct QuarterHourWheel: UIViewRepresentable {
+    @Binding var selection: Int
+    let values: [Int]
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(values: values)
+    }
+
+    func makeUIView(context: Context) -> WheelHost {
+        let host = WheelHost()
+        host.picker.dataSource = context.coordinator
+        host.picker.delegate = context.coordinator
+        context.coordinator.picker = host.picker
+        host.picker.onVisibleRow = { [weak coordinator = context.coordinator] row in
+            coordinator?.publish(row: row)
+        }
+        return host
+    }
+
+    func updateUIView(_ host: WheelHost, context: Context) {
+        context.coordinator.values = values
+        context.coordinator.selection = $selection
+        guard !host.isUserSpinning, let idx = values.firstIndex(of: selection) else { return }
+        if host.picker.selectedRow(inComponent: 0) != idx {
+            host.picker.selectRow(idx, inComponent: 0, animated: false)
+        }
+    }
+
+    final class Coordinator: NSObject, UIPickerViewDataSource, UIPickerViewDelegate {
+        var values: [Int]
+        var selection: Binding<Int>?
+        weak var picker: LiveQuarterPicker?
+        private var lastPublished: Int?
+
+        init(values: [Int]) {
+            self.values = values
+        }
+
+        func publish(row: Int) {
+            guard values.indices.contains(row) else { return }
+            let next = values[row]
+            guard lastPublished != next else { return }
+            lastPublished = next
+            if selection?.wrappedValue != next {
+                selection?.wrappedValue = next
+            }
+        }
+
+        func numberOfComponents(in pickerView: UIPickerView) -> Int { 1 }
+
+        func pickerView(_ pickerView: UIPickerView, numberOfRowsInComponent component: Int) -> Int {
+            values.count
+        }
+
+        func pickerView(_ pickerView: UIPickerView, titleForRow row: Int, forComponent component: Int) -> String? {
+            guard values.indices.contains(row) else { return nil }
+            return String(format: "%02d", values[row])
+        }
+
+        func pickerView(_ pickerView: UIPickerView, rowHeightForComponent component: Int) -> CGFloat { 28 }
+
+        func pickerView(_ pickerView: UIPickerView, didSelectRow row: Int, inComponent component: Int) {
+            publish(row: row)
+        }
+    }
+}
+
+private final class LiveQuarterPicker: UIPickerView {
+    var onVisibleRow: ((Int) -> Void)?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onVisibleRow?(selectedRow(inComponent: 0))
+    }
+}
+
+private final class WheelHost: UIView, UIGestureRecognizerDelegate {
+    let picker = LiveQuarterPicker()
+    var isUserSpinning = false
+    private weak var pageScroll: UIScrollView?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        picker.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(picker)
+        NSLayoutConstraint.activate([
+            picker.leadingAnchor.constraint(equalTo: leadingAnchor),
+            picker.trailingAnchor.constraint(equalTo: trailingAnchor),
+            picker.topAnchor.constraint(equalTo: topAnchor),
+            picker.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(holdPageScroll))
+        pan.delegate = self
+        addGestureRecognizer(pan)
+    }
+
+    required init?(coder: NSCoder) { return nil }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        true
+    }
+
+    @objc private func holdPageScroll(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began, .changed:
+            isUserSpinning = true
+            pageScroll?.isScrollEnabled = false
+        default:
+            isUserSpinning = false
+            pageScroll?.isScrollEnabled = true
+            picker.onVisibleRow?(picker.selectedRow(inComponent: 0))
+        }
+    }
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        var view = superview
+        while let current = view {
+            if let scroll = current as? UIScrollView {
+                pageScroll = scroll
+                break
+            }
+            view = current.superview
+        }
+    }
+}
+
 private struct BookingHMTimePickerColumn: View {
     let title: String
     @Binding var hour: Int
@@ -293,27 +421,17 @@ private struct BookingHMTimePickerColumn: View {
                 .font(.system(size: 9))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
             HStack(spacing: 2) {
-                Picker("", selection: $hour) {
-                    ForEach(Array(BookingHMTimePickerSupport.hourRange), id: \.self) { h in
-                        Text(String(format: "%02d", h)).tag(h)
-                    }
-                }
-                .pickerStyle(.wheel)
-                .frame(maxWidth: .infinity)
-                .clipped()
+                QuarterHourWheel(selection: $hour, values: Array(BookingHMTimePickerSupport.hourRange))
+                    .accessibilityIdentifier("bookingHMTimePickerColumn.picker")
+                    .frame(maxWidth: .infinity)
 
                 Text(":")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
 
-                Picker("", selection: $minute) {
-                    ForEach(BookingHMTimePickerSupport.minuteChoices, id: \.self) { m in
-                        Text(String(format: "%02d", m)).tag(m)
-                    }
-                }
-                .pickerStyle(.wheel)
-                .frame(width: 56)
-                .clipped()
+                QuarterHourWheel(selection: $minute, values: BookingHMTimePickerSupport.minuteChoices)
+                    .accessibilityIdentifier("bookingHMTimePickerColumn.picker2")
+                    .frame(width: 56)
             }
             .frame(height: 100)
         }
@@ -552,6 +670,7 @@ struct OperativeCustomHoursSheet: View {
                                 .background(Color.red.opacity(0.1))
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
+                        .accessibilityIdentifier("operativeCustomHours.deleteBooking")
                         .buttonStyle(.plain)
                         .padding(.top, 4)
                     }
@@ -574,9 +693,11 @@ struct OperativeCustomHoursSheet: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel", action: onCancel)
+                    .accessibilityIdentifier("operativeCustomHours.cancel")
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { validateAndSave() }
+                    .accessibilityIdentifier("operativeCustomHours.save")
                     .fontWeight(.semibold)
             }
         }
@@ -588,7 +709,9 @@ struct OperativeCustomHoursSheet: View {
             Button("Delete booking", role: .destructive) {
                 onDelete?()
             }
+                .accessibilityIdentifier("operativeCustomHours.deleteBooking2")
             Button("Keep booking", role: .cancel) {}
+                .accessibilityIdentifier("operativeCustomHours.keepBooking")
         } message: {
             Text("This removes it from the schedule, daily overview, warnings, weekly report, timesheets, and My Schedule.")
         }
@@ -798,6 +921,7 @@ struct OperativeCustomHoursSheet: View {
                 }
                 Spacer()
                 Toggle("", isOn: $breakIncluded)
+                    .accessibilityIdentifier("operativeCustomHours.toggle")
                     .labelsHidden()
             }
 
@@ -823,6 +947,7 @@ struct OperativeCustomHoursSheet: View {
                         "Optional — e.g. \(String(format: "%.1f", defaultMult))",
                         text: $otMultText
                     )
+                    .accessibilityIdentifier("operativeCustomHours.optionalEG")
                     .font(.system(size: 15, weight: .medium))
                     .keyboardType(.decimalPad)
                     Text(windowLabel)

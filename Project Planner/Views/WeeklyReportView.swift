@@ -197,6 +197,7 @@ struct WeeklyReportView: View {
                 .background(WeeklyReportColors.light)
                 .clipShape(Capsule())
             }
+                .accessibilityIdentifier("weeklyReport.close")
         }
         ToolbarItem(placement: .principal) {
             Text("Weekly Report")
@@ -356,6 +357,7 @@ struct WeeklyReportView: View {
                     .padding(.vertical, 12)
                     .background(WeeklyReportColors.greenBg)
                 }
+                .accessibilityIdentifier("weeklyReport.currentINVOICINGPERIOD")
                 .buttonStyle(.plain)
             }
         }
@@ -393,6 +395,7 @@ struct WeeklyReportView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                 }
+                .accessibilityIdentifier("weeklyReport.exclamationmarkTriangle")
                 .buttonStyle(.plain)
             } else {
                 warningsSummaryContent
@@ -432,6 +435,7 @@ struct WeeklyReportView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
+        .accessibilityIdentifier("weeklyReport.arrowRightCircleFill")
         .buttonStyle(.plain)
     }
 
@@ -472,6 +476,7 @@ struct WeeklyReportView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: WeeklyReportColors.blue.opacity(0.4), radius: 10, x: 0, y: 5)
             }
+            .accessibilityIdentifier("weeklyReport.generatingReport")
             .buttonStyle(.plain)
             .disabled(isGenerating)
 
@@ -528,6 +533,7 @@ struct WeeklyReportView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                 }
+                .accessibilityIdentifier("weeklyReport.share")
                 .buttonStyle(.borderedProminent)
                 .tint(tint)
             } else {
@@ -588,6 +594,7 @@ struct WeeklyReportView: View {
             .padding(.vertical, 12)
             .contentShape(Rectangle())
         }
+        .accessibilityIdentifier("weeklyReport.calendarBadgePlus")
         .buttonStyle(.plain)
     }
 
@@ -659,18 +666,21 @@ struct WeeklyReportView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 13)
             }
+            .accessibilityIdentifier("weeklyReport.start")
             .buttonStyle(.plain)
 
             if isExpanded.wrappedValue {
                 Divider().padding(.leading, 16)
                 if label == "End" {
                     DatePicker("", selection: date, in: startDate..., displayedComponents: .date)
+                        .accessibilityIdentifier("weeklyReport.dateRow")
                         .datePickerStyle(.graphical)
                         .tint(WeeklyReportColors.blue)
                         .padding(.horizontal, 12)
                         .padding(.bottom, 8)
                 } else {
                     DatePicker("", selection: date, displayedComponents: .date)
+                        .accessibilityIdentifier("weeklyReport.dateRow2")
                         .datePickerStyle(.graphical)
                         .tint(WeeklyReportColors.blue)
                         .padding(.horizontal, 12)

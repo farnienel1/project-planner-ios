@@ -18,8 +18,6 @@ class SubcontractorStore: ObservableObject {
         guard let firebaseBackend,
               firebaseBackend.isAuthenticated,
               let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            subcontractors = []
-            bookings = []
             return
         }
         isLoading = true

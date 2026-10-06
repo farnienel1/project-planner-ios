@@ -430,6 +430,7 @@ struct DailyOverviewView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.blue)
             }
+            .accessibilityIdentifier("dailyOverview.viewByDate")
             .buttonStyle(.plain)
         }
     }
@@ -456,6 +457,7 @@ struct DailyOverviewView: View {
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .frame(width: 44, height: 44)
             }
+            .accessibilityIdentifier("dailyOverview.back")
             .buttonStyle(.plain)
             Button(action: { showingPastBookings = true }) {
                 HStack(spacing: 6) {
@@ -473,6 +475,7 @@ struct DailyOverviewView: View {
                 }
                 .frame(maxWidth: .infinity)
             }
+            .accessibilityIdentifier("dailyOverview.calendar")
             .buttonStyle(.plain)
             Button(action: { shiftOverviewDay(1) }) {
                 Image(systemName: "chevron.right")
@@ -480,6 +483,7 @@ struct DailyOverviewView: View {
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .frame(width: 44, height: 44)
             }
+            .accessibilityIdentifier("dailyOverview.chevronRight")
             .buttonStyle(.plain)
         }
         .padding(.vertical, 6)
@@ -790,6 +794,7 @@ struct DailyOverviewView: View {
                                 Capsule().stroke(ProjectWorksRevampColors.requiredPillFg, lineWidth: 0.5)
                             )
                     }
+                    .accessibilityIdentifier("dailyOverview.bookLabour")
                     .buttonStyle(.plain)
                 }
             }
@@ -1009,6 +1014,7 @@ struct DailyOverviewView: View {
                         .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
                 )
             }
+            .accessibilityIdentifier("dailyOverview.row.\(project.id).openSmallWorks")
             .padding(.top, 8)
             .buttonStyle(.plain)
         }
@@ -1138,6 +1144,7 @@ struct DailyOverviewView: View {
             } label: {
                 row
             }
+            .accessibilityIdentifier("dailyOverview.managerBookingRevampRow")
             .buttonStyle(.plain)
         } else {
             row
@@ -1156,6 +1163,7 @@ struct DailyOverviewView: View {
                         .toolbar {
                             ToolbarItem(placement: .navigationBarTrailing) {
                                 Button("Done") { dismiss() }
+                                    .accessibilityIdentifier("dailyOverview.done")
                             }
                         }
                         .appChromeNavigationBarSurface()
@@ -1475,6 +1483,7 @@ struct HistoricDailyOverviewView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(ProjectWorksRevampColors.ink)
                     DatePicker("", selection: $selectedDate, in: minDate...maxDate, displayedComponents: .date)
+                        .accessibilityIdentifier("historicDailyOverview.datePicker")
                         .datePickerStyle(.graphical)
                         .tint(ProjectWorksRevampColors.blue)
                 }
@@ -1492,6 +1501,7 @@ struct HistoricDailyOverviewView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("historicDailyOverview.done")
                 }
             }
             .appChromeNavigationBarSurface()
@@ -1808,6 +1818,7 @@ struct ProjectBookingCard: View {
             } label: {
                 content
             }
+            .accessibilityIdentifier("projectBookingCard.projectPersonRow")
             .buttonStyle(.plain)
         } else {
             content

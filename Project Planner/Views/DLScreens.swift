@@ -131,6 +131,7 @@ struct DLDeadlinesScreen: View {
                         .background(HS.tealBg)
                         .clipShape(Circle())
                 }
+                    .accessibilityIdentifier("dlDeadlinesScreen.chartBarDocHorizontal")
                 if canManage {
                     Button {
                         HSHaptic.tap(); showingAdd = true
@@ -142,6 +143,7 @@ struct DLDeadlinesScreen: View {
                             .background(HS.teal)
                             .clipShape(Circle())
                     }
+                        .accessibilityIdentifier("dlDeadlinesScreen.add")
                 }
             }
         }
@@ -414,6 +416,7 @@ struct DLDeadlineDetailSheet: View {
                             .background(HS.tealBg)
                             .clipShape(Circle())
                     }
+                    .accessibilityIdentifier("dlDeadlineDetail.editDeadline")
                     .accessibilityLabel("Edit deadline")
                 }
             }
@@ -443,6 +446,7 @@ struct DLDeadlineDetailSheet: View {
                         } label: {
                             Label("Reschedule", systemImage: "calendar.badge.clock")
                         }
+                        .accessibilityIdentifier("dlDeadlineDetail.reschedule")
                         .buttonStyle(HSGhostButton(tint: HS.amber))
 
                         if live.status != .complete {
@@ -453,6 +457,7 @@ struct DLDeadlineDetailSheet: View {
                             } label: {
                                 Label("Mark complete", systemImage: "checkmark")
                             }
+                            .accessibilityIdentifier("dlDeadlineDetail.markComplete")
                             .buttonStyle(HSFilledButton(tone: .teal))
                         }
                     }
@@ -515,6 +520,7 @@ struct DLDeadlineDetailSheet: View {
                     } label: {
                         Text("Save progress")
                     }
+                    .accessibilityIdentifier("dlDeadlineDetail.saveProgress")
                     .buttonStyle(HSFilledButton(tone: .teal, size: 12))
                 }
             }
@@ -611,6 +617,7 @@ struct DLDeadlineDetailSheet: View {
                                     .foregroundStyle(HS.ink).hsNoClip(2)
                             }
                         }
+                        .accessibilityIdentifier("dlDeadlineDetail.file")
                         .buttonStyle(HSPressStyle())
                     }
                     if hasFile && live.siteAuditId != nil {
@@ -635,6 +642,7 @@ struct DLDeadlineDetailSheet: View {
                                 }
                             }
                         }
+                        .accessibilityIdentifier("dlDeadlineDetail.clipboardFill")
                         .buttonStyle(HSPressStyle())
                         .disabled(jobSiteAudits.first(where: { $0.id == live.siteAuditId }) == nil)
                     }
@@ -788,6 +796,7 @@ struct DLRescheduleSheet: View {
                     }
 
                     DatePicker("", selection: $newDate, displayedComponents: .date)
+                        .accessibilityIdentifier("dlReschedule.datePicker")
                         .datePickerStyle(.graphical)
                         .tint(HS.teal)
                         .hsCard()
@@ -818,6 +827,7 @@ struct DLRescheduleSheet: View {
                                             .background(active ? HS.amber : HS.fill)
                                             .clipShape(Capsule())
                                     }
+                                    .accessibilityIdentifier("dlReschedule.row.\(r).\(AccessibilityID.token(r))")
                                     .buttonStyle(HSPressStyle())
                                 }
                             }
@@ -825,6 +835,7 @@ struct DLRescheduleSheet: View {
                         }
 
                         TextField("Add detail (optional)", text: $reason, axis: .vertical)
+                            .accessibilityIdentifier("dlReschedule.addDetailOptional")
                             .font(HSFont.body)
                             .foregroundStyle(HS.ink)
                             .lineLimit(2...5)
@@ -855,6 +866,7 @@ struct DLRescheduleSheet: View {
                     } label: {
                         Text("Confirm new date")
                     }
+                    .accessibilityIdentifier("dlReschedule.button")
                     .buttonStyle(HSFilledButton(tone: .teal))
                     .disabled(!canSave)
                     .opacity(canSave ? 1 : 0.45)
@@ -1006,6 +1018,7 @@ struct DLEditDeadlineScreen: View {
                     } label: {
                         Text(existing == nil ? "Add deadline" : "Save changes")
                     }
+                    .accessibilityIdentifier("dlEditDeadlineScreen.addDeadline")
                     .buttonStyle(HSFilledButton(tone: .teal))
                     .disabled(!canSave)
                     .opacity(canSave ? 1 : 0.45)
@@ -1037,10 +1050,12 @@ struct DLEditDeadlineScreen: View {
             HSSectionHeader(title: "What is due").hsGutter()
             VStack(alignment: .leading, spacing: 10) {
                 TextField("e.g. 3rd Floor WC 1st Fix", text: $title)
+                    .accessibilityIdentifier("dlEditDeadlineScreen.eG3rdFloorWC1st")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(HS.ink)
                 HSDivider(inset: 0)
                 TextField("Scope detail (optional)", text: $detail, axis: .vertical)
+                    .accessibilityIdentifier("dlEditDeadlineScreen.scopeDetailOptional")
                     .font(HSFont.body)
                     .foregroundStyle(HS.inkSoft)
                     .lineLimit(2...5)
@@ -1084,6 +1099,7 @@ struct DLEditDeadlineScreen: View {
 
             if locationIsCustom {
                 TextField("Type floor or area", text: $location)
+                    .accessibilityIdentifier("dlEditDeadlineScreen.typeFloorOrArea")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(HS.ink)
                     .hsCard()
@@ -1105,6 +1121,7 @@ struct DLEditDeadlineScreen: View {
                 .background(selected ? HS.teal : HS.fill)
                 .clipShape(Capsule())
         }
+        .accessibilityIdentifier("dlEditDeadlineScreen.\(AccessibilityID.token(title))")
         .buttonStyle(HSPressStyle())
     }
 
@@ -1120,12 +1137,14 @@ struct DLEditDeadlineScreen: View {
                     HSDivider(inset: 62)
                     DLFieldRow(icon: "calendar", tint: HS.blue, label: "Starts") {
                         DatePicker("", selection: $start, displayedComponents: .date)
+                            .accessibilityIdentifier("dlEditDeadlineScreen.datePicker")
                             .labelsHidden().tint(HS.teal)
                     }
                 }
                 HSDivider(inset: 62)
                 DLFieldRow(icon: "flag.checkered", tint: HS.teal, label: "Due") {
                     DatePicker("", selection: $due, displayedComponents: .date)
+                        .accessibilityIdentifier("dlEditDeadlineScreen.datePicker2")
                         .labelsHidden().tint(HS.teal)
                 }
             }
@@ -1152,6 +1171,7 @@ struct DLEditDeadlineScreen: View {
                             .font(.system(size: 12, weight: .bold))
                             .foregroundStyle(HS.teal)
                     }
+                    .accessibilityIdentifier("dlEditDeadlineScreen.clearLive")
                     .buttonStyle(HSPressStyle())
                 }
             }
@@ -1189,6 +1209,7 @@ struct DLEditDeadlineScreen: View {
                     Menu {
                         ForEach(tradeOptions, id: \.self) { t in
                             Button(t) { HSHaptic.select(); trade = t }
+                                .accessibilityIdentifier("dlEditDeadlineScreen.row.\(t).\(AccessibilityID.token(t))")
                         }
                     } label: {
                         HStack(spacing: 5) {
@@ -1200,6 +1221,7 @@ struct DLEditDeadlineScreen: View {
                                 .foregroundStyle(HS.slate2)
                         }
                     }
+                        .accessibilityIdentifier("dlEditDeadlineScreen.chevronDown")
                 }
             }
             .hsGutter()
@@ -1239,6 +1261,7 @@ struct DLEditDeadlineScreen: View {
                     .padding(.vertical, 10)
                     .contentShape(Rectangle())
                 }
+                .accessibilityIdentifier("dlEditDeadlineScreen.row.\(person.id).peopleList")
                 .buttonStyle(HSPressStyle())
                 if idx < list.count - 1 { HSDivider(inset: 58) }
             }
@@ -1261,6 +1284,7 @@ struct DLEditDeadlineScreen: View {
                             .hsNoClip(2)
                     }
                 }
+                .accessibilityIdentifier("dlEditDeadlineScreen.paperclip")
                 .buttonStyle(HSPressStyle())
                 HSDivider(inset: 62)
                 Button {
@@ -1274,6 +1298,7 @@ struct DLEditDeadlineScreen: View {
                             .hsNoClip(2)
                     }
                 }
+                .accessibilityIdentifier("dlEditDeadlineScreen.clipboardFill")
                 .buttonStyle(HSPressStyle())
             }
             .hsGutter()
@@ -1423,6 +1448,7 @@ struct DLSiteAuditAttachSheet: View {
                                         .font(.system(size: 28, weight: .semibold))
                                         .foregroundStyle(selected ? HS.teal : HS.slate2)
                                 }
+                                .accessibilityIdentifier("dlSiteAuditAttach.row.\(audit.id)")
                                 .buttonStyle(HSPressStyle())
                                 .accessibilityLabel(selected ? "Remove site audit" : "Attach site audit")
                             }
@@ -1442,6 +1468,7 @@ struct DLSiteAuditAttachSheet: View {
                 } label: {
                     Text(selectedId == nil ? "Done" : "Use this site audit")
                 }
+                .accessibilityIdentifier("dlSiteAuditAttach.done")
                 .buttonStyle(HSFilledButton(tone: .teal))
             }
         }

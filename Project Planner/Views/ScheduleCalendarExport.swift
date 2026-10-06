@@ -467,11 +467,13 @@ struct ScheduleCalendarDestinationPicker: View {
                                 .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
                         )
                     }
+                    .accessibilityIdentifier("scheduleCalendarDestinationPicker.row.\(destination.id).chevronRight")
                     .buttonStyle(.plain)
                 }
             }
 
             Button("Cancel", action: onDismiss)
+                .accessibilityIdentifier("scheduleCalendarDestinationPicker.cancel")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .frame(maxWidth: .infinity)

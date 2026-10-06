@@ -67,8 +67,8 @@ struct MaterialCatalogueRootView: View {
                     heroCard
                     catalogueActionsRow
                     searchField
-                    if store.isLoading {
-                        ProgressView()
+                    if store.isLoading || (firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty {
+                        ProgressView("Loading catalogue…")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 40)
                     } else if filteredItems.isEmpty {
@@ -92,6 +92,7 @@ struct MaterialCatalogueRootView: View {
                                         Button { selectedItem = item } label: {
                                             catalogueRow(item)
                                         }
+                                        .accessibilityIdentifier("materialCatalogueRoot.row.\(item.id)")
                                         .buttonStyle(.plain)
                                     }
                                 }
@@ -120,11 +121,17 @@ struct MaterialCatalogueRootView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("materialCatalogueRoot.done")
                 }
             }
-            .task {
+            .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+                let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
+                guard !orgId.isEmpty else { return }
                 store.setFirebaseBackend(firebaseBackend)
                 await store.load()
+                if expandedCategories.isEmpty {
+                    expandedCategories = Set(store.items.map { normalizedCategory($0.category) })
+                }
             }
             .sheet(isPresented: $showingAdd) {
                 MaterialCatalogueEditorSheet(mode: .create) { item in
@@ -188,6 +195,7 @@ struct MaterialCatalogueRootView: View {
                 set: { if !$0 { saveError = nil } }
             )) {
                 Button("OK", role: .cancel) {}
+                    .accessibilityIdentifier("materialCatalogueRoot.ok")
             } message: {
                 Text(saveError ?? "")
             }
@@ -196,6 +204,7 @@ struct MaterialCatalogueRootView: View {
                 set: { if !$0 { deleteError = nil } }
             )) {
                 Button("OK", role: .cancel) {}
+                    .accessibilityIdentifier("materialCatalogueRoot.ok2")
             } message: {
                 Text(deleteError ?? "")
             }
@@ -240,6 +249,7 @@ struct MaterialCatalogueRootView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
             }
+            .accessibilityIdentifier("materialCatalogueRoot.uploadOrDownloadCatalogue")
             .buttonStyle(.bordered)
             .tint(MaterialsOrderingTheme.primary)
             .accessibilityLabel("Upload or download catalogue")
@@ -250,6 +260,7 @@ struct MaterialCatalogueRootView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
             }
+            .accessibilityIdentifier("materialCatalogueRoot.addCatalogueItem")
             .buttonStyle(.borderedProminent)
             .tint(MaterialsOrderingTheme.primary)
             .accessibilityLabel("Add catalogue item")
@@ -276,6 +287,7 @@ struct MaterialCatalogueRootView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(MaterialsOrderingTheme.muted)
             TextField("Search by name, brand or code", text: $searchText)
+                .accessibilityIdentifier("materialCatalogueRoot.searchByNameBrandOrCode")
                 .font(.system(size: 12))
         }
         .padding(.horizontal, 12)
@@ -355,9 +367,9 @@ struct MaterialCatalogueRootView: View {
             Image(systemName: "shippingbox")
                 .font(.system(size: 40))
                 .foregroundStyle(MaterialsOrderingTheme.disabled)
-            Text("No catalogue items yet")
+            Text(store.errorMessage == nil ? "No catalogue items yet" : "Catalogue could not be loaded")
                 .font(.system(size: 14, weight: .medium))
-            Text("Add materials manually or update the catalogue from a CSV.")
+            Text(store.errorMessage ?? "Add materials manually or update the catalogue from a CSV.")
                 .font(.system(size: 12))
                 .foregroundStyle(MaterialsOrderingTheme.muted)
                 .multilineTextAlignment(.center)
@@ -456,6 +468,7 @@ private struct MaterialCatalogueEditorSheet: View {
                                 )
                                 .clipShape(RoundedRectangle(cornerRadius: 11))
                             }
+                            .accessibilityIdentifier("materialCatalogueEditor.row.\(u)")
                             .buttonStyle(.plain)
                         }
                     }
@@ -470,9 +483,11 @@ private struct MaterialCatalogueEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("materialCatalogueEditor.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { attemptSave() }
+                        .accessibilityIdentifier("materialCatalogueEditor.save")
                         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -495,12 +510,14 @@ private struct MaterialCatalogueEditorSheet: View {
                     pendingSaveItem = nil
                     duplicateMatch = nil
                 }
+                    .accessibilityIdentifier("materialCatalogueEditor.cancel2")
                 Button("Add anyway") {
                     if let item = pendingSaveItem {
                         onSave(item)
                         dismiss()
                     }
                 }
+                    .accessibilityIdentifier("materialCatalogueEditor.addAnyway")
             } message: {
                 if let duplicateMatch {
                     Text("“\(duplicateMatch.name)” with code “\(duplicateMatch.productCode ?? "—")” is already in your catalogue. Add this entry anyway?")
@@ -608,6 +625,7 @@ private struct MaterialCatalogueEditorSheet: View {
                 }
             }
             TextField(placeholder.isEmpty ? label : placeholder, text: text)
+                .accessibilityIdentifier("materialCatalogueEditor.textFieldRow")
                 .font(.system(size: 13, weight: .medium))
         }
         .padding(.vertical, 11)
@@ -636,6 +654,7 @@ private struct MaterialCatalogueEditorSheet: View {
                                 .background(MaterialsOrderingTheme.primaryTint)
                                 .clipShape(Capsule())
                         }
+                        .accessibilityIdentifier("materialCatalogueEditor.row.\(option).\(AccessibilityID.token(option))")
                         .buttonStyle(.plain)
                     }
                 }
@@ -685,6 +704,7 @@ private struct MaterialCatalogueDetailView: View {
                         Label("Remove from catalogue", systemImage: "trash")
                             .frame(maxWidth: .infinity)
                     }
+                    .accessibilityIdentifier("materialCatalogueDetail.removeFromCatalogue")
                     .padding()
                     .background(MaterialsOrderingTheme.cardBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -696,17 +716,21 @@ private struct MaterialCatalogueDetailView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .accessibilityIdentifier("materialCatalogueDetail.close")
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Edit") {
                         dismiss()
                         onEdit()
                     }
+                        .accessibilityIdentifier("materialCatalogueDetail.edit")
                 }
             }
             .confirmationDialog("Remove from catalogue?", isPresented: $showingDeleteConfirm) {
                 Button("Remove", role: .destructive, action: onDelete)
+                    .accessibilityIdentifier("materialCatalogueDetail.remove")
                 Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("materialCatalogueDetail.cancel")
             }
         }
     }
@@ -801,6 +825,7 @@ struct MaterialCatalogueBulkImportView: View {
                         .background(MaterialsOrderingTheme.primaryGradient)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
+                    .accessibilityIdentifier("materialCatalogueBulkImport.arrowDownCircleFill")
                     .buttonStyle(.plain)
                     .disabled(isBusy)
 
@@ -830,6 +855,7 @@ struct MaterialCatalogueBulkImportView: View {
                                 .stroke(MaterialsOrderingTheme.border, lineWidth: 1)
                         )
                     }
+                    .accessibilityIdentifier("materialCatalogueBulkImport.docBadgePlus")
                     .buttonStyle(.plain)
                     .disabled(isBusy)
 
@@ -876,6 +902,7 @@ struct MaterialCatalogueBulkImportView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .accessibilityIdentifier("materialCatalogueBulkImport.close")
                         .disabled(isBusy)
                 }
             }
@@ -897,12 +924,15 @@ struct MaterialCatalogueBulkImportView: View {
                 set: { if !$0 { importError = nil } }
             )) {
                 Button("OK", role: .cancel) {}
+                    .accessibilityIdentifier("materialCatalogueBulkImport.ok")
             } message: {
                 Text(importError ?? "")
             }
             .alert("⚠️ CSV Warning", isPresented: $showCSVDownloadWarning) {
                 Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("materialCatalogueBulkImport.cancel")
                 Button("Download CSV") { prepareDownload() }
+                    .accessibilityIdentifier("materialCatalogueBulkImport.downloadCSV")
             } message: {
                 Text("When re-importing the file for a batch upload, make sure you save the file as csv and not .xls (excel) or .numbers (for mac). The batch upload function can only read .csv files. The template you download will be .csv by default.")
             }
@@ -975,6 +1005,7 @@ struct MaterialCatalogueBulkImportView: View {
                     .foregroundStyle(dashedColor)
             )
         }
+        .accessibilityIdentifier("materialCatalogueBulkImport.dropCSVOrTapToBrowse")
         .buttonStyle(.plain)
         .disabled(isBusy)
     }
@@ -983,7 +1014,8 @@ struct MaterialCatalogueBulkImportView: View {
         ZStack {
             Color.black.opacity(0.38)
                 .ignoresSafeArea()
-                .onTapGesture { showReplaceConfirm = false }
+                
+                .accessibilityIdentifier("materialCatalogueBulkImport.tap").onTapGesture { showReplaceConfirm = false }
             MaterialCatalogueReplaceConfirm(
                 onContinue: {
                     showReplaceConfirm = false
@@ -1039,7 +1071,8 @@ struct MaterialCatalogueBulkImportView: View {
         ZStack {
             Color.black.opacity(0.38)
                 .ignoresSafeArea()
-                .onTapGesture { dismiss() }
+                
+                .accessibilityIdentifier("materialCatalogueBulkImport.tap2").onTapGesture { dismiss() }
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 10) {
                     Image(systemName: "checkmark.circle.fill")
@@ -1066,6 +1099,7 @@ struct MaterialCatalogueBulkImportView: View {
                         .background(MaterialsOrderingTheme.primary)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
+                .accessibilityIdentifier("materialCatalogueBulkImport.done")
                 .buttonStyle(.plain)
             }
             .padding(20)
@@ -1178,6 +1212,7 @@ private struct MaterialCatalogueReplaceConfirm: View {
                         .background(MaterialsOrderingTheme.success)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
+                .accessibilityIdentifier("materialCatalogueReplaceConfirm.continue")
                 .buttonStyle(.plain)
                 Button(action: onCancel) {
                     Text("Cancel")
@@ -1188,6 +1223,7 @@ private struct MaterialCatalogueReplaceConfirm: View {
                         .background(MaterialsOrderingTheme.danger)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
+                .accessibilityIdentifier("materialCatalogueReplaceConfirm.cancel")
                 .buttonStyle(.plain)
             }
         }

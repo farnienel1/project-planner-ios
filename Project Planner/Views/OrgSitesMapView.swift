@@ -53,6 +53,7 @@ struct OrgSitesMapView: View {
                             }
                         }
                     }
+                        .accessibilityIdentifier("orgSitesMap.done")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if isLoading {
@@ -103,6 +104,7 @@ struct OrgSitesMapView: View {
                 } label: {
                     Label("Previous", systemImage: "chevron.left")
                 }
+                .accessibilityIdentifier("orgSitesMap.previous")
                 .buttonStyle(.bordered)
 
                 Button {
@@ -110,6 +112,7 @@ struct OrgSitesMapView: View {
                 } label: {
                     Label("Next", systemImage: "chevron.right")
                 }
+                .accessibilityIdentifier("orgSitesMap.next")
                 .buttonStyle(.bordered)
             }
 

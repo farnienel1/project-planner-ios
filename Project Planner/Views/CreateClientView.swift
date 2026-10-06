@@ -25,18 +25,22 @@ struct CreateClientView: View {
             Form {
                 Section(header: Text("Client Information")) {
                     TextField("Client Name", text: $clientName)
+                        .accessibilityIdentifier("createClient.clientName")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                     
                     TextField("Email", text: $clientEmail)
+                        .accessibilityIdentifier("createClient.email")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.emailAddress)
                         .autocapitalization(.none)
                     
                     TextField("Phone", text: $clientPhone)
+                        .accessibilityIdentifier("createClient.phone")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.phonePad)
                     
                     TextField("Address", text: $clientAddress)
+                        .accessibilityIdentifier("createClient.address")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                 }
                 
@@ -56,6 +60,7 @@ struct CreateClientView: View {
                         .foregroundColor(.white)
                         .cornerRadius(8)
                     }
+                    .accessibilityIdentifier("createClient.createClient")
                     .disabled(!isFormValid || isLoading)
                 }
                 .listRowBackground(Color.clear)
@@ -66,11 +71,13 @@ struct CreateClientView: View {
                 leading: Button("Cancel") {
                     presentationMode.wrappedValue.dismiss()
                 }
+                    .accessibilityIdentifier("createClient.cancel")
             )
             .alert("Client Created", isPresented: $showingAlert) {
                 Button("OK") {
                     presentationMode.wrappedValue.dismiss()
                 }
+                    .accessibilityIdentifier("createClient.ok")
             } message: {
                 Text(alertMessage)
             }

@@ -239,6 +239,7 @@ struct BookingClashWarningCard: View {
                 .padding(.vertical, 11)
                 .frame(minHeight: 44)
             }
+            .accessibilityIdentifier("bookingClashWarningCard.hideFullTimeline")
             .buttonStyle(.plain)
         }
         .overlay(
@@ -297,6 +298,7 @@ struct BookingClashWarningCard: View {
                     .background(Color(red: 0.937, green: 0.937, blue: 0.957))
                     .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
+            .accessibilityIdentifier("bookingClashWarningCard.removeEntryJobNumberMap")
             .buttonStyle(.plain)
             .accessibilityLabel("Remove \(entry.jobNumber.map { "\($0) " } ?? "")\(entry.displayTitle)")
         }
@@ -362,6 +364,7 @@ struct BookingClashWarningCard: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         }
+        .accessibilityIdentifier("bookingClashWarningCard.checkmark")
         .buttonStyle(.plain)
         .padding(.top, 1)
     }
@@ -376,6 +379,7 @@ struct BookingClashWarningCard: View {
                     .padding(.vertical, 13)
                     .frame(minHeight: 46)
             }
+            .accessibilityIdentifier("bookingClashWarningCard.openDailyOverview")
             .buttonStyle(.plain)
             Rectangle()
                 .fill(Color.black.opacity(0.10))
@@ -388,6 +392,7 @@ struct BookingClashWarningCard: View {
                     .padding(.vertical, 13)
                     .frame(minHeight: 46)
             }
+            .accessibilityIdentifier("bookingClashWarningCard.dismiss")
             .buttonStyle(.plain)
         }
         .overlay(alignment: .top) {

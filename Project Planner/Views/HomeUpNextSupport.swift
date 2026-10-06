@@ -82,6 +82,8 @@ enum HomeUpNextSupport {
         now: Date,
         authUserId: String?,
         currentUserEmail: String?,
+        currentUserFirstName: String? = nil,
+        currentUserSurname: String? = nil,
         operatives: [Operative],
         bookings: [Booking],
         managerBookings: [ManagerSiteBooking],
@@ -96,16 +98,20 @@ enum HomeUpNextSupport {
             .lowercased()
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let emailKey, !emailKey.isEmpty,
-           let op = operatives.first(where: {
-               $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailKey
-           }) {
+        let op = WorkAccess.signedInOperative(
+            email: emailKey,
+            firstName: currentUserFirstName,
+            surname: currentUserSurname,
+            operatives: operatives
+        )
+        if let op {
             let mine = bookings.filter { b in
                 b.operativeId == op.id && b.status != .cancelled && b.status != .completed
             }
+            let today = calendar.startOfDay(for: now)
             for b in mine {
                 let start = sortDate(operativeBooking: b, policy: payrollTimePolicy)
-                guard start >= now else { continue }
+                guard calendar.startOfDay(for: start) >= today else { continue }
                 let proj = project(forProjectId: b.projectId, allProjects: allProjects)
                 let site = proj?.siteName ?? "Scheduled work"
                 let title = site
@@ -132,11 +138,18 @@ enum HomeUpNextSupport {
             }
         }
 
-        if let authUserId {
-            let mine = managerBookings.filter { $0.userId == authUserId }
+        let accountIds = WorkAccess.signedInAccountIds(
+            authUid: authUserId,
+            currentUser: nil,
+            organizationUsers: organizationUsers,
+            email: currentUserEmail
+        )
+        if !accountIds.isEmpty {
+            let mine = managerBookings.filter { accountIds.contains($0.userId) }
+            let today = calendar.startOfDay(for: now)
             for b in mine {
                 let start = sortDate(managerBooking: b, policy: payrollTimePolicy)
-                guard start >= now else { continue }
+                guard calendar.startOfDay(for: start) >= today else { continue }
                 let loc = managerLocationTitle(booking: b, allProjects: allProjects)
                 let title = loc
                 let timeStr = timeDotString(from: start)
@@ -164,6 +177,8 @@ enum HomeUpNextSupport {
         now: Date,
         authUserId: String?,
         currentUserEmail: String?,
+        currentUserFirstName: String? = nil,
+        currentUserSurname: String? = nil,
         operatives: [Operative],
         bookings: [Booking],
         managerBookings: [ManagerSiteBooking],
@@ -178,6 +193,8 @@ enum HomeUpNextSupport {
             now: now,
             authUserId: authUserId,
             currentUserEmail: currentUserEmail,
+            currentUserFirstName: currentUserFirstName,
+            currentUserSurname: currentUserSurname,
             operatives: operatives,
             bookings: bookings,
             managerBookings: managerBookings,

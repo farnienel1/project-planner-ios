@@ -36,6 +36,7 @@ struct HSSectionHeader: View {
                     }
                     .foregroundStyle(HS.blue)
                 }
+                .accessibilityIdentifier("hsSectionHeader.chevronRight")
                 .buttonStyle(.plain)
             }
         }
@@ -226,6 +227,7 @@ struct HSNavBar<Trailing: View>: View {
                         .clipShape(Circle())
                         .overlay(Circle().strokeBorder(HS.line, lineWidth: 1))
                 }
+                .accessibilityIdentifier("hsNavBar.button")
                 .buttonStyle(.plain)
             }
             VStack(alignment: .leading, spacing: 1) {
@@ -396,6 +398,7 @@ struct HSSegmented<T: Hashable>: View {
                                 }
                             }
                         }
+                        .accessibilityIdentifier("hsSegmented.row.\(item.id)")
                         .buttonStyle(.plain)
                         .id(item.id)
                     }
@@ -441,7 +444,8 @@ struct HSStatTile: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .hsCard(padding: 14, radius: 16)
         .contentShape(Rectangle())
-        .onTapGesture { if let tapped { HSHaptic.tap(); tapped() } }
+        
+        .accessibilityIdentifier("hsStatTile.tap").onTapGesture { if let tapped { HSHaptic.tap(); tapped() } }
     }
 }
 
@@ -554,15 +558,18 @@ struct HSTalkCard: View {
                 Spacer(minLength: 0)
                 if let secondaryTitle, let secondaryAction {
                     Button(secondaryTitle) { HSHaptic.tap(); secondaryAction() }
+                        .accessibilityIdentifier("hsTalkCard.\(AccessibilityID.token(secondaryTitle))")
                         .buttonStyle(HSPillButton(tone: .neutral))
                 }
                 Button(primaryTitle) { HSHaptic.tap(); primaryAction() }
+                    .accessibilityIdentifier("hsTalkCard.\(AccessibilityID.token(primaryTitle))")
                     .buttonStyle(HSPillButton(tone: primaryTone))
             }
         }
         .hsCard()
         .contentShape(RoundedRectangle(cornerRadius: HSMetric.cardRadius, style: .continuous))
-        .onTapGesture { if let onOpen { HSHaptic.tap(); onOpen() } }
+        
+        .accessibilityIdentifier("hsTalkCard.tap").onTapGesture { if let onOpen { HSHaptic.tap(); onOpen() } }
     }
 }
 
@@ -608,12 +615,14 @@ struct HSLibraryRow: View {
                 if isCustom { HSBadge(text: "Your upload", tone: .scheduled) }
                 Spacer(minLength: 4)
                 Button("Issue") { HSHaptic.tap(); onIssue() }
+                    .accessibilityIdentifier("hsLibrary.issue")
                     .buttonStyle(HSPillButton(tone: .teal, icon: "paperplane.fill"))
             }
         }
         .hsCard(padding: 14)
         .contentShape(RoundedRectangle(cornerRadius: HSMetric.cardRadius, style: .continuous))
-        .onTapGesture { HSHaptic.tap(); onOpen() }
+        
+        .accessibilityIdentifier("hsLibrary.yourUpload").onTapGesture { HSHaptic.tap(); onOpen() }
     }
 }
 
@@ -651,6 +660,7 @@ struct HSActionRow: View {
             }
             .hsCard(padding: 14)
         }
+        .accessibilityIdentifier("hsAction.chevronRight")
         .buttonStyle(HSPressStyle())
     }
 }
@@ -784,7 +794,8 @@ struct HSOperativeRow: View {
         .padding(.vertical, 11)
         .padding(.horizontal, 14)
         .contentShape(Rectangle())
-        .onTapGesture { if let onTap { HSHaptic.select(); onTap() } }
+        
+        .accessibilityIdentifier("hsOperative.checkmarkCircleFill").onTapGesture { if let onTap { HSHaptic.select(); onTap() } }
     }
 }
 
@@ -824,6 +835,7 @@ struct HSSearchField: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(HS.slate2)
             TextField(placeholder, text: $text)
+                .accessibilityIdentifier("hsSearchField.\(AccessibilityID.token(placeholder))")
                 .font(.system(size: 15))
                 .foregroundStyle(HS.ink)
                 .autocorrectionDisabled()
@@ -836,6 +848,7 @@ struct HSSearchField: View {
                         .font(.system(size: 15))
                         .foregroundStyle(HS.slate2)
                 }
+                .accessibilityIdentifier("hsSearchField.clear")
                 .buttonStyle(.plain)
             }
         }
@@ -896,6 +909,7 @@ struct HSChipRow<T: Hashable>: View {
                                 .clipShape(Capsule())
                                 .overlay(Capsule().strokeBorder(active ? .clear : HS.line, lineWidth: 1))
                             }
+                            .accessibilityIdentifier("hsChip.row.\(chip.id)")
                             .buttonStyle(.plain)
                         }
                     }
@@ -930,6 +944,7 @@ struct HSEmptyState: View {
                 .fixedSize(horizontal: false, vertical: true)
             if let actionTitle, let action {
                 Button(actionTitle) { HSHaptic.tap(); action() }
+                    .accessibilityIdentifier("hsEmptyState.\(AccessibilityID.token(actionTitle))")
                     .buttonStyle(HSGhostButton(fullWidth: false))
                     .padding(.top, 2)
             }
@@ -983,6 +998,7 @@ struct HSStrokeSignaturePad: View {
                     Text("Clear").font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(isEmpty ? HS.slate2.opacity(0.5) : HS.red)
                 }
+                .accessibilityIdentifier("hsStrokeSignaturePad.clear")
                 .buttonStyle(.plain)
                 .disabled(isEmpty)
             }
@@ -1029,7 +1045,8 @@ struct HSStrokeSignaturePad: View {
             }
             .frame(height: 170)
             .contentShape(Rectangle())
-            .gesture(
+            
+            .accessibilityIdentifier("hsStrokeSignaturePad.signature").gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { current.append($0.location) }
                     .onEnded { _ in

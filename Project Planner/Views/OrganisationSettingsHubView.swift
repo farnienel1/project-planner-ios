@@ -95,6 +95,7 @@ struct OrganisationSettingsHubView: View {
                             subtitle: currencySubtitle
                         )
                     }
+                    .accessibilityIdentifier("organisationSettingsHub.sterlingsignCircleFill")
                     .buttonStyle(.plain)
                 }
 
@@ -112,6 +113,7 @@ struct OrganisationSettingsHubView: View {
                             subtitle: hoursSubtitle
                         )
                     }
+                    .accessibilityIdentifier("organisationSettingsHub.clockFill")
                     .buttonStyle(.plain)
                     Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 54)
                     NavigationLink {
@@ -126,6 +128,7 @@ struct OrganisationSettingsHubView: View {
                             subtitle: annualLeaveDefaultsSubtitle
                         )
                     }
+                    .accessibilityIdentifier("organisationSettingsHub.beachUmbrellaFill")
                     .buttonStyle(.plain)
                 }
 
@@ -143,6 +146,7 @@ struct OrganisationSettingsHubView: View {
                             subtitle: scheduleOptionsSubtitle
                         )
                     }
+                    .accessibilityIdentifier("organisationSettingsHub.calendarBadgeClock")
                     .buttonStyle(.plain)
                     Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 54)
                     NavigationLink {
@@ -164,6 +168,7 @@ struct OrganisationSettingsHubView: View {
                             subtitle: "Change and alter warning defaults"
                         )
                     }
+                    .accessibilityIdentifier("organisationSettingsHub.exclamationmarkTriangleFill")
                     .buttonStyle(.plain)
                     Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 54)
                     NavigationLink {
@@ -179,6 +184,7 @@ struct OrganisationSettingsHubView: View {
                             subtitle: materialReminderSubtitle
                         )
                     }
+                    .accessibilityIdentifier("organisationSettingsHub.bellBadgeFill")
                     .buttonStyle(.plain)
                 }
 
@@ -196,6 +202,7 @@ struct OrganisationSettingsHubView: View {
                             subtitle: invoicingSubtitle
                         )
                     }
+                    .accessibilityIdentifier("organisationSettingsHub.docTextFill")
                     .buttonStyle(.plain)
                 }
 
@@ -218,6 +225,7 @@ struct OrganisationSettingsHubView: View {
                             subtitle: roleCountsSubtitle
                         )
                     }
+                    .accessibilityIdentifier("organisationSettingsHub.person3Fill")
                     .buttonStyle(.plain)
                 }
 
@@ -251,6 +259,7 @@ struct OrganisationSettingsHubView: View {
                         }
                         .padding(.vertical, 11)
                     }
+                    .accessibilityIdentifier("organisationSettingsHub.delete")
                     .buttonStyle(.plain)
                 }
             }
@@ -279,6 +288,7 @@ struct OrganisationSettingsHubView: View {
         }
         .alert("Delete Organisation and Cancel Project Planner Membership", isPresented: $showingDeleteInfo) {
             Button("OK", role: .cancel) { }
+                .accessibilityIdentifier("organisationSettingsHub.ok")
         } message: {
             Text("Subscriptions can be turned off via the web app. To delete and organisation entirely, please contact info@projectplanner.us")
         }
@@ -462,6 +472,7 @@ struct OrganisationSettingsHubView: View {
         Button(action: action) {
             hubRowLabel(icon: icon, iconBg: iconBg, iconFg: iconFg, title: title, subtitle: subtitle)
         }
+        .accessibilityIdentifier("organisationSettingsHub.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
     }
 

@@ -204,6 +204,7 @@ struct InvoicingView: View {
                 symbol: "clock.fill"
             )
         }
+        .accessibilityIdentifier("invoicing.myTimesheets")
         .buttonStyle(.plain)
     }
 
@@ -246,6 +247,7 @@ struct InvoicingView: View {
                     .stroke(Color(.separator), lineWidth: 0.5)
             )
         }
+        .accessibilityIdentifier("invoicing.clockArrowCirclepath")
         .buttonStyle(.plain)
     }
 
@@ -277,6 +279,7 @@ struct InvoicingView: View {
                 } label: {
                     managerTile(title: "My Timesheets", subtitle: "Your own hours, expenses and price work", symbol: "clock.fill", badge: nil)
                 }
+                .accessibilityIdentifier("invoicing.myTimesheets2")
                 .buttonStyle(.plain)
             }
             NavigationLink {
@@ -302,6 +305,7 @@ struct InvoicingView: View {
                     badge: awaiting > 0 ? "\(awaiting) new" : nil
                 )
             }
+            .accessibilityIdentifier("invoicing.userTimesheets")
             .buttonStyle(.plain)
 
             HStack(spacing: 10) {
@@ -1161,6 +1165,7 @@ private struct MyTimesheetsHubView: View {
             .background(Color(.systemBackground))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
+        .accessibilityIdentifier("timesheets.chevronRight")
         .buttonStyle(.plain)
     }
 }
@@ -1453,12 +1458,14 @@ private struct MyTimesheetView: View {
                     } label: {
                         addonTile(title: "Price Work", subtitle: "Agreed extras", symbol: "bolt.fill", tint: Color(red: 0.329, green: 0.29, blue: 0.718))
                     }
+                    .accessibilityIdentifier("timesheets.priceWork")
                     .buttonStyle(.plain)
                     Button {
                         beginAddingExtra(.expense)
                     } label: {
                         addonTile(title: "Expenses", subtitle: "+ receipts", symbol: "sterlingsign.circle.fill", tint: Color(red: 0.706, green: 0.325, blue: 0.035))
                     }
+                    .accessibilityIdentifier("timesheets.expenses")
                     .buttonStyle(.plain)
                 }
 
@@ -1467,6 +1474,7 @@ private struct MyTimesheetView: View {
                         Text("Note to manager")
                             .font(.subheadline.weight(.semibold))
                         TextEditor(text: $draft.managerNote)
+                            .accessibilityIdentifier("timesheets.textEditor")
                             .frame(minHeight: 74)
                             .padding(8)
                             .background(ProjectWorksRevampColors.canvas)
@@ -1519,6 +1527,7 @@ private struct MyTimesheetView: View {
                             .foregroundStyle(.white)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
+                    .accessibilityIdentifier("timesheets.operative")
                     .buttonStyle(.plain)
                 } else {
                     VStack(spacing: 8) {
@@ -1596,6 +1605,7 @@ private struct MyTimesheetView: View {
                         .foregroundStyle(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
+                    .accessibilityIdentifier("timesheets.generateInvoice")
                     .buttonStyle(.plain)
                     .disabled(isGeneratingInvoice)
 
@@ -1642,12 +1652,14 @@ private struct MyTimesheetView: View {
                     Button("Add price work") {
                         showAddPriceWork = true
                     }
+                    .accessibilityIdentifier("timesheets.addPriceWork")
                     .buttonStyle(.borderedProminent)
                     .tint(.blue)
 
                     Button("Add expense") {
                         showAddExpense = true
                     }
+                    .accessibilityIdentifier("timesheets.addExpense")
                     .buttonStyle(.bordered)
 
                     if draft.operativeSignedAt == nil {
@@ -1655,6 +1667,7 @@ private struct MyTimesheetView: View {
                             draft.operativeSignedAt = Date()
                             saveDraft()
                         }
+                        .accessibilityIdentifier("timesheets.signTimesheet")
                         .buttonStyle(.borderedProminent)
                         .tint(.green)
                     } else {
@@ -1681,9 +1694,11 @@ private struct MyTimesheetView: View {
                 saveDraft()
                 openPendingExtraSheet()
             }
+                .accessibilityIdentifier("timesheets.acceptAddAnyway")
             Button("Decline", role: .cancel) {
                 pendingExtraMode = nil
             }
+                .accessibilityIdentifier("timesheets.decline")
         } message: {
             Text(postSignWarningMessage)
         }
@@ -2116,6 +2131,7 @@ private struct PreviousTimesheetsView: View {
                             } label: {
                                 Text(run.week.title)
                             }
+                                .accessibilityIdentifier("timesheets.row.\(run.id)")
                         }
                     } label: {
                         HStack {
@@ -2132,6 +2148,7 @@ private struct PreviousTimesheetsView: View {
                         .background(Color(.systemBackground))
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
+                        .accessibilityIdentifier("timesheets.selectPreviousPaymentRun")
 
                     if let run = selectedRun {
                         summaryCard(run)
@@ -2157,6 +2174,7 @@ private struct PreviousTimesheetsView: View {
                                 .foregroundStyle(.white)
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             }
+                            .accessibilityIdentifier("timesheets.generateInvoice")
                             .buttonStyle(.plain)
                             .disabled(isGeneratingInvoice)
 
@@ -2538,6 +2556,7 @@ private struct OperativeTimesheetsView: View {
                     Text("Signed off").tag(ManagerTimesheetListTab.signedOff)
                     Text("Exported").tag(ManagerTimesheetListTab.exported)
                 }
+                .accessibilityIdentifier("timesheets.status")
                 .pickerStyle(.segmented)
 
                 Text(selectedTab.helpText)
@@ -2605,6 +2624,7 @@ private struct OperativeTimesheetsView: View {
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 10)
                                 }
+                                .accessibilityIdentifier("timesheets.row.\(row.id).exported")
                                 .buttonStyle(.plain)
                                 if row.id != exportedHistory.last?.id {
                                     Divider().padding(.leading, 60)
@@ -2667,6 +2687,7 @@ private struct OperativeTimesheetsView: View {
                             .padding(.horizontal, 12)
                             .padding(.vertical, 10)
                         }
+                        .accessibilityIdentifier("timesheets.row.\(row.id).hrsOTPWExp")
                         .buttonStyle(.plain)
                         if row.id != awaitingRows.last?.id {
                             Divider().padding(.leading, 60)
@@ -2721,6 +2742,7 @@ private struct OperativeTimesheetsView: View {
                             .padding(.horizontal, 12)
                             .padding(.vertical, 10)
                         }
+                        .accessibilityIdentifier("timesheets.row.\(operative.id).hrsOTPWExp")
                         .buttonStyle(.plain)
                         if operative.id != filteredReports.last?.id {
                             Divider().padding(.leading, 60)
@@ -2746,6 +2768,7 @@ private struct OperativeTimesheetsView: View {
                             .background(Color.blue)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
+                    .accessibilityIdentifier("timesheets.sendingTimesheets")
                     .buttonStyle(.plain)
                     .disabled(isExporting)
                 }
@@ -3213,6 +3236,7 @@ private struct OperativeTimesheetReviewView: View {
             .task { await loadDayRateHistory() }
             .alert("Review required", isPresented: $showExtrasReviewRequiredAlert) {
                 Button("OK", role: .cancel) {}
+                    .accessibilityIdentifier("operativeTimesheetReview.ok")
             } message: {
                 Text("Please approve, decline or edit each expense and price-work item using the buttons provided.")
             }
@@ -3414,6 +3438,7 @@ private struct OperativeTimesheetReviewView: View {
                     .background(Color.green)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
+            .accessibilityIdentifier("operativeTimesheetReview.signOffFinalise")
             .buttonStyle(.plain)
             .disabled(!TimesheetApprovalPolicy.operativeHasSigned(draft))
             .opacity(TimesheetApprovalPolicy.operativeHasSigned(draft) ? 1 : 0.5)
@@ -4066,16 +4091,19 @@ private struct TimesheetMoneyEntrySheet: View {
 
                 moneyCard {
                     DatePicker(mode == .expense ? "Date" : "Start date", selection: $date, displayedComponents: .date)
+                        .accessibilityIdentifier("timesheets.date")
                         .font(.system(size: 13, weight: .medium))
                     if mode == .priceWork {
                         Divider().overlay(ProjectWorksRevampColors.border)
                         Toggle("Add end date", isOn: $includeEndDate)
+                            .accessibilityIdentifier("timesheets.addEndDate")
                             .font(.system(size: 13, weight: .medium))
                         if includeEndDate {
                             DatePicker("End date", selection: Binding(
                                 get: { endDate ?? date },
                                 set: { endDate = $0 }
                             ), displayedComponents: .date)
+                            .accessibilityIdentifier("timesheets.endDate")
                             .font(.system(size: 13, weight: .medium))
                         }
                     }
@@ -4103,6 +4131,7 @@ private struct TimesheetMoneyEntrySheet: View {
                                     .foregroundStyle(receiptName == nil ? ProjectWorksRevampColors.requiredPillFg : ProjectWorksRevampColors.blue)
                             }
                         }
+                            .accessibilityIdentifier("timesheets.paperclip")
                     }
                 }
             }
@@ -4115,6 +4144,7 @@ private struct TimesheetMoneyEntrySheet: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
+                    .accessibilityIdentifier("timesheets.cancel")
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button(mode == .expense ? "Add expense" : "Add price work") {
@@ -4147,6 +4177,7 @@ private struct TimesheetMoneyEntrySheet: View {
                     }
                     dismiss()
                 }
+                .accessibilityIdentifier("timesheets.addExpense")
                 .disabled(amount == nil || (amount ?? 0) <= 0 || (mode == .expense && receiptName == nil))
             }
         }
@@ -4181,6 +4212,7 @@ private struct TimesheetMoneyEntrySheet: View {
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .tracking(0.4)
             TextField(title, text: text)
+                .accessibilityIdentifier("timesheets.\(AccessibilityID.token(title))")
                 .font(.system(size: 14, weight: .medium))
                 .keyboardType(keyboard)
         }
@@ -4193,6 +4225,7 @@ private struct TimesheetMoneyEntrySheet: View {
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .tracking(0.4)
             TextField(title, text: text, axis: .vertical)
+                .accessibilityIdentifier("timesheets.\(AccessibilityID.token(title))2")
                 .font(.system(size: 14))
                 .lineLimit(3, reservesSpace: true)
         }
@@ -4215,6 +4248,7 @@ private struct TimesheetMoneyEntrySheet: View {
                                 .background(ProjectWorksRevampColors.blue.opacity(0.1))
                                 .clipShape(Capsule())
                         }
+                        .accessibilityIdentifier("timesheets.row.\(suggestion).\(AccessibilityID.token(suggestion))")
                         .buttonStyle(.plain)
                     }
                 }
@@ -4315,6 +4349,7 @@ private struct SignTimesheetView: View {
                         .background(Color.green)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
+                .accessibilityIdentifier("timesheets.checkmark")
                 .buttonStyle(.plain)
                 .disabled(signatureImageData == nil)
                 .opacity(signatureImageData == nil ? 0.5 : 1)
@@ -4366,6 +4401,7 @@ private struct ManagerTimesheetSignOffView: View {
                         .background(Color.green)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
+                .accessibilityIdentifier("timesheets.signOffFinalise")
                 .buttonStyle(.plain)
                 .disabled(signatureImageData == nil)
                 .opacity(signatureImageData == nil ? 0.5 : 1)
@@ -4378,6 +4414,7 @@ private struct ManagerTimesheetSignOffView: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
+                    .accessibilityIdentifier("timesheets.cancel")
             }
         }
     }
@@ -4396,6 +4433,7 @@ private struct InvoiceUTRBlankWarningSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 Button("Accept") { onAccept() }
+                    .accessibilityIdentifier("invoiceUTRBlankWarning.accept")
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
                     .frame(maxWidth: .infinity)
@@ -4406,6 +4444,7 @@ private struct InvoiceUTRBlankWarningSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Back") { onBack() }
+                        .accessibilityIdentifier("invoiceUTRBlankWarning.back")
                 }
             }
         }
@@ -4434,6 +4473,7 @@ private struct InvoiceGeneratedSuccessSheet: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
                 }
+                .accessibilityIdentifier("invoiceGeneratedSuccess.shareInvoice")
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
             }
@@ -4443,6 +4483,7 @@ private struct InvoiceGeneratedSuccessSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { onDismiss() }
+                        .accessibilityIdentifier("invoiceGeneratedSuccess.done")
                 }
             }
             .sheet(isPresented: $showShare) {
@@ -4718,6 +4759,7 @@ private struct GenerateInvoiceView: View {
                     }
                     .padding(.vertical, 16)
                 }
+                .accessibilityIdentifier("invoicing.generateInvoice")
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
                 .background(
@@ -4848,6 +4890,7 @@ private struct GenerateInvoiceView: View {
                             }
                         }
                     }
+                        .accessibilityIdentifier("invoicing.row.\(option.id).checkmark")
                 }
             } label: {
                 HStack {
@@ -4869,6 +4912,7 @@ private struct GenerateInvoiceView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: Color.black.opacity(0.06), radius: 8, y: 2)
             }
+            .accessibilityIdentifier("invoicing.checkmark")
             .buttonStyle(.plain)
             .onAppear {
                 if selectedPeriodId.isEmpty {
@@ -5291,6 +5335,7 @@ private struct TimesheetSignaturePad: View {
                     canvas.drawing = PKDrawing()
                     imageData = nil
                 }
+                .accessibilityIdentifier("timesheetSignaturePad.clear")
                 .font(.system(size: 12, weight: .semibold))
             }
             TimesheetCanvasRepresentable(canvas: $canvas) { exportSignaturePNG() }

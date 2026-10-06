@@ -99,15 +99,18 @@ struct SettingsView: View {
                         .foregroundStyle(ProjectWorksRevampColors.blue)
                         .font(.system(size: 17, weight: .semibold))
                 }
+                    .accessibilityIdentifier("settings.back")
             }
         }
         .navigationBarBackButtonHidden(true)
         .appChromeNavigationBarSurface()
         .alert("Sign Out", isPresented: $showingSignOutAlert) {
             Button("Cancel", role: .cancel) { }
+                .accessibilityIdentifier("settings.cancel")
             Button("Sign Out", role: .destructive) {
                 AppSignOut.perform(firebaseBackend: firebaseBackend, userStore: userStore)
             }
+                .accessibilityIdentifier("settings.signOut")
         } message: {
             Text("Are you sure you want to sign out?")
         }
@@ -227,6 +230,7 @@ struct SettingsView: View {
                     subtitle: settingsHubOrgLine
                 )
             }
+            .accessibilityIdentifier("settings.building2Fill")
             .buttonStyle(.plain)
             Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
             NavigationLink {
@@ -242,6 +246,7 @@ struct SettingsView: View {
                     subtitle: "Name, photo, contact details"
                 )
             }
+            .accessibilityIdentifier("settings.personFill")
             .buttonStyle(.plain)
             Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
             NavigationLink {
@@ -256,6 +261,7 @@ struct SettingsView: View {
                     subtitle: appSettings.settings.theme.displayName
                 )
             }
+            .accessibilityIdentifier("settings.circleLefthalfFilled")
             .buttonStyle(.plain)
             Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
             NavigationLink {
@@ -270,6 +276,7 @@ struct SettingsView: View {
                     subtitle: "Email, password, security"
                 )
             }
+            .accessibilityIdentifier("settings.keyFill")
             .buttonStyle(.plain)
             if !(userStore.currentUser?.permissions.operativeMode ?? false) {
                 Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
@@ -287,6 +294,7 @@ struct SettingsView: View {
                         subtitle: "Choose which reminders you receive"
                     )
                 }
+                .accessibilityIdentifier("settings.navigationLink")
                 .buttonStyle(.plain)
             }
         }
@@ -371,6 +379,7 @@ struct SettingsView: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .shadow(color: ProjectWorksRevampColors.blue.opacity(0.18), radius: 10, x: 0, y: 4)
         }
+        .accessibilityIdentifier("settings.building2Fill2")
         .buttonStyle(.plain)
     }
 
@@ -387,6 +396,7 @@ struct SettingsView: View {
                     subtitle: "Get in touch, browse FAQs"
                 )
             }
+            .accessibilityIdentifier("settings.questionmarkCircleFill")
             .buttonStyle(.plain)
             Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
             NavigationLink {
@@ -403,6 +413,7 @@ struct SettingsView: View {
                     subtitle: "Legal information"
                 )
             }
+            .accessibilityIdentifier("settings.docTextFill")
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
@@ -430,6 +441,7 @@ struct SettingsView: View {
                     .stroke(ProjectWorksRevampColors.requiredPillBg, lineWidth: 0.5)
             )
         }
+        .accessibilityIdentifier("settings.rectanglePortraitAndArrowRight")
         .buttonStyle(.plain)
     }
     
@@ -438,6 +450,7 @@ struct SettingsView: View {
             Form {
                 Section("Link to Organization") {
                     TextField("Organization ID", text: $manualLinkOrganizationId)
+                        .accessibilityIdentifier("settings.organizationID")
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     
@@ -463,6 +476,7 @@ struct SettingsView: View {
                             Spacer()
                         }
                     }
+                    .accessibilityIdentifier("settings.linking")
                     .disabled(isLinking || manualLinkOrganizationId.isEmpty)
                 }
                 
@@ -481,6 +495,7 @@ struct SettingsView: View {
                         manualLinkOrganizationId = ""
                         linkError = nil
                     }
+                        .accessibilityIdentifier("settings.cancel2")
                 }
             }
         }
@@ -506,6 +521,7 @@ struct SettingsView: View {
                         }
                     }
                 }
+                .accessibilityIdentifier("settings.tempRemotePushDiagnostic")
                 .disabled(isRunningPushDiagnostic)
             }
 
@@ -517,6 +533,7 @@ struct SettingsView: View {
         }
         .alert("Notification Test", isPresented: $showingNotificationTestAlert) {
             Button("OK", role: .cancel) { }
+                .accessibilityIdentifier("settings.ok")
         } message: {
             Text(notificationTestMessage)
         }
@@ -540,6 +557,7 @@ struct SettingsView: View {
                 Image(systemName: "bell")
             }
         }
+            .accessibilityIdentifier("settings.testNotificationScheduledItWillAppear")
     }
     
     private func diagnoseData() async {
@@ -623,6 +641,7 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                     
                     TextField("Test Email Address", text: $testEmailAddress)
+                        .accessibilityIdentifier("settings.testEmailAddress")
                         .keyboardType(.emailAddress)
                         .autocapitalization(.none)
                         .autocorrectionDisabled()
@@ -649,6 +668,7 @@ struct SettingsView: View {
                             Spacer()
                         }
                     }
+                    .accessibilityIdentifier("settings.sending")
                     .disabled(isTestingEmail || testEmailAddress.isEmpty)
                 }
                 
@@ -683,6 +703,7 @@ struct SettingsView: View {
                         testEmailAddress = ""
                         emailTestResult = nil
                     }
+                        .accessibilityIdentifier("settings.done")
                 }
             }
         }

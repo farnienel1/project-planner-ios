@@ -32,6 +32,7 @@ struct MainMenuMoreSheet: View {
                             Image(systemName: "xmark.circle.fill")
                                 .symbolRenderingMode(.hierarchical)
                         }
+                        .accessibilityIdentifier("mainMenu.close")
                         .accessibilityLabel("Close")
                         .ppGlassCircle()
                     }
@@ -108,6 +109,7 @@ struct MainMenuMoreSheet: View {
                 onNavy: false
             )
         }
+        .accessibilityIdentifier("mainMenu.\(AccessibilityID.token(title))")
         .buttonStyle(PPPressableButtonStyle())
     }
 
@@ -135,6 +137,7 @@ struct MainMenuMoreSheet: View {
                     subtitle: spec.detail
                 )
             }
+            .accessibilityIdentifier("mainMenu.row.\(spec.id)")
             .buttonStyle(PPMenuRowButtonStyle())
         }
         .padding(.top, 14)
@@ -153,6 +156,7 @@ struct MainMenuMoreSheet: View {
                 detail: subtitle ?? badge
             )
         }
+        .accessibilityIdentifier("mainMenu.moreRow")
         .buttonStyle(PPMenuRowButtonStyle())
     }
 
@@ -165,6 +169,7 @@ struct MainMenuMoreSheet: View {
                 Text(MainMenuCatalog.displayTitle(for: spec, userStore: userStore))
             }
         }
+        .accessibilityIdentifier("mainMenu.signOut")
         .buttonStyle(PPSignOutButtonStyle())
     }
 

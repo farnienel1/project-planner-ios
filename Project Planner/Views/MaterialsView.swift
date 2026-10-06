@@ -48,7 +48,8 @@ struct MaterialsView: View {
                 .environmentObject(firebaseBackend)
             }
         }
-        .task {
+        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+            guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await MainActor.run {
                 let today = Calendar.current.startOfDay(for: Date())
                 selectedDate = today
@@ -85,6 +86,7 @@ struct MaterialsView: View {
                     UserDefaults.standard.set(true, forKey: Self.materialsRetentionNoticeKey(userId: uid, projectId: project.id))
                 }
             }
+                .accessibilityIdentifier("materials.ok")
         } message: {
             Text("Material orders are kept in the app for about one year per job (by the date the material is needed). Older lines are removed automatically to keep lists manageable.")
         }
@@ -239,6 +241,7 @@ private struct OperativeMaterialsView: View {
                 Image(systemName: "chevron.left")
                     .foregroundColor(.blue)
             }
+                .accessibilityIdentifier("operativeMaterials.back")
             
             Spacer()
             
@@ -251,6 +254,7 @@ private struct OperativeMaterialsView: View {
                 Image(systemName: "chevron.right")
                     .foregroundColor(.blue)
             }
+                .accessibilityIdentifier("operativeMaterials.chevronRight")
         }
         .padding()
     }
@@ -276,6 +280,7 @@ private struct OperativeMaterialsView: View {
                     .background(isSelected(date) ? Color.blue : Color(.systemGray6))
                     .cornerRadius(8)
                 }
+                    .accessibilityIdentifier("operativeMaterials.row.\(date)")
             }
         }
         .padding(.horizontal)
@@ -295,6 +300,7 @@ private struct OperativeMaterialsView: View {
                         .font(.title2)
                         .foregroundColor(.blue)
                 }
+                    .accessibilityIdentifier("operativeMaterials.plusCircleFill")
             }
             .padding(.horizontal)
             
@@ -333,6 +339,7 @@ private struct OperativeMaterialsView: View {
                                     } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
+                                        .accessibilityIdentifier("operativeMaterials.row.\(material.id).delete")
                                 }
                             }
                             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
@@ -348,6 +355,7 @@ private struct OperativeMaterialsView: View {
         .padding(.vertical)
         .alert("Could Not Delete Material", isPresented: $showingDeleteErrorAlert) {
             Button("OK", role: .cancel) { }
+                .accessibilityIdentifier("operativeMaterials.ok")
         } message: {
             Text(deleteErrorMessage)
         }
@@ -528,6 +536,7 @@ struct MaterialItemRow: View {
                         .foregroundColor(.blue)
                         .font(.body)
                 }
+                .accessibilityIdentifier("materialItem.edit")
                 .buttonStyle(.borderless)
             }
         }
@@ -607,6 +616,7 @@ struct AddMaterialView: View {
                         }
                         .foregroundColor(.blue)
                     }
+                        .accessibilityIdentifier("addMaterial.plusCircleFill")
                 }
             }
             .navigationTitle("Add Materials")
@@ -616,11 +626,13 @@ struct AddMaterialView: View {
                     Button("Cancel") {
                         isPresented = false
                     }
+                        .accessibilityIdentifier("addMaterial.cancel")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Submit All") {
                         handleSubmitAllTapped()
                     }
+                    .accessibilityIdentifier("addMaterial.submitAll")
                     .disabled(materialEntries.allSatisfy { $0.materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } || isSaving)
                 }
             }
@@ -629,12 +641,15 @@ struct AddMaterialView: View {
             Button("Book Materials") {
                 saveAllMaterials()
             }
+                .accessibilityIdentifier("addMaterial.bookMaterials")
             Button("Change Date", role: .cancel) { }
+                .accessibilityIdentifier("addMaterial.changeDate")
         } message: {
             Text("Some materials are being added for today after 4:00 PM. Continue or change the date.")
         }
         .alert("Could Not Save Materials", isPresented: $showingSaveErrorAlert) {
             Button("OK", role: .cancel) { }
+                .accessibilityIdentifier("addMaterial.ok")
         } message: {
             Text(saveErrorMessage)
         }
@@ -781,6 +796,7 @@ private struct MaterialEntrySection: View {
                             .contentShape(Rectangle())
                             .frame(minWidth: 44, minHeight: 44)
                     }
+                    .accessibilityIdentifier("materialEntrySection.minusCircleFill")
                     .buttonStyle(.borderless)
                 }
             }
@@ -793,6 +809,7 @@ private struct MaterialEntrySection: View {
                     }
                 }
             ), displayedComponents: .date)
+            .accessibilityIdentifier("materialEntrySection.date")
             .datePickerStyle(.compact)
             
             Picker("Quantity", selection: Binding(
@@ -807,6 +824,7 @@ private struct MaterialEntrySection: View {
                     Text("\(num)").tag(num)
                 }
             }
+                .accessibilityIdentifier("materialEntrySection.quantity")
             
             Picker(MaterialUnit.typePickerTitle, selection: Binding(
                 get: { entry.unit },
@@ -820,6 +838,7 @@ private struct MaterialEntrySection: View {
                     Text(unit.displayName).tag(unit)
                 }
             }
+                .accessibilityIdentifier("materialEntrySection.picker")
 
             HStack(spacing: 8) {
                 TextField("Length (optional)", text: Binding(
@@ -830,6 +849,7 @@ private struct MaterialEntrySection: View {
                         }
                     }
                 ))
+                    .accessibilityIdentifier("materialEntrySection.lengthOptional")
                 Picker("Unit", selection: Binding(
                     get: { entry.lengthUnit ?? .metres },
                     set: { newValue in
@@ -843,6 +863,7 @@ private struct MaterialEntrySection: View {
                         Text(u.displayName).tag(u)
                     }
                 }
+                .accessibilityIdentifier("materialEntrySection.unit")
                 .pickerStyle(.menu)
             }
             
@@ -854,6 +875,7 @@ private struct MaterialEntrySection: View {
                     }
                 }
             ), axis: .vertical)
+            .accessibilityIdentifier("materialEntrySection.materialDescription")
             .lineLimit(3...6)
 
             TextField("Size (optional)", text: Binding(
@@ -864,6 +886,7 @@ private struct MaterialEntrySection: View {
                     }
                 }
             ))
+                .accessibilityIdentifier("materialEntrySection.sizeOptional")
         }
         .padding(.vertical, 8)
     }

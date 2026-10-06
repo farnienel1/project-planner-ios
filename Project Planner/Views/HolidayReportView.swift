@@ -31,6 +31,7 @@ struct HolidayReportView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("holidayReport.done")
                 }
             }
             .task {
@@ -80,6 +81,7 @@ struct HolidayReportView: View {
                             .background(selectedYear == year ? Color.indigo : Color(.secondarySystemBackground))
                             .cornerRadius(12)
                     }
+                        .accessibilityIdentifier("holidayReport.row.\(year)")
                 }
             }
         }

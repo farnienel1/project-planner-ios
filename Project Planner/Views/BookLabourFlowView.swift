@@ -207,6 +207,7 @@ struct BookLabourFlowView: View {
                                 goBack()
                             }
                         }
+                            .accessibilityIdentifier("bookLabourFlow.close")
                     }
                 }
             }
@@ -215,6 +216,7 @@ struct BookLabourFlowView: View {
                 set: { if !$0 { errorBanner = nil } }
             )) {
                 Button("OK") { errorBanner = nil }
+                    .accessibilityIdentifier("bookLabourFlow.ok")
             } message: {
                 Text(errorBanner ?? "")
             }
@@ -354,6 +356,7 @@ struct BookLabourFlowView: View {
                                 .background(isMultiSelectMode ? ProjectWorksRevampColors.blue : Color.white.opacity(0.7))
                                 .clipShape(Capsule())
                             }
+                            .accessibilityIdentifier("bookLabourFlow.button")
                             .buttonStyle(.plain)
                             .accessibilityLabel(isMultiSelectMode ? "Turn off multi-select" : "Multi-select")
                         }
@@ -401,6 +404,7 @@ struct BookLabourFlowView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
                                 }
+                                .accessibilityIdentifier("bookLabourFlow.row.\(person.id)")
                                 .buttonStyle(.plain)
                                 if idx < candidates.count - 1 {
                                     Divider().overlay(ProjectWorksRevampColors.border)
@@ -441,6 +445,7 @@ struct BookLabourFlowView: View {
                                 .background(selectedPersonIds.isEmpty ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.blue)
                                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
+                        .accessibilityIdentifier("bookLabourFlow.continue")
                         .buttonStyle(.plain)
                         .disabled(selectedPersonIds.isEmpty)
                         .padding(.horizontal, 18)
@@ -554,6 +559,7 @@ struct BookLabourFlowView: View {
                                         iconForeground: meta.foreground
                                     )
                                 }
+                                .accessibilityIdentifier("bookLabourFlow.row.\(idx).pickOtherLocation")
                                 .buttonStyle(.plain)
                                 if idx < picks.count - 1 {
                                     Divider().overlay(ProjectWorksRevampColors.border)
@@ -660,6 +666,7 @@ struct BookLabourFlowView: View {
                                     } label: {
                                         bookLabourProjectRow(project: project, smallWorks: smallWorks)
                                     }
+                                    .accessibilityIdentifier("bookLabourFlow.row.\(project.id).noOperativeProfileIsLinkedTo")
                                     .buttonStyle(.plain)
                                     if idx < list.count - 1 {
                                         Divider().overlay(ProjectWorksRevampColors.border)
@@ -738,6 +745,7 @@ struct BookLabourFlowView: View {
                                         .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
                                 )
                         }
+                        .accessibilityIdentifier("bookLabourFlow.row.\(slot).pickSlotManager")
                         .buttonStyle(.plain)
                         .disabled(isSaving)
                     }
@@ -763,6 +771,7 @@ struct BookLabourFlowView: View {
                                 .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
                         )
                 }
+                .accessibilityIdentifier("bookLabourFlow.custom")
                 .buttonStyle(.plain)
                 .disabled(isSaving)
             }
@@ -888,16 +897,19 @@ struct BookLabourFlowView: View {
                         } label: {
                             quickDraftButtonLabel("FULL DAY")
                         }
+                            .accessibilityIdentifier("bookLabourFlow.fullDAY")
                         Button {
                             applyQuickTimeSlot(.morning, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
                         } label: {
                             quickDraftButtonLabel("AM")
                         }
+                            .accessibilityIdentifier("bookLabourFlow.am")
                         Button {
                             applyQuickTimeSlot(.afternoon, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
                         } label: {
                             quickDraftButtonLabel("PM")
                         }
+                            .accessibilityIdentifier("bookLabourFlow.pm")
                     }
 
                     bookLabourSectionLabel("Custom hours")
@@ -933,6 +945,7 @@ struct BookLabourFlowView: View {
                             )
                         }
                     ))
+                    .accessibilityIdentifier("bookLabourFlow.noBreakOnThisBooking")
                     .font(.system(size: 12, weight: .medium))
                     .tint(ProjectWorksRevampColors.blue)
 
@@ -980,6 +993,7 @@ struct BookLabourFlowView: View {
                             .background(ProjectWorksRevampColors.blue)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
+                    .accessibilityIdentifier("bookLabourFlow.saveBooking")
                     .disabled(isSaving || draft.endMinutes <= draft.startMinutes)
 
                     Button {
@@ -997,6 +1011,7 @@ struct BookLabourFlowView: View {
                                     .stroke(ProjectWorksRevampColors.blue.opacity(0.35), lineWidth: 0.5)
                             )
                     }
+                    .accessibilityIdentifier("bookLabourFlow.advancedEditor")
                     .buttonStyle(.plain)
                     .disabled(isSaving)
                 }
@@ -1129,6 +1144,7 @@ struct BookLabourFlowView: View {
                     }
                 }
             }
+            .accessibilityIdentifier("bookLabourFlow.\(AccessibilityID.token(title))")
             .pickerStyle(.wheel)
             .frame(maxWidth: .infinity)
             .frame(height: 92)
@@ -1339,6 +1355,7 @@ struct BookLabourFlowView: View {
                     .stroke(isOn ? accent : ProjectWorksRevampColors.searchBorder, lineWidth: isOn ? 1.5 : 0.5)
             )
         }
+        .accessibilityIdentifier("bookLabourFlow.\(AccessibilityID.token(label))")
         .buttonStyle(.plain)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.45)
@@ -1938,10 +1955,13 @@ private struct BookLabourOperativeHoursSheet: View {
             Form {
                 Section {
                     TextField("Start (HH:mm)", text: $startText)
+                        .accessibilityIdentifier("bookLabourOperativeHours.startHHMm")
                         .keyboardType(.numbersAndPunctuation)
                     TextField("End (HH:mm)", text: $endText)
+                        .accessibilityIdentifier("bookLabourOperativeHours.endHHMm")
                         .keyboardType(.numbersAndPunctuation)
                     Toggle("No break (on this booking)", isOn: $breakRemoved)
+                        .accessibilityIdentifier("bookLabourOperativeHours.noBreakOnThisBooking")
                 }
                 if let errorMessage {
                     Section {
@@ -1955,9 +1975,11 @@ private struct BookLabourOperativeHoursSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
+                        .accessibilityIdentifier("bookLabourOperativeHours.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { validateAndSave() }
+                        .accessibilityIdentifier("bookLabourOperativeHours.save")
                 }
             }
         }

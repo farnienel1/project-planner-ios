@@ -44,6 +44,7 @@ struct AccountDeactivatedView: View {
                         Button("Switch organisation") {
                             showingSwitchOrganisation = true
                         }
+                        .accessibilityIdentifier("accountDeactivated.switchOrganisation")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
@@ -58,6 +59,7 @@ struct AccountDeactivatedView: View {
                 Button("Sign Out") {
                     AppSignOut.perform(firebaseBackend: firebaseBackend, userStore: userStore)
                 }
+                .accessibilityIdentifier("accountDeactivated.signOut")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Color.red)
                 .padding(.bottom, 28)
@@ -74,6 +76,7 @@ struct AccountDeactivatedView: View {
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Close") { showingSwitchOrganisation = false }
+                                    .accessibilityIdentifier("accountDeactivated.close")
                             }
                         }
                 }

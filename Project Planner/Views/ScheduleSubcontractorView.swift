@@ -51,6 +51,7 @@ struct ScheduleSubcontractorView: View {
                         }
                         .foregroundColor(Color.theme.primary)
                     }
+                        .accessibilityIdentifier("scheduleSubcontractor.back")
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -61,6 +62,7 @@ struct ScheduleSubcontractorView: View {
             }
             .alert("Date selection", isPresented: $showingDateSelectionAlert) {
                 Button("OK", role: .cancel) { }
+                    .accessibilityIdentifier("scheduleSubcontractor.ok")
             } message: {
                 Text(dateSelectionAlertMessage)
             }
@@ -108,6 +110,7 @@ struct ScheduleSubcontractorView: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.secondary)
                 TextField("Search sub contractors...", text: $searchText)
+                    .accessibilityIdentifier("scheduleSubcontractor.searchSubContractors")
                     .textFieldStyle(.plain)
             }
             .padding(.horizontal, 10)
@@ -136,6 +139,7 @@ struct ScheduleSubcontractorView: View {
                                     Capsule().stroke(Color(.systemGray5), lineWidth: selectedTypeFilter == type ? 0 : 0.8)
                                 )
                         }
+                        .accessibilityIdentifier("scheduleSubcontractor.row.\(type).allTypes")
                         .buttonStyle(.plain)
                     }
                 }
@@ -177,6 +181,7 @@ struct ScheduleSubcontractorView: View {
                         .background(selectedSubcontractorId == subcontractor.id ? Color.purple.opacity(0.08) : Color(.systemGray6))
                         .cornerRadius(10)
                     }
+                    .accessibilityIdentifier("scheduleSubcontractor.row.\(subcontractor.id).op")
                     .buttonStyle(.plain)
                 }
             }
@@ -216,6 +221,7 @@ struct ScheduleSubcontractorView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                .accessibilityIdentifier("scheduleSubcontractor.general")
                 .tint(.purple)
                 if !useGeneralAttendance, !selectedSubcontractor.contacts.isEmpty {
                     ForEach(selectedSubcontractor.contacts) { contact in
@@ -242,6 +248,7 @@ struct ScheduleSubcontractorView: View {
                             .background(Color(.systemGray6))
                             .cornerRadius(10)
                         }
+                        .accessibilityIdentifier("scheduleSubcontractor.row.\(contact.id).checkmarkSquareFill")
                         .buttonStyle(.plain)
                     }
                 }
@@ -264,6 +271,7 @@ struct ScheduleSubcontractorView: View {
                         .frame(width: 32, height: 32)
                         .background(Circle().fill(Color.theme.primary))
                 }
+                    .accessibilityIdentifier("scheduleSubcontractor.back2")
                 Spacer()
                 Text(monthYearString)
                     .font(.headline)
@@ -274,6 +282,7 @@ struct ScheduleSubcontractorView: View {
                         .frame(width: 32, height: 32)
                         .background(Circle().fill(Color.theme.primary))
                 }
+                    .accessibilityIdentifier("scheduleSubcontractor.chevronRight")
             }
             calendarGrid
         }
@@ -311,6 +320,7 @@ struct ScheduleSubcontractorView: View {
                         .fill(quickSelectDays == days ? Color.purple : Color.purple.opacity(0.1))
                 )
         }
+            .accessibilityIdentifier("scheduleSubcontractor.\(AccessibilityID.token(label))")
     }
     
     private var selectedDatesSection: some View {
@@ -328,6 +338,7 @@ struct ScheduleSubcontractorView: View {
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                         }
+                            .accessibilityIdentifier("scheduleSubcontractor.row.\(date).clear")
                     }
                     Picker("Time", selection: Binding(
                         get: { dateTimeSlots[slotKey(for: date)] ?? .fullDay },
@@ -338,6 +349,7 @@ struct ScheduleSubcontractorView: View {
                         Text("FULL DAY").tag(TimeSlot.fullDay)
                         Text("Custom").tag(TimeSlot.customHours)
                     }
+                    .accessibilityIdentifier("scheduleSubcontractor.row.\(date).time")
                     .pickerStyle(.segmented)
                 }
                 .padding(12)
@@ -416,6 +428,7 @@ struct ScheduleSubcontractorView: View {
                     .background(Color.purple)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
+            .accessibilityIdentifier("scheduleSubcontractor.booking")
             .disabled(isSaving || selectedSubcontractorId == nil || selectedDates.isEmpty)
             .opacity((isSaving || selectedSubcontractorId == nil || selectedDates.isEmpty) ? 0.55 : 1)
         }
@@ -553,6 +566,7 @@ struct ScheduleSubcontractorView: View {
                 .frame(width: 40, height: 40)
                 .background(Circle().fill(isSelected ? Color.theme.primary : Color.clear))
         }
+        .accessibilityIdentifier("scheduleSubcontractor.day")
         .frame(maxWidth: .infinity)
         .opacity(isCurrentMonth ? 1.0 : 0.3)
     }

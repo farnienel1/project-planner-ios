@@ -127,6 +127,7 @@ struct AdminHomeOverviewCustomizeSheet: View {
                                         .font(.system(size: 26))
                                         .foregroundStyle(draftMetricIds.count >= 3 ? Color.secondary.opacity(0.35) : Color.accentColor)
                                 }
+                                .accessibilityIdentifier("adminHomeOverviewCustomize.row.\(metric.id).plusCircleFill")
                                 .buttonStyle(.plain)
                                 .disabled(draftMetricIds.count >= 3)
                             }
@@ -148,12 +149,14 @@ struct AdminHomeOverviewCustomizeSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("adminHomeOverviewCustomize.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         onSave()
                         dismiss()
                     }
+                    .accessibilityIdentifier("adminHomeOverviewCustomize.save")
                     .disabled(draftMetricIds.isEmpty)
                 }
             }
@@ -185,6 +188,7 @@ struct AdminHomeOverviewCustomizeSheet: View {
                         .frame(width: 22, height: 22)
                         .background(Circle().fill(Color.black.opacity(0.35)))
                 }
+                .accessibilityIdentifier("adminHomeOverviewCustomize.remove")
                 .buttonStyle(.plain)
                 .offset(x: 6, y: -6)
                 .accessibilityLabel("Remove \(title)")

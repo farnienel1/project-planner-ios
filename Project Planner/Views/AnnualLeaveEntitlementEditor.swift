@@ -22,6 +22,7 @@ struct AnnualLeaveEntitlementEditor: View {
                 Text("Days per year")
                     .font(.subheadline.weight(.semibold))
                 TextField("e.g. 25", text: $daysText)
+                    .accessibilityIdentifier("annualLeaveEntitlementEditor.eG25")
                     .keyboardType(.decimalPad)
                     .textFieldStyle(.roundedBorder)
                     .disabled(!isEnabled)
@@ -39,6 +40,7 @@ struct AnnualLeaveEntitlementEditor: View {
                             Text(monthSymbols[m - 1]).tag(m)
                         }
                     }
+                    .accessibilityIdentifier("annualLeaveEntitlementEditor.fromMonth")
                     .pickerStyle(.menu)
                     .disabled(!isEnabled)
 
@@ -50,6 +52,7 @@ struct AnnualLeaveEntitlementEditor: View {
                             Text(monthSymbols[m - 1]).tag(m)
                         }
                     }
+                    .accessibilityIdentifier("annualLeaveEntitlementEditor.toMonth")
                     .pickerStyle(.menu)
                     .disabled(!isEnabled)
                 }
@@ -64,6 +67,7 @@ struct AnnualLeaveEntitlementEditor: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .accessibilityIdentifier("annualLeaveEntitlementEditor.carryUnusedDaysIntoNextLeave")
             .disabled(!isEnabled)
         }
     }

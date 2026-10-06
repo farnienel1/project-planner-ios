@@ -46,6 +46,7 @@ struct VariationsListView: View {
                         Text("Submitted \(count(for: .submitted))").tag(VariationListFilter.submitted)
                         Text("Closed \(count(for: .closed))").tag(VariationListFilter.closed)
                     }
+                    .accessibilityIdentifier("variationsList.status")
                     .pickerStyle(.segmented)
 
                     if let status = filter.status {
@@ -72,6 +73,7 @@ struct VariationsListView: View {
                             } label: {
                                 variationCard(variation)
                             }
+                            .accessibilityIdentifier("variationsList.row.\(variation.id)")
                             .buttonStyle(.plain)
                         }
                     }
@@ -98,6 +100,7 @@ struct VariationsListView: View {
                             .background(ProjectWorksRevampColors.blue)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
+                    .accessibilityIdentifier("variationsList.addVariation")
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
                 }
@@ -114,10 +117,12 @@ struct VariationsListView: View {
                     } label: {
                         Text("Tracker")
                     }
+                        .accessibilityIdentifier("variationsList.tracker")
                 }
             }
         }
-        .task {
+        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+            guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             store.start(firebaseBackend: firebaseBackend)
             if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
                let items = try? await firebaseBackend.loadMaterialCatalogue(organizationId: orgId) {

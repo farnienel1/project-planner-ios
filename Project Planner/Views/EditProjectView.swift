@@ -121,6 +121,7 @@ struct EditProjectView: View {
                             Text(mode.rawValue).tag(mode)
                         }
                     }
+                    .accessibilityIdentifier("editProject.picker")
                     .pickerStyle(.segmented)
                     .onChange(of: locationMode) { _, newValue in
                         applyMutualExclusion(for: newValue)
@@ -145,6 +146,7 @@ struct EditProjectView: View {
 
                     sectionLabel("Description · Optional")
                     TextEditor(text: $projectDescription)
+                        .accessibilityIdentifier("editProject.textEditor")
                         .frame(minHeight: 100)
                         .padding(12)
                         .background(ProjectWorksRevampColors.surface)
@@ -179,6 +181,7 @@ struct EditProjectView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("editProject.cancel")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.ink)
                         .padding(.horizontal, 14)
@@ -189,6 +192,7 @@ struct EditProjectView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { saveProject() }
+                        .accessibilityIdentifier("editProject.save")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 18)
@@ -320,12 +324,14 @@ struct EditProjectView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
             TextField("Project reference", text: $projectJobNumber)
+                .accessibilityIdentifier("editProject.projectReference")
                 .font(.system(size: 13, weight: .medium))
             Divider().overlay(ProjectWorksRevampColors.border)
             Text("Project name")
                 .font(.system(size: 11))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
             TextField("Project name", text: $projectSiteName)
+                .accessibilityIdentifier("editProject.projectName")
                 .font(.system(size: 13, weight: .medium))
         }
         .padding(14)
@@ -340,9 +346,13 @@ struct EditProjectView: View {
     private var addressFieldsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             TextField("Address line 1", text: $projectAddressLine1)
+                .accessibilityIdentifier("editProject.addressLine1")
             TextField("Address line 2 (optional)", text: $projectAddressLine2)
+                .accessibilityIdentifier("editProject.addressLine2Optional")
             TextField("Town / City", text: $projectTownCity)
+                .accessibilityIdentifier("editProject.townCity")
             TextField("Postcode", text: $projectPostcode)
+                .accessibilityIdentifier("editProject.postcode")
                 .textInputAutocapitalization(.characters)
         }
         .textFieldStyle(.roundedBorder)
@@ -382,6 +392,7 @@ struct EditProjectView: View {
                 }
                 .padding(.vertical, 10)
             }
+            .accessibilityIdentifier("editProject.map")
             .buttonStyle(.plain)
             Divider().overlay(ProjectWorksRevampColors.border)
             Button {
@@ -400,6 +411,7 @@ struct EditProjectView: View {
                 }
                 .padding(.vertical, 10)
             }
+            .accessibilityIdentifier("editProject.textJustifyLeft")
             .buttonStyle(.plain)
         }
         .padding(14)
@@ -419,6 +431,7 @@ struct EditProjectView: View {
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                 Spacer()
                 DatePicker("", selection: $projectStartDate, displayedComponents: .date)
+                    .accessibilityIdentifier("editProject.datePicker")
                     .labelsHidden()
             }
             .padding(.vertical, 12)
@@ -430,6 +443,7 @@ struct EditProjectView: View {
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                 Spacer()
                 DatePicker("", selection: $projectEndDate, displayedComponents: .date)
+                    .accessibilityIdentifier("editProject.datePicker2")
                     .labelsHidden()
             }
             .padding(.vertical, 12)
@@ -492,12 +506,15 @@ struct EditProjectView: View {
             Menu {
                 ForEach(projectStore.clients, id: \.id) { c in
                     Button(c.name) { selectedClient = c }
+                        .accessibilityIdentifier("editProject.row.\(c.id)")
                 }
                 Button("Create client…") { showingCreateClient = true }
+                    .accessibilityIdentifier("editProject.createClient2")
             } label: {
                 Image(systemName: "chevron.down")
                     .foregroundStyle(ProjectWorksRevampColors.muted)
             }
+                .accessibilityIdentifier("editProject.createClient")
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 14)
@@ -521,12 +538,15 @@ struct EditProjectView: View {
             Menu {
                 ForEach(projectStore.jobTypes.sorted(), id: \.self) { jt in
                     Button(jt) { projectWorksType = jt }
+                        .accessibilityIdentifier("editProject.row.\(jt).\(AccessibilityID.token(jt))")
                 }
                 Button("Manage job types…") { showingCreateJobType = true }
+                    .accessibilityIdentifier("editProject.manageJobTypes2")
             } label: {
                 Image(systemName: "chevron.down")
                     .foregroundStyle(ProjectWorksRevampColors.muted)
             }
+                .accessibilityIdentifier("editProject.manageJobTypes")
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 14)
@@ -553,9 +573,13 @@ struct EditProjectView: View {
         NavigationStack {
             Form {
                 TextField("Address line 1", text: $projectAddressLine1)
+                    .accessibilityIdentifier("editProject.addressLine12")
                 TextField("Address line 2 (optional)", text: $projectAddressLine2)
+                    .accessibilityIdentifier("editProject.addressLine2Optional2")
                 TextField("Town / City", text: $projectTownCity)
+                    .accessibilityIdentifier("editProject.townCity2")
                 TextField("Postcode", text: $projectPostcode)
+                    .accessibilityIdentifier("editProject.postcode2")
                     .textInputAutocapitalization(.characters)
             }
             .navigationTitle("Set address")
@@ -563,9 +587,11 @@ struct EditProjectView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { showingQuickAddressForm = false }
+                        .accessibilityIdentifier("editProject.cancel2")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { showingQuickAddressForm = false }
+                        .accessibilityIdentifier("editProject.save2")
                 }
             }
         }

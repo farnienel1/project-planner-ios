@@ -95,6 +95,7 @@ struct SelectOperativesView: View {
                             Text(filter.rawValue).tag(filter)
                         }
                     }
+                    .accessibilityIdentifier("selectOperatives.filter")
                     .pickerStyle(.segmented)
                     .padding(.horizontal)
                     Picker("Trade", selection: $tradeFilterPreset) {
@@ -103,6 +104,7 @@ struct SelectOperativesView: View {
                             Text(trade.rawValue).tag(Optional(trade.rawValue))
                         }
                     }
+                    .accessibilityIdentifier("selectOperatives.trade")
                     .padding(.horizontal)
                     .padding(.bottom, 8)
                 }
@@ -146,9 +148,11 @@ struct SelectOperativesView: View {
                         Image(systemName: "chevron.left")
                             .foregroundStyle(Color.theme.primary)
                     }
+                        .accessibilityIdentifier("selectOperatives.back")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") { dismiss() }
+                        .accessibilityIdentifier("selectOperatives.save")
                         .fontWeight(.semibold)
                         .foregroundStyle(canSave ? Color.theme.primary : Color.secondary)
                         .disabled(!canSave)
@@ -275,6 +279,7 @@ private struct SchedulePersonSelectionRow: View {
                         }
                     }
                 }
+                .accessibilityIdentifier("schedulePersonSelection.button")
                 .buttonStyle(.plain)
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -316,6 +321,7 @@ private struct SchedulePersonSelectionRow: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
+                    .accessibilityIdentifier("schedulePersonSelection.chevronUp")
                     .buttonStyle(.plain)
                 }
             }
@@ -347,12 +353,14 @@ struct OperativeSearchBar: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
             TextField("Search by name, email, or trade", text: $text)
+                .accessibilityIdentifier("operativeSearchBar.searchByNameEmailOrTrade")
                 .textFieldStyle(.plain)
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
                 }
+                    .accessibilityIdentifier("operativeSearchBar.clear")
             }
         }
         .padding(10)

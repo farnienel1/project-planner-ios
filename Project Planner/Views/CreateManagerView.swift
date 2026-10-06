@@ -48,17 +48,21 @@ struct CreateManagerView: View {
                     // Form
                     VStack(spacing: 15) {
                         TextField("First Name *", text: $managerFirstName)
+                            .accessibilityIdentifier("createManager.firstName")
                             .textFieldStyle(.roundedBorder)
                         
                         TextField("Last Name *", text: $managerLastName)
+                            .accessibilityIdentifier("createManager.lastName")
                             .textFieldStyle(.roundedBorder)
                         
                         TextField("Email *", text: $managerEmail)
+                            .accessibilityIdentifier("createManager.email")
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.emailAddress)
                             .autocapitalization(.none)
                         
                         TextField("Mobile Number *", text: $managerMobileNumber)
+                            .accessibilityIdentifier("createManager.mobileNumber")
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.phonePad)
                         
@@ -70,9 +74,11 @@ struct CreateManagerView: View {
                         )
                         
                         TextField("Department (Optional)", text: $managerDepartment)
+                            .accessibilityIdentifier("createManager.departmentOptional")
                             .textFieldStyle(.roundedBorder)
                         
                         TextField("Notes (Optional)", text: $managerNotes, axis: .vertical)
+                            .accessibilityIdentifier("createManager.notesOptional")
                             .textFieldStyle(.roundedBorder)
                             .lineLimit(3...6)
                     }
@@ -89,6 +95,7 @@ struct CreateManagerView: View {
                     Button("Create Manager") {
                         createManager()
                     }
+                    .accessibilityIdentifier("createManager.createManager")
                     .buttonStyle(.borderedProminent)
                     .disabled(isLoading || !isFormValid)
                     .padding()
@@ -102,6 +109,7 @@ struct CreateManagerView: View {
                     Button("Cancel") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("createManager.cancel")
                 }
             }
         }
