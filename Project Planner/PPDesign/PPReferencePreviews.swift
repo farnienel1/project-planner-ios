@@ -54,8 +54,10 @@ private struct PPHomeReference: View {
                         Spacer()
                         HStack(spacing: 8) {
                             Button {} label: { Image(systemName: "arrow.clockwise") }
+                                .accessibilityIdentifier("ppHomeReference.refresh")
                                 .buttonStyle(PPOnNavyCircleButtonStyle())
                             Button {} label: { Image(systemName: "bell.fill") }
+                                .accessibilityIdentifier("ppHomeReference.notifications")
                                 .buttonStyle(PPOnNavyCircleButtonStyle())
                                 .overlay(alignment: .topTrailing) { PPBellDot() }
                             // Existing avatar view goes here unchanged (40pt).
@@ -70,8 +72,10 @@ private struct PPHomeReference: View {
                         Spacer(minLength: 8)
                         HStack(spacing: 6) {
                             Button {} label: { Image(systemName: "gearshape.fill") }
+                                .accessibilityIdentifier("ppHomeReference.settings")
                                 .buttonStyle(PPOnNavyCircleButtonStyle(size: PPMetrics.smallHeaderButton))
                             Button("Heads up") {}
+                                .accessibilityIdentifier("ppHomeReference.headsUp")
                                 .buttonStyle(PPHeadsUpButtonStyle())
                         }
                     }
@@ -91,11 +95,13 @@ private struct PPHomeReference: View {
                             PPStatusChipLabel(symbol: "exclamationmark.triangle.fill", family: .alert,
                                               title: "Warnings", value: "9", unit: "active")
                         }
+                        .accessibilityIdentifier("ppHomeReference.exclamationmarkTriangleFill")
                         .buttonStyle(PPOnNavyChipButtonStyle())
                         Button {} label: {
                             PPStatusChipLabel(symbol: "checklist", family: .plan,
                                               title: "Tasks", value: "0", unit: "pending")
                         }
+                        .accessibilityIdentifier("ppHomeReference.checklist")
                         .buttonStyle(PPOnNavyChipButtonStyle())
                     }
                     .padding(.top, 18)
@@ -111,8 +117,10 @@ private struct PPHomeReference: View {
                         Button {} label: {
                             Label("Main Menu", systemImage: "arrow.up.left.and.arrow.down.right")
                         }
+                        .accessibilityIdentifier("ppHomeReference.mainMenu")
                         .tint(PPColor.brand)
                         Button("Customise") {}
+                            .accessibilityIdentifier("ppHomeReference.customise")
                             .fontWeight(.medium)
                             .tint(.secondary)
                     }
@@ -123,24 +131,28 @@ private struct PPHomeReference: View {
                             Button {} label: {
                                 PPQuickActionLabel(title: item.title, symbol: item.symbol, family: item.family)
                             }
+                            .accessibilityIdentifier("ppHomeReference.row.\(item.id)")
                             .buttonStyle(PPPressableButtonStyle())
                         }
                     }
 
                     PPSectionHeader("Up next") {
-                        Button("See all") {}.tint(PPColor.brand)
+                        Button("See all") {}
+                            .accessibilityIdentifier("ppHomeReference.seeAll").tint(PPColor.brand)
                     }
                     PPDayHeading(text: "Tuesday 6th October")
                     Button {} label: {
                         PPUpNextRowLabel(weekday: "Tue", day: "6", title: "71 Broadwick Street",
                                          time: "07:30", tag: "FULL DAY")
                     }
+                    .accessibilityIdentifier("ppHomeReference.tue")
                     .buttonStyle(PPPressableButtonStyle())
                     PPDayHeading(text: "Thursday 8th October")
                     Button {} label: {
                         PPUpNextRowLabel(weekday: "Thu", day: "8", title: "71 Broadwick Street",
                                          time: "07:30", tag: "C984")
                     }
+                    .accessibilityIdentifier("ppHomeReference.thu")
                     .buttonStyle(PPPressableButtonStyle())
 
                     PPComingSoonCard(title: "Maintenance", subtitle: "Coming in a future update", badge: "Soon")
@@ -193,6 +205,7 @@ private struct PPMenuListsReference: View {
             Button {} label: {
                 Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
             }
+            .accessibilityIdentifier("ppMenuListsReference.signOut")
             .buttonStyle(PPSignOutButtonStyle())
             PPVersionFooter(text: "Project Planner · v1.0")
         }
@@ -202,6 +215,7 @@ private struct PPMenuListsReference: View {
         Button {} label: {
             PPMenuRowLabel(title: title, symbol: symbol, family: family, detail: detail)
         }
+        .accessibilityIdentifier("ppMenuListsReference.\(AccessibilityID.token(title))")
         .buttonStyle(PPMenuRowButtonStyle())
     }
 }
@@ -222,6 +236,7 @@ private struct PPEditBarRow: View {
                                family: .system,
                                subtitle: "Icons jiggle — drag onto a slot in the bar below to reorder.")
             }
+            .accessibilityIdentifier("ppEditBar.editTabBar")
             .buttonStyle(PPMenuRowButtonStyle())
         }
     }
@@ -232,10 +247,12 @@ private struct PPMainMenuReference: View {
         ScrollView {
             VStack(spacing: 0) {
                 PPLargeSheetHeader("Main Menu") {
-                    Button("Done") {}.ppProminentCapsule()
+                    Button("Done") {}
+                        .accessibilityIdentifier("ppMainMenuReference.done").ppProminentCapsule()
                 }
                 PPQuickCreateCard(eyebrow: "Quick create", title: "Start something new") {
                     Button {} label: { Image(systemName: "sparkles") }
+                        .accessibilityIdentifier("ppMainMenuReference.sparkles")
                         .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                 } tiles: {
                     ForEach(quickCreate) { item in
@@ -243,6 +260,7 @@ private struct PPMainMenuReference: View {
                             PPQuickCreateTileLabel(title: item.title, symbol: item.symbol,
                                                    family: item.family, onNavy: true)
                         }
+                        .accessibilityIdentifier("ppMainMenuReference.row.\(item.id)")
                         .buttonStyle(PPPressableButtonStyle())
                     }
                 }
@@ -261,7 +279,8 @@ private struct PPMoreReference: View {
         ScrollView {
             VStack(spacing: 0) {
                 PPInlineSheetHeader("More") {
-                    Button {} label: { Image(systemName: "xmark") }.ppGlassCircle()
+                    Button {} label: { Image(systemName: "xmark") }
+                        .accessibilityIdentifier("ppMoreReference.close").ppGlassCircle()
                 }
                 PPEditBarRow()
                 PPGroupLabel(text: "Quick create")
@@ -271,6 +290,7 @@ private struct PPMoreReference: View {
                             Button {} label: {
                                 PPQuickCreateTileLabel(title: item.title, symbol: item.symbol, family: item.family)
                             }
+                            .accessibilityIdentifier("ppMoreReference.row.\(item.id)")
                             .buttonStyle(PPPressableButtonStyle())
                         }
                     }

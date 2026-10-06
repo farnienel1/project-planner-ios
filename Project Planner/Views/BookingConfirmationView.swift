@@ -31,6 +31,7 @@ struct BookingConfirmationView: View {
                 .padding(.horizontal, 20)
             
             Button("Done") { isPresented = false }
+                .accessibilityIdentifier("bookingConfirmation.done")
                 .font(.headline)
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)

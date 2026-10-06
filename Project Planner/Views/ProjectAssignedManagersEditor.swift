@@ -24,17 +24,21 @@ struct ProjectAssignedManagersEditor: View {
                             selectedManagers.append(manager)
                             onEdited()
                         }
+                            .accessibilityIdentifier("projectAssignedManagersEditor.row.\(manager.id)")
                     }
                     if availableManagersToAdd.isEmpty {
                         Button("All managers added") {}
+                            .accessibilityIdentifier("projectAssignedManagersEditor.allManagersAdded")
                             .disabled(true)
                     }
                     Button("Create manager…") { onCreateManager() }
+                        .accessibilityIdentifier("projectAssignedManagersEditor.createManager")
                 } label: {
                     Label("Add", systemImage: "plus")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.blue)
                 }
+                    .accessibilityIdentifier("projectAssignedManagersEditor.menu")
             }
 
             if selectedManagers.isEmpty {
@@ -80,6 +84,7 @@ struct ProjectAssignedManagersEditor: View {
                                     .font(.system(size: 18))
                                     .foregroundStyle(Color(red: 0.74, green: 0.2, blue: 0.2))
                             }
+                            .accessibilityIdentifier("projectAssignedManagersEditor.row.\(manager.id).remove")
                             .buttonStyle(.plain)
                             .accessibilityLabel("Remove \(manager.fullName)")
                         }

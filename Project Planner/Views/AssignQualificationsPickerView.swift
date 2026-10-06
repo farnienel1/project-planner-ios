@@ -54,6 +54,7 @@ struct AssignQualificationsPickerView: View {
                                     .foregroundStyle(.blue)
                             }
                         }
+                            .accessibilityIdentifier("assignQualificationsPicker.row.\(qualification.id).plusCircleFill")
                     }
                 }
             }
@@ -62,12 +63,14 @@ struct AssignQualificationsPickerView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("assignQualificationsPicker.done")
                 }
                 if canCreateOrganisationTypes {
                     ToolbarItem(placement: .primaryAction) {
                         Button("Add") {
                             showingAddOrganisationType = true
                         }
+                            .accessibilityIdentifier("assignQualificationsPicker.add")
                     }
                 }
             }

@@ -130,10 +130,99 @@ enum WorkAccess {
         return false
     }
 
-    private static func operativeMatching(email: String, in operatives: [Operative]) -> Operative? {
+    /// Home “active projects”: live jobs whose dates include today, including the last day.
+    /// Admins see every such job. Managers see every such job except ones hidden from them.
+    /// Operatives see only jobs they are booked onto.
+    static func homeActiveProjectCount(
+        projects: [Project],
+        user: AppUser?,
+        isOperativeMode: Bool,
+        seesEveryJob: Bool,
+        isManager: Bool,
+        operatives: [Operative],
+        bookings: [Booking],
+        managerBookings: [ManagerSiteBooking]
+    ) -> Int {
+        let active = projects.filter { $0.status == .active }
+        guard let user else { return 0 }
+        if isOperativeMode {
+            let operative = signedInOperative(
+                email: user.email,
+                firstName: user.firstName,
+                surname: user.surname,
+                operatives: operatives
+            )
+            var bookedIds = Set<UUID>()
+            if let operative {
+                for booking in bookings where booking.operativeId == operative.id && booking.status != .cancelled {
+                    bookedIds.insert(booking.projectId)
+                }
+            }
+            for booking in managerBookings where booking.userId == user.id {
+                guard booking.locationType == .project || booking.locationType == .smallWork,
+                      let locationId = booking.locationId else { continue }
+                bookedIds.insert(locationId)
+            }
+            return active.filter {
+                bookedIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(user.id)
+            }.count
+        }
+        if seesEveryJob {
+            return active.count
+        }
+        if isManager {
+            return active.filter { !$0.hiddenManagerUserIds.contains(user.id) }.count
+        }
+        return active.filter { !$0.hiddenManagerUserIds.contains(user.id) }.count
+    }
+
+    /// Roster row for the signed-in account. Email first, then first and last name.
+    static func signedInOperative(
+        email: String?,
+        firstName: String?,
+        surname: String?,
+        operatives: [Operative]
+    ) -> Operative? {
         let needle = normalizedEmail(email)
-        guard !needle.isEmpty else { return nil }
-        return operatives.first { normalizedEmail($0.email) == needle }
+        if !needle.isEmpty,
+           let match = operatives.first(where: { normalizedEmail($0.email) == needle }) {
+            return match
+        }
+        let first = firstName?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let last = surname?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !first.isEmpty || !last.isEmpty else { return nil }
+        return operatives.first { operative in
+            operative.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == first
+                && operative.lastName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == last
+        }
+    }
+
+    /// Auth uid plus every `users` document id for the same email.
+    /// An invited account can keep a legacy document id, and bookings are often stored against that id.
+    static func signedInAccountIds(
+        authUid: String?,
+        currentUser: AppUser?,
+        organizationUsers: [AppUser],
+        email: String? = nil
+    ) -> Set<String> {
+        var ids = Set<String>()
+        func add(_ raw: String?) {
+            let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmed.isEmpty { ids.insert(trimmed) }
+        }
+        add(authUid)
+        add(currentUser?.id)
+        let rawEmail = currentUser?.email ?? email ?? ""
+        let needle = rawEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return ids }
+        for user in organizationUsers where user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == needle {
+            add(user.id)
+        }
+        return ids
+    }
+
+    private static func operativeMatching(email: String, in operatives: [Operative]) -> Operative? {
+        signedInOperative(email: email, firstName: nil, surname: nil, operatives: operatives)
     }
 
     static func operativeVisibleProjectIds(

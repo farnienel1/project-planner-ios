@@ -168,6 +168,7 @@ struct ManageUserDetailTextFieldRow: View {
                     .font(.system(size: 11))
                     .foregroundStyle(ManageUserProfilePalette.textSecondary)
                 TextField(placeholder, text: $text)
+                    .accessibilityIdentifier("manageUserDetailTextField.\(AccessibilityID.token(label))")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ManageUserProfilePalette.textPrimary)
                     .keyboardType(keyboard)
@@ -200,11 +201,13 @@ struct ManageUserNameEditRow: View {
                     .foregroundStyle(ManageUserProfilePalette.textSecondary)
                 HStack(spacing: 10) {
                     TextField("First name", text: $firstName)
+                        .accessibilityIdentifier("manageUserNameEdit.firstName")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(ManageUserProfilePalette.textPrimary)
                         .textInputAutocapitalization(.words)
                         .textContentType(.givenName)
                     TextField("Last name", text: $surname)
+                        .accessibilityIdentifier("manageUserNameEdit.lastName")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(ManageUserProfilePalette.textPrimary)
                         .textInputAutocapitalization(.words)
@@ -269,6 +272,7 @@ struct ManageUserDayRateEditRow: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     TextField("Leave blank if not set", text: $dayRateText)
+                        .accessibilityIdentifier("manageUserDayRateEdit.leaveBlankIfNotSet")
                         .keyboardType(.decimalPad)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(ManageUserProfilePalette.textPrimary)
@@ -305,6 +309,7 @@ struct ManageUserPermissionToggleRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Toggle("", isOn: $isOn)
+                .accessibilityIdentifier("manageUserPermissionToggle.\(AccessibilityID.token(title))")
                 .labelsHidden()
                 .tint(ManageUserProfilePalette.primaryBlue)
                 .disabled(isDisabled)
@@ -352,6 +357,7 @@ struct ManageUserExpandablePermissionToggleRow: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                         }
+                        .accessibilityIdentifier("manageUserExpandablePermissionToggle.chevronDown")
                         .buttonStyle(.plain)
                     } else {
                         Text(title)
@@ -362,6 +368,7 @@ struct ManageUserExpandablePermissionToggleRow: View {
                 }
                 ZStack {
                     Toggle("", isOn: $isOn)
+                        .accessibilityIdentifier("manageUserExpandablePermissionToggle.\(AccessibilityID.token(title))")
                         .labelsHidden()
                         .tint(ManageUserProfilePalette.primaryBlue)
                         .disabled(isDisabled)
@@ -369,7 +376,8 @@ struct ManageUserExpandablePermissionToggleRow: View {
                     if isDisabled && onDisabledTap != nil {
                         Color.clear
                             .contentShape(Rectangle())
-                            .onTapGesture { onDisabledTap?() }
+                            
+                            .accessibilityIdentifier("manageUserExpandablePermissionToggle.tap").onTapGesture { onDisabledTap?() }
                     }
                 }
                 .scaleEffect(0.86)
@@ -423,6 +431,7 @@ struct ManageUserNavigationSubtitleRow: View {
             .padding(.horizontal, 14)
             .contentShape(Rectangle())
         }
+        .accessibilityIdentifier("manageUserNavigationSubtitle.chevronRight")
         .buttonStyle(.plain)
     }
 }
@@ -473,6 +482,7 @@ struct ManageUserAccountActionButton: View {
                     .stroke(borderColor, lineWidth: 0.5)
             )
         }
+        .accessibilityIdentifier("manageUserAccountAction.chevronRight")
         .buttonStyle(.plain)
         .disabled(isBusy)
     }

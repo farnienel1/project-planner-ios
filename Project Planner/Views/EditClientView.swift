@@ -33,18 +33,22 @@ struct EditClientView: View {
             Form {
                 Section(header: Text("Client Information")) {
                     TextField("Client Name", text: $clientName)
+                        .accessibilityIdentifier("editClient.clientName")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                     
                     TextField("Email", text: $clientEmail)
+                        .accessibilityIdentifier("editClient.email")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.emailAddress)
                         .autocapitalization(.none)
                     
                     TextField("Phone", text: $clientPhone)
+                        .accessibilityIdentifier("editClient.phone")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.phonePad)
                     
                     TextField("Address", text: $clientAddress)
+                        .accessibilityIdentifier("editClient.address")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                 }
                 
@@ -64,6 +68,7 @@ struct EditClientView: View {
                         .foregroundColor(.white)
                         .cornerRadius(8)
                     }
+                    .accessibilityIdentifier("editClient.saveChanges")
                     .disabled(!isFormValid || isLoading)
                 }
                 .listRowBackground(Color.clear)
@@ -84,6 +89,7 @@ struct EditClientView: View {
                         .background(Color.red.opacity(0.1))
                         .cornerRadius(8)
                     }
+                        .accessibilityIdentifier("editClient.deleteClient")
                 }
                 .listRowBackground(Color.clear)
             }
@@ -94,13 +100,16 @@ struct EditClientView: View {
                     Button("Cancel") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("editClient.cancel")
                 }
             }
             .alert("Delete Client", isPresented: $showingDeleteAlert) {
                 Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("editClient.cancel2")
                 Button("Delete", role: .destructive) {
                     deleteClient()
                 }
+                    .accessibilityIdentifier("editClient.delete")
             } message: {
                 Text("Are you sure you want to delete \(client.name)? This action cannot be undone.")
             }

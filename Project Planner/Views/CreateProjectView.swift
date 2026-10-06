@@ -194,6 +194,7 @@ struct CreateProjectView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("createProject.cancel")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.ink)
                 }
@@ -429,6 +430,7 @@ struct CreateProjectView: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
         }
+        .accessibilityIdentifier("createProject.chevronDown")
         .buttonStyle(.plain)
     }
 
@@ -512,6 +514,7 @@ struct CreateProjectView: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
         }
+        .accessibilityIdentifier("createProject.map")
         .buttonStyle(.plain)
     }
 
@@ -543,6 +546,7 @@ struct CreateProjectView: View {
             }
             Spacer()
             DatePicker("", selection: date, displayedComponents: .date)
+                .accessibilityIdentifier("createProject.dateRow")
                 .labelsHidden()
             Image(systemName: "chevron.right")
                 .font(.system(size: 14, weight: .semibold))
@@ -601,13 +605,16 @@ struct CreateProjectView: View {
             Menu {
                 ForEach(projectStore.clients, id: \.id) { c in
                     Button(c.name) { selectedClient = c }
+                        .accessibilityIdentifier("createProject.row.\(c.id)")
                 }
                 Button("Create client…") { showingCreateClient = true }
+                    .accessibilityIdentifier("createProject.createClient2")
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
             }
+                .accessibilityIdentifier("createProject.createClient")
         }
         .padding(.vertical, 10)
     }
@@ -629,19 +636,23 @@ struct CreateProjectView: View {
             Spacer()
             if projectStore.jobTypes.isEmpty {
                 Button("Manage…") { showingCreateJobType = true }
+                    .accessibilityIdentifier("createProject.manage")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.blue)
             } else {
                 Menu {
                     ForEach(projectStore.jobTypes.sorted(), id: \.self) { jt in
                         Button(jt) { projectWorksType = jt }
+                            .accessibilityIdentifier("createProject.row.\(jt).\(AccessibilityID.token(jt))")
                     }
                     Button("Manage job types…") { showingCreateJobType = true }
+                        .accessibilityIdentifier("createProject.manageJobTypes2")
                 } label: {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
                 }
+                    .accessibilityIdentifier("createProject.manageJobTypes")
             }
         }
         .padding(.vertical, 10)
@@ -658,6 +669,7 @@ struct CreateProjectView: View {
     private var descriptionCard: some View {
         ZStack(alignment: .topLeading) {
             TextEditor(text: $projectDescription)
+                .accessibilityIdentifier("createProject.textEditor")
                 .font(.system(size: 12))
                 .frame(minHeight: 88)
                 .scrollContentBackground(.hidden)
@@ -692,6 +704,7 @@ struct CreateProjectView: View {
                 .background(isFormValid && !isLoading ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.placeholderInk)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+            .accessibilityIdentifier("createProject.folderBadgePlus")
             .disabled(!isFormValid || isLoading)
             Text(isFormValid ? " " : "Fill the \(requiredFieldTotal) required fields to continue")
                 .font(.system(size: 10))
@@ -728,8 +741,10 @@ struct CreateProjectView: View {
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
-                    .onTapGesture { focusedFieldKey = fieldKey }
+                    
+                    .accessibilityIdentifier("createProject.tap").onTapGesture { focusedFieldKey = fieldKey }
                 TextField("", text: text, prompt: Text(prompt).foregroundStyle(ProjectWorksRevampColors.placeholderInk))
+                    .accessibilityIdentifier("createProject.\(AccessibilityID.token(prompt))")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                     .textInputAutocapitalization(autocapitalization)
@@ -750,7 +765,8 @@ struct CreateProjectView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
-        .onTapGesture { focusedFieldKey = fieldKey }
+        
+        .accessibilityIdentifier("createProject.address1").onTapGesture { focusedFieldKey = fieldKey }
     }
 
     private func createProject() {

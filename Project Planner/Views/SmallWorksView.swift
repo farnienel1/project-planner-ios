@@ -65,6 +65,7 @@ struct SmallWorksView: View {
                             .background(WorksDashboardPalette.soft)
                             .clipShape(Circle())
                     }
+                        .accessibilityIdentifier("smallWorks.gobacktoprevioustab")
                 }
                 if canCreateSmallWorks {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -78,6 +79,7 @@ struct SmallWorksView: View {
                                 .background(WorksDashboardListStyle.smallWorks.accent)
                                 .clipShape(Circle())
                         }
+                        .accessibilityIdentifier("smallWorks.add")
                         .accessibilityLabel("New small work")
                     }
                 }
@@ -159,14 +161,19 @@ struct SmallWorksView: View {
                         WorksDashboardSearchRow(text: $searchText, placeholder: WorksDashboardListStyle.smallWorks.searchPlaceholder) {
                             Menu {
                                 Button("All · \(listCounts.all)") { selectedStatus = nil }
+                                    .accessibilityIdentifier("smallWorks.filter.all")
                                 Button("Active · \(listCounts.active)") { selectedStatus = .active }
+                                    .accessibilityIdentifier("smallWorks.filter.active")
                                 Button("Upcoming · \(listCounts.upcoming)") { selectedStatus = .upcoming }
+                                    .accessibilityIdentifier("smallWorks.filter.upcoming")
                                 Button("Completed · \(listCounts.completed)") { selectedStatus = .completed }
+                                    .accessibilityIdentifier("smallWorks.filter.completed")
                             } label: {
                                 Image(systemName: "line.3.horizontal.decrease.circle")
                                     .font(.body.weight(.medium))
                                     .foregroundStyle(WorksDashboardListStyle.smallWorks.accent)
                             }
+                                .accessibilityIdentifier("smallWorks.all")
                         }
                         .padding(.bottom, 12)
                         filterChipsRow
@@ -192,6 +199,7 @@ struct SmallWorksView: View {
                                         )
                                         .environmentObject(operativeStore)
                                     }
+                                    .accessibilityIdentifier("smallWorks.row.\(project.id)")
                                     .buttonStyle(.plain)
                                 }
                             }
@@ -229,7 +237,10 @@ struct SmallWorksView: View {
                     titleFont: .subheadline.weight(.semibold),
                     horizontalPadding: 15,
                     verticalPadding: 9
-                ) { selectedStatus = nil }
+                ,
+                    accessibilityIdentifier: "smallWorks.filter.all",
+                    action: { selectedStatus = nil }
+                )
                 WorksRevampFilterChip(
                     title: "Active · \(listCounts.active)",
                     isSelected: selectedStatus == .active,
@@ -238,7 +249,10 @@ struct SmallWorksView: View {
                     titleFont: .subheadline.weight(.semibold),
                     horizontalPadding: 15,
                     verticalPadding: 9
-                ) { selectedStatus = .active }
+                ,
+                    accessibilityIdentifier: "smallWorks.filter.active",
+                    action: { selectedStatus = .active }
+                )
                 WorksRevampFilterChip(
                     title: "Upcoming · \(listCounts.upcoming)",
                     isSelected: selectedStatus == .upcoming,
@@ -247,7 +261,10 @@ struct SmallWorksView: View {
                     titleFont: .subheadline.weight(.semibold),
                     horizontalPadding: 15,
                     verticalPadding: 9
-                ) { selectedStatus = .upcoming }
+                ,
+                    accessibilityIdentifier: "smallWorks.filter.upcoming",
+                    action: { selectedStatus = .upcoming }
+                )
                 WorksRevampFilterChip(
                     title: "Completed · \(listCounts.completed)",
                     isSelected: selectedStatus == .completed,
@@ -256,7 +273,10 @@ struct SmallWorksView: View {
                     titleFont: .subheadline.weight(.semibold),
                     horizontalPadding: 15,
                     verticalPadding: 9
-                ) { selectedStatus = .completed }
+                ,
+                    accessibilityIdentifier: "smallWorks.filter.completed",
+                    action: { selectedStatus = .completed }
+                )
             }
         }
     }
@@ -300,11 +320,13 @@ struct SmallWorksView: View {
                 Button("Show all small works") {
                     selectedStatus = nil
                 }
+                .accessibilityIdentifier("smallWorks.showAllSmallWorks")
                 .buttonStyle(.borderedProminent)
             } else if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil || isUnmatchedOperativeWithJobs {
                 Button("Retry") {
                     projectStore.loadData()
                 }
+                .accessibilityIdentifier("smallWorks.retry")
                 .buttonStyle(.borderedProminent)
             }
         }

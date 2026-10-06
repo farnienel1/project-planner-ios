@@ -17,8 +17,8 @@ enum OperativeBookingInterval {
                 : (windows.afternoonStart, windows.afternoonEnd)
         }
         if let s = booking.workStartTime, let e = booking.workEndTime,
-           let sm = ManagerScheduleInterval.parseMinutes(s), let em = ManagerScheduleInterval.parseMinutes(e), em > sm {
-            return (sm, em)
+           let span = ManagerScheduleInterval.clockSpanMinutes(start: s, end: e) {
+            return span
         }
         guard let dayStart = resolvedStandardWindowStart(for: booking, policy: policy),
               let dayEnd = resolvedStandardWindowEnd(for: booking, policy: policy),
@@ -104,6 +104,66 @@ enum OperativeBookingInterval {
         if a == .fullDay || b == .fullDay { return true }
         if a == b { return true }
         return false
+    }
+
+    /// One payable booking per non-overlapping block. Overlapping shifts on the same day pay the union once.
+    struct PayCluster {
+        let payable: Booking
+    }
+
+    static func payClusters(on bookings: [Booking], policy: OrgPayrollTimePolicy) -> [PayCluster] {
+        struct Row {
+            var booking: Booking
+            var interval: (Int, Int)?
+        }
+        let rows = bookings.map { Row(booking: $0, interval: clashInterval(for: $0, policy: policy)) }
+        let timed = rows.filter { $0.interval != nil }.sorted { ($0.interval?.0 ?? 0) < ($1.interval?.0 ?? 0) }
+        var clusters: [[Row]] = []
+        for row in timed {
+            let start = row.interval?.0 ?? 0
+            if var last = clusters.last,
+               let lastEnd = last.compactMap(\.interval).map(\.1).max(),
+               start < lastEnd {
+                last.append(row)
+                clusters[clusters.count - 1] = last
+            } else {
+                clusters.append([row])
+            }
+        }
+
+        var result = rows.filter { $0.interval == nil }.map { PayCluster(payable: $0.booking) }
+        for cluster in clusters {
+            guard cluster.count > 1 else {
+                if let only = cluster.first {
+                    result.append(PayCluster(payable: only.booking))
+                }
+                continue
+            }
+            let intervals = cluster.compactMap(\.interval)
+            let start = intervals.map(\.0).min() ?? 0
+            let end = intervals.map(\.1).max() ?? start
+            let source = cluster.min(by: { $0.booking.createdAt < $1.booking.createdAt })?.booking ?? cluster[0].booking
+            let endClock = end >= 24 * 60 ? end - 24 * 60 : end
+            let payable = Booking(
+                id: source.id,
+                operativeId: source.operativeId,
+                projectId: source.projectId,
+                date: source.date,
+                timeSlot: .customHours,
+                bookedBy: source.bookedBy,
+                notes: source.notes,
+                status: source.status,
+                workStartTime: ManagerScheduleInterval.formatMinutes(start),
+                workEndTime: ManagerScheduleInterval.formatMinutes(endClock),
+                isBreakRemoved: cluster.allSatisfy { $0.booking.isBreakRemoved },
+                otMultiplierOverride: source.otMultiplierOverride,
+                bookingGroupId: source.bookingGroupId,
+                createdAt: source.createdAt,
+                updatedAt: source.updatedAt
+            )
+            result.append(PayCluster(payable: payable))
+        }
+        return result
     }
 }
 
@@ -214,9 +274,8 @@ extension Booking {
     /// Wall-clock hours for this booking (explicit times or legacy slot mapped to the org day).
     func totalBookedHours(policy: OrgPayrollTimePolicy = .default) -> Double {
         if let s = workStartTime, let e = workEndTime,
-           let sm = ManagerScheduleInterval.parseMinutes(s),
-           let em = ManagerScheduleInterval.parseMinutes(e), em > sm {
-            return Double(em - sm) / 60.0
+           let span = ManagerScheduleInterval.clockSpanMinutes(start: s, end: e) {
+            return Double(span.1 - span.0) / 60.0
         }
         if let iv = OperativeBookingInterval.clashInterval(for: self, policy: policy) {
             return Double(iv.1 - iv.0) / 60.0

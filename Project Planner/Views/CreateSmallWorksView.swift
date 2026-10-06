@@ -188,6 +188,7 @@ struct CreateSmallWorksView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("createSmallWorks.cancel")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.ink)
                 }
@@ -426,6 +427,7 @@ struct CreateSmallWorksView: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
         }
+        .accessibilityIdentifier("createSmallWorks.chevronDown")
         .buttonStyle(.plain)
     }
 
@@ -509,6 +511,7 @@ struct CreateSmallWorksView: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
         }
+        .accessibilityIdentifier("createSmallWorks.map")
         .buttonStyle(.plain)
     }
 
@@ -540,6 +543,7 @@ struct CreateSmallWorksView: View {
             }
             Spacer()
             DatePicker("", selection: date, displayedComponents: .date)
+                .accessibilityIdentifier("createSmallWorks.dateRow")
                 .labelsHidden()
             Image(systemName: "chevron.right")
                 .font(.system(size: 14, weight: .semibold))
@@ -598,13 +602,16 @@ struct CreateSmallWorksView: View {
             Menu {
                 ForEach(projectStore.clients, id: \.id) { c in
                     Button(c.name) { selectedClient = c }
+                        .accessibilityIdentifier("createSmallWorks.row.\(c.id)")
                 }
                 Button("Create client…") { showingCreateClient = true }
+                    .accessibilityIdentifier("createSmallWorks.createClient2")
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
             }
+                .accessibilityIdentifier("createSmallWorks.createClient")
         }
         .padding(.vertical, 10)
     }
@@ -626,19 +633,23 @@ struct CreateSmallWorksView: View {
             Spacer()
             if projectStore.jobTypes.isEmpty {
                 Button("Manage…") { showingCreateJobType = true }
+                    .accessibilityIdentifier("createSmallWorks.manage")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(accentRust)
             } else {
                 Menu {
                     ForEach(projectStore.jobTypes.sorted(), id: \.self) { jt in
                         Button(jt) { selectedJobType = jt }
+                            .accessibilityIdentifier("createSmallWorks.row.\(jt).\(AccessibilityID.token(jt))")
                     }
                     Button("Manage job types…") { showingCreateJobType = true }
+                        .accessibilityIdentifier("createSmallWorks.manageJobTypes2")
                 } label: {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
                 }
+                    .accessibilityIdentifier("createSmallWorks.manageJobTypes")
             }
         }
         .padding(.vertical, 10)
@@ -655,6 +666,7 @@ struct CreateSmallWorksView: View {
     private var descriptionCard: some View {
         ZStack(alignment: .topLeading) {
             TextEditor(text: $projectDescription)
+                .accessibilityIdentifier("createSmallWorks.textEditor")
                 .font(.system(size: 12))
                 .frame(minHeight: 88)
                 .scrollContentBackground(.hidden)
@@ -689,6 +701,7 @@ struct CreateSmallWorksView: View {
                 .background(isFormValid && !isSaving ? accentRust : ProjectWorksRevampColors.placeholderInk)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+            .accessibilityIdentifier("createSmallWorks.hammerFill")
             .disabled(!isFormValid || isSaving)
             Text(isFormValid ? " " : "Fill the \(requiredFieldTotal) required fields to continue")
                 .font(.system(size: 10))
@@ -725,8 +738,10 @@ struct CreateSmallWorksView: View {
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
-                    .onTapGesture { focusedFieldKey = fieldKey }
+                    
+                    .accessibilityIdentifier("createSmallWorks.tap").onTapGesture { focusedFieldKey = fieldKey }
                 TextField("", text: text, prompt: Text(prompt).foregroundStyle(ProjectWorksRevampColors.placeholderInk))
+                    .accessibilityIdentifier("createSmallWorks.\(AccessibilityID.token(prompt))")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                     .textInputAutocapitalization(autocapitalization)
@@ -747,7 +762,8 @@ struct CreateSmallWorksView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
-        .onTapGesture { focusedFieldKey = fieldKey }
+        
+        .accessibilityIdentifier("createSmallWorks.address1").onTapGesture { focusedFieldKey = fieldKey }
     }
 
     private func createSmallWorks() async {

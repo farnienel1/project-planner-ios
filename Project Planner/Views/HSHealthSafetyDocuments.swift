@@ -106,6 +106,7 @@ struct HSRamsDocumentDetailView: View {
                                 Label("Preview RAMS", systemImage: "eye.fill")
                                     .frame(maxWidth: .infinity)
                             }
+                            .accessibilityIdentifier("hsRamsDocumentDetail.rams")
                             .buttonStyle(HSFilledButton(tone: .blue))
 
                             Button {
@@ -115,6 +116,7 @@ struct HSRamsDocumentDetailView: View {
                                 Label("Download / share", systemImage: "square.and.arrow.up")
                                     .frame(maxWidth: .infinity)
                             }
+                            .accessibilityIdentifier("hsRamsDocumentDetail.downloadShare")
                             .buttonStyle(HSGhostButton(tint: HS.blue))
                         }
                     }
@@ -130,6 +132,7 @@ struct HSRamsDocumentDetailView: View {
                             Label("Send for signatures", systemImage: "paperplane.fill")
                                 .frame(maxWidth: .infinity)
                         }
+                        .accessibilityIdentifier("hsRamsDocumentDetail.sendForSignatures")
                         .buttonStyle(HSFilledButton(tone: .teal))
                     }
                 }
@@ -142,6 +145,7 @@ struct HSRamsDocumentDetailView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .accessibilityIdentifier("hsRamsDocumentDetail.close")
                 }
             }
             .sheet(item: $preview) { item in
@@ -232,6 +236,7 @@ struct HSOtherDocumentDetailView: View {
                                 Label("Preview document", systemImage: "eye.fill")
                                     .frame(maxWidth: .infinity)
                             }
+                            .accessibilityIdentifier("hsOtherDocumentDetail.document")
                             .buttonStyle(HSFilledButton(tone: .blue))
 
                             Button {
@@ -241,6 +246,7 @@ struct HSOtherDocumentDetailView: View {
                                 Label("Download / share", systemImage: "square.and.arrow.up")
                                     .frame(maxWidth: .infinity)
                             }
+                            .accessibilityIdentifier("hsOtherDocumentDetail.downloadShare")
                             .buttonStyle(HSGhostButton(tint: HS.blue))
                         }
                     }
@@ -254,6 +260,7 @@ struct HSOtherDocumentDetailView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .accessibilityIdentifier("hsOtherDocumentDetail.close")
                 }
             }
             .sheet(item: $preview) { item in
@@ -359,6 +366,7 @@ struct HSCustomSignedTalkView: View {
                             Label("Preview signature PDF", systemImage: "eye.fill")
                                 .frame(maxWidth: .infinity)
                         }
+                        .accessibilityIdentifier("hsCustomSignedTalk.previewSignaturePDF")
                         .buttonStyle(HSFilledButton(tone: .blue))
 
                         Button {
@@ -368,6 +376,7 @@ struct HSCustomSignedTalkView: View {
                             Label("Download / share PDF", systemImage: "square.and.arrow.up")
                                 .frame(maxWidth: .infinity)
                         }
+                        .accessibilityIdentifier("hsCustomSignedTalk.downloadSharePDF")
                         .buttonStyle(HSGhostButton(tint: HS.blue))
                     }
                 }
@@ -380,6 +389,7 @@ struct HSCustomSignedTalkView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .accessibilityIdentifier("hsCustomSignedTalk.close")
                 }
             }
             .sheet(item: $preview) { item in

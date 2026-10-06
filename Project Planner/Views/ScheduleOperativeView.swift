@@ -200,16 +200,19 @@ struct ScheduleOperativeView: View {
             }
             .alert("Select dates first", isPresented: $showingSelectDatesFirstAlert) {
                 Button("OK", role: .cancel) { }
+                    .accessibilityIdentifier("scheduleOperative.ok")
             } message: {
                 Text("Select a day or days below first, then you will be able to add users to the booking.")
             }
             .alert("Hours caused clashes", isPresented: $showingHoursClashAlert) {
                 Button("OK", role: .cancel) { }
+                    .accessibilityIdentifier("scheduleOperative.ok2")
             } message: {
                 Text("New hours have been selected, which has caused clashes with other bookings. Make your final change and then acknowledge each clash above before being able to Confirm booking.")
             }
             .alert("Date selection", isPresented: $showingDateSelectionAlert) {
                 Button("OK", role: .cancel) { }
+                    .accessibilityIdentifier("scheduleOperative.ok3")
             } message: {
                 Text(dateSelectionAlertMessage)
             }
@@ -291,6 +294,7 @@ struct ScheduleOperativeView: View {
                         .foregroundStyle(ProjectWorksRevampColors.blue)
                         .fontWeight(.medium)
                     }
+                        .accessibilityIdentifier("scheduleOperative.back")
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -771,6 +775,7 @@ struct ScheduleOperativeView: View {
                                     .stroke(ProjectWorksRevampColors.blue.opacity(canOpenPeoplePicker ? 0.35 : 0.15), lineWidth: 1)
                             )
                         }
+                        .accessibilityIdentifier("scheduleOperative.personBadgePlus")
                         .buttonStyle(.plain)
                         .disabled(!canOpenPeoplePicker)
                     }
@@ -837,6 +842,7 @@ struct ScheduleOperativeView: View {
                                     }
                                     .contentShape(Rectangle())
                                 }
+                                .accessibilityIdentifier("scheduleOperative.row.\(person.id)")
                                 .buttonStyle(.plain)
                                 Button {
                                     clearOverrides(for: op.id)
@@ -848,6 +854,7 @@ struct ScheduleOperativeView: View {
                                         .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
                                         .frame(width: 32, height: 32)
                                 }
+                                .accessibilityIdentifier("scheduleOperative.row.\(person.id).close")
                                 .buttonStyle(.plain)
                             }
                             if let summary = personConflictSummary(person), !summary.rows.isEmpty {
@@ -884,6 +891,7 @@ struct ScheduleOperativeView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                     }
+                    .accessibilityIdentifier("scheduleOperative.plusCircleFill")
                     .buttonStyle(.plain)
                     .padding(.horizontal, 4)
                 }
@@ -1008,6 +1016,7 @@ struct ScheduleOperativeView: View {
                         .stroke(selected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.searchBorder, lineWidth: selected ? 1.5 : 0.5)
                 )
         }
+        .accessibilityIdentifier("scheduleOperative.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
         .disabled(!enabled)
     }
@@ -1066,6 +1075,7 @@ struct ScheduleOperativeView: View {
                                     .stroke(isBulkSelectedSlot(.customHours) ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.searchBorder, lineWidth: isBulkSelectedSlot(.customHours) ? 1.5 : 0.5)
                             )
                     }
+                    .accessibilityIdentifier("scheduleOperative.custom")
                     .buttonStyle(.plain)
                 }
                 HStack(spacing: 8) {
@@ -1159,6 +1169,7 @@ struct ScheduleOperativeView: View {
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                     }
+                    .accessibilityIdentifier("scheduleOperative.back2")
                     .buttonStyle(.plain)
                     Spacer()
                     Text(monthYearString)
@@ -1170,6 +1181,7 @@ struct ScheduleOperativeView: View {
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                     }
+                    .accessibilityIdentifier("scheduleOperative.chevronRight")
                     .buttonStyle(.plain)
                 }
                 calendarGridCompact
@@ -1210,6 +1222,7 @@ struct ScheduleOperativeView: View {
                         .stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5)
                 )
         }
+        .accessibilityIdentifier("scheduleOperative.\(AccessibilityID.token(label))")
         .buttonStyle(.plain)
     }
     
@@ -1269,6 +1282,7 @@ struct ScheduleOperativeView: View {
                     }
                 )
         }
+        .accessibilityIdentifier("scheduleOperative.calendarDayButtonCompact")
         .frame(maxWidth: .infinity)
         .opacity(isCurrentMonth ? 1.0 : 0.35)
     }
@@ -1323,6 +1337,7 @@ struct ScheduleOperativeView: View {
                             .fill(canConfirmBooking ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.muted.opacity(0.45))
                     )
                 }
+                .accessibilityIdentifier("scheduleOperative.checkmark")
                 .buttonStyle(.plain)
                 .disabled(!canConfirmBooking)
                 .padding(.horizontal, 14)

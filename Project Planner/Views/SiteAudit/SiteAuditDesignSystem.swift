@@ -159,6 +159,7 @@ struct SiteAuditIconCircleButton: View {
                         .strokeBorder(primary ? Color.clear : SiteAuditColors.borderStrong, lineWidth: 0.5)
                 )
         }
+        .accessibilityIdentifier("siteAuditIconCircle.\(AccessibilityID.token(systemName))")
         .buttonStyle(.plain)
     }
 }
@@ -186,6 +187,7 @@ struct SiteAuditToolbarPill: View {
                     }
                 }
         }
+        .accessibilityIdentifier("siteAuditToolbarPill.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
         .disabled(disabled)
     }
@@ -341,6 +343,7 @@ struct SiteAuditFilterChipsRow: View {
                                     .strokeBorder(SiteAuditColors.borderStrong, lineWidth: selected ? 0 : 0.5)
                             )
                     }
+                    .accessibilityIdentifier("siteAuditFilterChips.row.\(index)")
                     .buttonStyle(.plain)
                 }
             }
@@ -382,6 +385,7 @@ struct SiteAuditTypePickerGrid: View {
                             .strokeBorder(isSelected ? style.accent : SiteAuditColors.borderStrong, lineWidth: isSelected ? 1.5 : 0.5)
                     )
                 }
+                .accessibilityIdentifier("siteAuditTypePickerGrid.row.\(type.id)")
                 .buttonStyle(.plain)
             }
         }
@@ -425,6 +429,7 @@ struct SiteAuditPrimaryButton: View {
                 }
             }
         }
+        .accessibilityIdentifier("siteAuditPrimary.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
         .disabled(disabled)
         .opacity(disabled ? 0.55 : 1)

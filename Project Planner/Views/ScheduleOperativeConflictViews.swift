@@ -52,6 +52,7 @@ struct ScheduleConflictRowView: View {
                         .background(Color.red.opacity(0.1))
                         .clipShape(Circle())
                 }
+                .accessibilityIdentifier("scheduleConflictRow.close")
                 .buttonStyle(.plain)
                 Button(action: onAcknowledge) {
                     Image(systemName: "checkmark")
@@ -61,6 +62,7 @@ struct ScheduleConflictRowView: View {
                         .background(isAcknowledged ? Color.blue : Color.blue.opacity(0.35))
                         .clipShape(Circle())
                 }
+                .accessibilityIdentifier("scheduleConflictRow.checkmark")
                 .buttonStyle(.plain)
             }
         }
@@ -102,6 +104,7 @@ struct ScheduleOperativeMainConflictBlock: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .accessibilityIdentifier("scheduleOperativeMainConflictBlock.exclamationmarkTriangleFill")
             .buttonStyle(.plain)
 
             if isExpanded {

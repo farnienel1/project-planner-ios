@@ -103,6 +103,7 @@ struct SubcontractorBookingEditSheet: View {
                     .background(Color(.systemGray6))
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
+                .accessibilityIdentifier("subcontractorBookingEdit.row.\(contact.id).bookedOperativesSection")
                 .buttonStyle(.plain)
             }
         }

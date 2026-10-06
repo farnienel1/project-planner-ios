@@ -439,6 +439,7 @@ struct FlowDayChips: View {
                         Image(systemName: "xmark")
                             .font(.caption.weight(.bold))
                     }
+                    .accessibilityIdentifier("flowDayChips.row.\(day).close")
                     .buttonStyle(.plain)
                 }
                 .padding(8)
@@ -461,6 +462,7 @@ struct FlowDayChips: View {
                 .foregroundStyle(on ? Color.white : AnnualLeavePalette.ink3)
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
+        .accessibilityIdentifier("flowDayChips.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
     }
 }

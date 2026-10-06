@@ -96,6 +96,7 @@ struct InAppRemoteDocumentViewer: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("inAppRemoteDocumentViewer.done")
                 }
                 ToolbarItem(placement: .primaryAction) {
                     if let localFileURL {
@@ -104,6 +105,7 @@ struct InAppRemoteDocumentViewer: View {
                         } label: {
                             Image(systemName: "square.and.arrow.up")
                         }
+                            .accessibilityIdentifier("inAppRemoteDocumentViewer.squareAndArrowUp")
                     }
                 }
             }

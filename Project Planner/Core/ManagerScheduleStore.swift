@@ -75,7 +75,6 @@ class ManagerScheduleStore: ObservableObject {
 
         let orgId = fb.resolvedOrganizationIdForOfflineWrites()
         guard let orgId else {
-            managerSiteBookings = []
             return
         }
 
@@ -229,9 +228,17 @@ class ManagerScheduleStore: ObservableObject {
         }
     }
 
-    func myBookings(on date: Date) -> [ManagerSiteBooking] {
-        guard let uid = firebaseBackend?.currentUser?.uid else { return [] }
-        return bookings(for: uid, on: date)
+    func myBookings(on date: Date, matching accountIds: Set<String> = []) -> [ManagerSiteBooking] {
+        var ids = accountIds
+        if let uid = firebaseBackend?.currentUser?.uid {
+            let trimmed = uid.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { ids.insert(trimmed) }
+        }
+        guard !ids.isEmpty else { return [] }
+        let cal = Calendar.current
+        return managerSiteBookings.filter {
+            ids.contains($0.userId) && cal.isDate($0.date, inSameDayAs: date)
+        }
     }
 
     private func semanticKey(for booking: ManagerSiteBooking) -> String {

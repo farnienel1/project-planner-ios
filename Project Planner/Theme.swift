@@ -187,3 +187,23 @@ extension View {
     }
 }
 
+
+
+/// Lower-camel token used only to build accessibility identifiers.
+enum AccessibilityID {
+    static func token(_ raw: String) -> String {
+        let parts = raw.split { character in
+            !character.isLetter && !character.isNumber
+        }.map(String.init)
+        guard let first = parts.first else { return "item" }
+        let head = first.prefix(1).lowercased() + first.dropFirst()
+        let tail = parts.dropFirst().map { part in
+            part.prefix(1).uppercased() + part.dropFirst()
+        }.joined()
+        let combined = head + tail
+        if combined.first?.isNumber == true {
+            return "n" + combined
+        }
+        return combined
+    }
+}

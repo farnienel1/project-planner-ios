@@ -81,6 +81,7 @@ struct WeeklyReportOpenShell: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                         Button("Close") { dismiss() }
+                            .accessibilityIdentifier("weeklyReportOpenShell.close")
                             .padding(.top, 8)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -88,6 +89,7 @@ struct WeeklyReportOpenShell: View {
                     .toolbar {
                         ToolbarItem(placement: .topBarLeading) {
                             Button("Close") { dismiss() }
+                                .accessibilityIdentifier("weeklyReportOpenShell.close2")
                         }
                     }
                 }

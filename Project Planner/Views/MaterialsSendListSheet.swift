@@ -76,6 +76,7 @@ struct MaterialsSendListSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { isPresented = false }
+                        .accessibilityIdentifier("materialsSendList.cancel")
                 }
             }
             .task {
@@ -84,6 +85,7 @@ struct MaterialsSendListSheet: View {
             }
             .alert("Multiple wholesalers", isPresented: $showingMultipleWholesalerAlert) {
                 Button("OK", role: .cancel) {}
+                    .accessibilityIdentifier("materialsSendList.ok")
             } message: {
                 Text("Orders can only go to one wholesaler at a time.")
             }
@@ -145,6 +147,7 @@ struct MaterialsSendListSheet: View {
                         } label: {
                             Label(material.material, systemImage: selected ? "checkmark.square.fill" : "square")
                         }
+                            .accessibilityIdentifier("materialsSendList.row.\(material.id).checkmarkSquareFill")
                     }
                 } label: {
                     Text("\(selectedMaterialIds.count) items")
@@ -155,6 +158,7 @@ struct MaterialsSendListSheet: View {
                         .foregroundStyle(MaterialsOrderingTheme.success)
                         .clipShape(Capsule())
                 }
+                    .accessibilityIdentifier("materialsSendList.checkmarkSquareFill")
             }
             Text(project.siteAddress)
                 .font(.system(size: 10))
@@ -173,6 +177,7 @@ struct MaterialsSendListSheet: View {
                             .foregroundStyle(MaterialsOrderingTheme.muted)
                     }
                 }
+                .accessibilityIdentifier("materialsSendList.materialsInThisSend")
                 .buttonStyle(.plain)
             }
             if materialSelectionExpanded {
@@ -190,6 +195,7 @@ struct MaterialsSendListSheet: View {
                                 Image(systemName: isSelected ? "checkmark.square.fill" : "square")
                                     .foregroundStyle(isSelected ? MaterialsOrderingTheme.primary : MaterialsOrderingTheme.disabled)
                             }
+                            .accessibilityIdentifier("materialsSendList.row.\(item.id).checkmarkSquareFill")
                             .buttonStyle(.plain)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(item.material)
@@ -273,6 +279,7 @@ struct MaterialsSendListSheet: View {
                 .padding(.vertical, 11)
                 .padding(.horizontal, 12)
             }
+            .accessibilityIdentifier("materialsSendList.row.\(wholesaler.id).contact")
             .buttonStyle(.plain)
             if expanded {
                 ForEach(wholesaler.contacts) { contact in
@@ -310,6 +317,7 @@ struct MaterialsSendListSheet: View {
             .padding(.horizontal, 12)
             .padding(.leading, 4)
         }
+        .accessibilityIdentifier("materialsSendList.row.\(wholesaler.id).checkmarkSquareFill")
         .buttonStyle(.plain)
     }
 
@@ -331,6 +339,7 @@ struct MaterialsSendListSheet: View {
                     Button { oneOffRecipients.removeAll { $0.id == recipient.id } } label: {
                         Image(systemName: "xmark")
                     }
+                        .accessibilityIdentifier("materialsSendList.row.\(recipient.id).close")
                 }
                 .padding(10)
                 .background(MaterialsOrderingTheme.cardBackground)
@@ -338,7 +347,9 @@ struct MaterialsSendListSheet: View {
             }
             VStack(spacing: 8) {
                 TextField("Name (for email greeting)", text: $newRecipientName)
+                    .accessibilityIdentifier("materialsSendList.nameForEmailGreeting")
                 TextField("Email", text: $newEmail)
+                    .accessibilityIdentifier("materialsSendList.email")
                     .keyboardType(.emailAddress)
                     .textInputAutocapitalization(.never)
                 Button("Add") {
@@ -350,6 +361,7 @@ struct MaterialsSendListSheet: View {
                     newRecipientName = ""
                     newEmail = ""
                 }
+                .accessibilityIdentifier("materialsSendList.add")
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .padding(10)
@@ -371,6 +383,7 @@ struct MaterialsSendListSheet: View {
                         .foregroundStyle(MaterialsOrderingTheme.muted)
                 }
             }
+            .accessibilityIdentifier("materialsSendList.sendMaterialListInPlainText")
             .tint(MaterialsOrderingTheme.primary)
             HStack {
                 Text("\(selectedMaterialIds.count) items · \(recipientCount) recipients")
@@ -386,12 +399,14 @@ struct MaterialsSendListSheet: View {
                     Label("Quote", systemImage: "doc.text")
                         .frame(maxWidth: .infinity)
                 }
+                .accessibilityIdentifier("materialsSendList.quote")
                 .buttonStyle(.bordered)
                 .tint(MaterialsOrderingTheme.primary)
                 Button { beginSend(type: .order) } label: {
                     Label("Order", systemImage: "paperplane.fill")
                         .frame(maxWidth: .infinity)
                 }
+                .accessibilityIdentifier("materialsSendList.order")
                 .buttonStyle(.borderedProminent)
                 .tint(MaterialsOrderingTheme.success)
             }
@@ -580,6 +595,7 @@ private struct MaterialRequiredDeliveryDateSheet: View {
                     in: Calendar.current.startOfDay(for: Date())...,
                     displayedComponents: .date
                 )
+                .accessibilityIdentifier("materialRequiredDeliveryDate.requiredDeliveryDate")
                 .datePickerStyle(.graphical)
                 Spacer(minLength: 0)
             }
@@ -589,9 +605,11 @@ private struct MaterialRequiredDeliveryDateSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
+                        .accessibilityIdentifier("materialRequiredDeliveryDate.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Send order", action: onConfirm)
+                        .accessibilityIdentifier("materialRequiredDeliveryDate.sendOrder")
                         .fontWeight(.semibold)
                 }
             }
@@ -656,11 +674,13 @@ private struct MaterialsResendIncludeExcludeSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
+                        .accessibilityIdentifier("materialsResendIncludeExclude.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Continue") {
                         onContinue(selectedMaterialIds)
                     }
+                    .accessibilityIdentifier("materialsResendIncludeExclude.continue")
                     .disabled(selectedMaterialIds.isEmpty)
                 }
             }
@@ -744,6 +764,7 @@ private struct MaterialsResendIncludeExcludeSheet: View {
                         .font(.title3)
                         .foregroundStyle(isExcluded ? MaterialsOrderingTheme.primary : .red)
                 }
+                .accessibilityIdentifier("materialsResendIncludeExclude.plusCircleFill")
                 .buttonStyle(.plain)
                 .accessibilityLabel(isExcluded ? "Include \(item.material)" : "Exclude \(item.material)")
             }
@@ -775,6 +796,7 @@ private struct MaterialsSendConfirmationView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Button("Done", action: onDone)
+                        .accessibilityIdentifier("materialsSendConfirmation.done")
                         .buttonStyle(.borderedProminent)
                         .tint(MaterialsOrderingTheme.success)
                         .padding(.top, 12)

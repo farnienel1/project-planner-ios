@@ -59,12 +59,14 @@ struct MapPinPickerView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("mapPinPicker.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Use this pin") {
                         onConfirm(pinCoordinate)
                         dismiss()
                     }
+                    .accessibilityIdentifier("mapPinPicker.useThisPin")
                     .fontWeight(.semibold)
                 }
             }

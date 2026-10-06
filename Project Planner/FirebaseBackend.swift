@@ -411,13 +411,23 @@ class FirebaseBackend: ObservableObject {
             return
         }
 
-        let sessionUser = auth.currentUser
-        currentUser = sessionUser
-        isAuthenticated = sessionUser != nil
+        #if DEBUG
+        let keepUITestSession = UITestingMode.isEnabled && UITestingMode.autoLoginRole != nil
+        #else
+        let keepUITestSession = false
+        #endif
+        if !keepUITestSession {
+            let sessionUser = auth.currentUser
+            currentUser = sessionUser
+            isAuthenticated = sessionUser != nil
+        }
 
         authHandle = auth.addStateDidChangeListener { [weak self] _, user in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                #if DEBUG
+                if UITestingMode.isEnabled, UITestingMode.autoLoginRole != nil { return }
+                #endif
                 self.currentUser = user
                 self.isAuthenticated = user != nil
                 if let user = user {
@@ -470,6 +480,9 @@ class FirebaseBackend: ObservableObject {
     func syncPublishedAuthFromAuthSession() {
         ensureFirebaseAppConfigured()
         guard FirebaseApp.app() != nil else { return }
+        #if DEBUG
+        if UITestingMode.isEnabled, UITestingMode.autoLoginRole != nil { return }
+        #endif
         let user = auth.currentUser
         currentUser = user
         isAuthenticated = user != nil
@@ -481,6 +494,9 @@ class FirebaseBackend: ObservableObject {
         syncPublishedAuthFromAuthSession()
         await ensureAuthStateListenerAttached()
         guard FirebaseApp.app() != nil else { return }
+        #if DEBUG
+        if UITestingMode.isEnabled, UITestingMode.autoLoginRole != nil { return }
+        #endif
         let user = auth.currentUser
         currentUser = user
         isAuthenticated = user != nil
@@ -8430,7 +8446,7 @@ extension FirebaseBackend {
             if let migration = legacyLengthMigrationPayload(data) {
                 try? await doc.reference.setData(migration, merge: true)
             }
-            if let item = materialCatalogItemFromFirestore(data) {
+            if let item = materialCatalogItemFromFirestore(data, documentId: doc.documentID) {
                 loaded.append(item)
             }
         }
@@ -8595,18 +8611,16 @@ extension FirebaseBackend {
         return data
     }
 
-    private func materialCatalogItemFromFirestore(_ data: [String: Any]) -> MaterialCatalogItem? {
-        guard let idString = data["id"] as? String,
-              let id = UUID(uuidString: idString),
-              let name = data["name"] as? String,
-              let brand = data["brand"] as? String,
-              let unitRaw = data["defaultUnit"] as? String,
-              let unit = MaterialUnit(rawValue: unitRaw),
-              let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
-              let createdByUserId = data["createdByUserId"] as? String,
-              let createdByName = data["createdByName"] as? String else {
-            return nil
-        }
+    private func materialCatalogItemFromFirestore(_ data: [String: Any], documentId: String) -> MaterialCatalogItem? {
+        let name = (data["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !name.isEmpty else { return nil }
+        let id = UUID(uuidString: (data["id"] as? String) ?? "") ?? UUID(uuidString: documentId)
+        guard let id else { return nil }
+        let brand = (data["brand"] as? String) ?? ""
+        let unit = MaterialUnit(rawValue: (data["defaultUnit"] as? String) ?? "") ?? .number
+        let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+        let createdByUserId = (data["createdByUserId"] as? String) ?? ""
+        let createdByName = (data["createdByName"] as? String) ?? ""
         return MaterialCatalogItem(
             id: id,
             name: name,

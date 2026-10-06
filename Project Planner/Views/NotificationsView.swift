@@ -54,6 +54,7 @@ struct NotificationsView: View {
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.blue)
                     }
+                        .accessibilityIdentifier("notifications.filter")
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
@@ -86,6 +87,7 @@ struct NotificationsView: View {
                                 } label: {
                                     NotificationRowView(notification: notification)
                                 }
+                                .accessibilityIdentifier("notifications.row.\(notification.id)")
                                 .buttonStyle(.plain)
                             }
                         }
@@ -104,13 +106,16 @@ struct NotificationsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("notifications.done")
                 }
             }
             .confirmationDialog("Filter Notifications", isPresented: $showingFilterOptions, titleVisibility: .visible) {
                 ForEach(FilterOption.allCases, id: \.self) { option in
                     Button(option.displayName) { filterOption = option }
+                        .accessibilityIdentifier("notifications.row.\(option)")
                 }
                 Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("notifications.cancel")
             }
             .task {
                 // Inbox is intentionally not loaded on app launch (jetsam risk). Load here on demand.
@@ -170,6 +175,7 @@ struct NotificationRowView: View {
                             isMessageExpanded.toggle()
                         }
                     }
+                    .accessibilityIdentifier("notificationRow.showLess")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.blue)
                     .buttonStyle(.plain)

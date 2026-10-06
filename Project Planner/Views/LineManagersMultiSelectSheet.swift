@@ -71,6 +71,7 @@ struct LineManagersMultiSelectSheet: View {
                                     .stroke(AnnualLeavePalette.line, lineWidth: 1)
                             )
                         }
+                        .accessibilityIdentifier("lineManagersMultiSelect.noLineManager")
                         .buttonStyle(.plain)
                     }
 
@@ -121,6 +122,7 @@ struct LineManagersMultiSelectSheet: View {
                                     .stroke(selected ? AnnualLeavePalette.leave : AnnualLeavePalette.line, lineWidth: 1)
                             )
                         }
+                        .accessibilityIdentifier("lineManagersMultiSelect.row.\(candidate.id)")
                         .buttonStyle(.plain)
                     }
 
@@ -131,6 +133,7 @@ struct LineManagersMultiSelectSheet: View {
                             showingClearValidationAlert = true
                         }
                     }
+                    .accessibilityIdentifier("lineManagersMultiSelect.clearAll")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(AnnualLeavePalette.red)
                 }
@@ -148,6 +151,7 @@ struct LineManagersMultiSelectSheet: View {
                             showingClearValidationAlert = true
                         }
                     }
+                    .accessibilityIdentifier("lineManagersMultiSelect.done")
                     .fontWeight(.semibold)
                 }
             }
@@ -155,6 +159,7 @@ struct LineManagersMultiSelectSheet: View {
         }
         .alert("Line manager required", isPresented: $showingClearValidationAlert) {
             Button("OK", role: .cancel) {}
+                .accessibilityIdentifier("lineManagersMultiSelect.ok")
         } message: {
             Text(validationMessage)
         }

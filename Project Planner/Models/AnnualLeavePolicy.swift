@@ -104,7 +104,8 @@ nonisolated enum AnnualLeavePolicy {
     ) -> Double {
         let rs = calendar.startOfDay(for: rangeStart)
         let re = calendar.startOfDay(for: rangeEnd)
-        var total: Double = 0
+        // Several requests can cover the same calendar day. A day never consumes more than 1.
+        var byDay: [Date: Double] = [:]
         for b in bookings where statuses.contains(b.status) {
             let matchesUser = Self.holidayUserMatches(bookingUserId: b.userId, profileUserId: userId, profileEmail: profileEmail)
             let matchesOp = operativeId != nil && b.operativeId == operativeId
@@ -114,13 +115,13 @@ nonisolated enum AnnualLeavePolicy {
             let endB = calendar.startOfDay(for: b.endDate)
             while d <= endB {
                 if d >= rs && d <= re {
-                    total += b.timeSlot.dayValue
+                    byDay[d, default: 0] += b.timeSlot.dayValue
                 }
                 guard let nx = calendar.date(byAdding: .day, value: 1, to: d) else { break }
                 d = nx
             }
         }
-        return total
+        return byDay.values.reduce(0) { $0 + min(1, $1) }
     }
 
     static func usageSummary(

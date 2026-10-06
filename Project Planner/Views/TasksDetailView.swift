@@ -192,17 +192,20 @@ struct TasksDetailView: View {
                             .font(.system(size: 14))
                             .foregroundStyle(MyTasksScreenPalette.muted)
                         TextField("Search tasks…", text: $searchText)
+                            .accessibilityIdentifier("tasksDetail.searchTasks")
                             .font(.system(size: 12))
                         Spacer(minLength: 0)
                         Menu {
                             Button(sortNewestFirst ? "Sort: Oldest first" : "Sort: Newest first") {
                                 sortNewestFirst.toggle()
                             }
+                                .accessibilityIdentifier("tasksDetail.sortOldestFirst2")
                         } label: {
                             Image(systemName: "line.3.horizontal.decrease.circle")
                                 .font(.system(size: 15))
                                 .foregroundStyle(MyTasksScreenPalette.blue)
                         }
+                            .accessibilityIdentifier("tasksDetail.sortOldestFirst")
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
@@ -262,11 +265,13 @@ struct TasksDetailView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("tasksDetail.done")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(MyTasksScreenPalette.ink)
                 }
             }
-            .task {
+            .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+                guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
                 await taskStore.loadData()
                 await holidayStore.loadData()
             }
@@ -308,6 +313,7 @@ struct TasksDetailView: View {
                         .stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: isSelected ? 0 : 0.5)
                 )
         }
+        .accessibilityIdentifier("tasksDetail.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
     }
 
@@ -376,6 +382,7 @@ struct TasksDetailView: View {
             Button("Retry") {
                 Task { await taskStore.loadData() }
             }
+            .accessibilityIdentifier("tasksDetail.retry")
             .buttonStyle(.borderedProminent)
             .tint(MyTasksScreenPalette.blue)
         }
@@ -640,6 +647,7 @@ private struct MyTasksRedesignTaskCard: View {
                         }
                     }
                 }
+                .accessibilityIdentifier("myTasksRedesignTaskCard.calendar")
                 .buttonStyle(.plain)
 
                 checklistRow
@@ -739,6 +747,7 @@ private struct MyTasksRedesignTaskCard: View {
         }
         if canCarryOut {
             Button { showingCarryOut = true } label: { label }
+                .accessibilityIdentifier("myTasksRedesignTaskCard.button")
                 .buttonStyle(.plain)
         } else {
             label
@@ -963,9 +972,11 @@ private struct HolidayApprovalTaskCard: View {
 
             HStack(spacing: 10) {
                 Button(isCancellationRequest ? "Keep Booking" : "Decline", action: onDecline)
+                    .accessibilityIdentifier("holidayApprovalTaskCard.keepBooking")
                     .buttonStyle(.bordered)
                     .tint(.red)
                 Button(isCancellationRequest ? "Approve Cancellation" : "Approve", action: onApprove)
+                    .accessibilityIdentifier("holidayApprovalTaskCard.approveCancellation")
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
             }

@@ -115,6 +115,7 @@ struct SchedulingV2BookingCell: View {
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             .overlay(todayOverlay)
         }
+        .accessibilityIdentifier("schedulingV2BookingCell.button")
         .buttonStyle(.plain)
     }
 

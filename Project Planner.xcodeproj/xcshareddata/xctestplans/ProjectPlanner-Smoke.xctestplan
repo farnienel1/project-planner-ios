@@ -1,0 +1,61 @@
+{
+  "configurations" : [
+    {
+      "id" : "8F3A1C20-4B7E-4D11-9A6C-1E2F3A4B5C6D",
+      "name" : "Smoke",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:Project Planner.xcodeproj",
+      "identifier" : "E7A11F012F9B200100A1D001",
+      "name" : "ProjectPlannerUITests"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : false,
+      "selectedTests" : [
+        "AuthTests/test_AUTH01_adminReachesHome",
+        "AuthTests/test_AUTH02_managerReachesHome",
+        "AuthTests/test_AUTH03_operativeReachesHome",
+        "AuthTests/test_AUTH04_wrongPasswordShowsError",
+        "AuthTests/test_AUTH05_emptyEmailAndPasswordShowError",
+        "AuthTests/test_AUTH06_signOutThenSignIn",
+        "HomeTests/test_HOME01_greetingShowsNameAndDate",
+        "HomeTests/test_HOME02_refreshKeepsHomeAndBellOpensNotifications",
+        "HomeTests/test_HOME03_projectsQuickActionOpensProjects",
+        "NavigationTests/test_NAV01_adminTapsEveryHomeMenuAndMoreButton",
+        "NavigationTests/test_NAV02_managerTapsEveryHomeMenuAndMoreButton",
+        "NavigationTests/test_NAV03_operativeTapsEveryHomeMenuAndMoreButton",
+        "ProjectsTests/test_PROJ01_emptyRequiredFieldsThenSave",
+        "ProjectsTests/test_PROJ03_managerEditsProjectEndDate",
+        "SmallWorksTests/test_SW01_createSmallWorksJob",
+        "VariationsTests/test_VAR01_createVariationWithRequiredFields",
+        "TasksTests/test_TASK01_createAndCompleteTask",
+        "ScheduleTests/test_SCH01_scheduleOperativeFullDay",
+        "TimesheetsTests/test_TS01_operativeSubmitsTimesheet",
+        "TimesheetsTests/test_TS04_managerApprovesOperativeTimesheet",
+        "LeaveTests/test_LV01_operativeRequestsLeave",
+        "LeaveTests/test_LV04_managerApprovesLeave",
+        "WarningsTests/test_WARN01_managerIssuesWarning",
+        "PeopleTests/test_PPL01_addUserRequiresFields",
+        "LibraryTests/test_LIB01_createClient",
+        "SiteAuditTests/test_AUD01_startAuditAddNoteSave",
+        "SettingsTests/test_SET01_adminOpensOrganisationSettings",
+        "PermissionsTests/test_PERM01_operativeCannotSeeStaffOnlySurfaces",
+        "PermissionsTests/test_PERM02_managerCannotSeeAdminOnlySurfaces",
+        "PermissionsTests/test_PERM03_adminSeesOrganisationAndUserManagement"
+      ],
+      "target" : {
+        "containerPath" : "container:Project Planner.xcodeproj",
+        "identifier" : "E7A11F012F9B200100A1D001",
+        "name" : "ProjectPlannerUITests"
+      }
+    }
+  ],
+  "version" : 1
+}

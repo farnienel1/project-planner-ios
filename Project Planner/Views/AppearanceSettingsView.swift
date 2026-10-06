@@ -32,6 +32,7 @@ struct AppearanceSettingsView: View {
                             }
                             .padding(.vertical, 12)
                         }
+                        .accessibilityIdentifier("appearanceSettings.row.\(index).checkmark")
                         .buttonStyle(.plain)
                         if index < ThemePreference.allCases.count - 1 {
                             Divider().overlay(ProjectWorksRevampColors.border)

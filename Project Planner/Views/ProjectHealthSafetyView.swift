@@ -37,6 +37,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
 
     func loadIfNeeded(firebaseBackend: FirebaseBackend, userStore: UserStore) async {
         guard !didInitialLoad else { return }
+        guard organizationId(firebaseBackend: firebaseBackend, userStore: userStore) != nil else { return }
         didInitialLoad = true
         await load(firebaseBackend: firebaseBackend, userStore: userStore)
     }
@@ -718,7 +719,8 @@ struct ProjectHealthSafetyView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
-        .task {
+        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+            guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await vm.loadIfNeeded(firebaseBackend: firebaseBackend, userStore: userStore)
             if operativeWeekFilter == nil {
                 operativeWeekFilter = availableOperativeWeeks.first
@@ -732,6 +734,7 @@ struct ProjectHealthSafetyView: View {
             }
         )) {
             Button("OK", role: .cancel) {}
+                .accessibilityIdentifier("projectHealthSafety.ok")
         } message: {
             Text(vm.errorMessage ?? reminderSuccessMessage ?? "")
         }
@@ -1259,6 +1262,7 @@ struct ProjectHealthSafetyView: View {
                     Label("Download blank template", systemImage: "arrow.down")
                         .frame(maxWidth: .infinity)
                 }
+                .accessibilityIdentifier("projectHealthSafety.downloadBlankTemplate")
                 .buttonStyle(HSGhostButton(tint: HS.blue))
 
                 Button {
@@ -1268,6 +1272,7 @@ struct ProjectHealthSafetyView: View {
                     Label("Upload your own", systemImage: "arrow.up.doc.fill")
                         .frame(maxWidth: .infinity)
                 }
+                .accessibilityIdentifier("projectHealthSafety.uploadYourOwn")
                 .buttonStyle(HSGhostButton(tint: HS.violet))
             }
             .padding(.top, 12)
@@ -1385,6 +1390,7 @@ struct ProjectHealthSafetyView: View {
                     Label("Upload RAMS", systemImage: "plus")
                         .frame(maxWidth: .infinity)
                 }
+                .accessibilityIdentifier("projectHealthSafety.uploadRAMS")
                 .buttonStyle(HSFilledButton(tone: .blue))
                 .padding(.bottom, 12)
             }
@@ -1432,6 +1438,7 @@ struct ProjectHealthSafetyView: View {
                                     .foregroundStyle(HS.slate2)
                             }
                         }
+                        .accessibilityIdentifier("projectHealthSafety.row.\(doc.id).docRichtextFill")
                         .buttonStyle(HSPressStyle())
                         .hsTappableCard(padding: 14)
                     }
@@ -1454,6 +1461,7 @@ struct ProjectHealthSafetyView: View {
                     Label("Add trade / site doc", systemImage: "plus")
                         .frame(maxWidth: .infinity)
                 }
+                .accessibilityIdentifier("projectHealthSafety.addTradeSiteDoc")
                 .buttonStyle(HSFilledButton(tone: .blue))
                 .padding(.bottom, 12)
             }
@@ -1500,6 +1508,7 @@ struct ProjectHealthSafetyView: View {
                                     .foregroundStyle(HS.slate2)
                             }
                         }
+                        .accessibilityIdentifier("projectHealthSafety.row.\(doc.id).folderFill")
                         .buttonStyle(HSPressStyle())
                         .hsTappableCard(padding: 14)
                     }
@@ -1713,6 +1722,7 @@ private struct HSIssueTalkSheet: View {
                         Button("View Library") {
                             showLibraryPicker.toggle()
                         }
+                        .accessibilityIdentifier("hsIssueTalk.viewLibrary")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(HS.blue)
 
@@ -1720,6 +1730,7 @@ private struct HSIssueTalkSheet: View {
                             HStack(spacing: 8) {
                                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                                 TextField("Search toolbox talks", text: $talkSearch)
+                                    .accessibilityIdentifier("hsIssueTalk.searchToolboxTalks")
                                     .textInputAutocapitalization(.never)
                             }
                             .hsCard(padding: 10)
@@ -1727,6 +1738,7 @@ private struct HSIssueTalkSheet: View {
                                 HStack(spacing: 8) {
                                     ForEach(talkTradeFilters, id: \.self) { filter in
                                         Button(filter) { selectedTalkTrade = filter }
+                                            .accessibilityIdentifier("hsIssueTalk.row.\(filter).\(AccessibilityID.token(filter))")
                                             .font(.system(size: 12, weight: .medium))
                                             .padding(.horizontal, 10)
                                             .padding(.vertical, 6)
@@ -1764,6 +1776,7 @@ private struct HSIssueTalkSheet: View {
                                             .padding(12)
                                             .hsCard(padding: 12)
                                         }
+                                        .accessibilityIdentifier("hsIssueTalk.row.\(talk.id).general")
                                         .buttonStyle(.plain)
                                     }
                                 }
@@ -1792,9 +1805,11 @@ private struct HSIssueTalkSheet: View {
                             .background(HS.card)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
+                        .accessibilityIdentifier("hsIssueTalk.chevronUp")
                         .buttonStyle(.plain)
                         if showDatePicker {
                             DatePicker("Date", selection: $issueDate, displayedComponents: .date)
+                                .accessibilityIdentifier("hsIssueTalk.date")
                                 .labelsHidden()
                                 .datePickerStyle(.graphical)
                                 .padding(8)
@@ -1812,6 +1827,7 @@ private struct HSIssueTalkSheet: View {
                             HStack(spacing: 8) {
                                 ForEach(availableTrades, id: \.self) { trade in
                                     Button(trade) { selectedTrade = trade }
+                                        .accessibilityIdentifier("hsIssueTalk.row.\(trade).\(AccessibilityID.token(trade))")
                                         .font(.system(size: 12, weight: .medium))
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 6)
@@ -1824,12 +1840,14 @@ private struct HSIssueTalkSheet: View {
                         HStack(spacing: 8) {
                             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                             TextField("Search operative", text: $recipientSearch)
+                                .accessibilityIdentifier("hsIssueTalk.searchOperative")
                                 .textInputAutocapitalization(.never)
                         }
                         .hsCard(padding: 10)
                         Button("Select all in trade") {
                             selectedRecipientIds.formUnion(filteredRecipients.map(\.id))
                         }
+                        .accessibilityIdentifier("hsIssueTalk.selectAllInTrade")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(HS.teal)
                         ScrollView {
@@ -1861,6 +1879,7 @@ private struct HSIssueTalkSheet: View {
                                         .background(HS.card)
                                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                     }
+                                    .accessibilityIdentifier("hsIssueTalk.row.\(user.id)")
                                     .buttonStyle(.plain)
                                 }
                             }
@@ -1884,6 +1903,7 @@ private struct HSIssueTalkSheet: View {
                                                 .foregroundStyle(HS.red)
                                                 .font(.system(size: 17, weight: .bold))
                                         }
+                                        .accessibilityIdentifier("hsIssueTalk.row.\(user.id).clear")
                                         .buttonStyle(.plain)
                                     }
                                     .padding(.horizontal, 10)
@@ -1905,6 +1925,7 @@ private struct HSIssueTalkSheet: View {
                         Text("Issue to \(selectedRecipientIds.count) operative\(selectedRecipientIds.count == 1 ? "" : "s")")
                             .frame(maxWidth: .infinity)
                     }
+                    .accessibilityIdentifier("hsIssueTalk.issueToOperative")
                     .buttonStyle(HSFilledButton(tone: .teal))
                     .disabled(selectedTalkId == nil || selectedRecipientIds.isEmpty)
                     .opacity((selectedTalkId == nil || selectedRecipientIds.isEmpty) ? 0.45 : 1)
@@ -1930,6 +1951,7 @@ private struct HSIssueTalkSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("hsIssueTalk.cancel")
                 }
             }
         }
@@ -2007,6 +2029,7 @@ private struct HSToolboxTalkDetailView: View {
                             Label("Issue", systemImage: "paperplane.fill")
                                 .frame(maxWidth: .infinity)
                         }
+                        .accessibilityIdentifier("hsToolboxTalkDetail.issue")
                         .buttonStyle(HSFilledButton(tone: .teal))
 
                         Button {
@@ -2020,6 +2043,7 @@ private struct HSToolboxTalkDetailView: View {
                             Label(talk.isCustomUpload ? "Preview / download original file" : "Download", systemImage: "arrow.down.circle.fill")
                                 .frame(maxWidth: .infinity)
                         }
+                        .accessibilityIdentifier("hsToolboxTalkDetail.toolboxTalk")
                         .buttonStyle(HSGhostButton(tint: HS.blue))
                     }
                 }
@@ -2031,6 +2055,7 @@ private struct HSToolboxTalkDetailView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .accessibilityIdentifier("hsToolboxTalkDetail.close")
                 }
             }
             .sheet(item: $remotePreview) { item in
@@ -2083,6 +2108,7 @@ private struct HSScheduledTalksView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                            .accessibilityIdentifier("hsScheduledTalks.row.\(issue.id).toolboxTalk")
                     }
                 }
             }
@@ -2162,6 +2188,7 @@ private struct HSScheduledTalkDetailView: View {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundStyle(.red)
                         }
+                        .accessibilityIdentifier("hsScheduledTalkDetail.row.\(userId).clear")
                         .buttonStyle(.plain)
                     }
                 }
@@ -2172,6 +2199,7 @@ private struct HSScheduledTalkDetailView: View {
                     HStack(spacing: 8) {
                         ForEach(availableTrades, id: \.self) { trade in
                             Button(trade) { selectedTrade = trade }
+                                .accessibilityIdentifier("hsScheduledTalkDetail.row.\(trade).\(AccessibilityID.token(trade))")
                                 .font(.system(size: 12, weight: .medium))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
@@ -2182,6 +2210,7 @@ private struct HSScheduledTalkDetailView: View {
                     }
                 }
                 TextField("Search users in organization", text: $recipientSearch)
+                    .accessibilityIdentifier("hsScheduledTalkDetail.searchUsersInOrganization")
                     .textInputAutocapitalization(.never)
                 ForEach(candidateUsers, id: \.id) { user in
                     let selected = pendingAdds.contains(user.id)
@@ -2200,12 +2229,14 @@ private struct HSScheduledTalkDetailView: View {
                                 .foregroundStyle(selected ? HS.teal : HS.slate2)
                         }
                     }
+                    .accessibilityIdentifier("hsScheduledTalkDetail.row.\(user.id)")
                     .buttonStyle(.plain)
                 }
                 Button("Add Selected Recipients") {
                     onAddRecipients(Array(pendingAdds))
                     pendingAdds.removeAll()
                 }
+                .accessibilityIdentifier("hsScheduledTalkDetail.addSelectedRecipients")
                 .disabled(pendingAdds.isEmpty)
             }
 
@@ -2214,6 +2245,7 @@ private struct HSScheduledTalkDetailView: View {
                     onCancelIssue()
                     dismiss()
                 }
+                    .accessibilityIdentifier("hsScheduledTalkDetail.cancelToolboxTalk")
             }
         }
         .navigationTitle("Scheduled Talk")
@@ -2275,6 +2307,7 @@ private struct HSAddRecipientsSheet: View {
                         HStack(spacing: 8) {
                             ForEach(availableTrades, id: \.self) { trade in
                                 Button(trade) { selectedTrade = trade }
+                                    .accessibilityIdentifier("hsAddRecipients.row.\(trade).\(AccessibilityID.token(trade))")
                                     .font(.system(size: 12, weight: .medium))
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 6)
@@ -2288,6 +2321,7 @@ private struct HSAddRecipientsSheet: View {
                     HStack(spacing: 8) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                         TextField("Search operative", text: $searchText)
+                            .accessibilityIdentifier("hsAddRecipients.searchOperative")
                             .textInputAutocapitalization(.never)
                     }
                     .hsCard(padding: 10)
@@ -2295,6 +2329,7 @@ private struct HSAddRecipientsSheet: View {
                     Button("Select all in trade") {
                         selectedRecipientIds.formUnion(candidates.map(\.id))
                     }
+                    .accessibilityIdentifier("hsAddRecipients.selectAllInTrade")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(HS.teal)
 
@@ -2322,6 +2357,7 @@ private struct HSAddRecipientsSheet: View {
                                 .background(HS.card)
                                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             }
+                            .accessibilityIdentifier("hsAddRecipients.row.\(user.id)")
                             .buttonStyle(.plain)
                         }
                     }
@@ -2334,6 +2370,7 @@ private struct HSAddRecipientsSheet: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
                     }
+                    .accessibilityIdentifier("hsAddRecipients.addRecipient")
                     .buttonStyle(FilledButtonStyle(tone: .teal))
                     .disabled(selectedRecipientIds.isEmpty)
                     .opacity(selectedRecipientIds.isEmpty ? 0.5 : 1)
@@ -2345,6 +2382,7 @@ private struct HSAddRecipientsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("hsAddRecipients.cancel")
                 }
             }
         }
@@ -2464,12 +2502,14 @@ private struct HSTrackIssueView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .accessibilityIdentifier("hsTrackIssue.close")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Remove", role: .destructive) {
                         onRemoveIssue()
                         dismiss()
                     }
+                        .accessibilityIdentifier("hsTrackIssue.remove")
                 }
             }
         }
@@ -2561,6 +2601,7 @@ private struct HSSignTalkView: View {
                         )
                         .frame(maxWidth: .infinity)
                     }
+                    .accessibilityIdentifier("hsSignTalk.previewDownloadOriginalFile")
                     .buttonStyle(HSGhostButton(tint: HS.blue))
 
                     Button {
@@ -2583,6 +2624,7 @@ private struct HSSignTalkView: View {
                                 .strokeBorder(readConfirmed ? HS.teal : HS.line, lineWidth: readConfirmed ? 2 : 1)
                         )
                     }
+                    .accessibilityIdentifier("hsSignTalk.checkmarkSquareFill")
                     .buttonStyle(.plain)
                     .hsCard(padding: 0)
 
@@ -2604,6 +2646,7 @@ private struct HSSignTalkView: View {
                         Label("Submit signature", systemImage: "checkmark.seal.fill")
                             .frame(maxWidth: .infinity)
                     }
+                    .accessibilityIdentifier("hsSignTalk.submitSignature")
                     .buttonStyle(HSFilledButton(tone: .teal))
                     .disabled(!canSubmit)
                     .opacity(canSubmit ? 1 : 0.45)
@@ -2616,6 +2659,7 @@ private struct HSSignTalkView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("hsSignTalk.cancel")
                 }
             }
             .sheet(item: $documentPreview) { item in
@@ -2752,6 +2796,7 @@ private struct HSUploadTalkSheet: View {
                         HSFormMenuField(label: "Trade", value: trade) {
                             ForEach(trades, id: \.self) { t in
                                 Button(t) { trade = t }
+                                    .accessibilityIdentifier("hsUploadTalk.row.\(t).\(AccessibilityID.token(t))")
                             }
                         }
                         HSFormMultilineField(label: "Small description about the talk", text: $purpose, placeholder: "What this talk is about")
@@ -2781,6 +2826,7 @@ private struct HSUploadTalkSheet: View {
                         Label("Save to library", systemImage: "checkmark")
                             .frame(maxWidth: .infinity)
                     }
+                    .accessibilityIdentifier("hsUploadTalk.saveToLibrary")
                     .buttonStyle(HSFilledButton(tone: .teal))
                     .disabled(!canSave)
                     .opacity(canSave ? 1 : 0.45)
@@ -2792,6 +2838,7 @@ private struct HSUploadTalkSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("hsUploadTalk.cancel")
                 }
             }
             .fileImporter(
@@ -2852,9 +2899,11 @@ private struct HSRamsUploadSheet: View {
                         HSFormMenuField(label: "Trade / area", value: trade.isEmpty ? "Select trade (optional)" : trade) {
                             ForEach(trades, id: \.self) { t in
                                 Button(t.isEmpty ? "Unassigned" : t) { trade = t }
+                                    .accessibilityIdentifier("hsRamsUpload.row.\(t).unassigned")
                             }
                         }
                         DatePicker("Review date", selection: $reviewDate, displayedComponents: .date)
+                            .accessibilityIdentifier("hsRamsUpload.reviewDate")
                             .datePickerStyle(.compact)
                             .font(.system(size: 14, weight: .medium))
                     }
@@ -2876,6 +2925,7 @@ private struct HSRamsUploadSheet: View {
                         Label("Publish RAMS", systemImage: "checkmark")
                             .frame(maxWidth: .infinity)
                     }
+                    .accessibilityIdentifier("hsRamsUpload.publishRAMS")
                     .buttonStyle(HSFilledButton(tone: .blue))
                     .disabled(docTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .opacity(docTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
@@ -2883,7 +2933,8 @@ private struct HSRamsUploadSheet: View {
                 .padding(16)
             }
             .hsScreen()
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }
+                .accessibilityIdentifier("hsRamsUpload.cancel") } }
             .fileImporter(
                 isPresented: $showFileImporter,
                 allowedContentTypes: [.pdf, .data],
@@ -2938,9 +2989,12 @@ private struct HSOtherDocumentUploadSheet: View {
                         HSFormField(label: "Trade", text: $trade, placeholder: "Optional")
                         HSFormMenuField(label: "Category", value: category) {
                             Button("trade") { category = "trade" }
+                                .accessibilityIdentifier("hsOtherDocumentUpload.trade")
                             Button("site_wide") { category = "site_wide" }
+                                .accessibilityIdentifier("hsOtherDocumentUpload.siteWide")
                         }
                         Toggle("Issuable to client", isOn: $issuableToClient)
+                            .accessibilityIdentifier("hsOtherDocumentUpload.issuableToClient")
                     }
                     .hsCard()
 
@@ -2961,6 +3015,7 @@ private struct HSOtherDocumentUploadSheet: View {
                         Label("Save document", systemImage: "checkmark")
                             .frame(maxWidth: .infinity)
                     }
+                    .accessibilityIdentifier("hsOtherDocumentUpload.saveDocument")
                     .buttonStyle(HSFilledButton(tone: .blue))
                     .disabled(docTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .opacity(docTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
@@ -2968,7 +3023,8 @@ private struct HSOtherDocumentUploadSheet: View {
                 .padding(16)
             }
             .hsScreen()
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }
+                .accessibilityIdentifier("hsOtherDocumentUpload.cancel") } }
             .fileImporter(
                 isPresented: $showFileImporter,
                 allowedContentTypes: [.pdf, .image, .data],
@@ -3020,6 +3076,7 @@ private struct HSUploadDropZone: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
+        .accessibilityIdentifier("hsUploadDropZone.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
     }
 }
@@ -3036,6 +3093,7 @@ private struct HSFormField: View {
                 .foregroundStyle(HS.slate2)
                 .textCase(.uppercase)
             TextField(placeholder, text: $text)
+                .accessibilityIdentifier("hsFormField.\(AccessibilityID.token(placeholder))")
                 .font(.system(size: 15, weight: .medium))
                 .textInputAutocapitalization(.sentences)
         }
@@ -3054,6 +3112,7 @@ private struct HSFormMultilineField: View {
                 .foregroundStyle(HS.slate2)
                 .textCase(.uppercase)
             TextField(placeholder, text: $text, axis: .vertical)
+                .accessibilityIdentifier("hsFormMultilineField.\(AccessibilityID.token(placeholder))")
                 .lineLimit(4...8)
                 .font(.system(size: 15, weight: .medium))
         }
@@ -3085,6 +3144,7 @@ private struct HSFormMenuField<MenuContent: View>: View {
                 }
             }
         }
+            .accessibilityIdentifier("hsFormMenuField.select")
     }
 }
 
@@ -3389,6 +3449,7 @@ private struct HSSignaturePad: View {
                     canvas.drawing = PKDrawing()
                     imageData = nil
                 }
+                .accessibilityIdentifier("hsSignaturePad.clear")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(imageData == nil ? HS.slate2.opacity(0.5) : HS.red)
                 .disabled(imageData == nil)

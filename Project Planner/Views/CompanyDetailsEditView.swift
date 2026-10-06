@@ -33,6 +33,7 @@ struct CompanyDetailsEditView: View {
                     SettingsHubChrome.sectionTitle("Company name")
                     SettingsHubChrome.card {
                         TextField("Organisation name", text: $organizationName)
+                            .accessibilityIdentifier("companyDetailsEdit.organisationName")
                             .font(.system(size: 13, weight: .medium))
                             .padding(.vertical, 12)
                     }
@@ -40,6 +41,7 @@ struct CompanyDetailsEditView: View {
                     SettingsHubChrome.sectionTitle("Abbreviation for site audits and toolbox talks")
                     SettingsHubChrome.card {
                         TextField("e.g. RM", text: $documentAbbreviation)
+                            .accessibilityIdentifier("companyDetailsEdit.eGRM")
                             .font(.system(size: 13, weight: .medium))
                             .textInputAutocapitalization(.characters)
                             .disableAutocorrection(true)
@@ -53,6 +55,7 @@ struct CompanyDetailsEditView: View {
                     SettingsHubChrome.sectionTitle("Office & country")
                     SettingsHubChrome.card {
                         Toggle("Organisation has an office address", isOn: $hasOfficeAddress)
+                            .accessibilityIdentifier("companyDetailsEdit.organisationHasAnOfficeAddress")
                             .font(.system(size: 13, weight: .medium))
                             .tint(ProjectWorksRevampColors.blue)
                             .padding(.vertical, 11)
@@ -62,20 +65,24 @@ struct CompanyDetailsEditView: View {
                                 Text(country.name).tag(country.code)
                             }
                         }
+                        .accessibilityIdentifier("companyDetailsEdit.country")
                         .font(.system(size: 13, weight: .medium))
                         .tint(ProjectWorksRevampColors.blue)
                         .padding(.vertical, 11)
                         if hasOfficeAddress {
                             SettingsHubChrome.divider()
                             TextField("Office address line 1", text: $officeAddressLine1)
+                                .accessibilityIdentifier("companyDetailsEdit.officeAddressLine1")
                                 .font(.system(size: 13, weight: .medium))
                                 .padding(.vertical, 11)
                             SettingsHubChrome.divider()
                             TextField("City / town", text: $officeCity)
+                                .accessibilityIdentifier("companyDetailsEdit.cityTown")
                                 .font(.system(size: 13, weight: .medium))
                                 .padding(.vertical, 11)
                             SettingsHubChrome.divider()
                             TextField("Postcode (optional)", text: $officePostcode)
+                                .accessibilityIdentifier("companyDetailsEdit.postcodeOptional")
                                 .font(.system(size: 13, weight: .medium))
                                 .padding(.vertical, 11)
                         } else {
@@ -123,6 +130,7 @@ struct CompanyDetailsEditView: View {
                                         .background(ProjectWorksRevampColors.blue)
                                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                 }
+                                    .accessibilityIdentifier("companyDetailsEdit.uploadLogoJPEG")
                                 Button("Remove logo", role: .destructive) {
                                     selectedLogoImage = nil
                                     selectedLogoItem = nil
@@ -130,6 +138,7 @@ struct CompanyDetailsEditView: View {
                                         try? await firebaseBackend.updateOrganizationCompanyLogoURL(nil)
                                     }
                                 }
+                                .accessibilityIdentifier("companyDetailsEdit.removeLogo")
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                             }
@@ -176,6 +185,7 @@ struct CompanyDetailsEditView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("companyDetailsEdit.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if isSaving {
@@ -184,6 +194,7 @@ struct CompanyDetailsEditView: View {
                         Button("Save") {
                             Task { await save() }
                         }
+                        .accessibilityIdentifier("companyDetailsEdit.save")
                         .disabled(!canSave)
                     }
                 }

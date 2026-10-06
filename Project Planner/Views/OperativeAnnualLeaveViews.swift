@@ -64,6 +64,7 @@ struct OperativeAnnualLeaveHubView: View {
                         Text(tab.shortTitle).tag(tab)
                     }
                 }
+                .accessibilityIdentifier("operativeAnnualLeaveHub.teamView")
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -83,7 +84,8 @@ struct OperativeAnnualLeaveHubView: View {
         .background(HolidayChrome.canvas.ignoresSafeArea())
         .navigationTitle("View and manage user annual leave")
         .navigationBarTitleDisplayMode(.inline)
-        .task {
+        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+            guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await holidayStore.loadData()
         }
     }
@@ -150,6 +152,7 @@ struct OperativeAnnualLeaveDirectoryView: View {
                         Text(mode.rawValue).tag(mode)
                     }
                 }
+                    .accessibilityIdentifier("operativeAnnualLeaveDirectory.sortBy")
                 if !tradeChoices.isEmpty {
                     Picker("Trade", selection: Binding(
                         get: { tradeFilter ?? "All trades" },
@@ -160,6 +163,7 @@ struct OperativeAnnualLeaveDirectoryView: View {
                             Text(trade).tag(trade)
                         }
                     }
+                        .accessibilityIdentifier("operativeAnnualLeaveDirectory.trade")
                 }
             }
 
@@ -186,6 +190,7 @@ struct OperativeAnnualLeaveDirectoryView: View {
                             }
                             .padding(.vertical, 2)
                         }
+                            .accessibilityIdentifier("operativeAnnualLeaveDirectory.row.\(person.id)")
                     }
                 }
             } header: {
@@ -256,6 +261,7 @@ private struct OperativeAnnualLeaveApprovedListView: View {
                                 .symbolRenderingMode(.hierarchical)
                                 .foregroundStyle(HolidayChrome.pending)
                         }
+                        .accessibilityIdentifier("operativeAnnualLeaveApprovedList.row.\(booking.id).removeAnnualLeaveBooking")
                         .buttonStyle(.plain)
                         .accessibilityLabel("Remove annual leave booking")
                     }
@@ -268,7 +274,8 @@ private struct OperativeAnnualLeaveApprovedListView: View {
                 ZStack {
                     Color.black.opacity(0.32)
                         .ignoresSafeArea()
-                        .onTapGesture { bookingPendingRemoval = nil }
+                        
+                        .accessibilityIdentifier("operativeAnnualLeaveApprovedList.removeAnnualLeaveBooking").onTapGesture { bookingPendingRemoval = nil }
                     AnnualLeaveRemoveBookingConfirm(
                         onYes: {
                             guard let booking = bookingPendingRemoval else { return }
@@ -497,7 +504,8 @@ struct OperativeAnnualLeaveCalendarView: View {
                 ZStack {
                     Color.black.opacity(0.32)
                         .ignoresSafeArea()
-                        .onTapGesture { bookingPendingRemoval = nil }
+                        
+                        .accessibilityIdentifier("operativeAnnualLeaveCalendar.tap").onTapGesture { bookingPendingRemoval = nil }
                     AnnualLeaveRemoveBookingConfirm(
                         onYes: {
                             guard let booking = bookingPendingRemoval else { return }
@@ -512,9 +520,11 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
         .alert("Confirm annual leave booking", isPresented: $showBookConfirm) {
             Button("Cancel", role: .cancel) {}
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.cancel")
             Button("Book leave") {
                 Task { await bookSelectedDay() }
             }
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.bookLeave")
         } message: {
             if let day = selectedDay {
                 Text("Book \(bookSlot.rawValue) annual leave for \(person.displayName) on \(day.formatted(date: .abbreviated, time: .omitted))?")
@@ -522,9 +532,11 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
         .alert("Confirm annual leave booking change", isPresented: $showChangeConfirm) {
             Button("Cancel", role: .cancel) {}
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.cancel2")
             Button("Save change") {
                 Task { await saveBookingChange() }
             }
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.saveChange")
         } message: {
             if let booking = approvedBooking(on: selectedDay) {
                 Text("Change booking on \(booking.startDate.formatted(date: .abbreviated, time: .omitted)) to \(changeSlot.rawValue)?")
@@ -532,11 +544,13 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
         .alert("Error", isPresented: $showError) {
             Button("OK") { showError = false }
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.ok")
         } message: {
             if let errorMessage { Text(errorMessage) }
         }
         .alert("Success", isPresented: $showSuccess) {
             Button("OK") { showSuccess = false }
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.ok2")
         } message: {
             if let successMessage { Text(successMessage) }
         }
@@ -545,12 +559,14 @@ struct OperativeAnnualLeaveCalendarView: View {
             set: { if !$0 { bookingPendingDelete = nil } }
         )) {
             Button("Cancel", role: .cancel) { bookingPendingDelete = nil }
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.cancel3")
             Button("Delete annual leave", role: .destructive) {
                 let booking = bookingPendingDelete
                 bookingPendingDelete = nil
                 guard let booking else { return }
                 Task { await removeApprovedBooking(booking) }
             }
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.deleteAnnualLeave")
         } message: {
             if let booking = bookingPendingDelete {
                 Text("Delete \(person.displayName)'s approved annual leave on \(booking.startDate.formatted(date: .abbreviated, time: .omitted))?")
@@ -561,6 +577,7 @@ struct OperativeAnnualLeaveCalendarView: View {
             set: { if !$0 { bankHolidayTooltip = nil } }
         )) {
             Button("OK") { bankHolidayTooltip = nil }
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.ok3")
         } message: {
             if let bankHolidayTooltip { Text(bankHolidayTooltip) }
         }
@@ -570,7 +587,8 @@ struct OperativeAnnualLeaveCalendarView: View {
         .task(id: displayedMonth) {
             await reloadBankHolidays(referenceDate: displayedMonth)
         }
-        .task {
+        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+            guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await holidayStore.loadData()
         }
         .onChange(of: firebaseBackend.currentOrganization?.settings.bankHolidayRegionId) { _, _ in
@@ -615,6 +633,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
+            .accessibilityIdentifier("operativeAnnualLeaveCalendar.confirmAnnualLeaveBooking")
             .buttonStyle(.plain)
             .disabled(isSaving)
         }
@@ -645,6 +664,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
+            .accessibilityIdentifier("operativeAnnualLeaveCalendar.confirmAnnualLeaveBookingChange")
             .buttonStyle(.plain)
             .disabled(isSaving || changeSlot == approvedBooking(on: day)?.timeSlot)
             if let booking = approvedBooking(on: day) {
@@ -665,6 +685,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                     .background(HolidayChrome.pending.opacity(0.08))
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.clear")
                 .buttonStyle(.plain)
                 .disabled(isSaving)
             }
@@ -696,6 +717,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                         .background(HolidayChrome.taken)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.approve")
                 .buttonStyle(.plain)
                 Button {
                     Task { await declinePending(on: day) }
@@ -708,6 +730,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                         .background(HolidayChrome.pending)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.decline")
                 .buttonStyle(.plain)
             }
         }
@@ -746,6 +769,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                         .stroke(on ? HolidayChrome.accent : HolidayChrome.border, lineWidth: on ? 1.5 : 1)
                 )
         }
+        .accessibilityIdentifier("operativeAnnualLeaveCalendar.\(AccessibilityID.token(label))")
         .buttonStyle(.plain)
     }
 
@@ -884,6 +908,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                                     .symbolRenderingMode(.hierarchical)
                                     .foregroundStyle(HolidayChrome.pending)
                             }
+                            .accessibilityIdentifier("operativeAnnualLeaveCalendar.row.\(booking.id).removeAnnualLeaveBooking")
                             .buttonStyle(.plain)
                             .accessibilityLabel("Remove annual leave booking")
                         }
@@ -937,10 +962,12 @@ struct OperativeAnnualLeaveCalendarView: View {
     private var monthNavigator: some View {
         HStack {
             Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left") }
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.back")
             Spacer()
             Text(monthYearString(displayedMonth)).font(.headline)
             Spacer()
             Button { shiftMonth(1) } label: { Image(systemName: "chevron.right") }
+                .accessibilityIdentifier("operativeAnnualLeaveCalendar.chevronRight")
         }
         .foregroundStyle(HolidayChrome.accent)
     }
@@ -1058,6 +1085,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                                 .symbolRenderingMode(.hierarchical)
                                 .foregroundStyle(Color.red.opacity(0.85))
                         }
+                        .accessibilityIdentifier("operativeAnnualLeaveCalendar.row.\(booking.id).deleteAnnualLeave")
                         .buttonStyle(.plain)
                         .accessibilityLabel("Delete annual leave")
                     }
@@ -1146,6 +1174,7 @@ struct OperativeAnnualLeaveCalendarView: View {
             )
             .opacity(isInMonth ? 1 : 0.35)
         }
+        .accessibilityIdentifier("operativeAnnualLeaveCalendar.weekend")
         .buttonStyle(.plain)
     }
 

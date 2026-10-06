@@ -84,6 +84,7 @@ struct OperativesView: View {
                             .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
                             .font(.system(size: 17, weight: .semibold))
                     }
+                        .accessibilityIdentifier("operatives.gobacktoprevioustab")
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if userStore.canViewOperatives() {
@@ -92,11 +93,13 @@ struct OperativesView: View {
                         } label: {
                             Image(systemName: "plus")
                         }
+                        .accessibilityIdentifier("operatives.add")
                         .accessibilityLabel("Add operative")
                     }
                     Button(action: { showingFilterOptions.toggle() }) {
                         Image(systemName: "line.3.horizontal.decrease.circle")
                     }
+                        .accessibilityIdentifier("operatives.filter")
                 }
             }
             .navigationBarBackButtonHidden(true)
@@ -296,6 +299,7 @@ struct OperativesView: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(ManageUserProfilePalette.listBlue)
             TextField("Search operatives by name", text: $liveSearchText)
+                .accessibilityIdentifier("operatives.searchOperativesByName")
                 .font(.system(size: 16))
                 .textInputAutocapitalization(.words)
                 .autocorrectionDisabled()
@@ -308,6 +312,7 @@ struct OperativesView: View {
                         .font(.system(size: 16))
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
                 }
+                .accessibilityIdentifier("operatives.clearSearch")
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear search")
             }
@@ -381,6 +386,7 @@ struct OperativesView: View {
                         Button("Clear") {
                             filterText = ""
                         }
+                        .accessibilityIdentifier("operatives.clear")
                         .font(.caption)
                     }
                     .padding(.horizontal)
@@ -405,6 +411,7 @@ struct OperativesView: View {
                                     .foregroundColor(.white)
                                     .font(.system(size: 16, weight: .medium))
                             }
+                            .accessibilityIdentifier("operatives.delete")
                             .tint(.red)
                         }
                 }
@@ -414,6 +421,7 @@ struct OperativesView: View {
                     set: { if !$0 { operativeToDelete = nil } }
                 )) {
                     Button("Cancel", role: .cancel) { operativeToDelete = nil }
+                        .accessibilityIdentifier("operatives.cancel")
                     Button("Delete", role: .destructive) {
                         guard let op = operativeToDelete else { return }
                         operativeToDelete = nil
@@ -421,6 +429,7 @@ struct OperativesView: View {
                             await operativeStore.deleteOperative(op, bookingStore: bookingStore)
                         }
                     }
+                        .accessibilityIdentifier("operatives.delete2")
                 } message: {
                     if let op = operativeToDelete {
                         let count = bookingStore.bookings.filter { $0.operativeId == op.id }.count
@@ -503,6 +512,7 @@ struct OperativeUserRowView: View {
                     .foregroundColor(.secondary)
             }
         }
+            .accessibilityIdentifier("operativeUserRow.pending")
     }
 }
 
@@ -529,9 +539,11 @@ struct OperativeFilterOptionsView: View {
                             }
                         }
                     }
+                        .accessibilityIdentifier("operativeFilterOptions.row.\(type).checkmark")
                 }
                 Section("Search text") {
                     TextField("Filter by \(selectedFilter.rawValue)", text: $filterText)
+                        .accessibilityIdentifier("operativeFilterOptions.filterBy")
                 }
             }
             .navigationTitle("Filter")
@@ -539,6 +551,7 @@ struct OperativeFilterOptionsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("operativeFilterOptions.done")
                 }
             }
         }
@@ -664,13 +677,18 @@ struct AddOperativeView: View {
             Form {
                 Section("Personal Information") {
                     TextField("First Name", text: $firstName)
+                        .accessibilityIdentifier("addOperative.firstName")
                     TextField("Last Name", text: $lastName)
+                        .accessibilityIdentifier("addOperative.lastName")
                     TextField("Email", text: $email)
+                        .accessibilityIdentifier("addOperative.email")
                         .keyboardType(.emailAddress)
                         .autocapitalization(.none)
                     TextField("Phone", text: $phone)
+                        .accessibilityIdentifier("addOperative.phone")
                         .keyboardType(.phonePad)
                     DatePicker("Start Date", selection: $startDate, displayedComponents: .date)
+                        .accessibilityIdentifier("addOperative.startDate")
                 }
                 
                 Section("Qualifications") {
@@ -704,7 +722,8 @@ struct AddOperativeView: View {
                                 }
                             }
                             .contentShape(Rectangle())
-                            .onTapGesture {
+                            
+                            .accessibilityIdentifier("addOperative.checkmarkCircleFill").onTapGesture {
                                 if selectedQualifications.contains(qualification) {
                                     selectedQualifications.remove(qualification)
                                 } else {
@@ -726,7 +745,9 @@ struct AddOperativeView: View {
                 
                 Section("Additional Info") {
                     TextField("Day Rate (e.g., £45, $50)", text: $hourlyRate)
+                        .accessibilityIdentifier("addOperative.dayRateEG4550")
                     TextField("Notes", text: $notes, axis: .vertical)
+                        .accessibilityIdentifier("addOperative.notes")
                         .lineLimit(3...6)
                 }
             }
@@ -737,12 +758,14 @@ struct AddOperativeView: View {
                     Button("Cancel") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("addOperative.cancel")
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
                         saveOperative()
                     }
+                    .accessibilityIdentifier("addOperative.save")
                     .disabled(!isFormValid)
                 }
             }
@@ -880,14 +903,20 @@ struct EditOperativeView: View {
                 Form {
                     Section("Personal Information") {
                         TextField("First Name", text: $firstName)
+                            .accessibilityIdentifier("editOperative.firstName")
                         TextField("Last Name", text: $lastName)
+                            .accessibilityIdentifier("editOperative.lastName")
                         TextField("Email", text: $email)
+                            .accessibilityIdentifier("editOperative.email")
                             .keyboardType(.emailAddress)
                             .autocapitalization(.none)
                         TextField("Phone", text: $phone)
+                            .accessibilityIdentifier("editOperative.phone")
                             .keyboardType(.phonePad)
                         DatePicker("Start Date", selection: $startDate, displayedComponents: .date)
+                            .accessibilityIdentifier("editOperative.startDate")
                         Toggle("Active", isOn: $isActive)
+                            .accessibilityIdentifier("editOperative.active")
                     }
                 
                 Section("Qualifications") {
@@ -921,7 +950,8 @@ struct EditOperativeView: View {
                                 }
                             }
                             .contentShape(Rectangle())
-                            .onTapGesture {
+                            
+                            .accessibilityIdentifier("editOperative.checkmarkCircleFill").onTapGesture {
                                 if selectedQualifications.contains(qualification) {
                                     selectedQualifications.remove(qualification)
                                 } else {
@@ -940,7 +970,9 @@ struct EditOperativeView: View {
                         footnote: "Required."
                     )
                     TextField("Day Rate (e.g., £45, $50)", text: $dayRate)
+                        .accessibilityIdentifier("editOperative.dayRateEG4550")
                     TextField("Notes", text: $notes, axis: .vertical)
+                        .accessibilityIdentifier("editOperative.notes")
                         .lineLimit(3...6)
                 }
                 
@@ -948,6 +980,7 @@ struct EditOperativeView: View {
                     Button("Delete Operative") {
                         showingDeleteConfirmation = true
                     }
+                    .accessibilityIdentifier("editOperative.deleteOperative")
                     .foregroundColor(.red)
                     .frame(maxWidth: .infinity)
                     .padding()
@@ -964,18 +997,21 @@ struct EditOperativeView: View {
                     Button("Cancel") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("editOperative.cancel")
                 }
                 
                         ToolbarItem(placement: .navigationBarTrailing) {
                             Button("Save") {
                                 updateOperative()
                             }
+                            .accessibilityIdentifier("editOperative.save")
                             .disabled(!isFormValid)
                         }
             }
         }
         .alert("Delete Operative", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
+                .accessibilityIdentifier("editOperative.cancel2")
             Button("Delete", role: .destructive) {
                 Task {
                     await operativeStore.deleteOperative(operative, bookingStore: bookingStore)
@@ -984,6 +1020,7 @@ struct EditOperativeView: View {
                     }
                 }
             }
+                .accessibilityIdentifier("editOperative.delete")
         } message: {
             let bookingCount = bookingStore.bookings.filter { $0.operativeId == operative.id }.count
             if bookingCount > 0 {
@@ -1156,6 +1193,7 @@ struct FinishOperativeSetupView: View {
                         }
                         .padding(.vertical, 4)
                     }
+                        .accessibilityIdentifier("finishOperativeSetup.row.\(operative.id).startDateRequired")
                 }
             }
             .navigationTitle("Finish Operative Setup")
@@ -1165,6 +1203,7 @@ struct FinishOperativeSetupView: View {
                     Button("Done") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("finishOperativeSetup.done")
                 }
             }
         }
@@ -1187,10 +1226,12 @@ struct FilterOptionsView: View {
                             Text(type.rawValue).tag(type)
                         }
                     }
+                        .accessibilityIdentifier("filterOptions.filterType")
                 }
                 
                 Section("Search") {
                     TextField("Enter search term", text: $filterText)
+                        .accessibilityIdentifier("filterOptions.enterSearchTerm")
                 }
             }
             .navigationTitle("Filter Operatives")
@@ -1200,6 +1241,7 @@ struct FilterOptionsView: View {
                     Button("Done") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("filterOptions.done")
                 }
             }
         }
@@ -1225,6 +1267,7 @@ struct OperativeTabButton: View {
                     .frame(height: 2)
             }
         }
+        .accessibilityIdentifier("operativeTab.\(AccessibilityID.token(title))")
         .frame(maxWidth: .infinity)
     }
 }
@@ -1277,6 +1320,7 @@ struct PendingUserRowView: View {
             }
             .padding(.vertical, 8)
         }
+        .accessibilityIdentifier("pendingUserRow.pending")
         .buttonStyle(PlainButtonStyle())
     }
 }

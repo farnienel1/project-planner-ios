@@ -73,6 +73,7 @@ struct QuickMenuSheet: View {
     private var headerRow: some View {
         PPLargeSheetHeader("Main Menu") {
             Button("Done") { dismiss() }
+                .accessibilityIdentifier("mainMenu.done")
                 .ppProminentCapsule()
         }
     }
@@ -117,6 +118,7 @@ struct QuickMenuSheet: View {
                 onNavy: true
             )
         }
+        .accessibilityIdentifier("mainMenu.\(AccessibilityID.token(title))")
         .buttonStyle(PPPressableButtonStyle())
     }
 
@@ -132,6 +134,7 @@ struct QuickMenuSheet: View {
                     subtitle: spec.detail
                 )
             }
+            .accessibilityIdentifier("mainMenu.row.\(spec.id)")
             .buttonStyle(PPMenuRowButtonStyle())
         }
         .padding(.top, 14)
@@ -152,6 +155,7 @@ struct QuickMenuSheet: View {
         } label: {
             rowLabel
         }
+        .accessibilityIdentifier("mainMenu.catalogRow")
         .buttonStyle(PPMenuRowButtonStyle())
     }
 
@@ -170,6 +174,7 @@ struct QuickMenuSheet: View {
                         Text(MainMenuCatalog.displayTitle(for: spec, userStore: userStore))
                     }
                 }
+                .accessibilityIdentifier("mainMenu.button")
                 .buttonStyle(PPSignOutButtonStyle())
             }
         }

@@ -81,6 +81,12 @@ enum PlannerStoreWiring {
         holidayStore: HolidayStore,
         notificationService: NotificationService
     ) async {
+        #if DEBUG
+        if UITestingMode.shouldSkipNetworkBootstrap {
+            print("UITestingMode: skipping network bootstrap")
+            return
+        }
+        #endif
         guard firebaseBackend.isAuthenticated else { return }
         guard !userStore.isDeactivatedForLastUsedOrganization else {
             print("🔥🔥🔥 DEBUG: bootstrapOrgDataIfNeeded skipped — account deactivated for last-used organisation")
@@ -277,6 +283,9 @@ struct ProjectPlannerRootView: View {
         }
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
             guard !signedIn else { return }
+            #if DEBUG
+            if UITestingMode.isEnabled, UITestingMode.autoLoginRole != nil { return }
+            #endif
             guard FirebaseApp.app() != nil else { return }
             // Listener / startup can briefly report signed-out before Keychain catches up — don’t wipe profile or you get a blank main shell.
             if Auth.auth().currentUser != nil {
@@ -295,6 +304,9 @@ struct ProjectPlannerRootView: View {
                     print("🔥🔥🔥 DEBUG: RootView ignored spurious auth clear notification; Firebase session still present")
                     return
                 }
+                #if DEBUG
+                if UITestingMode.isEnabled, UITestingMode.autoLoginRole != nil { return }
+                #endif
                 firebaseAuthUID = nil
                 userStore.clearOnSignOut()
                 print("🔥🔥🔥 DEBUG: RootView auth uid cleared (signed out)")
@@ -378,6 +390,7 @@ struct ProjectPlannerRootView: View {
             Button("OK", role: .cancel) {
                 firebaseBackend.organizationSwitchErrorMessage = nil
             }
+                .accessibilityIdentifier("projectPlannerRoot.ok")
         } message: {
             Text(firebaseBackend.organizationSwitchErrorMessage ?? "")
         }

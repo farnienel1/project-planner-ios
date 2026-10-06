@@ -87,6 +87,7 @@ struct OrganisationInvoicingSettingsView: View {
                                 }
                                 .padding(.vertical, 10)
                             }
+                            .accessibilityIdentifier("organisationInvoicingSettings.addAnotherPaymentRunDateRange")
                             .buttonStyle(.plain)
                         }
                     } else {
@@ -105,6 +106,7 @@ struct OrganisationInvoicingSettingsView: View {
                         Text("Set Payment date/s").tag(PaymentDateConfigurationMode.specificDates)
                         Text("Recurring payment date").tag(PaymentDateConfigurationMode.recurringDate)
                     }
+                    .accessibilityIdentifier("organisationInvoicingSettings.dateMode")
                     .pickerStyle(.segmented)
                     .padding(.vertical, 12)
 
@@ -137,6 +139,7 @@ struct OrganisationInvoicingSettingsView: View {
                                 }
                                 .padding(.vertical, 10)
                             }
+                            .accessibilityIdentifier("organisationInvoicingSettings.addAnotherPaymentDate")
                             .buttonStyle(.plain)
                         }
                     } else {
@@ -152,6 +155,7 @@ struct OrganisationInvoicingSettingsView: View {
                 SettingsHubChrome.sectionTitle("Note to User")
                 SettingsHubChrome.card {
                     TextEditor(text: $draft.noteToUsers)
+                        .accessibilityIdentifier("organisationInvoicingSettings.textEditor")
                         .frame(minHeight: 120)
                         .font(.system(size: 13))
                         .padding(.vertical, 8)
@@ -257,6 +261,7 @@ struct OrganisationInvoicingSettingsView: View {
                     .stroke(draft.paymentRunMode == mode ? ProjectWorksRevampColors.blue.opacity(0.35) : Color.clear, lineWidth: 1)
             )
         }
+        .accessibilityIdentifier("organisationInvoicingSettings.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
     }
 
@@ -276,6 +281,7 @@ struct OrganisationInvoicingSettingsView: View {
                         .font(.system(size: 11, weight: .bold))
                         .frame(width: 26, height: 26)
                 }
+                .accessibilityIdentifier("organisationInvoicingSettings.chevronDown")
                 .buttonStyle(.plain)
                 .foregroundStyle(ProjectWorksRevampColors.blue)
 
@@ -292,6 +298,7 @@ struct OrganisationInvoicingSettingsView: View {
                         .font(.system(size: 11, weight: .bold))
                         .frame(width: 26, height: 26)
                 }
+                .accessibilityIdentifier("organisationInvoicingSettings.chevronUp")
                 .buttonStyle(.plain)
                 .foregroundStyle(ProjectWorksRevampColors.blue)
             }
@@ -311,6 +318,7 @@ struct OrganisationInvoicingSettingsView: View {
                     } label: {
                         Text("\(prefix)\(day.title)")
                     }
+                        .accessibilityIdentifier("organisationInvoicingSettings.row.\(day.id).\(AccessibilityID.token(title))")
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -322,6 +330,7 @@ struct OrganisationInvoicingSettingsView: View {
                         .foregroundStyle(ProjectWorksRevampColors.blue)
                 }
             }
+                .accessibilityIdentifier("organisationInvoicingSettings.\(AccessibilityID.token(title))2")
         }
     }
 

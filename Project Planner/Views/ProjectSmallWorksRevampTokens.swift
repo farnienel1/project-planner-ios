@@ -186,6 +186,7 @@ struct WorksListSearchRow<FilterMenu: View>: View {
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
             TextField(placeholder, text: $text)
+                .accessibilityIdentifier("worksListSearch.\(AccessibilityID.token(placeholder))")
                 .font(.system(size: 12))
                 .foregroundStyle(ProjectWorksRevampColors.ink)
             filterMenu()
@@ -224,6 +225,7 @@ struct WorksRevampFilterChip: View {
     var titleFont: Font = .system(size: 11, weight: .medium)
     var horizontalPadding: CGFloat = 12
     var verticalPadding: CGFloat = 5
+    var accessibilityIdentifier: String = "filterChip"
     let action: () -> Void
 
     var body: some View {
@@ -243,6 +245,7 @@ struct WorksRevampFilterChip: View {
                 )
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
 

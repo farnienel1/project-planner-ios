@@ -34,6 +34,7 @@ struct OrganisationMaterialCutOffSettingsView: View {
                             get: { appSettings.settings.notifications.materialOrderCutOff },
                             set: { v in Task { await updateMaterial(v) } }
                         ))
+                        .accessibilityIdentifier("organisationMaterialCutOffSettings.toggle")
                         .labelsHidden()
                         .tint(ProjectWorksRevampColors.blue)
                     }
@@ -70,6 +71,7 @@ struct OrganisationMaterialCutOffSettingsView: View {
                                 Text(materialCutOffTimeLabel(for: value)).tag(value)
                             }
                         }
+                        .accessibilityIdentifier("organisationMaterialCutOffSettings.cutOffTime")
                         .labelsHidden()
                         .pickerStyle(.menu)
                         .disabled(!appSettings.settings.notifications.materialOrderCutOff)
@@ -96,6 +98,7 @@ struct OrganisationMaterialCutOffSettingsView: View {
                                 }
                             }
                         ))
+                        .accessibilityIdentifier("organisationMaterialCutOffSettings.toggle2")
                         .labelsHidden()
                         .tint(ProjectWorksRevampColors.blue)
                         .disabled(!appSettings.settings.notifications.materialOrderCutOff)
@@ -121,6 +124,7 @@ struct OrganisationMaterialCutOffSettingsView: View {
                                 }
                             }
                         ))
+                        .accessibilityIdentifier("organisationMaterialCutOffSettings.toggle3")
                         .labelsHidden()
                         .tint(ProjectWorksRevampColors.blue)
                         .disabled(!appSettings.settings.notifications.materialOrderCutOff)

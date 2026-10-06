@@ -16,9 +16,9 @@ import UserNotifications
 
 /// Notification payloads are `[AnyHashable: Any]`, which is not Sendable. The box only
 /// carries the same dictionary onto the main queue.
-private struct NotificationUserInfoBox: @unchecked Sendable {
+private nonisolated struct NotificationUserInfoBox: @unchecked Sendable {
     let value: [AnyHashable: Any]
-    init(_ value: [AnyHashable: Any]) { self.value = value }
+    nonisolated init(_ value: [AnyHashable: Any]) { self.value = value }
 }
 
 extension Notification.Name {
@@ -175,6 +175,9 @@ private nonisolated func installAuthUIDNotifications() -> AuthStateDidChangeList
             if let uid, !uid.isEmpty {
                 NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: ["uid": uid])
             } else {
+                #if DEBUG
+                if UITestingMode.isEnabled, UITestingMode.autoLoginRole != nil { return }
+                #endif
                 NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: [:])
             }
         }
@@ -238,18 +241,30 @@ struct Project_PlannerApp: App {
         // and the log line "Ignoring activation message because no connection exists".
         let backend = FirebaseBackend()
         let users = UserStore()
+        let projects = ProjectStore()
+        let operatives = OperativeStore()
+        let settings = AppSettingsStore()
         _firebaseBackend = StateObject(wrappedValue: backend)
         _smartCache = StateObject(wrappedValue: SmartCacheService())
-        _projectStore = StateObject(wrappedValue: ProjectStore())
-        _operativeStore = StateObject(wrappedValue: OperativeStore())
+        _projectStore = StateObject(wrappedValue: projects)
+        _operativeStore = StateObject(wrappedValue: operatives)
         _bookingStore = StateObject(wrappedValue: BookingStore())
         _managerScheduleStore = StateObject(wrappedValue: ManagerScheduleStore())
         _userStore = StateObject(wrappedValue: users)
+        _appSettings = StateObject(wrappedValue: settings)
         backend.installLaunchSession(into: users)
+        #if DEBUG
+        UITestingMode.apply(
+            backend: backend,
+            userStore: users,
+            projectStore: projects,
+            operativeStore: operatives,
+            appSettings: settings
+        )
+        #endif
         _taskStore = StateObject(wrappedValue: ProjectTaskStore())
         _holidayStore = StateObject(wrappedValue: HolidayStore())
         _subcontractorStore = StateObject(wrappedValue: SubcontractorStore())
-        _appSettings = StateObject(wrappedValue: AppSettingsStore())
         _notificationService = StateObject(wrappedValue: NotificationService())
     }
 

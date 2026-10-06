@@ -147,6 +147,7 @@ struct OperativeQualificationsEditorView: View {
                 Form {
                     Section("Qualifications") {
                         TextField("Search qualifications", text: $qualificationSearchText)
+                            .accessibilityIdentifier("operativeQualificationsEditor.searchQualifications")
                             .textInputAutocapitalization(.never)
                     }
                 }
@@ -155,6 +156,7 @@ struct OperativeQualificationsEditorView: View {
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { showingListFilters = false }
+                            .accessibilityIdentifier("operativeQualificationsEditor.done")
                     }
                 }
             }
@@ -198,6 +200,7 @@ struct OperativeQualificationsEditorView: View {
             } label: {
                 Image(systemName: "line.3.horizontal.decrease.circle")
             }
+                .accessibilityIdentifier("operativeQualificationsEditor.filter")
         }
         if isMyQualifications {
             ToolbarItem(placement: .primaryAction) {
@@ -206,6 +209,7 @@ struct OperativeQualificationsEditorView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
+                .accessibilityIdentifier("operativeQualificationsEditor.add")
                 .disabled(!canEditAssignments)
                 .accessibilityLabel("Add qualifications")
             }
@@ -215,10 +219,12 @@ struct OperativeQualificationsEditorView: View {
                         Button("Cancel") {
                             revertToBaseline()
                         }
+                            .accessibilityIdentifier("operativeQualificationsEditor.cancel")
                     } else {
                         Button("Done") {
                             dismiss()
                         }
+                            .accessibilityIdentifier("operativeQualificationsEditor.done2")
                     }
                 }
             } else if hasUnsavedChanges {
@@ -226,12 +232,14 @@ struct OperativeQualificationsEditorView: View {
                     Button("Cancel") {
                         revertToBaseline()
                     }
+                        .accessibilityIdentifier("operativeQualificationsEditor.cancel2")
                 }
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button(isSaving ? "Saving…" : "Save") {
                     Task { await saveChanges(dismissAfterSave: false, mergeAdditions: nil) }
                 }
+                .accessibilityIdentifier("operativeQualificationsEditor.saving")
                 .disabled(isSaving || !canEditAssignments || !hasUnsavedChanges)
                 .foregroundColor(
                     hasUnsavedChanges && canEditAssignments && !isSaving ? .blue : .gray
@@ -240,11 +248,13 @@ struct OperativeQualificationsEditorView: View {
         } else {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
+                    .accessibilityIdentifier("operativeQualificationsEditor.cancel3")
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button(isSaving ? "Saving…" : "Save") {
                     Task { _ = await saveChanges(dismissAfterSave: true, mergeAdditions: nil) }
                 }
+                .accessibilityIdentifier("operativeQualificationsEditor.saving2")
                 .disabled(isSaving || !canEditAssignments || !hasUnsavedChanges)
                 .foregroundColor(
                     hasUnsavedChanges && canEditAssignments && !isSaving ? .blue : .gray
@@ -279,6 +289,7 @@ struct OperativeQualificationsEditorView: View {
             } label: {
                 Label("Add qualifications", systemImage: "plus.circle.fill")
             }
+            .accessibilityIdentifier("operativeQualificationsEditor.add2")
             .buttonStyle(.borderless)
             .disabled(!canEditAssignments)
         } header: {
@@ -310,6 +321,7 @@ struct OperativeQualificationsEditorView: View {
             } label: {
                 Label("Add qualifications", systemImage: "plus.circle.fill")
             }
+            .accessibilityIdentifier("operativeQualificationsEditor.add3")
             .buttonStyle(.borderless)
             .disabled(!canEditAssignments)
         } header: {
@@ -341,6 +353,7 @@ struct OperativeQualificationsEditorView: View {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .foregroundColor(isSelected ? .blue : .gray)
                 }
+                .accessibilityIdentifier("operativeQualificationsEditor.qualificationRow")
                 .buttonStyle(.borderless)
                 .disabled(!canEditAssignments)
                 .accessibilityLabel(isSelected ? "Remove qualification" : "Keep qualification")
@@ -366,6 +379,7 @@ struct OperativeQualificationsEditorView: View {
                         Text("No").tag(false)
                         Text("Yes").tag(true)
                     }
+                    .accessibilityIdentifier("operativeQualificationsEditor.expiryDate")
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .frame(maxWidth: 140)
@@ -381,6 +395,7 @@ struct OperativeQualificationsEditorView: View {
                         ),
                         displayedComponents: .date
                     )
+                    .accessibilityIdentifier("operativeQualificationsEditor.expires")
                     .disabled(!canEditAssignments)
                 }
 
@@ -388,6 +403,7 @@ struct OperativeQualificationsEditorView: View {
                     pendingUploadQualificationId = qualification.id
                     showingCertificateImporter = true
                 }
+                .accessibilityIdentifier("operativeQualificationsEditor.uploadCertificate")
                 .buttonStyle(.borderless)
                 .font(.caption)
                 .disabled(!canEditAssignments)
@@ -413,6 +429,7 @@ struct OperativeQualificationsEditorView: View {
                             Button("View certificate") {
                                 certificateViewerURL = IdentifiableURL(url)
                             }
+                            .accessibilityIdentifier("operativeQualificationsEditor.viewCertificate")
                             .buttonStyle(.borderless)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.green)
@@ -429,6 +446,7 @@ struct OperativeQualificationsEditorView: View {
                         qualificationCertificateURLs.removeValue(forKey: qualification.id)
                         certificateUploadTargets.removeValue(forKey: qualification.id)
                     }
+                    .accessibilityIdentifier("operativeQualificationsEditor.removeCertificate")
                     .buttonStyle(.borderless)
                     .font(.caption)
                     .foregroundColor(.red)

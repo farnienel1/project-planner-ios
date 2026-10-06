@@ -55,6 +55,7 @@ struct AnnualLeaveRemoveBookingConfirm: View {
                                 .stroke(HolidayChrome.border, lineWidth: 1)
                         )
                 }
+                .accessibilityIdentifier("annualLeaveRemoveBookingConfirm.keepIt")
                 .buttonStyle(.plain)
                 Button(action: onYes) {
                     Text("Remove")
@@ -65,6 +66,7 @@ struct AnnualLeaveRemoveBookingConfirm: View {
                         .background(AnnualLeavePalette.red)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
+                .accessibilityIdentifier("annualLeaveRemoveBookingConfirm.remove")
                 .buttonStyle(.plain)
             }
         }
