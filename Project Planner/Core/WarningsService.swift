@@ -398,19 +398,16 @@ class WarningsService: ObservableObject {
     ) async {
         updateGeneration += 1
         let generation = updateGeneration
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
+        let cal = CanonicalBusinessEngine.businessCalendar
+        let canonical = CanonicalBusinessEngine.warningBounds(
+            detection: warningDetection,
+            invoicing: invoicingSettings
+        )
         // Explicit coverage (from refresh helper) still publishes to the live Warnings list
         // when publishToLiveCache is true. Period-only callers can set it false.
         let isLiveScan = publishToLiveCache
-        let coverageStart = cal.startOfDay(
-            for: labourCoverageStart
-                ?? warningDetection.coverageStart(from: today, invoicing: invoicingSettings, calendar: cal)
-        )
-        let coverageEnd = cal.startOfDay(
-            for: labourCoverageEnd
-                ?? warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
-        )
+        let coverageStart = cal.startOfDay(for: labourCoverageStart ?? canonical.start)
+        let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? canonical.end)
         let windowedBookings = bookings.filter {
             let day = cal.startOfDay(for: $0.date)
             return day >= coverageStart && day <= coverageEnd

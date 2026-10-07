@@ -80,11 +80,7 @@ service cloud.firestore {
   }
 
   function canAccessOrganization(organizationId) {
-    return request.auth != null && (
-      isAdminOrSuperAdmin() ||
-      belongsToOrganization(organizationId) ||
-      organizationExists(organizationId)
-    );
+    return belongsToOrganization(organizationId);
   }
   
   // Treat missing or blank addedByUserId like legacy rows (see canDeleteOwnMaterial / canClaimLegacyOwnMaterial).
@@ -391,7 +387,6 @@ service cloud.firestore {
       // Org root document: must not call get(organizations/{organizationId}) inside the rule (same doc → circular deny).
       // Use resource.data.members for membership; userOrgIdMatchesPath for users/{uid}.organizationId.
       allow read: if request.auth != null && (
-        isAdminOrSuperAdmin() ||
         userOrgIdMatchesPath(organizationId) ||
         (resource != null && 'members' in resource.data && resource.data.members[request.auth.uid] != null) ||
         (resource != null && 'creatorUserId' in resource.data && resource.data.creatorUserId == request.auth.uid)

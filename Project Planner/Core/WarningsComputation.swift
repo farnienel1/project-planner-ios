@@ -7,6 +7,9 @@
 
 import Foundation
 
+// The scan window is CanonicalBusinessEngine.warningBounds (lib/canonical).
+// This file decides which warning rows fall inside that window.
+
 struct WarningsComputationInput: @unchecked Sendable {
     let operatives: [Operative]
     let bookings: [Booking]

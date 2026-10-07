@@ -39,10 +39,16 @@ final class PersistenceService: @unchecked Sendable {
             return _currentUserId
         }()
         
-        guard let userId = userId else {
-            return baseKey // Fallback to global key if no user
+        let organizationId = (userDefaults.string(forKey: "cached_organizationId") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard let userId = userId, !userId.isEmpty else {
+            return organizationId.isEmpty ? baseKey : "\(organizationId)_\(baseKey)"
         }
-        return "\(userId)_\(baseKey)"
+        if organizationId.isEmpty {
+            return "\(userId)_\(baseKey)"
+        }
+        return "\(userId)_\(organizationId)_\(baseKey)"
     }
     
     // MARK: - Project Data

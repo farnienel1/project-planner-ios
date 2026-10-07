@@ -24,7 +24,7 @@ nonisolated enum InvoicingPeriodResolver {
     static func resolve(
         invoicing: OrganizationInvoicingSettings,
         referenceDate: Date = Date(),
-        calendar: Calendar = .current
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> InvoicingPeriodInfo {
         if invoicing.paymentRunMode == .recurringTimeframe {
             return recurringPeriod(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
@@ -36,7 +36,7 @@ nonisolated enum InvoicingPeriodResolver {
     static func warningCoverageStart(
         invoicing: OrganizationInvoicingSettings,
         referenceDate: Date = Date(),
-        calendar: Calendar = .current
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> Date {
         warningScanBounds(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar).start
     }
@@ -45,7 +45,7 @@ nonisolated enum InvoicingPeriodResolver {
     static func warningCoverageEnd(
         invoicing: OrganizationInvoicingSettings,
         referenceDate: Date = Date(),
-        calendar: Calendar = .current
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> Date {
         warningScanBounds(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar).end
     }
@@ -58,7 +58,7 @@ nonisolated enum InvoicingPeriodResolver {
     static func warningScanBounds(
         invoicing: OrganizationInvoicingSettings,
         referenceDate: Date = Date(),
-        calendar: Calendar = .current
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> (start: Date, end: Date, label: String) {
         let period = resolve(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
         return (period.currentPeriodStart, period.currentPeriodEnd, period.currentPeriodLabel)

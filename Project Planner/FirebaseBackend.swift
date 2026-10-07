@@ -314,6 +314,7 @@ class FirebaseBackend: ObservableObject {
                 }
                 guard let self, let snapshot, snapshot.exists, let data = snapshot.data() else { return }
                 Task { @MainActor in
+                    guard organizationIdsMatch(self.currentOrganization?.firestoreDocumentId, orgId) else { return }
                     self.applyOrganizationDocumentMyScheduleOptions(from: data)
                 }
             }

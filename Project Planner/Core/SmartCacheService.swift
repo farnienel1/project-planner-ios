@@ -36,14 +36,16 @@ class SmartCacheService: ObservableObject {
     private var outboxCancellable: AnyCancellable?
     private var syncTask: Task<Void, Never>?
 
-    // In-memory cache for offline functionality
-    private var cachedProjects: [Project] = []
-    private var cachedClients: [Client] = []
-    private var cachedOperatives: [Operative] = []
-    private var cachedManagers: [Manager] = []
-    private var cachedBookings: [Booking] = []
-    private var cachedOrganizationSkills: [OrganizationSkill] = []
-    private var cachedQualifications: [Qualification] = []
+    // In-memory cache for offline functionality. Values are stored per organisation
+    // so a switch cannot satisfy the next company from the previous company's arrays.
+    private var cacheOrganizationId = ""
+    private var projectsByOrganization: [String: [Project]] = [:]
+    private var clientsByOrganization: [String: [Client]] = [:]
+    private var operativesByOrganization: [String: [Operative]] = [:]
+    private var managersByOrganization: [String: [Manager]] = [:]
+    private var bookingsByOrganization: [String: [Booking]] = [:]
+    private var skillsByOrganization: [String: [OrganizationSkill]] = [:]
+    private var qualificationsByOrganization: [String: [Qualification]] = [:]
 
     init() {
         refreshOutboxCounts()
@@ -163,62 +165,75 @@ class SmartCacheService: ObservableObject {
 
     // MARK: - Cache Management
 
+    func useOrganization(_ organizationId: String) {
+        cacheOrganizationId = organizationId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// Explicit switch wins. Otherwise the organisation id already stored for this device.
+    private func resolvedOrganizationId() -> String {
+        if !cacheOrganizationId.isEmpty { return cacheOrganizationId }
+        let stored = (UserDefaults.standard.string(forKey: "cached_organizationId") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return stored.isEmpty ? "__unscoped__" : stored
+    }
+
     func cacheProjects(_ projects: [Project]) {
-        cachedProjects = projects
+        projectsByOrganization[resolvedOrganizationId()] = projects
     }
 
     func cacheClients(_ clients: [Client]) {
-        cachedClients = clients
+        clientsByOrganization[resolvedOrganizationId()] = clients
     }
 
     func cacheOperatives(_ operatives: [Operative]) {
-        cachedOperatives = operatives
+        operativesByOrganization[resolvedOrganizationId()] = operatives
     }
 
     func cacheManagers(_ managers: [Manager]) {
-        cachedManagers = managers
+        managersByOrganization[resolvedOrganizationId()] = managers
     }
 
     func cacheBookings(_ bookings: [Booking]) {
-        cachedBookings = bookings
+        bookingsByOrganization[resolvedOrganizationId()] = bookings
     }
 
     func cacheOrganizationSkills(_ skills: [OrganizationSkill]) {
-        cachedOrganizationSkills = skills
+        skillsByOrganization[resolvedOrganizationId()] = skills
     }
 
     func cacheQualifications(_ qualifications: [Qualification]) {
-        cachedQualifications = qualifications
+        qualificationsByOrganization[resolvedOrganizationId()] = qualifications
     }
 
     // MARK: - Cache Retrieval
 
     func getCachedProjects() -> [Project] {
-        return cachedProjects
+        return projectsByOrganization[resolvedOrganizationId()] ?? []
     }
 
     func getCachedClients() -> [Client] {
-        return cachedClients
+        return clientsByOrganization[resolvedOrganizationId()] ?? []
     }
 
     func getCachedOperatives() -> [Operative] {
-        return cachedOperatives
+        return operativesByOrganization[resolvedOrganizationId()] ?? []
     }
 
     func getCachedManagers() -> [Manager] {
-        return cachedManagers
+        return managersByOrganization[resolvedOrganizationId()] ?? []
     }
 
     func getCachedBookings() -> [Booking] {
-        return cachedBookings
+        return bookingsByOrganization[resolvedOrganizationId()] ?? []
     }
 
     func getCachedOrganizationSkills() -> [OrganizationSkill] {
-        return cachedOrganizationSkills
+        return skillsByOrganization[resolvedOrganizationId()] ?? []
     }
 
     func getCachedQualifications() -> [Qualification] {
-        return cachedQualifications
+        return qualificationsByOrganization[resolvedOrganizationId()] ?? []
     }
 
     // MARK: - Offline Queue Management (legacy API — delegates to outbox)
@@ -231,13 +246,14 @@ class SmartCacheService: ObservableObject {
     // MARK: - Cache Clearing
 
     func clearAllCache() {
-        cachedProjects.removeAll()
-        cachedClients.removeAll()
-        cachedOperatives.removeAll()
-        cachedManagers.removeAll()
-        cachedBookings.removeAll()
-        cachedOrganizationSkills.removeAll()
-        cachedQualifications.removeAll()
+        cacheOrganizationId = ""
+        projectsByOrganization.removeAll()
+        clientsByOrganization.removeAll()
+        operativesByOrganization.removeAll()
+        managersByOrganization.removeAll()
+        bookingsByOrganization.removeAll()
+        skillsByOrganization.removeAll()
+        qualificationsByOrganization.removeAll()
         OfflineOutboxStore.shared.clearAll()
         refreshOutboxCounts()
         print("🔥🔥🔥 DEBUG: All cache cleared")
