@@ -8,7 +8,8 @@
 import Foundation
 
 // The scan window is CanonicalBusinessEngine.warningBounds (lib/canonical).
-// This file decides which warning rows fall inside that window.
+// Qualification, unverified, and unbooked rows come from that script.
+// Clash timelines and material cut-off copy stay here, on the London business calendar.
 
 struct WarningsComputationInput: @unchecked Sendable {
     let operatives: [Operative]
@@ -42,6 +43,8 @@ struct WarningsComputationSnapshot: Sendable {
         let emailLowercased: String
         let isActive: Bool
         let qualificationExpiries: [QualificationExpirySnapshot]
+        var isPlaceholder: Bool = false
+        var profileWeight: Int = 0
     }
 
     struct UserSnapshot: Sendable {
@@ -156,7 +159,7 @@ enum WarningsComputation {
     /// bookings first; only `generate` runs in `Task.detached`.
     @MainActor
     static func makeSnapshot(from input: WarningsComputationInput) -> WarningsComputationSnapshot {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
 
         let operatives: [WarningsComputationSnapshot.OperativeSnapshot] = input.operatives.map { operative in
             let qualificationNames: [UUID: String] = operative.qualifications.reduce(into: [:]) { acc, q in
@@ -176,12 +179,16 @@ enum WarningsComputation {
                     )
                 )
             }
+            let foldedName = operative.name.lowercased()
+            let foldedEmail = operative.email.lowercased()
             return WarningsComputationSnapshot.OperativeSnapshot(
                 id: operative.id,
                 name: operative.name,
                 emailLowercased: operative.email.lowercased(),
                 isActive: operative.isActive,
-                qualificationExpiries: qualificationExpiries
+                qualificationExpiries: qualificationExpiries,
+                isPlaceholder: foldedName.contains("placeholder") || foldedEmail.contains("placeholder") || foldedName.contains("initial"),
+                profileWeight: operative.qualifications.count + operative.qualificationCertificateURLs.count + operative.qualificationExpiryDates.count
             )
         }
 
@@ -345,8 +352,9 @@ enum WarningsComputation {
 
     nonisolated static func generate(_ input: WarningsComputationSnapshot) -> [Warning] {
         var generated: [Warning] = []
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
+        let cal = CanonicalBusinessEngine.businessCalendar
+        let now = Date()
+        let today = cal.startOfDay(for: now)
         let coverageStart = cal.startOfDay(for: input.coverageStart)
         let coverageEnd = cal.startOfDay(for: input.coverageEnd)
 
@@ -394,48 +402,58 @@ enum WarningsComputation {
         }
         let managerUsers = managerOrAdminUsers.filter(\.passwordSet)
 
-        let oneMonthFromNow = cal.date(byAdding: .month, value: 1, to: today) ?? today
-        for operative in input.operatives where operative.isActive {
-            for expiry in operative.qualificationExpiries {
-                let expiryDate = expiry.expiryDate
-                guard expiryDate <= oneMonthFromNow else { continue }
-                let daysUntilExpiry = cal.dateComponents([.day], from: today, to: expiryDate).day ?? 0
-                let message: String
-                if daysUntilExpiry < 0 {
-                    let ago = abs(daysUntilExpiry)
-                    message = "\(operative.name)'s \(expiry.qualificationName) expired \(ago) day\(ago == 1 ? "" : "s") ago"
-                } else if daysUntilExpiry == 0 {
-                    message = "\(operative.name)'s \(expiry.qualificationName) expires today"
-                } else {
-                    message = "\(operative.name)'s \(expiry.qualificationName) expires in \(daysUntilExpiry) day\(daysUntilExpiry == 1 ? "" : "s")"
+        if let rows = qualificationRows(input, reference: now) {
+            for row in rows {
+                generated.append(row)
+            }
+        } else {
+            let oneMonthFromNow = cal.date(byAdding: .month, value: 1, to: today) ?? today
+            for operative in input.operatives where operative.isActive {
+                for expiry in operative.qualificationExpiries {
+                    let expiryDate = expiry.expiryDate
+                    guard expiryDate <= oneMonthFromNow else { continue }
+                    let daysUntilExpiry = cal.dateComponents([.day], from: today, to: expiryDate).day ?? 0
+                    let message: String
+                    if daysUntilExpiry < 0 {
+                        let ago = abs(daysUntilExpiry)
+                        message = "\(operative.name)'s \(expiry.qualificationName) expired \(ago) day\(ago == 1 ? "" : "s") ago"
+                    } else if daysUntilExpiry == 0 {
+                        message = "\(operative.name)'s \(expiry.qualificationName) expires today"
+                    } else {
+                        message = "\(operative.name)'s \(expiry.qualificationName) expires in \(daysUntilExpiry) day\(daysUntilExpiry == 1 ? "" : "s")"
+                    }
+                    let key = "qual-\(operative.id.uuidString)-\(expiry.qualificationId.uuidString)"
+                    generated.append(Warning(
+                        resolutionKey: key,
+                        type: .qualificationExpiry,
+                        title: daysUntilExpiry < 0 ? "Qualification expired" : "Qualification expiry",
+                        message: message,
+                        severity: .low,
+                        occurrenceDate: expiryDate
+                    ))
                 }
-                let key = "qual-\(operative.id.uuidString)-\(expiry.qualificationId.uuidString)"
-                generated.append(Warning(
-                    resolutionKey: key,
-                    type: .qualificationExpiry,
-                    title: daysUntilExpiry < 0 ? "Qualification expired" : "Qualification expiry",
-                    message: message,
-                    severity: .low,
-                    occurrenceDate: expiryDate
-                ))
             }
         }
 
-        for operative in input.operatives {
-            if let operativeUser = input.users.first(where: {
-                $0.emailLowercased == operative.emailLowercased && $0.isOperativeMode
-            }), !operativeUser.passwordSet {
-                let daysSince = workingDaysBetween(operativeUser.createdAt, today, calendar: cal)
-                if daysSince >= 3 {
-                    let key = "unverified-\(operative.id.uuidString)"
-                    generated.append(Warning(
-                        resolutionKey: key,
-                        type: .operativeNotVerified,
-                        title: "Unverified operative",
-                        message: "\(operative.name) has not verified their account",
-                        severity: .low,
-                        operativeEmail: operativeUser.emailLowercased
-                    ))
+        if let rows = unverifiedRows(input, reference: now) {
+            generated.append(contentsOf: rows)
+        } else {
+            for operative in input.operatives {
+                if let operativeUser = input.users.first(where: {
+                    $0.emailLowercased == operative.emailLowercased && $0.isOperativeMode
+                }), !operativeUser.passwordSet {
+                    let daysSince = workingDaysBetween(operativeUser.createdAt, today, calendar: cal)
+                    if daysSince >= 3 {
+                        let key = "unverified-\(operative.id.uuidString)"
+                        generated.append(Warning(
+                            resolutionKey: key,
+                            type: .operativeNotVerified,
+                            title: "Unverified operative",
+                            message: "\(operative.name) has not verified their account",
+                            severity: .low,
+                            operativeEmail: operativeUser.emailLowercased
+                        ))
+                    }
                 }
             }
         }
@@ -551,47 +569,50 @@ enum WarningsComputation {
         // - Full week: Monday of this week (past days included)
         // - Invoicing period: payment-run segment start (past days in that timeframe included)
         // Never clamp to today here — that hid past invoicing/full-week warnings.
-        let unbookedScanStart = coverageStart
-        var day = unbookedScanStart
-        while day <= coverageEnd {
-            let weekday = cal.component(.weekday, from: day)
-            if isUnbookedLabourWeekday(weekday, includeWeekends: input.warningDetection.includeWeekendsForUnbookedLabour) {
-                let requiredHours = paidHoursRequired(on: day, policy: input.payrollTimePolicy, calendar: cal)
-                // A non-working weekend (counts-as 0) is not unbooked labour.
-                if requiredHours > 0.001 {
-                    let people = scheduleIndex.unbookedPeople(
-                        on: day,
-                        operativeUsers: operativeUsers,
-                        managerUsers: managerUsers,
-                        rosterOperatives: activeOperatives,
-                        operativesByEmail: operativesByEmail,
-                        usersById: usersById,
-                        managerAdminUserIds: managerAdminUserIds,
-                        excludedUserIds: input.warningDetection.excludedUserIdsFromUnbookedWarnings,
-                        standardPaidHours: requiredHours
-                    )
-                    for person in people {
-                        generated.append(Warning(
-                            resolutionKey: "unbooked-\(day.timeIntervalSince1970)-\(person.personKey)",
-                            type: .unbookedLabour,
-                            title: "Unbooked labour",
-                            message: "\(person.displayName) is not booked on \(formatDay(day)).",
-                            severity: .high,
-                            occurrenceDate: day,
-                            unbookedLabour: Warning.UnbookedLabourWarningDetails(
-                                date: day,
-                                names: [person.displayLine],
-                                personKeys: [person.personKey]
-                            )
-                        ))
+        if let rows = unbookedRows(input, coverageStart: coverageStart, coverageEnd: coverageEnd) {
+            generated.append(contentsOf: rows)
+        } else {
+            let unbookedScanStart = coverageStart
+            var day = unbookedScanStart
+            while day <= coverageEnd {
+                let weekday = cal.component(.weekday, from: day)
+                if isUnbookedLabourWeekday(weekday, includeWeekends: input.warningDetection.includeWeekendsForUnbookedLabour) {
+                    let requiredHours = paidHoursRequired(on: day, policy: input.payrollTimePolicy, calendar: cal)
+                    if requiredHours > 0.001 {
+                        let people = scheduleIndex.unbookedPeople(
+                            on: day,
+                            operativeUsers: operativeUsers,
+                            managerUsers: managerUsers,
+                            rosterOperatives: activeOperatives,
+                            operativesByEmail: operativesByEmail,
+                            usersById: usersById,
+                            managerAdminUserIds: managerAdminUserIds,
+                            excludedUserIds: input.warningDetection.excludedUserIdsFromUnbookedWarnings,
+                            standardPaidHours: requiredHours
+                        )
+                        for person in people {
+                            generated.append(Warning(
+                                resolutionKey: "unbooked-\(day.timeIntervalSince1970)-\(person.personKey)",
+                                type: .unbookedLabour,
+                                title: "Unbooked labour",
+                                message: "\(person.displayName) is not booked on \(formatDay(day)).",
+                                severity: .high,
+                                occurrenceDate: day,
+                                unbookedLabour: Warning.UnbookedLabourWarningDetails(
+                                    date: day,
+                                    names: [person.displayLine],
+                                    personKeys: [person.personKey]
+                                )
+                            ))
+                        }
                     }
                 }
+                guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
             }
-            guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
-            day = next
         }
 
-        let hour = cal.component(.hour, from: Date())
+        let hour = cal.component(.hour, from: now)
         if input.materialOrderCutOffEnabled, hour >= 16 {
             let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
             let tomorrowWeekday = cal.component(.weekday, from: tomorrow)
@@ -639,6 +660,200 @@ enum WarningsComputation {
         }
 
         return generated
+    }
+
+    nonisolated private static func dayKeyString(_ date: Date, calendar: Calendar) -> String {
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+    }
+
+    nonisolated private static func qualificationRows(_ input: WarningsComputationSnapshot, reference: Date) -> [Warning]? {
+        let calendar = CanonicalBusinessEngine.businessCalendar
+        let operatives: [[String: Any]] = input.operatives.map { operative in
+            let expiries: [[String: Any]] = operative.qualificationExpiries.map { expiry in
+                [
+                    "qualificationId": expiry.qualificationId.uuidString,
+                    "name": expiry.qualificationName,
+                    "expiryIso": CanonicalBusinessEngine.isoString(from: expiry.expiryDate),
+                ]
+            }
+            return [
+                "id": operative.id.uuidString,
+                "isActive": operative.isActive,
+                "name": operative.name,
+                "expiries": expiries,
+            ]
+        }
+        guard let rows = CanonicalBusinessEngine.objectRows(
+            function: "qualificationExpiryRows",
+            payload: [
+                "referenceIso": CanonicalBusinessEngine.isoString(from: reference),
+                "timeZone": "Europe/London",
+                "operatives": operatives,
+            ]
+        ) else {
+            return nil
+        }
+        return rows.compactMap { row in
+            guard let id = row["id"] as? String, !id.isEmpty,
+                  let title = row["title"] as? String,
+                  let message = row["message"] as? String,
+                  let dayKey = row["dayKey"] as? String,
+                  let date = CanonicalBusinessEngine.date(fromDayKey: dayKey, calendar: calendar) else {
+                return nil
+            }
+            return Warning(
+                resolutionKey: id,
+                type: .qualificationExpiry,
+                title: title,
+                message: message,
+                severity: .low,
+                occurrenceDate: date
+            )
+        }
+    }
+
+    nonisolated private static func unverifiedRows(_ input: WarningsComputationSnapshot, reference: Date) -> [Warning]? {
+        let operatives: [[String: Any]] = input.operatives.map { operative in
+            [
+                "id": operative.id.uuidString,
+                "email": operative.emailLowercased,
+                "name": operative.name,
+            ]
+        }
+        let people: [[String: Any]] = input.users.map { user in
+            [
+                "email": user.emailLowercased,
+                "passwordSet": user.passwordSet,
+                "createdAtIso": CanonicalBusinessEngine.isoString(from: user.createdAt),
+                "isOperativeMode": user.isOperativeMode,
+            ]
+        }
+        guard let rows = CanonicalBusinessEngine.objectRows(
+            function: "unverifiedOperativeRows",
+            payload: [
+                "referenceIso": CanonicalBusinessEngine.isoString(from: reference),
+                "timeZone": "Europe/London",
+                "operatives": operatives,
+                "people": people,
+            ]
+        ) else {
+            return nil
+        }
+        return rows.compactMap { row in
+            guard let id = row["id"] as? String, !id.isEmpty,
+                  let message = row["message"] as? String else {
+                return nil
+            }
+            let title = row["title"] as? String ?? "Unverified operative"
+            let email = row["email"] as? String
+            return Warning(
+                resolutionKey: id,
+                type: .operativeNotVerified,
+                title: title,
+                message: message,
+                severity: .low,
+                operativeEmail: email
+            )
+        }
+    }
+
+    nonisolated private static func unbookedRows(
+        _ input: WarningsComputationSnapshot,
+        coverageStart: Date,
+        coverageEnd: Date
+    ) -> [Warning]? {
+        let calendar = CanonicalBusinessEngine.businessCalendar
+        var bookings: [[String: Any]] = []
+        for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
+            bookings.append([
+                "personId": booking.operativeId.uuidString,
+                "dayKey": dayKeyString(booking.dayStart, calendar: calendar),
+                "kind": "operative",
+            ])
+        }
+        for booking in input.managerSiteBookings where booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
+            bookings.append([
+                "personId": booking.userId,
+                "dayKey": dayKeyString(booking.dayStart, calendar: calendar),
+                "kind": "manager",
+            ])
+        }
+        let people: [[String: Any]] = input.users.map { user in
+            [
+                "id": user.id,
+                "email": user.emailLowercased,
+                "name": user.displayName,
+                "isActive": user.isActive,
+                "passwordSet": user.passwordSet,
+                "isOperativeMode": user.isOperativeMode,
+                "isManager": user.isManager,
+                "isAdmin": user.hasAdminAccess || user.isAdminRole,
+                "isSuperAdmin": user.isSuperAdmin,
+            ]
+        }
+        let operatives: [[String: Any]] = input.operatives.map { operative in
+            [
+                "id": operative.id.uuidString,
+                "email": operative.emailLowercased,
+                "name": operative.name,
+                "isActive": operative.isActive,
+                "isPlaceholder": operative.isPlaceholder,
+                "profileWeight": operative.profileWeight,
+            ]
+        }
+        let holidays: [[String: Any]] = input.holidayBookings.map { holiday in
+            [
+                "userId": holiday.userId ?? "",
+                "operativeId": holiday.operativeId?.uuidString ?? "",
+                "startDayKey": dayKeyString(holiday.startDay, calendar: calendar),
+                "endDayKey": dayKeyString(holiday.endDay, calendar: calendar),
+                "approved": holiday.isApproved,
+            ]
+        }
+        guard let rows = CanonicalBusinessEngine.objectRows(
+            function: "unbookedLabourRows",
+            payload: [
+                "timeZone": "Europe/London",
+                "startDayKey": dayKeyString(coverageStart, calendar: calendar),
+                "endDayKey": dayKeyString(coverageEnd, calendar: calendar),
+                "includeWeekends": input.warningDetection.includeWeekendsForUnbookedLabour,
+                "excludedUserIds": Array(input.warningDetection.excludedUserIdsFromUnbookedWarnings),
+                "standardPaidHours": input.payrollTimePolicy.standardPaidHours,
+                "saturdayCountsAsHours": input.payrollTimePolicy.saturdayCountsAsHours,
+                "sundayCountsAsHours": input.payrollTimePolicy.sundayCountsAsHours,
+                "people": people,
+                "operatives": operatives,
+                "bookings": bookings,
+                "holidays": holidays,
+            ]
+        ) else {
+            return nil
+        }
+        return rows.compactMap { row in
+            guard let id = row["id"] as? String, !id.isEmpty,
+                  let message = row["message"] as? String,
+                  let dayKey = row["dayKey"] as? String,
+                  let date = CanonicalBusinessEngine.date(fromDayKey: dayKey, calendar: calendar) else {
+                return nil
+            }
+            let name = row["operativeName"] as? String ?? ""
+            let personKey = row["personKey"] as? String ?? ""
+            let hours = (row["missingHours"] as? NSNumber)?.doubleValue ?? 0
+            return Warning(
+                resolutionKey: id,
+                type: .unbookedLabour,
+                title: "Unbooked labour",
+                message: message,
+                severity: .high,
+                occurrenceDate: date,
+                unbookedLabour: Warning.UnbookedLabourWarningDetails(
+                    date: date,
+                    names: ["\(name) (missing \(formatHours(hours))h)"],
+                    personKeys: personKey.isEmpty ? [] : [personKey]
+                )
+            )
+        }
     }
 
     nonisolated private static func workingDaysBetween(_ start: Date, _ end: Date, calendar: Calendar) -> Int {
