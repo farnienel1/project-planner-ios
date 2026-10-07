@@ -1,0 +1,19 @@
+---
+description: Shared business rules come from the canonical script, not a second Swift copy
+alwaysApply: true
+---
+
+# Canonical business logic
+
+`Project Planner/Canonical/canonical-business.js` is generated from `project-planner-web/lib/canonical`. `CanonicalBusinessEngine.swift` is the Swift entry. `docs/CANONICAL_ARCHITECTURE.md` describes the boundary.
+
+Before adding or changing a booking, warning, invoicing, labour, organisation, or date rule:
+
+1. Call `CanonicalBusinessEngine` or the existing Swift wrapper that already calls it.
+2. If the rule is new, add it in the web `lib/canonical/engine.ts`, rebuild the script, and commit `canonical-business.js`.
+3. Key caches and UserDefaults by the current organisation. Ignore listener results whose organisation id is no longer `currentOrganization`.
+4. If this app and the web app disagree, trace the first divergence. Do not patch the view to copy the other platform's number.
+5. Add a regression test for the shared result.
+6. Update `docs/CANONICAL_ARCHITECTURE.md` when the boundary changes.
+
+SwiftUI layout and navigation stay in this app.

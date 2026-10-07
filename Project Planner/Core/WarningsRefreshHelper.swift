@@ -161,7 +161,7 @@ enum WarningsRefreshHelper {
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore
     ) async {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let today = cal.startOfDay(for: Date())
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
@@ -169,12 +169,13 @@ enum WarningsRefreshHelper {
         let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
 
         // Honor Organisation Warnings detection horizon (days / working week / invoicing period).
-        let coverageStart = cal.startOfDay(
-            for: warningDetection.coverageStart(from: today, invoicing: invoicingSettings, calendar: cal)
+        let canonical = CanonicalBusinessEngine.warningBounds(
+            detection: warningDetection,
+            invoicing: invoicingSettings,
+            reference: today
         )
-        let coverageEnd = cal.startOfDay(
-            for: warningDetection.coverageEnd(from: today, invoicing: invoicingSettings, calendar: cal)
-        )
+        let coverageStart = canonical.start
+        let coverageEnd = canonical.end
         let dayCount = max(1, (cal.dateComponents([.day], from: coverageStart, to: coverageEnd).day ?? 0) + 1)
         print("🔥🔥🔥 DEBUG: Warnings coverage mode=\(warningDetection.clashLookaheadMode.displayName) days=\(dayCount) \(coverageStart)…\(coverageEnd)")
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)

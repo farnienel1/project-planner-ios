@@ -88,7 +88,7 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     func coverageEnd(
         from today: Date,
         invoicing: OrganizationInvoicingSettings = .default,
-        calendar: Calendar = .current
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> Date {
         let start = calendar.startOfDay(for: today)
         switch clashLookaheadMode {
@@ -120,7 +120,7 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     func coverageStart(
         from today: Date,
         invoicing: OrganizationInvoicingSettings = .default,
-        calendar: Calendar = .current
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> Date {
         let start = calendar.startOfDay(for: today)
         switch clashLookaheadMode {
@@ -150,7 +150,7 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     func detectionHorizonEndLabel(
         from today: Date = Date(),
         invoicing: OrganizationInvoicingSettings = .default,
-        calendar: Calendar = .current
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> String {
         let end = coverageEnd(from: today, invoicing: invoicing, calendar: calendar)
         let formatter = DateFormatter()
@@ -163,7 +163,7 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     func detectionHorizonDayCount(
         from today: Date = Date(),
         invoicing: OrganizationInvoicingSettings = .default,
-        calendar: Calendar = .current
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> Int {
         let start = coverageStart(from: today, invoicing: invoicing, calendar: calendar)
         let end = coverageEnd(from: today, invoicing: invoicing, calendar: calendar)
@@ -175,7 +175,7 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     func detectionScanSummary(
         from today: Date = Date(),
         invoicing: OrganizationInvoicingSettings = .default,
-        calendar: Calendar = .current
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> String {
         let start = coverageStart(from: today, invoicing: invoicing, calendar: calendar)
         let end = coverageEnd(from: today, invoicing: invoicing, calendar: calendar)

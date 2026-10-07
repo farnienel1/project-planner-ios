@@ -881,7 +881,10 @@ nonisolated struct OrganizationInvoicingSettings: Codable, Hashable, Sendable {
     nonisolated static let `default` = OrganizationInvoicingSettings(
         paymentRunMode: .dateRanges,
         paymentDateMode: .specificDates,
-        paymentRunDateRanges: [PaymentRunDateRange(startDay: 1, endDay: 2)],
+        paymentRunDateRanges: [
+            PaymentRunDateRange(startDay: 1, endDay: 15),
+            PaymentRunDateRange(startDay: 16, endDay: 31),
+        ],
         paymentDates: [18],
         noteToUsers: "",
         recurringPaymentRunSummary: "In arrears: Monday to Sunday (previous week)",
@@ -892,7 +895,13 @@ nonisolated struct OrganizationInvoicingSettings: Codable, Hashable, Sendable {
 
     var normalizedRanges: [PaymentRunDateRange] {
         let trimmed = Array(paymentRunDateRanges.prefix(2))
-        return trimmed.isEmpty ? [PaymentRunDateRange(startDay: 1, endDay: 2)] : trimmed
+        if trimmed.isEmpty {
+            return [
+                PaymentRunDateRange(startDay: 1, endDay: 15),
+                PaymentRunDateRange(startDay: 16, endDay: 31),
+            ]
+        }
+        return trimmed
     }
 
     var normalizedPaymentDates: [Int] {
