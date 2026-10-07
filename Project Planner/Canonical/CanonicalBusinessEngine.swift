@@ -14,7 +14,7 @@ struct CanonicalDayWindow: Equatable {
     let endDayKey: String
 }
 
-enum CanonicalBusinessEngine {
+nonisolated enum CanonicalBusinessEngine {
     /// Organisation calendar. Device time zone must not decide pay periods or warning windows.
     static var businessCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
@@ -23,6 +23,8 @@ enum CanonicalBusinessEngine {
         calendar.firstWeekday = 2
         return calendar
     }
+
+    private static let scriptLock = NSLock()
 
     private static let context: JSContext? = {
         let source: String?
@@ -52,7 +54,7 @@ enum CanonicalBusinessEngine {
     ) -> CanonicalDayWindow? {
         guard context != nil else { return nil }
         let payload: [String: Any] = [
-            "referenceIso": iso8601.string(from: reference),
+            "referenceIso": isoString(from: reference),
             "timeZone": timeZone,
             "clashLookaheadMode": clashLookaheadMode,
             "clashLookaheadDays": clashLookaheadDays,
@@ -66,7 +68,7 @@ enum CanonicalBusinessEngine {
               let json = String(data: data, encoding: .utf8) else {
             return nil
         }
-        let value = context?.evaluateScript("ProjectPlannerCanonical.coverageWindow(\(json))")
+        let value = evaluate("ProjectPlannerCanonical.coverageWindow(\(json))")
         guard let result = value?.toDictionary(),
               let start = result["startDayKey"] as? String,
               let end = result["endDayKey"] as? String,
@@ -104,6 +106,33 @@ enum CanonicalBusinessEngine {
         )
     }
 
+    /// JSON array returned by a canonical row function. Nil means the script did not run.
+    static func objectRows(function: String, payload: [String: Any]) -> [[String: Any]]? {
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8),
+              let value = evaluate("ProjectPlannerCanonical.\(function)(\(json))"),
+              let raw = value.toArray() else {
+            return nil
+        }
+        return raw.compactMap { item -> [String: Any]? in
+            if let dict = item as? [String: Any] { return dict }
+            guard let dict = item as? NSDictionary else { return nil }
+            var out: [String: Any] = [:]
+            for key in dict.allKeys {
+                guard let name = key as? String, let value = dict[name] else { continue }
+                out[name] = value
+            }
+            return out
+        }
+    }
+
+    static func isoString(from date: Date) -> String {
+        scriptLock.lock()
+        defer { scriptLock.unlock() }
+        return iso8601.string(from: date)
+    }
+
     static func date(fromDayKey key: String, calendar: Calendar = businessCalendar) -> Date? {
         let parts = key.split(separator: "-")
         guard parts.count == 3,
@@ -119,6 +148,20 @@ enum CanonicalBusinessEngine {
         components.month = month
         components.day = day
         return calendar.date(from: components).map { calendar.startOfDay(for: $0) }
+    }
+
+    private static func evaluate(_ source: String) -> JSValue? {
+        scriptLock.lock()
+        defer { scriptLock.unlock() }
+        guard let context else { return nil }
+        context.exception = nil
+        let value = context.evaluateScript(source)
+        if context.exception != nil {
+            NSLog("Canonical business script error: %@", context.exception?.toString() ?? "")
+            context.exception = nil
+            return nil
+        }
+        return value
     }
 
     private static let iso8601: ISO8601DateFormatter = {

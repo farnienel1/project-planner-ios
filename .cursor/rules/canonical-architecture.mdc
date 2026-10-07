@@ -10,7 +10,7 @@ alwaysApply: true
 Before adding or changing a booking, warning, invoicing, labour, organisation, or date rule:
 
 1. Call `CanonicalBusinessEngine` or the existing Swift wrapper that already calls it.
-2. If the rule is new, add it in the web `lib/canonical/engine.ts`, rebuild the script, and commit `canonical-business.js`.
+2. If the rule is new, add it in the web `lib/canonical` module (`engine.ts` or `warningRows.ts`), rebuild the script, and commit `canonical-business.js`. Do not hand-edit that script. Qualification, unverified, and unbooked rows already come from it.
 3. Key caches and UserDefaults by the current organisation. Ignore listener results whose organisation id is no longer `currentOrganization`.
 4. If this app and the web app disagree, trace the first divergence. Do not patch the view to copy the other platform's number.
 5. Add a regression test for the shared result.
