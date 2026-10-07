@@ -10,6 +10,23 @@ import UIKit
 import FirebaseAuth
 import FirebaseFirestore
 
+/// Marks this organisation's invitations for the email as used. Matches the stored casing and leaves another organisation's invitations alone.
+private func markOrganisationInvitationsUsed(email: String, organizationId: String) async throws {
+    let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+    let candidates = Set([trimmed, trimmed.lowercased()].filter { !$0.isEmpty })
+    let db = Firestore.firestore()
+    for candidate in candidates {
+        let existing = try await db.collection("invitations")
+            .whereField("email", isEqualTo: candidate)
+            .getDocuments()
+        for doc in existing.documents {
+            let org = doc.data()["organizationId"] as? String
+            guard org == nil || org == organizationId else { continue }
+            try? await doc.reference.updateData(["isUsed": true])
+        }
+    }
+}
+
 struct ManageUsersView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var bookingStore: BookingStore
@@ -989,19 +1006,14 @@ struct ManageUserRowView: View {
             let db = Firestore.firestore()
             do {
                 // Mark all existing invitations for this email as used so only the new link works
-                let existing = try await db.collection("invitations")
-                    .whereField("email", isEqualTo: user.email)
-                    .getDocuments()
-                for doc in existing.documents {
-                    try? await doc.reference.updateData(["isUsed": true])
-                }
+                try await markOrganisationInvitationsUsed(email: user.email, organizationId: user.organizationId)
 
                 // Always create a brand new invitation (never reuse old link)
                 let invitationId = UUID().uuidString
                 var invitationData: [String: Any] = [
                     "email": user.email,
                     "organizationId": user.organizationId,
-                    "invitedBy": userStore.currentUser?.email ?? "System",
+                    "invitedBy": userStore.currentUser?.id ?? "System",
                     "firstName": user.firstName,
                     "surname": user.surname,
                     "permissions": [
@@ -1014,6 +1026,7 @@ struct ManageUserRowView: View {
                         "projects": user.permissions.projects,
                         "smallWorks": user.permissions.smallWorks,
                         "operativeMode": user.permissions.operativeMode,
+                        "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
                         "weeklyReports": user.permissions.weeklyReports,
                         "dailyOverview": user.permissions.dailyOverview,
                         "subContractors": user.permissions.subContractors,
@@ -1336,6 +1349,7 @@ struct EditUserView: View {
     @State private var showingSelfBookOffConfirmation = false
     @State private var selfBookOffConfirmationAccepted = false
     @State private var dayRateText: String
+    @State private var payBasis: PayrollRateBasis
     @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
     @State private var showingQualificationsEditor = false
     @State private var operativeForQualificationsEditor: Operative?
@@ -1396,6 +1410,7 @@ struct EditUserView: View {
         self._hasNoLineManagerDraft = State(initialValue: user.hasNoLineManager)
         self._managerSelfBookDraft = State(initialValue: user.permissions.annualLeaveSelfBook)
         self._dayRateText = State(initialValue: Self.formatPayrollRateText(dayRate: user.dayRate, hourlyRate: user.hourlyRate))
+        self._payBasis = State(initialValue: Self.initialPayBasis(dayRate: user.dayRate, hourlyRate: user.hourlyRate))
         self._tradePresetRaw = State(initialValue: user.tradeTypePreset ?? "")
         self._tradeCustomText = State(initialValue: user.tradeTypeCustom ?? "")
         self._editFirstName = State(initialValue: user.firstName)
@@ -2669,7 +2684,7 @@ struct EditUserView: View {
                     lineManagerPickRow
                     ManageUserCardDivider()
                 }
-                ManageUserDayRateEditRow(dayRateText: $dayRateText, currencySymbol: localeCurrencySymbol())
+                ManageUserDayRateEditRow(dayRateText: $dayRateText, payBasis: $payBasis, currencySymbol: localeCurrencySymbol())
                     .onChange(of: dayRateText) { _, newValue in
                         guard employmentTypeDraft == .paye else { return }
                         guard parseDayRate(newValue) != nil else { return }
@@ -2796,7 +2811,7 @@ struct EditUserView: View {
 
     private var dayRateHistoryChromeBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Previous day rates")
+            Text("Previous rates")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(ManageUserProfilePalette.textSecondary)
                 .padding(.horizontal, 14)
@@ -2807,7 +2822,7 @@ struct EditUserView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     Spacer()
-                    Text("\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))")
+                    Text("\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))\(entry.payBasis.amountUnit)")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(ManageUserProfilePalette.textPrimary)
                 }
@@ -2876,6 +2891,7 @@ struct EditUserView: View {
 
     private func isPayrollRateDirty(versus user: AppUser) -> Bool {
         parseDayRate(dayRateText) != displayedPayrollRate(for: user)
+            || payBasis != Self.initialPayBasis(dayRate: user.dayRate, hourlyRate: user.hourlyRate)
     }
 
     private func openQualificationsEditor() {
@@ -3524,6 +3540,7 @@ struct EditUserView: View {
                 assignedManagerUserIds: managerIds,
                 hasNoLineManager: hasNoLineManagerDraft,
                 dayRate: permissions.operativeMode ? rateToPersist : subjectUser.dayRate,
+                payBasis: payBasis,
                 operativeStore: operativeStore,
                 dayRateEffectiveAt: effectiveForHistory,
                 updateDayRate: operativeDayRateChanged
@@ -3539,6 +3556,7 @@ struct EditUserView: View {
             managerDayRateSuccess = await userStore.updateManagerDayRate(
                 for: subjectUser,
                 dayRate: parsed,
+                payBasis: payBasis,
                 effectiveAt: effective,
                 operativeStore: operativeStore
             )
@@ -3641,6 +3659,11 @@ struct EditUserView: View {
         }
     }
 
+    private static func initialPayBasis(dayRate: Double?, hourlyRate: Double?) -> PayrollRateBasis {
+        if hourlyRate != nil, dayRate == nil { return .hourly }
+        return .dayRate
+    }
+
     private static func formatPayrollRateText(dayRate: Double?, hourlyRate: Double?) -> String {
         if let dayRate { return String(format: "%.2f", dayRate) }
         if let hourlyRate { return String(format: "%.2f", hourlyRate) }
@@ -3703,12 +3726,7 @@ struct EditUserView: View {
         let db = Firestore.firestore()
         do {
             // Mark all existing invitations for this email as used so only the new link works
-            let existing = try await db.collection("invitations")
-                .whereField("email", isEqualTo: user.email)
-                .getDocuments()
-            for doc in existing.documents {
-                try? await doc.reference.updateData(["isUsed": true])
-            }
+            try await markOrganisationInvitationsUsed(email: user.email, organizationId: user.organizationId)
         } catch {
             // Continue anyway; we'll create a new invitation
         }
@@ -3717,7 +3735,7 @@ struct EditUserView: View {
         var invitationData: [String: Any] = [
             "email": user.email,
             "organizationId": user.organizationId,
-            "invitedBy": userStore.currentUser?.email ?? "System",
+            "invitedBy": userStore.currentUser?.id ?? "System",
             "firstName": user.firstName,
             "surname": user.surname,
             "permissions": [
@@ -3730,6 +3748,7 @@ struct EditUserView: View {
                 "projects": permissions.projects,
                 "smallWorks": permissions.smallWorks,
                 "operativeMode": permissions.operativeMode,
+                "annualLeaveSelfBook": permissions.annualLeaveSelfBook,
                 "weeklyReports": permissions.weeklyReports,
                 "dailyOverview": permissions.dailyOverview,
                 "subContractors": permissions.subContractors,
@@ -3776,19 +3795,14 @@ struct EditUserView: View {
             let db = Firestore.firestore()
             do {
                 // Mark all existing invitations for this email as used so only the new link works
-                let existing = try await db.collection("invitations")
-                    .whereField("email", isEqualTo: user.email)
-                    .getDocuments()
-                for doc in existing.documents {
-                    try? await doc.reference.updateData(["isUsed": true])
-                }
+                try await markOrganisationInvitationsUsed(email: user.email, organizationId: user.organizationId)
 
                 // Always create a brand new invitation (never reuse old link)
                 let invitationId = UUID().uuidString
                 var invitationData: [String: Any] = [
                     "email": user.email,
                     "organizationId": user.organizationId,
-                    "invitedBy": userStore.currentUser?.email ?? "System",
+                    "invitedBy": userStore.currentUser?.id ?? "System",
                     "firstName": user.firstName,
                     "surname": user.surname,
                     "permissions": [
@@ -3801,6 +3815,7 @@ struct EditUserView: View {
                         "projects": user.permissions.projects,
                         "smallWorks": user.permissions.smallWorks,
                         "operativeMode": user.permissions.operativeMode,
+                        "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
                         "weeklyReports": user.permissions.weeklyReports,
                         "dailyOverview": user.permissions.dailyOverview,
                         "subContractors": user.permissions.subContractors,

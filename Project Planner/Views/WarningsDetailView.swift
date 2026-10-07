@@ -99,7 +99,13 @@ struct WarningsDetailView: View {
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
                 WarningsRefreshHelper.isWarningsSheetVisible = true
-                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED count=\(warningsService.activeWarnings.count) completed=\(warningsService.hasCompletedLiveDetection)")
+                WarningsService.allowsSharedMaterialization = true
+                // adoptOrganization waits a turn before decoding, so this layout
+                // can finish with the empty list instead of publishing the cache.
+                if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                    warningsService.adoptOrganization(orgId)
+                }
+                print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED")
             }
             .onDisappear {
                 WarningsRefreshHelper.isWarningsSheetVisible = false

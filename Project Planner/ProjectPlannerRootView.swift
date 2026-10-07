@@ -14,6 +14,21 @@ import FirebaseMessaging
 #endif
 import UIKit
 
+/// Clears a sheet the system restored from the last time the app was closed.
+/// SwiftUI starts those screens closed, but the old PDF report page can still be on screen.
+enum LaunchPresentationReset {
+    @MainActor
+    static func dismissRestoredPresentations() {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        for scene in scenes {
+            for window in scene.windows {
+                guard let root = window.rootViewController, root.presentedViewController != nil else { continue }
+                root.dismiss(animated: false)
+            }
+        }
+    }
+}
+
 /// One-time wiring of stores to Firebase (called from root `onAppear`).
 enum PlannerStoreWiring {
     private static var didConnect = false
@@ -146,8 +161,11 @@ enum PlannerStoreWiring {
             return
         }
 
-        guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        WarningsService.shared.adoptOrganization(organizationId)
+        guard firebaseBackend.currentOrganization?.firestoreDocumentId != nil else { return }
+        // Do not construct WarningsService.shared here. A 1.2s delay still froze
+        // the Admin sim (pid 51233, launched 13:54, sampled 14:05, 0% CPU) inside
+        // bootstrap → shared → init → refreshSeverityCounts. The warnings sheet
+        // loads that cache when the user opens it.
         firebaseBackend.hasBootstrappedOrgDataLoad = true
         print("🔥🔥🔥 DEBUG: ✅ Organization loaded, starting single-flight data bootstrap...")
 
@@ -216,6 +234,8 @@ struct ProjectPlannerRootView: View {
     /// Bumps only when the signed-in user moves from one organisation to another.
     /// Keying ContentView on the first nil → org id remounted Home and ran startup twice.
     @State private var contentShellEpoch = 0
+    /// Hides the launch logo once jobs have started loading, or after a cap so it cannot stick.
+    @State private var launchCoverDismissed = false
 
     /// Prefer backend flag first so we’re not gated on `FirebaseApp.app()` before `ensureFirebaseAppConfigured()` runs; only then read Auth.
     private var showMainExperience: Bool {
@@ -224,10 +244,13 @@ struct ProjectPlannerRootView: View {
         return Auth.auth().currentUser != nil
     }
 
-    /// Launch must not cover Home. A full-screen logo on the first frames left a white window.
-    /// This cover is only for an organisation switch, after Home is already on screen.
+    /// Logo until Home has drawn, and during an organisation switch.
+    /// Hiding it when bootstrap starts left a white window, then a restored report sheet.
     private var showSplash: Bool {
-        firebaseBackend.isSwitchingOrganization
+        if firebaseBackend.isSwitchingOrganization { return true }
+        return showMainExperience
+            && !launchCoverDismissed
+            && !userStore.isDeactivatedForLastUsedOrganization
     }
 
     @ViewBuilder
@@ -280,6 +303,19 @@ struct ProjectPlannerRootView: View {
         .background(ProjectWorksRevampColors.canvas)
         .onReceive(NotificationCenter.default.publisher(for: .plannerHomeDidDraw)) { _ in
             print("🔥🔥🔥 DEBUG: PP_LAUNCH_VISIBLE home")
+            // The system can put the last sheet back (the weekly-report PDF page)
+            // before SwiftUI's own state says it is closed. Drop it under the logo.
+            LaunchPresentationReset.dismissRestoredPresentations()
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                LaunchPresentationReset.dismissRestoredPresentations()
+                launchCoverDismissed = true
+            }
+        }
+        .task {
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            LaunchPresentationReset.dismissRestoredPresentations()
+            launchCoverDismissed = true
         }
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
             guard !signedIn else { return }
@@ -440,7 +476,9 @@ struct ProjectPlannerRootView: View {
 
             guard !userStore.isDeactivatedForLastUsedOrganization else { return }
 
-            WarningsService.shared.adoptOrganization(targetId)
+            // Do not create WarningsService.shared here. adoptOrganization decodes the
+            // warning cache, and that stalled the switch to Raccord MEP on the line
+            // "WarningsService cancelInFlightUpdate". The warnings sheet loads the cache.
             WarningsRefreshHelper.prepareForOrganizationSwitch()
             await userStore.loadOrganizationUsers()
 
@@ -489,18 +527,6 @@ struct ProjectPlannerRootView: View {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 spins += 1
             }
-            _ = await WarningsRefreshHelper.refreshSharedWarnings(
-                operativeStore: operativeStore,
-                bookingStore: bookingStore,
-                projectStore: projectStore,
-                userStore: userStore,
-                managerScheduleStore: managerScheduleStore,
-                holidayStore: holidayStore,
-                firebaseBackend: firebaseBackend,
-                appSettings: appSettings,
-                force: true,
-                bypassLaunchQuiet: true
-            )
             firebaseBackend.suppressStaleOrganizationCache = false
         } catch {
             firebaseBackend.suppressStaleOrganizationCache = false

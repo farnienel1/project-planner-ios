@@ -11,7 +11,12 @@ import FirebaseAuth
 
 @MainActor
 class ProjectStore: ObservableObject {
-    @Published var projects: [Project] = []
+    /// Bumps when `projects` is replaced, including a date or live-flag edit that keeps the same count.
+    /// Home uses this instead of hashing every job on each redraw.
+    private(set) var worksContentRevision: Int = 0
+    @Published var projects: [Project] = [] {
+        didSet { worksContentRevision &+= 1 }
+    }
     @Published var clients: [Client] = []
     @Published var jobTypes: Set<String> = []
     @Published var isLoading: Bool = false

@@ -583,7 +583,8 @@ struct OperativeDetailRowView: View {
                     
                     if let dayRate = operative.dayRate ?? operative.hourlyRate {
                         let currencySymbol = operative.currencySymbol ?? defaultCurrencySymbol()
-                        Text("\(currencySymbol)\(String(format: "%.0f", dayRate))/day")
+                        let unit = (operative.hourlyRate != nil && operative.dayRate == nil) ? "/hr" : "/day"
+                        Text("\(currencySymbol)\(String(format: "%.0f", dayRate))\(unit)")
                             .font(.caption)
                             .foregroundColor(.blue)
                             .fontWeight(.medium)
@@ -668,6 +669,7 @@ struct AddOperativeView: View {
     @State private var startDate = Date()
     @State private var selectedQualifications: Set<Qualification> = []
     @State private var hourlyRate = ""
+    @State private var payBasis: PayrollRateBasis = .dayRate
     @State private var notes = ""
     @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
     @State private var tradeCustomText = ""
@@ -743,9 +745,21 @@ struct AddOperativeView: View {
                     )
                 }
                 
-                Section("Additional Info") {
-                    TextField("Day Rate (e.g., £45, $50)", text: $hourlyRate)
+                Section("Pay") {
+                    Picker("Pay basis", selection: $payBasis) {
+                        Text("Day rate").tag(PayrollRateBasis.dayRate)
+                        Text("Hourly rate").tag(PayrollRateBasis.hourly)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("addOperative.payBasis")
+                    TextField(payBasis == .hourly ? "Hourly rate (e.g. 18.50)" : "Day rate (e.g. 250)", text: $hourlyRate)
                         .accessibilityIdentifier("addOperative.dayRateEG4550")
+                        .keyboardType(.decimalPad)
+                    Text(payBasis == .hourly
+                         ? "Hours worked × this rate, including 15-minute blocks. Not a day rate."
+                         : "A share of the standard day. Not an hourly rate.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     TextField("Notes", text: $notes, axis: .vertical)
                         .accessibilityIdentifier("addOperative.notes")
                         .lineLimit(3...6)
@@ -791,8 +805,8 @@ struct AddOperativeView: View {
             startDate: startDate,
             skills: [],
             qualifications: Array(selectedQualifications),
-            hourlyRate: parsedRate.amount,
-            dayRate: parsedRate.amount,
+            hourlyRate: payBasis == .hourly ? parsedRate.amount : nil,
+            dayRate: payBasis == .dayRate ? parsedRate.amount : nil,
             currencySymbol: parsedRate.symbol,
             tradeTypePreset: tp.isEmpty ? nil : tp,
             tradeTypeCustom: tc.isEmpty ? nil : tc
@@ -849,6 +863,7 @@ struct EditOperativeView: View {
     @State private var startDate: Date
     @State private var selectedQualifications: Set<Qualification>
     @State private var dayRate: String
+    @State private var payBasis: PayrollRateBasis
     @State private var notes: String
     @State private var isActive: Bool
     @State private var showingDeleteConfirmation = false
@@ -863,8 +878,10 @@ struct EditOperativeView: View {
         self._phone = State(initialValue: operative.phone ?? "")
         self._startDate = State(initialValue: operative.startDate)
         self._selectedQualifications = State(initialValue: operative.qualifications)
+        let initialBasis: PayrollRateBasis = (operative.hourlyRate != nil && operative.dayRate == nil) ? .hourly : .dayRate
+        self._payBasis = State(initialValue: initialBasis)
         self._dayRate = State(initialValue: {
-            let amount = operative.dayRate ?? operative.hourlyRate
+            let amount = initialBasis == .hourly ? operative.hourlyRate : (operative.dayRate ?? operative.hourlyRate)
             guard let amount else { return "" }
             let symbol = operative.currencySymbol ?? defaultCurrencySymbol()
             return "\(symbol)\(String(format: "%.0f", amount))"
@@ -969,8 +986,15 @@ struct EditOperativeView: View {
                         title: "Trade type *",
                         footnote: "Required."
                     )
-                    TextField("Day Rate (e.g., £45, $50)", text: $dayRate)
+                    Picker("Pay basis", selection: $payBasis) {
+                        Text("Day rate").tag(PayrollRateBasis.dayRate)
+                        Text("Hourly rate").tag(PayrollRateBasis.hourly)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("editOperative.payBasis")
+                    TextField(payBasis == .hourly ? "Hourly rate (e.g. 18.50)" : "Day rate (e.g. 250)", text: $dayRate)
                         .accessibilityIdentifier("editOperative.dayRateEG4550")
+                        .keyboardType(.decimalPad)
                     TextField("Notes", text: $notes, axis: .vertical)
                         .accessibilityIdentifier("editOperative.notes")
                         .lineLimit(3...6)
@@ -1050,8 +1074,8 @@ struct EditOperativeView: View {
         updatedOperative.startDate = startDate
         updatedOperative.skills = operative.skills  // skills UI removed; preserve existing
         updatedOperative.qualifications = selectedQualifications
-        updatedOperative.dayRate = parsedRate.amount
-        updatedOperative.hourlyRate = parsedRate.amount
+        updatedOperative.dayRate = payBasis == .dayRate ? parsedRate.amount : nil
+        updatedOperative.hourlyRate = payBasis == .hourly ? parsedRate.amount : nil
         updatedOperative.currencySymbol = parsedRate.symbol
         updatedOperative.notes = notes.isEmpty ? nil : notes
         updatedOperative.isActive = isActive
@@ -1080,6 +1104,7 @@ struct EditOperativeView: View {
                             userId: linkedUserId,
                             operativeId: operative.id,
                             dayRate: prev,
+                            payBasis: operative.hourlyRate != nil && operative.dayRate == nil ? .hourly : .dayRate,
                             effectiveAt: operative.createdAt
                         )
                     }
@@ -1089,6 +1114,7 @@ struct EditOperativeView: View {
                             userId: linkedUserId,
                             operativeId: operative.id,
                             dayRate: newRate,
+                            payBasis: payBasis,
                             effectiveAt: Date()
                         )
                     }

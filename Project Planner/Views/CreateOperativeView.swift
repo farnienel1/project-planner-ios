@@ -18,6 +18,7 @@ struct CreateOperativeView: View {
     @State private var operativeEmail = ""
     @State private var operativePhone = ""
     @State private var operativeDayRate = ""
+    @State private var payBasis: PayrollRateBasis = .dayRate
     @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
     @State private var tradeCustomText = ""
     @State private var isLoading = false
@@ -73,10 +74,11 @@ struct CreateOperativeView: View {
                             footnote: "Required. Choose Other to enter a custom trade."
                         )
                         
-                        TextField("Day Rate (Optional)", text: $operativeDayRate)
-                            .accessibilityIdentifier("createOperative.dayRateOptional")
-                            .textFieldStyle(.roundedBorder)
-                            .keyboardType(.decimalPad)
+                        PayrollBasisAmountFields(
+                            basis: $payBasis,
+                            amountText: $operativeDayRate,
+                            title: "Pay (optional)"
+                        )
                     }
                     .padding(.horizontal)
                     
@@ -151,8 +153,8 @@ struct CreateOperativeView: View {
             phone: operativePhone.trimmingCharacters(in: .whitespaces),
             startDate: Date(),
             skills: [],
-            hourlyRate: parsedRate,
-            dayRate: parsedRate,
+            hourlyRate: payBasis == .hourly ? parsedRate : nil,
+            dayRate: payBasis == .dayRate ? parsedRate : nil,
             tradeTypePreset: tp.isEmpty ? nil : tp,
             tradeTypeCustom: tc.isEmpty ? nil : tc
         )

@@ -23,6 +23,14 @@ enum DailyOverviewEditTarget: Identifiable {
     }
 }
 
+private struct DayLabourIndex {
+    var operativeByEmail: [String: Operative]
+    var bookedOperativeIds: Set<UUID>
+    var bookedUserIds: Set<String>
+    var holidayUserIds: Set<String>
+    var holidayOperativeIds: Set<UUID>
+}
+
 struct DailyOverviewView: View {
     /// When nil, shows today. When set, shows that day (for historic overview).
     var displayDate: Date? = nil
@@ -282,47 +290,69 @@ struct DailyOverviewView: View {
         }
     }
 
-    private func hasApprovedHoliday(userId: String, operativeId: UUID?) -> Bool {
-        dayHolidays.contains { holiday in
-            if holiday.status != .approved { return false }
-            if holiday.userId == userId { return true }
-            if let operativeId, holiday.operativeId == operativeId { return true }
-            return false
+    /// One pass over today's bookings, so the unbooked list does not rescan every person against every booking.
+    private var dayLabourIndex: DayLabourIndex {
+        var operativeByEmail: [String: Operative] = [:]
+        operativeByEmail.reserveCapacity(operativeStore.allOperatives.count)
+        for operative in operativeStore.allOperatives {
+            let email = operative.email.lowercased()
+            if operativeByEmail[email] == nil {
+                operativeByEmail[email] = operative
+            }
         }
+        var bookedOperativeIds = Set<UUID>()
+        for booking in dayBookings where booking.status == .confirmed || booking.status == .tentative {
+            bookedOperativeIds.insert(booking.operativeId)
+        }
+        var bookedUserIds = Set<String>()
+        for booking in managerScheduleStore.managerSiteBookings where Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) {
+            bookedUserIds.insert(booking.userId)
+        }
+        var holidayUserIds = Set<String>()
+        var holidayOperativeIds = Set<UUID>()
+        for holiday in dayHolidays where holiday.status == .approved {
+            if let userId = holiday.userId { holidayUserIds.insert(userId) }
+            if let operativeId = holiday.operativeId { holidayOperativeIds.insert(operativeId) }
+        }
+        return DayLabourIndex(
+            operativeByEmail: operativeByEmail,
+            bookedOperativeIds: bookedOperativeIds,
+            bookedUserIds: bookedUserIds,
+            holidayUserIds: holidayUserIds,
+            holidayOperativeIds: holidayOperativeIds
+        )
     }
 
-    private func hasLabourBooking(userId: String, operativeId: UUID?) -> Bool {
-        if let operativeId {
-            let booked = dayBookings.contains {
-                $0.operativeId == operativeId && ($0.status == .confirmed || $0.status == .tentative)
-            }
-            if booked { return true }
-        }
-        return managerScheduleStore.managerSiteBookings.contains {
-            $0.userId == userId && Calendar.current.isDate($0.date, inSameDayAs: overviewDate)
-        }
+    private func isUnbooked(_ user: AppUser, index: DayLabourIndex) -> Bool {
+        let linked = index.operativeByEmail[user.email.lowercased()]
+        if index.holidayUserIds.contains(user.id) { return false }
+        if let linked, index.holidayOperativeIds.contains(linked.id) { return false }
+        if index.bookedUserIds.contains(user.id) { return false }
+        if let linked, index.bookedOperativeIds.contains(linked.id) { return false }
+        return true
+    }
+
+    private func missingHoursLabel(for user: AppUser, requiredHours: Double) -> String {
+        let display = user.fullName.isEmpty ? user.email : user.fullName
+        return "\(display) (missing \(ScheduleCoverageFormat.hours(requiredHours))h)"
     }
 
     private var unbookedOperativeNames: [String] {
         let required = max(payrollTimePolicy.standardPaidHours, 0)
+        let index = dayLabourIndex
         return operativeUsers.compactMap { user in
-            let linkedOperative = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
-            if hasApprovedHoliday(userId: user.id, operativeId: linkedOperative?.id) { return nil }
-            if hasLabourBooking(userId: user.id, operativeId: linkedOperative?.id) { return nil }
-            let display = user.fullName.isEmpty ? user.email : user.fullName
-            return "\(display) (missing \(ScheduleCoverageFormat.hours(required))h)"
+            guard isUnbooked(user, index: index) else { return nil }
+            return missingHoursLabel(for: user, requiredHours: required)
         }
         .sorted()
     }
 
     private var unbookedManagerNames: [String] {
         let required = max(payrollTimePolicy.standardPaidHours, 0)
+        let index = dayLabourIndex
         return managerUsers.compactMap { user in
-            let linkedOperative = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
-            if hasApprovedHoliday(userId: user.id, operativeId: linkedOperative?.id) { return nil }
-            if hasLabourBooking(userId: user.id, operativeId: linkedOperative?.id) { return nil }
-            let display = user.fullName.isEmpty ? user.email : user.fullName
-            return "\(display) (missing \(ScheduleCoverageFormat.hours(required))h)"
+            guard isUnbooked(user, index: index) else { return nil }
+            return missingHoursLabel(for: user, requiredHours: required)
         }
         .sorted()
     }

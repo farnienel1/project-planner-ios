@@ -419,7 +419,7 @@ struct OrganisationWarningsSettingsView: View {
 
             toggleRow(
                 title: "Booking clashes",
-                subtitle: "Flags when a person is double-booked on the same date. Operative, manager, and admin clashes are high-urgency; each can be approved for the weekly report.",
+                subtitle: "Flags when a person is double-booked on the same date. Operative clashes are high urgency. Manager and admin clashes are medium. Each can be approved for the weekly report.",
                 isOn: $draft.detectClashes
             )
 
@@ -440,7 +440,7 @@ struct OrganisationWarningsSettingsView: View {
 
             severityRow(title: "High", description: "Operative booking clashes and unbooked labour. Approve a clash to note it on the weekly report.", tint: .red)
             severityRow(title: "Medium", description: "Manager and admin booking overlaps. Approve if intentional so they appear on the weekly report.", tint: .orange)
-            severityRow(title: "Low", description: "Materials not ordered by the 16:00 cut-off, qualification expiry (including already expired), and unverified accounts.", tint: .blue)
+            severityRow(title: "Low", description: "Materials not ordered by the cut-off time, qualification expiry (including already expired), and unverified accounts.", tint: .blue)
         }
     }
 

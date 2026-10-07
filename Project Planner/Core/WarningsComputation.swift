@@ -19,6 +19,8 @@ struct WarningsComputationInput: @unchecked Sendable {
     let coverageStart: Date
     let coverageEnd: Date
     let materialOrderCutOffEnabled: Bool
+    let materialCutOffHour: Int
+    let materialCutOffMinute: Int
     let materialCutOffOnSaturday: Bool
     let materialCutOffOnSunday: Bool
     let projectsWithTomorrowBookings: [Project]
@@ -140,6 +142,8 @@ struct WarningsComputationSnapshot: Sendable {
     let coverageStart: Date
     let coverageEnd: Date
     let materialOrderCutOffEnabled: Bool
+    let materialCutOffHour: Int
+    let materialCutOffMinute: Int
     let materialCutOffOnSaturday: Bool
     let materialCutOffOnSunday: Bool
     let projectsWithTomorrowBookingIds: [UUID]
@@ -315,6 +319,8 @@ enum WarningsComputation {
             coverageStart: cal.startOfDay(for: input.coverageStart),
             coverageEnd: cal.startOfDay(for: input.coverageEnd),
             materialOrderCutOffEnabled: input.materialOrderCutOffEnabled,
+            materialCutOffHour: input.materialCutOffHour,
+            materialCutOffMinute: input.materialCutOffMinute,
             materialCutOffOnSaturday: input.materialCutOffOnSaturday,
             materialCutOffOnSunday: input.materialCutOffOnSunday,
             projectsWithTomorrowBookingIds: input.projectsWithTomorrowBookings.map(\.id),
@@ -340,10 +346,10 @@ enum WarningsComputation {
         return map
     }
 
-    nonisolated static func generate(_ input: WarningsComputationSnapshot) -> [Warning] {
+    nonisolated static func generate(_ input: WarningsComputationSnapshot, now: Date = Date()) -> [Warning] {
         var generated: [Warning] = []
         let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
+        let today = cal.startOfDay(for: now)
         let coverageStart = cal.startOfDay(for: input.coverageStart)
         let coverageEnd = cal.startOfDay(for: input.coverageEnd)
 
@@ -588,8 +594,11 @@ enum WarningsComputation {
             day = next
         }
 
-        let hour = cal.component(.hour, from: Date())
-        if input.materialOrderCutOffEnabled, hour >= 16 {
+        let cutoffHour = min(23, max(0, input.materialCutOffHour))
+        let cutoffMinute = min(59, max(0, input.materialCutOffMinute))
+        let nowMinutes = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
+        if input.materialOrderCutOffEnabled, nowMinutes >= (cutoffHour * 60 + cutoffMinute) {
+            let cutoffLabel = String(format: "%02d:%02d", cutoffHour, cutoffMinute)
             let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
             let tomorrowWeekday = cal.component(.weekday, from: tomorrow)
             if tomorrowWeekday == 7 && !input.materialCutOffOnSaturday {
@@ -613,9 +622,9 @@ enum WarningsComputation {
                 let notOrderedCount = tomorrowMaterials.filter { !$0.isOrdered }.count
                 let message: String
                 if tomorrowMaterials.isEmpty {
-                    message = "No materials have been ordered for \(project.jobNumber) tomorrow's work (cut-off 16:00)."
+                    message = "No materials have been ordered for \(project.jobNumber) tomorrow's work (cut-off \(cutoffLabel))."
                 } else {
-                    message = "Materials for \(project.jobNumber) were not fully ordered by 16:00 for tomorrow's work (\(notOrderedCount) line\(notOrderedCount == 1 ? "" : "s") still not ordered)."
+                    message = "Materials for \(project.jobNumber) were not fully ordered by \(cutoffLabel) for tomorrow's work (\(notOrderedCount) line\(notOrderedCount == 1 ? "" : "s") still not ordered)."
                 }
                 generated.append(Warning(
                     resolutionKey: "materials-\(project.id.uuidString)-\(tomorrow.timeIntervalSince1970)",

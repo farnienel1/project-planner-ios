@@ -214,6 +214,24 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         return calendar.startOfDay(for: calendar.date(byAdding: .day, value: add, to: date) ?? date)
     }
 
+    /// Top-level `warningDetection` wins. A missing day count is taken from `settings.warningDetection`.
+    /// When the top-level map is absent, the nested map is the whole setting.
+    static func resolved(topLevel: [String: Any]?, nested: [String: Any]?) -> OrgWarningDetectionSettings {
+        if let topLevel {
+            var settings = fromFirestore(topLevel)
+            if firestoreInt(topLevel["clashLookaheadDays"]) == nil,
+               let nested,
+               let days = firestoreInt(nested["clashLookaheadDays"]) {
+                settings.clashLookaheadDays = days
+            }
+            return settings
+        }
+        if let nested {
+            return fromFirestore(nested)
+        }
+        return .default
+    }
+
     static func fromFirestore(_ data: [String: Any]) -> OrgWarningDetectionSettings {
         var s = OrgWarningDetectionSettings.default
         if let clashes = firestoreBool(data["detectClashes"]) { s.detectClashes = clashes }

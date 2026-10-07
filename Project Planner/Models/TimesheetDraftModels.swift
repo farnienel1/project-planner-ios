@@ -91,8 +91,12 @@ struct TimesheetWeeklyReportLabourLine: Codable, Hashable, Identifiable {
     var days: Double
     var amount: Double
     var isOvertime: Bool
+    /// Overtime multiplier for this line. Missing on older snapshots.
+    var otMultiplier: Double? = nil
     var decision: TimesheetManagerDecision
     var bookingId: String?
+    /// `"day"` or `"hourly"`. Missing on older snapshots means day rate.
+    var payBasis: String? = nil
 }
 
 struct TimesheetWeeklyReportMoneyLine: Codable, Hashable, Identifiable {

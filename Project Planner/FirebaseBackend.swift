@@ -204,6 +204,8 @@ class FirebaseBackend: ObservableObject {
         let userId: String
         let assignedManagerUserId: String?
         let dayRate: Double?
+        let hourlyRate: Double?
+        let payBasis: PayrollRateBasis?
     }
     
     /// Breaks recover → loadUserOrganization → org read fails → recover again loops (see firestore org self-read rules).
@@ -976,9 +978,8 @@ class FirebaseBackend: ObservableObject {
             settings.workingHours.lunchBreak = policy.unpaidBreakMinutes
         }
         let warningDict = data["warningDetection"] as? [String: Any]
-        if let warningDict {
-            settings.warningDetection = OrgWarningDetectionSettings.fromFirestore(warningDict)
-        }
+        let nestedWarning = (data["settings"] as? [String: Any])?["warningDetection"] as? [String: Any]
+        settings.warningDetection = OrgWarningDetectionSettings.resolved(topLevel: warningDict, nested: nestedWarning)
         let canonicalExclusionPresent = warningDict?["excludedUserIdsFromUnbookedWarnings"] != nil
         if !canonicalExclusionPresent {
             if let settingsDict = data["settings"] as? [String: Any],
@@ -2863,7 +2864,7 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: Operative email: \(operative.email), phone: \(operative.phone ?? "nil")")
         print("🔥🔥🔥 DEBUG: Operative skills: \(Array(operative.skills))")
         
-            let data: [String: Any] = [
+            var data: [String: Any] = [
                 "firstName": operative.firstName,
                 "lastName": operative.lastName,
                 "name": operative.name, // Keep for backward compatibility
@@ -2887,10 +2888,8 @@ class FirebaseBackend: ObservableObject {
                     return qualificationData
                 },
                 "isActive": operative.isActive,
-                "hourlyRate": operative.hourlyRate ?? 0,
                 "currencySymbol": operative.currencySymbol ?? "£",
             "notes": operative.notes ?? "",
-            "dayRate": operative.dayRate ?? 0,
             "tradeTypePreset": operative.tradeTypePreset ?? "",
             "tradeTypeCustom": operative.tradeTypeCustom ?? "",
             "qualificationExpiryDates": Dictionary(uniqueKeysWithValues: operative.qualificationExpiryDates.map { ($0.key.uuidString, Timestamp(date: $0.value)) }),
@@ -2899,7 +2898,14 @@ class FirebaseBackend: ObservableObject {
             "createdAt": Timestamp(date: operative.createdAt),
             "updatedAt": Timestamp(date: operative.updatedAt)
         ]
-        
+        if let dayRate = operative.dayRate {
+            data["payBasis"] = PayrollRateBasis.dayRate.rawValue
+            data["dayRate"] = dayRate
+        } else if let hourlyRate = operative.hourlyRate {
+            data["payBasis"] = PayrollRateBasis.hourly.rawValue
+            data["hourlyRate"] = hourlyRate
+        }
+
         print("🔥🔥🔥 DEBUG: Data to save: \(data)")
         print("🔥🔥🔥 DEBUG: Saving operative to organizations/\(organizationId)/operatives/\(operative.id.uuidString)")
         
@@ -3031,8 +3037,15 @@ class FirebaseBackend: ObservableObject {
                     lastName = ""
                 }
                 
-                let loadedHourly = data["hourlyRate"] as? Double
-                let loadedDay = data["dayRate"] as? Double
+                let storedBasis = PayrollRateBasis(rawValue: (data["payBasis"] as? String) ?? "")
+                let exclusiveRate = PayrollRateCodec.exclusive(
+                    dayRate: data["dayRate"] as? Double,
+                    hourlyRate: data["hourlyRate"] as? Double,
+                    payBasis: storedBasis,
+                    treatZeroAsUnset: storedBasis == nil
+                )
+                let loadedHourly = exclusiveRate.hourlyRate
+                let loadedDay = exclusiveRate.dayRate
                 let tp = (data["tradeTypePreset"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let tc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let operative = Operative(
@@ -3048,7 +3061,7 @@ class FirebaseBackend: ObservableObject {
                     qualificationCertificateURLs: qualificationCertificateURLs,
                     isActive: firestoreBool(data["isActive"]) ?? true,
                     hourlyRate: loadedHourly,
-                    dayRate: loadedDay ?? loadedHourly,
+                    dayRate: loadedDay,
                     currencySymbol: data["currencySymbol"] as? String,
                     notes: data["notes"] as? String,
                     tradeTypePreset: (tp?.isEmpty == false) ? tp : nil,
@@ -3679,12 +3692,15 @@ class FirebaseBackend: ObservableObject {
             var seen = Set<String>()
             return ids.filter { seen.insert($0).inserted }
         }()
-        let dayRate = data["dayRate"] as? Double
-        var hourlyRate = data["hourlyRate"] as? Double
-        // Prefer day rate if both are present (legacy / misconfigured documents).
-        if let dr = dayRate, dr > 0, let hr = hourlyRate, hr > 0 {
-            hourlyRate = nil
-        }
+        let storedPayBasis = PayrollRateBasis(rawValue: (data["payBasis"] as? String) ?? "")
+        let exclusivePay = PayrollRateCodec.exclusive(
+            dayRate: data["dayRate"] as? Double,
+            hourlyRate: data["hourlyRate"] as? Double,
+            payBasis: storedPayBasis,
+            treatZeroAsUnset: false
+        )
+        let dayRate = exclusivePay.dayRate
+        let hourlyRate = exclusivePay.hourlyRate
         let utp = (data["tradeTypePreset"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let utc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let profilePhotoRaw = (data["profilePhotoURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4256,10 +4272,13 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
             )
         }
-        // Dotted fields update this list without replacing other warningDetection keys the web app stores.
+        // The same keys go to warningDetection and settings.warningDetection so neither map goes stale.
+        // Dotted fields update those keys without replacing the rest of settings.
+        let dictionary = settings.asFirestoreDictionary()
         var payload: [String: Any] = ["updatedAt": Timestamp(date: Date())]
-        for (key, value) in settings.asFirestoreDictionary() {
+        for (key, value) in dictionary {
             payload["warningDetection.\(key)"] = value
+            payload["settings.warningDetection.\(key)"] = value
         }
         let orgRef = db.collection("organizations").document(orgId)
         do {
@@ -4267,11 +4286,16 @@ class FirebaseBackend: ObservableObject {
         } catch {
             try await orgRef.setData(
                 [
-                    "warningDetection": settings.asFirestoreDictionary(),
+                    "warningDetection": dictionary,
                     "updatedAt": Timestamp(date: Date()),
                 ],
                 merge: true
             )
+            var nested: [String: Any] = [:]
+            for (key, value) in dictionary {
+                nested["settings.warningDetection.\(key)"] = value
+            }
+            try await orgRef.updateData(nested)
         }
         guard var org = currentOrganization else { return }
         org.settings.warningDetection = settings
@@ -4792,13 +4816,15 @@ class FirebaseBackend: ObservableObject {
             userData["assignedManagerUserIds"] = lineManagerIds
         }
         
-        if user.permissions.operativeMode || user.permissions.manager {
+        if user.permissions.operativeMode || user.permissions.manager || user.permissions.adminAccess {
             let dr = user.dayRate
             let hr = user.hourlyRate
-            if let dr {
+            if let dr, user.hourlyRate == nil {
+                userData["payBasis"] = PayrollRateBasis.dayRate.rawValue
                 userData["dayRate"] = dr
                 userData["hourlyRate"] = FieldValue.delete()
-            } else if let hr {
+            } else if let hr, user.dayRate == nil {
+                userData["payBasis"] = PayrollRateBasis.hourly.rawValue
                 userData["hourlyRate"] = hr
                 userData["dayRate"] = FieldValue.delete()
             }
@@ -5050,6 +5076,7 @@ class FirebaseBackend: ObservableObject {
         assignedManagerUserIds: [String]? = nil,
         hasNoLineManager: Bool? = nil,
         dayRate: Double?,
+        payBasis: PayrollRateBasis = .dayRate,
         updateDayRate: Bool = true
     ) async throws {
         var payload: [String: Any] = [
@@ -5084,29 +5111,35 @@ class FirebaseBackend: ObservableObject {
             }
         }
         if updateDayRate {
-            if let dayRate {
-                payload["dayRate"] = dayRate
-                payload["hourlyRate"] = FieldValue.delete()
-            } else {
-                payload["dayRate"] = FieldValue.delete()
-                payload["hourlyRate"] = FieldValue.delete()
-            }
+            Self.writeExclusivePayRate(amount: dayRate, payBasis: payBasis, into: &payload)
         }
         try await db.collection("users").document(userId).updateData(payload)
     }
 
-    func updateUserDayRateMetadata(userId: String, dayRate: Double?) async throws {
+    func updateUserDayRateMetadata(userId: String, dayRate: Double?, payBasis: PayrollRateBasis = .dayRate) async throws {
         var payload: [String: Any] = [
             "updatedAt": Timestamp(date: Date())
         ]
-        if let dayRate {
-            payload["dayRate"] = dayRate
-            payload["hourlyRate"] = FieldValue.delete()
-        } else {
+        Self.writeExclusivePayRate(amount: dayRate, payBasis: payBasis, into: &payload)
+        try await db.collection("users").document(userId).updateData(payload)
+    }
+
+    private static func writeExclusivePayRate(amount: Double?, payBasis: PayrollRateBasis, into payload: inout [String: Any]) {
+        guard let amount else {
             payload["dayRate"] = FieldValue.delete()
             payload["hourlyRate"] = FieldValue.delete()
+            payload["payBasis"] = FieldValue.delete()
+            return
         }
-        try await db.collection("users").document(userId).updateData(payload)
+        payload["payBasis"] = payBasis.rawValue
+        switch payBasis {
+        case .dayRate:
+            payload["dayRate"] = amount
+            payload["hourlyRate"] = FieldValue.delete()
+        case .hourly:
+            payload["hourlyRate"] = amount
+            payload["dayRate"] = FieldValue.delete()
+        }
     }
 
     /// Client heartbeat for “last seen”; merge-only so other writes are not replaced.
@@ -5126,7 +5159,9 @@ class FirebaseBackend: ObservableObject {
         organizationId: String,
         userId: String,
         assignedManagerUserId: String?,
-        dayRate: Double?
+        dayRate: Double?,
+        hourlyRate: Double? = nil,
+        payBasis: PayrollRateBasis = .dayRate
     ) async throws {
         let orgId = try await ensureReadableOrganization(organizationId)
         let ref = db.collection("organizations")
@@ -5144,11 +5179,8 @@ class FirebaseBackend: ObservableObject {
         } else {
             payload["assignedManagerUserId"] = FieldValue.delete()
         }
-        if let dayRate {
-            payload["dayRate"] = dayRate
-        } else {
-            payload["dayRate"] = FieldValue.delete()
-        }
+        let amount = payBasis == .hourly ? hourlyRate : dayRate
+        Self.writeExclusivePayRate(amount: amount, payBasis: payBasis, into: &payload)
 
         do {
             try await ref.updateData(payload)
@@ -5163,8 +5195,14 @@ class FirebaseBackend: ObservableObject {
                    !managerId.isEmpty {
                     createPayload["assignedManagerUserId"] = managerId
                 }
-                if let dayRate {
-                    createPayload["dayRate"] = dayRate
+                let amount = payBasis == .hourly ? hourlyRate : dayRate
+                if let amount {
+                    createPayload["payBasis"] = payBasis.rawValue
+                    if payBasis == .hourly {
+                        createPayload["hourlyRate"] = amount
+                    } else {
+                        createPayload["dayRate"] = amount
+                    }
                 }
                 try await ref.setData(createPayload, merge: true)
             } else {
@@ -5189,10 +5227,19 @@ class FirebaseBackend: ObservableObject {
         for doc in snapshot.documents {
             let data = doc.data()
             let userId = (data["userId"] as? String) ?? doc.documentID
+            let basis = PayrollRateBasis(rawValue: (data["payBasis"] as? String) ?? "")
+            let exclusive = PayrollRateCodec.exclusive(
+                dayRate: data["dayRate"] as? Double,
+                hourlyRate: data["hourlyRate"] as? Double,
+                payBasis: basis,
+                treatZeroAsUnset: false
+            )
             mapped[userId] = OperativeProfileMetadata(
                 userId: userId,
                 assignedManagerUserId: data["assignedManagerUserId"] as? String,
-                dayRate: data["dayRate"] as? Double
+                dayRate: exclusive.dayRate,
+                hourlyRate: exclusive.hourlyRate,
+                payBasis: basis ?? (exclusive.hourlyRate != nil ? .hourly : (exclusive.dayRate != nil ? .dayRate : nil))
             )
         }
         return mapped
@@ -5616,7 +5663,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedPayBasis: PayrollRateBasis = .dayRate, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         
         let emailLower = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5699,11 +5746,14 @@ class FirebaseBackend: ObservableObject {
         if hasNoLineManager {
             invitationData["hasNoLineManager"] = true
         }
-        if permissions.operativeMode, let dr = invitedOperativeDayRate {
-            invitationData["dayRate"] = dr
-        }
-        if permissions.manager, let dr = invitedManagerDayRate {
-            invitationData["dayRate"] = dr
+        let invitedAmount = permissions.operativeMode ? invitedOperativeDayRate : (permissions.manager ? invitedManagerDayRate : nil)
+        if let invitedAmount {
+            invitationData["payBasis"] = invitedPayBasis.rawValue
+            if invitedPayBasis == .hourly {
+                invitationData["hourlyRate"] = invitedAmount
+            } else {
+                invitationData["dayRate"] = invitedAmount
+            }
         }
         if permissions.operativeMode || permissions.manager {
             let tp = invitedTradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5788,7 +5838,8 @@ class FirebaseBackend: ObservableObject {
                 assignedManagerUserId: operativeManagerId,
                 assignedManagerUserIds: resolvedManagerIds,
                 hasNoLineManager: hasNoLineManager,
-                dayRate: permissions.operativeMode ? invitedOperativeDayRate : (permissions.manager ? invitedManagerDayRate : nil),
+                dayRate: invitedPayBasis == .hourly ? nil : invitedAmount,
+                hourlyRate: invitedPayBasis == .hourly ? invitedAmount : nil,
                 tradeTypePreset: (permissions.operativeMode || permissions.manager) && inviteTp?.isEmpty == false ? inviteTp : nil,
                 tradeTypeCustom: (permissions.operativeMode || permissions.manager) && inviteTc?.isEmpty == false ? inviteTc : nil,
                 employmentType: employmentType,
@@ -6521,6 +6572,7 @@ class FirebaseBackend: ObservableObject {
         userId: String?,
         operativeId: UUID?,
         dayRate: Double,
+        payBasis: PayrollRateBasis = .dayRate,
         effectiveAt: Date
     ) async throws {
         let trimmedUser = userId?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -6534,6 +6586,7 @@ class FirebaseBackend: ObservableObject {
         }
         var payload: [String: Any] = [
             "dayRate": dayRate,
+            "payBasis": payBasis.rawValue,
             "effectiveAt": Timestamp(date: effectiveAt),
             "createdAt": Timestamp(date: Date())
         ]
@@ -6568,7 +6621,8 @@ class FirebaseBackend: ObservableObject {
                 operativeId: operativeId,
                 dayRate: dayRate,
                 effectiveAt: effectiveAt,
-                createdAt: createdAt
+                createdAt: createdAt,
+                payBasis: PayrollRateBasis(rawValue: (data["payBasis"] as? String) ?? "") ?? .dayRate
             )
             if let userId {
                 byUserId[userId, default: []].append(entry)

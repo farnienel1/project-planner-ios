@@ -47,6 +47,7 @@ struct AddUserView: View {
     @State private var showingLineManagerPicker = false
     @State private var operativeDayRateText = ""
     @State private var managerDayRateText = ""
+    @State private var payBasis: PayrollRateBasis = .dayRate
     @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
     @State private var tradeCustomText = ""
     @State private var annualLeaveDaysText = "25"
@@ -497,17 +498,11 @@ struct AddUserView: View {
                 }
                 
                 if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Day rate (optional)")
-                            .font(.headline)
-                        TextField("e.g. 250", text: dayRateBindingForSelectedType)
-                            .accessibilityIdentifier("addUser.eG250")
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .keyboardType(.decimalPad)
-                        Text(invitedAccountType == .manager ? "Optional for managers. Leave blank if not needed." : "Stored on the operative profile when their account is linked.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
+                    PayrollBasisAmountFields(
+                        basis: $payBasis,
+                        amountText: dayRateBindingForSelectedType,
+                        title: "Pay (optional)"
+                    )
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -906,7 +901,7 @@ struct AddUserView: View {
                     let reviewDayRate = selectedDayRateTextForReview
                     if !reviewDayRate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         HStack {
-                            Text("Day rate:")
+                            Text(payBasis == .hourly ? "Hourly rate:" : "Day rate:")
                                 .foregroundColor(.secondary)
                             Spacer()
                             Text(reviewDayRate)
@@ -1136,6 +1131,7 @@ struct AddUserView: View {
                 hasNoLineManager: hasNoLineManager,
                 invitedOperativeDayRate: permissions.operativeMode ? parsedDayRate : nil,
                 invitedManagerDayRate: permissions.manager ? parsedDayRate : nil,
+                invitedPayBasis: payBasis,
                 invitedTradeTypePreset: needsTrade ? tradePresetRaw : nil,
                 invitedTradeTypeCustom: needsTrade ? tCustom : nil,
                 annualLeaveDaysPerYear: passAnnualLeaveInvite ? parseAnnualLeaveDaysForInvite() : nil,

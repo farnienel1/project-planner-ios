@@ -34,6 +34,11 @@ enum WarningsRefreshHelper {
         bypassLaunchQuiet: Bool = false
     ) async -> Bool {
         guard userStore.hasAdminAccess() else { return false }
+        // Launch must not create the shared service. The warnings sheet turns this on.
+        guard WarningsService.allowsSharedMaterialization else {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (service not materialised)")
+            return false
+        }
 
         if isWarningsSheetVisible && !manualUserInitiated && !allowWhileSheetVisible {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (Warnings sheet visible)")
@@ -122,10 +127,14 @@ enum WarningsRefreshHelper {
     }
 
     /// Organisation switch must not reuse the previous scan's cooldown or in-flight task.
+    /// Do not create the shared service here. The warnings sheet loads the new company when it opens.
     @MainActor
     static func prepareForOrganizationSwitch() {
         lastRefreshAt = nil
-        cancelInFlightRefresh()
+        inFlightTask?.cancel()
+        inFlightTask = nil
+        guard WarningsService.allowsSharedMaterialization else { return }
+        WarningsService.shared.dropLiveWarningsForOrganizationSwitch()
     }
 
     /// Cancel any in-flight Home warnings scan before opening heavy sheets (Weekly Report).
@@ -133,6 +142,7 @@ enum WarningsRefreshHelper {
     static func cancelInFlightRefresh() {
         inFlightTask?.cancel()
         inFlightTask = nil
+        guard WarningsService.allowsSharedMaterialization else { return }
         WarningsService.shared.cancelInFlightUpdate()
         print("🔥🔥🔥 DEBUG: Warnings refresh in-flight cancelled for sheet open")
     }
@@ -188,6 +198,15 @@ enum WarningsRefreshHelper {
         )
         let projects = projectStore.projects
         let projectsTomorrow = projects.filter { tomorrowIds.contains($0.id) }
+        let notifications = appSettings.settings.notifications
+        let tomorrowMaterials = notifications.materialOrderCutOff
+            ? await materialLinesForTomorrow(
+                projects: projectsTomorrow,
+                tomorrow: tomorrow,
+                calendar: cal,
+                firebaseBackend: firebaseBackend
+            )
+            : (items: [MaterialItem](), projects: [Project]())
 
         // Pre-window to the detection horizon before WarningsService snapshot work.
         let liveBookings = bookingStore.bookings.filter {
@@ -222,13 +241,46 @@ enum WarningsRefreshHelper {
             invoicingSettings: invoicingSettings,
             labourCoverageStart: coverageStart,
             labourCoverageEnd: coverageEnd,
-            materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
-            materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
-            materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
-            projectsWithTomorrowBookings: projectsTomorrow,
+            materialOrderCutOffEnabled: notifications.materialOrderCutOff,
+            materialCutOffHour: notifications.materialCutOffHour,
+            materialCutOffMinute: notifications.materialCutOffMinute,
+            materialCutOffOnSaturday: notifications.materialCutOffOnSaturday,
+            materialCutOffOnSunday: notifications.materialCutOffOnSunday,
+            projectsWithTomorrowBookings: tomorrowMaterials.projects,
+            materialItemsForTomorrow: tomorrowMaterials.items,
             publishToLiveCache: true
         )
         postWarningsCountDidChange()
+    }
+
+    /// Lines needed tomorrow on jobs that have a booking. A failed read leaves that job out of the materials check so a network error is not reported as “nothing ordered”.
+    @MainActor
+    private static func materialLinesForTomorrow(
+        projects: [Project],
+        tomorrow: Date,
+        calendar: Calendar,
+        firebaseBackend: FirebaseBackend
+    ) async -> (items: [MaterialItem], projects: [Project]) {
+        guard !projects.isEmpty,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+              !organizationId.isEmpty else {
+            return ([], [])
+        }
+        var lines: [MaterialItem] = []
+        var loadedProjects: [Project] = []
+        for project in projects {
+            do {
+                let loaded = try await firebaseBackend.loadMaterialItems(
+                    organizationId: organizationId,
+                    projectId: project.id
+                )
+                lines.append(contentsOf: loaded.filter { calendar.isDate($0.date, inSameDayAs: tomorrow) })
+                loadedProjects.append(project)
+            } catch {
+                continue
+            }
+        }
+        return (lines, loadedProjects)
     }
 
     @MainActor

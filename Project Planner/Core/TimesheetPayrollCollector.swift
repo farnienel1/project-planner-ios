@@ -20,6 +20,58 @@ struct TimesheetPayrollLineItem: Identifiable, Hashable {
     let amount: Double
     let isPayeDay: Bool
     let isOvertimeLine: Bool
+    /// Set on overtime lines so weekly-report labels can say `Hourly OT x1.5`.
+    let otMultiplier: Double?
+
+    init(
+        id: String,
+        date: Date,
+        jobNumber: String,
+        projectName: String,
+        details: String,
+        paidHours: Double,
+        payrollBasis: PayrollRateBasis,
+        dayRate: Double,
+        hourlyRate: Double?,
+        amount: Double,
+        isPayeDay: Bool,
+        isOvertimeLine: Bool,
+        otMultiplier: Double? = nil
+    ) {
+        self.id = id
+        self.date = date
+        self.jobNumber = jobNumber
+        self.projectName = projectName
+        self.details = details
+        self.paidHours = paidHours
+        self.payrollBasis = payrollBasis
+        self.dayRate = dayRate
+        self.hourlyRate = hourlyRate
+        self.amount = amount
+        self.isPayeDay = isPayeDay
+        self.isOvertimeLine = isOvertimeLine
+        self.otMultiplier = otMultiplier
+    }
+
+    func payrollBreakdown(standardDayHours: Double) -> PayrollPayLineDisplay {
+        let rate: Double? = {
+            if isPayeDay { return 0 }
+            switch payrollBasis {
+            case .hourly: return hourlyRate
+            case .dayRate: return dayRate
+            }
+        }()
+        return PayrollPayLineFormatter.line(
+            basis: payrollBasis,
+            paidHours: paidHours,
+            standardDayHours: standardDayHours,
+            rate: rate,
+            pay: amount,
+            isOvertime: isOvertimeLine,
+            otMultiplier: isOvertimeLine ? otMultiplier : nil,
+            isPaye: isPayeDay
+        )
+    }
 }
 
 struct TimesheetPayrollSummary {
@@ -45,7 +97,10 @@ enum TimesheetPayrollCollector {
         history: OperativeDayRateHistoryCollection,
         policy: OrgPayrollTimePolicy,
         organization: Organization? = nil,
-        scheduleOptions: MyScheduleOptions = MyScheduleOptions()
+        scheduleOptions: MyScheduleOptions = MyScheduleOptions(),
+        payrollUserIds: [String] = [],
+        livePrefersHourly: Bool = false,
+        preferredHourlyRate: Double? = nil
     ) -> TimesheetPayrollSummary {
         let cal = Calendar.current
         let rangeStart = cal.startOfDay(for: range.lowerBound)
@@ -93,7 +148,10 @@ enum TimesheetPayrollCollector {
                 operative: matchedOperative,
                 on: day,
                 history: history,
-                standardDayHours: standardDayHours
+                standardDayHours: standardDayHours,
+                userIds: payrollUserIds,
+                livePrefersHourly: livePrefersHourly,
+                preferredHourlyRate: preferredHourlyRate
             )
             let paidHours = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
@@ -140,7 +198,8 @@ enum TimesheetPayrollCollector {
                         hourlyRate: otDisplayHourly,
                         amount: otAmount,
                         isPayeDay: user.employmentType(on: day) == .paye,
-                        isOvertimeLine: true
+                        isOvertimeLine: true,
+                        otMultiplier: otMultiplier
                     )
                 )
             }
@@ -160,7 +219,10 @@ enum TimesheetPayrollCollector {
                 operative: matchedOperatives.first,
                 on: day,
                 history: history,
-                standardDayHours: standardDayHours
+                standardDayHours: standardDayHours,
+                userIds: payrollUserIds,
+                livePrefersHourly: livePrefersHourly,
+                preferredHourlyRate: preferredHourlyRate
             )
             let paidHours = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
@@ -207,7 +269,8 @@ enum TimesheetPayrollCollector {
                         hourlyRate: otDisplayHourly,
                         amount: otAmount,
                         isPayeDay: user.employmentType(on: day) == .paye,
-                        isOvertimeLine: true
+                        isOvertimeLine: true,
+                        otMultiplier: otMultiplier
                     )
                 )
             }
@@ -244,7 +307,10 @@ enum TimesheetPayrollCollector {
         history: OperativeDayRateHistoryCollection,
         policy: OrgPayrollTimePolicy,
         organization: Organization? = nil,
-        scheduleOptions: MyScheduleOptions = MyScheduleOptions()
+        scheduleOptions: MyScheduleOptions = MyScheduleOptions(),
+        payrollUserIds: [String] = [],
+        livePrefersHourly: Bool = false,
+        preferredHourlyRate: Double? = nil
     ) -> TimesheetPayrollSummary {
         collect(
             for: user,
@@ -257,7 +323,10 @@ enum TimesheetPayrollCollector {
             history: history,
             policy: policy,
             organization: organization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            payrollUserIds: payrollUserIds,
+            livePrefersHourly: livePrefersHourly,
+            preferredHourlyRate: preferredHourlyRate
         )
     }
 
@@ -334,11 +403,4 @@ enum TimesheetPayrollCollector {
         }
     }
 
-    private static func formatHours(_ value: Double) -> String {
-        let rounded = (value * 2).rounded() / 2
-        if abs(rounded - rounded.rounded()) < 0.001 {
-            return String(format: "%.0f", rounded)
-        }
-        return String(format: "%.1f", rounded)
-    }
 }

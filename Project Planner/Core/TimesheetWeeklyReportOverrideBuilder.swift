@@ -22,24 +22,16 @@ enum TimesheetWeeklyReportOverrideBuilder {
         policy: OrgPayrollTimePolicy,
         organization: Organization?,
         scheduleOptions: MyScheduleOptions,
-        viewer: AppUser?
+        viewer: AppUser?,
+        payrollUserIds: [String] = [],
+        livePrefersHourly: Bool = false,
+        preferredHourlyRate: Double? = nil
     ) {
         guard TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) else {
             draft.weeklyReportOverride = nil
             return
         }
-        if let existing = draft.weeklyReportOverride {
-            // Keep the agreed labour snapshot. Later schedule edits must not undo a
-            // counter-sign; only line-manager (or exported-tab) review changes apply.
-            draft.weeklyReportOverride = reapplyReviews(
-                to: existing,
-                draft: draft,
-                user: user,
-                viewer: viewer
-            )
-            return
-        }
-        draft.weeklyReportOverride = make(
+        let corrected = make(
             user: user,
             week: week,
             draft: draft,
@@ -52,8 +44,42 @@ enum TimesheetWeeklyReportOverrideBuilder {
             policy: policy,
             organization: organization,
             scheduleOptions: scheduleOptions,
-            viewer: viewer
+            viewer: viewer,
+            payrollUserIds: payrollUserIds,
+            livePrefersHourly: livePrefersHourly,
+            preferredHourlyRate: preferredHourlyRate
         )
+        if let existing = draft.weeklyReportOverride {
+            // Keep the agreed labour snapshot. Later schedule edits must not undo a
+            // counter-sign; only line-manager (or exported-tab) review changes apply.
+            // A snapshot stored as day rate while this person is hourly is not an
+            // agreed rate change — it missed the hourly profile and must be rebuilt.
+            if snapshotMissedHourlyBasis(existing: existing, corrected: corrected) {
+                draft.weeklyReportOverride = corrected
+                return
+            }
+            draft.weeklyReportOverride = reapplyReviews(
+                to: existing,
+                draft: draft,
+                user: user,
+                viewer: viewer
+            )
+            return
+        }
+        draft.weeklyReportOverride = corrected
+    }
+
+    /// True when a stored line is day-rate but the hourly profile resolves that same line as hourly.
+    private static func snapshotMissedHourlyBasis(
+        existing: TimesheetWeeklyReportOverride,
+        corrected: TimesheetWeeklyReportOverride
+    ) -> Bool {
+        let correctedById = Dictionary(uniqueKeysWithValues: corrected.lines.map { ($0.id, $0) })
+        return existing.lines.contains { line in
+            guard line.payBasis != "hourly",
+                  let match = correctedById[line.id] else { return false }
+            return match.payBasis == "hourly"
+        }
     }
 
     static func make(
@@ -69,7 +95,10 @@ enum TimesheetWeeklyReportOverrideBuilder {
         policy: OrgPayrollTimePolicy,
         organization: Organization?,
         scheduleOptions: MyScheduleOptions,
-        viewer: AppUser?
+        viewer: AppUser?,
+        payrollUserIds: [String] = [],
+        livePrefersHourly: Bool = false,
+        preferredHourlyRate: Double? = nil
     ) -> TimesheetWeeklyReportOverride {
         let summary = TimesheetPayrollCollector.collect(
             for: user,
@@ -82,7 +111,10 @@ enum TimesheetWeeklyReportOverrideBuilder {
             history: history,
             policy: policy,
             organization: organization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            payrollUserIds: payrollUserIds,
+            livePrefersHourly: livePrefersHourly,
+            preferredHourlyRate: preferredHourlyRate
         )
         let managerHasSigned = draft.managerSignedAt != nil
         let applyLiveReview = true
@@ -268,8 +300,10 @@ enum TimesheetWeeklyReportOverrideBuilder {
             days: days,
             amount: amount,
             isOvertime: line.isOvertimeLine,
+            otMultiplier: line.isOvertimeLine ? line.otMultiplier : nil,
             decision: decision,
-            bookingId: bookingId(from: line.id)
+            bookingId: bookingId(from: line.id),
+            payBasis: line.payrollBasis.rawValue
         )
     }
 

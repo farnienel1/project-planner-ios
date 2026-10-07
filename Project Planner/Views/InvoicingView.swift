@@ -507,6 +507,20 @@ enum TimesheetApprovalPolicy {
         return true
     }
 
+    /// Higher means more complete. A line-manager counter-sign outranks an operative-only copy.
+    static func approvalRank(of draft: TimesheetDraft) -> Int {
+        var rank = 0
+        if operativeHasSigned(draft) { rank += 1 }
+        if isExported(draft) { rank += 2 }
+        if recordedSignatureDate(draft.managerSignedAt) != nil { rank += 4 }
+        return rank
+    }
+
+    /// Keep the copy that already has the line manager's counter-sign.
+    static func preferringCounterSign(_ current: TimesheetDraft, _ other: TimesheetDraft) -> TimesheetDraft {
+        approvalRank(of: other) > approvalRank(of: current) ? other : current
+    }
+
     /// Awaiting sign-off means the operative has actually signed, the line manager has not, and the sheet is not exported.
     static func awaitingManagerSignOff(draft: TimesheetDraft, user: AppUser) -> Bool {
         requiresLineManagerCounterSign(for: user)
@@ -516,7 +530,8 @@ enum TimesheetApprovalPolicy {
     }
 
     /// One row per pay period. An exported copy of that period never waits for sign-off.
-    /// A signature on a spare week key cannot promote the period when the period-start sheet is unsigned.
+    /// Returns the stored start of the signed sheet, including a day inside the period
+    /// when the period-start document itself is still unsigned.
     static func awaitingPayPeriodStarts(
         user: AppUser,
         documentStarts: [Date],
@@ -538,16 +553,16 @@ enum TimesheetApprovalPolicy {
         for (periodDay, keys) in keysByPeriod {
             let drafts = keys.map { TimesheetDraftStore.load(userId: user.id, weekStart: $0) }
             if drafts.contains(where: { isExported($0) }) { continue }
-            let authoritative: TimesheetDraft
-            if let index = keys.firstIndex(where: { calendar.isDate($0, inSameDayAs: periodDay) }) {
-                authoritative = drafts[index]
-            } else if let signed = drafts.first(where: { operativeHasSigned($0) }) {
-                authoritative = signed
-            } else {
-                continue
+            // A signed sheet can be stored on the day the person signed, which is not
+            // always the pay-period start. That signed document is what the line manager
+            // must counter-sign. An unsigned placeholder on the period start must not hide it.
+            let signedAwaiting = zip(keys, drafts).filter { _, draft in
+                awaitingManagerSignOff(draft: draft, user: user)
             }
-            if awaitingManagerSignOff(draft: authoritative, user: user) {
-                awaiting.append(periodDay)
+            if let match = signedAwaiting.first(where: { calendar.isDate($0.0, inSameDayAs: periodDay) }) {
+                awaiting.append(match.0)
+            } else if let match = signedAwaiting.first {
+                awaiting.append(match.0)
             }
         }
         return awaiting.sorted(by: >)
@@ -779,7 +794,7 @@ enum TimesheetDraftStore {
             "approvedByName": override.approvedByName,
             "selfSigned": override.selfSigned,
             "lines": override.lines.map { line in
-                [
+                var row: [String: Any] = [
                     "id": line.id,
                     "date": Timestamp(date: line.date),
                     "jobNumber": line.jobNumber,
@@ -791,8 +806,13 @@ enum TimesheetDraftStore {
                     "amount": line.amount,
                     "isOvertime": line.isOvertime,
                     "decision": line.decision.rawValue,
-                    "bookingId": line.bookingId ?? ""
-                ] as [String: Any]
+                    "bookingId": line.bookingId ?? "",
+                    "payBasis": line.payBasis ?? PayrollRateBasis.dayRate.rawValue
+                ]
+                if let otMultiplier = line.otMultiplier {
+                    row["otMultiplier"] = otMultiplier
+                }
+                return row
             },
             "priceWork": override.priceWork.map(moneyLineMap),
             "expenses": override.expenses.map(moneyLineMap)
@@ -826,8 +846,10 @@ enum TimesheetDraftStore {
                 days: row["days"] as? Double ?? 0,
                 amount: row["amount"] as? Double ?? 0,
                 isOvertime: row["isOvertime"] as? Bool ?? false,
+                otMultiplier: (row["otMultiplier"] as? NSNumber)?.doubleValue,
                 decision: TimesheetManagerDecision(rawValue: row["decision"] as? String ?? "") ?? .approved,
-                bookingId: (bookingId?.isEmpty == false) ? bookingId : nil
+                bookingId: (bookingId?.isEmpty == false) ? bookingId : nil,
+                payBasis: row["payBasis"] as? String
             )
         }
         func moneyLines(_ key: String) -> [TimesheetWeeklyReportMoneyLine] {
@@ -1268,7 +1290,10 @@ private struct MyTimesheetView: View {
             history: dayRateHistoryCollection,
             policy: policy,
             organization: firebaseBackend.currentOrganization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            payrollUserIds: userStore.payrollRateLookup(forUserId: currentUser.id).userIds,
+            livePrefersHourly: userStore.payrollRateLookup(forUserId: currentUser.id).livePrefersHourly,
+            preferredHourlyRate: userStore.payrollRateLookup(forUserId: currentUser.id).preferredHourlyRate
         )
         return summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
     }
@@ -1318,10 +1343,12 @@ private struct MyTimesheetView: View {
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                                     .strikethrough(removed)
-                                Text(row.details)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .strikethrough(removed)
+                                if let caption = PayrollPayLineFormatter.scheduleCaption(row.details) {
+                                    Text(caption)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .strikethrough(removed)
+                                }
                                 Text(timesheetHoursRateLine(for: row))
                                     .font(.caption.weight(.medium))
                                     .foregroundStyle(row.shouldHighlightRateInOrange ? Color.orange : Color.primary)
@@ -1634,7 +1661,8 @@ private struct MyTimesheetView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
-                        } else if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser) {
+                        } else if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser),
+                                  TimesheetApprovalPolicy.recordedSignatureDate(draft.managerSignedAt) == nil {
                             Text("Timesheet pending manager signature — Generate Invoice unlocks after your line manager counter-signs.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
@@ -1939,7 +1967,28 @@ private struct MyTimesheetView: View {
 
     private func loadDraft() {
         draft = TimesheetDraftStore.load(userId: currentUserId, weekStart: week.start)
+        adoptCounterSignedSiblingDraft()
         Task { await refreshDraftFromCloud() }
+    }
+
+    private func siblingUserIds(for userId: String) -> [String] {
+        var ids = userStore.payrollRateLookup(forUserId: userId).userIds
+        if !ids.contains(userId) { ids.append(userId) }
+        return ids
+    }
+
+    /// The line manager may have counter-signed a second users document for this email.
+    /// Generate Invoice follows that copy, not an older operative-only draft on the other id.
+    private func adoptCounterSignedSiblingDraft() {
+        let ids = siblingUserIds(for: currentUserId)
+        var best = draft
+        for id in ids where id != currentUserId {
+            let sibling = TimesheetDraftStore.load(userId: id, weekStart: week.start)
+            best = TimesheetApprovalPolicy.preferringCounterSign(best, sibling)
+        }
+        guard TimesheetApprovalPolicy.approvalRank(of: best) > TimesheetApprovalPolicy.approvalRank(of: draft) else { return }
+        draft = best
+        TimesheetDraftStore.save(best, userId: currentUserId, weekStart: week.start)
     }
 
     private func markTimesheetSigned(signatureImageData: Data) {
@@ -2010,23 +2059,52 @@ private struct MyTimesheetView: View {
 
     private func refreshDraftFromCloud() async {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        guard let remote = await TimesheetDraftStore.refreshFromCloud(
-            userId: currentUserId,
-            weekStart: week.start,
-            firebaseBackend: firebaseBackend,
-            organizationId: orgId
-        ) else { return }
+        let ids = siblingUserIds(for: currentUserId)
+        var best = TimesheetDraftStore.load(userId: currentUserId, weekStart: week.start)
+        best = TimesheetApprovalPolicy.preferringCounterSign(best, draft)
+        var sawRemote = false
+        for id in ids {
+            let local = TimesheetDraftStore.load(userId: id, weekStart: week.start)
+            best = TimesheetApprovalPolicy.preferringCounterSign(best, local)
+            if let remote = await TimesheetDraftStore.refreshFromCloud(
+                userId: id,
+                weekStart: week.start,
+                firebaseBackend: firebaseBackend,
+                organizationId: orgId
+            ) {
+                sawRemote = true
+                best = TimesheetApprovalPolicy.preferringCounterSign(best, remote)
+            }
+        }
+        if !sawRemote && !TimesheetApprovalPolicy.operativeHasSigned(best) {
+            return
+        }
         await MainActor.run {
-            var updated = remote
-            if let current = userStore.displayUser {
+            var updated = best
+            if let current = userStore.displayUser,
+               TimesheetApprovalPolicy.recordedSignatureDate(updated.managerSignedAt) == nil {
                 TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &updated, user: current)
             }
-            if updated.managerSignedAt != remote.managerSignedAt {
-                draft = updated
-                saveDraft()
-            } else {
-                draft = remote
-            }
+            draft = updated
+            TimesheetDraftStore.save(updated, userId: currentUserId, weekStart: week.start)
+        }
+        if TimesheetApprovalPolicy.operativeHasSigned(draft) {
+            await publishSignedTimesheet(draft, organizationId: orgId)
+        }
+    }
+
+    /// Write the signed sheet onto every user id for this email so the line manager's queue can find it.
+    private func publishSignedTimesheet(_ signed: TimesheetDraft, organizationId: String) async {
+        var ids = userStore.payrollRateLookup(forUserId: currentUserId).userIds
+        if !ids.contains(currentUserId) { ids.append(currentUserId) }
+        for id in ids {
+            await TimesheetDraftStore.saveToCloud(
+                signed,
+                userId: id,
+                weekStart: week.start,
+                firebaseBackend: firebaseBackend,
+                organizationId: organizationId
+            )
         }
     }
 
@@ -2037,16 +2115,10 @@ private struct MyTimesheetView: View {
     }
 
     private func timesheetHoursRateLine(for row: InvoiceLineItem) -> String {
-        let hours = formatTimesheetHours(row.paidHours)
-        return "\(hours)h · \(row.timesheetRateAnnotation)"
-    }
-
-    private func formatTimesheetHours(_ value: Double) -> String {
-        let rounded = (value * 2).rounded() / 2
-        if abs(rounded - rounded.rounded()) < 0.01 {
-            return String(format: "%.0f", rounded)
-        }
-        return String(format: "%.1f", rounded)
+        let standard = PayrollPayLineFormatter.orgDayHours(
+            firebaseBackend.payrollPolicy(for: row.date).standardPaidHours
+        )
+        return row.payrollBreakdown(standardDayHours: standard).equationText
     }
 
     private func managerBookingLabels(for booking: ManagerSiteBooking) -> (jobNumber: String, siteName: String) {
@@ -2867,21 +2939,34 @@ private struct OperativeTimesheetsView: View {
             extraWeekStart: week.start
         )
         for user in users {
-            for weekStart in prefetchWeeks {
-                _ = await TimesheetDraftStore.refreshFromCloud(
-                    userId: user.id,
-                    weekStart: weekStart,
-                    firebaseBackend: firebaseBackend,
-                    organizationId: orgId
-                )
-            }
-            if let rows = try? await firebaseBackend.listTimesheetStates(
-                organizationId: orgId,
-                userId: user.id,
-                limit: 200
-            ) {
-                for row in rows {
-                    _ = TimesheetDraftStore.ingestCloudRow(row, userId: user.id)
+            // Invite id and auth id share an email. A signed sheet is stored on the id
+            // the person was signed in as, which may not be the id shown in this list.
+            let lookup = userStore.payrollRateLookup(forUserId: user.id)
+            var ids = lookup.userIds
+            if !ids.contains(user.id) { ids.append(user.id) }
+            for id in ids {
+                for weekStart in prefetchWeeks {
+                    guard let remote = await TimesheetDraftStore.refreshFromCloud(
+                        userId: id,
+                        weekStart: weekStart,
+                        firebaseBackend: firebaseBackend,
+                        organizationId: orgId
+                    ) else { continue }
+                    if id != user.id {
+                        TimesheetDraftStore.save(remote, userId: user.id, weekStart: weekStart)
+                    }
+                }
+                if let rows = try? await firebaseBackend.listTimesheetStates(
+                    organizationId: orgId,
+                    userId: id,
+                    limit: 200
+                ) {
+                    for row in rows {
+                        _ = TimesheetDraftStore.ingestCloudRow(row, userId: id)
+                        if id != user.id {
+                            _ = TimesheetDraftStore.ingestCloudRow(row, userId: user.id)
+                        }
+                    }
                 }
             }
         }
@@ -2891,21 +2976,71 @@ private struct OperativeTimesheetsView: View {
         }
     }
 
+    /// A signed sheet may live on the auth-id document while the roster shows the invite id.
+    private func copySiblingTimesheetsOntoRosterUser(_ user: AppUser) {
+        let ids = userStore.payrollRateLookup(forUserId: user.id).userIds
+        for id in ids where id != user.id {
+            for start in TimesheetDraftStore.discoverStoredWeekStarts(userId: id) {
+                let siblingDraft = TimesheetDraftStore.load(userId: id, weekStart: start)
+                guard TimesheetApprovalPolicy.operativeHasSigned(siblingDraft) else { continue }
+                let canonical = TimesheetDraftStore.load(userId: user.id, weekStart: start)
+                if !TimesheetApprovalPolicy.operativeHasSigned(canonical) {
+                    TimesheetDraftStore.save(siblingDraft, userId: user.id, weekStart: start)
+                }
+            }
+        }
+    }
+
+    /// Counter-sign follows the line manager on any document for this email.
+    private func userForTimesheetSignOff(_ user: AppUser) -> AppUser {
+        if user.hasLineManager { return user }
+        let managerIds = userStore.lineManagerUserIds(forUserId: user.id)
+        guard !managerIds.isEmpty else { return user }
+        var copy = user
+        copy.setLineManagerUserIds(managerIds)
+        return copy
+    }
+
     private func rebuildAwaitingRows() {
         let _ = refreshVersion
         var rows: [ManagerTimesheetRow] = []
         var seen = Set<String>()
+        let signOffPeople = userStore.timesheetSignOffPeople()
+        let signedSheets = signOffPeople.flatMap { person in
+            TimesheetDraftStore.discoverStoredWeekStarts(userId: person.id).map { start in
+                let stored = TimesheetDraftStore.load(userId: person.id, weekStart: start)
+                return TimesheetSignOffQueue.Sheet(
+                    userId: person.id,
+                    operativeSigned: TimesheetApprovalPolicy.operativeHasSigned(stored),
+                    managerSigned: TimesheetApprovalPolicy.recordedSignatureDate(stored.managerSignedAt) != nil,
+                    exported: TimesheetApprovalPolicy.isExported(stored)
+                )
+            }
+        }
+        let viewerId = userStore.displayUser?.id ?? ""
         for user in managerScopeUsers {
+            copySiblingTimesheetsOntoRosterUser(user)
+            guard TimesheetSignOffQueue.shouldQueueForLineManager(
+                rosterUserId: user.id,
+                viewerUserId: viewerId,
+                documents: signOffPeople,
+                sheets: signedSheets
+            ) else { continue }
+            let reviewUser = userForTimesheetSignOff(user)
             let documentStarts = TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id)
             for periodStart in TimesheetApprovalPolicy.awaitingPayPeriodStarts(
-                user: user,
+                user: reviewUser,
                 documentStarts: documentStarts,
                 settings: settings
             ) {
-                let period = TimesheetPayrollPolicy.periodMatchingStoredStart(periodStart, settings: settings)
+                let containing = TimesheetPayrollPolicy.periodMatchingStoredStart(periodStart, settings: settings)
+                // Open the stored signed day when it is not the period-start document.
+                let period = Calendar.current.isDate(containing.start, inSameDayAs: periodStart)
+                    ? containing
+                    : WeekRange.titled(start: periodStart, end: periodStart)
                 let id = "\(user.id)|\(Int(period.start.timeIntervalSince1970))"
                 guard seen.insert(id).inserted else { continue }
-                rows.append(ManagerTimesheetRow(id: id, user: user, week: period))
+                rows.append(ManagerTimesheetRow(id: id, user: reviewUser, week: period))
             }
         }
         awaitingRows = rows.sorted { lhs, rhs in
@@ -3196,6 +3331,10 @@ private struct OperativeTimesheetReviewView: View {
     @State private var editingExpenseId: UUID?
     @State private var editingPriceWorkId: UUID?
     @State private var showExtrasReviewRequiredAlert = false
+    @State private var showInvoiceUTRWarning = false
+    @State private var showInvoiceSuccess = false
+    @State private var generatedInvoiceURL: URL?
+    @State private var isGeneratingInvoice = false
 
     private var canManagerReview: Bool {
         guard let viewer = userStore.displayUser else { return false }
@@ -3256,6 +3395,23 @@ private struct OperativeTimesheetReviewView: View {
                 notificationService: notificationService,
                 onSaveDraft: saveDraft
             ))
+            .sheet(isPresented: $showInvoiceUTRWarning) {
+                InvoiceUTRBlankWarningSheet(
+                    onBack: { showInvoiceUTRWarning = false },
+                    onAccept: {
+                        showInvoiceUTRWarning = false
+                        Task { await runOperativeInvoiceGeneration() }
+                    }
+                )
+            }
+            .sheet(isPresented: $showInvoiceSuccess) {
+                if let generatedInvoiceURL {
+                    InvoiceGeneratedSuccessSheet(pdfURL: generatedInvoiceURL) {
+                        showInvoiceSuccess = false
+                        self.generatedInvoiceURL = nil
+                    }
+                }
+            }
     }
 
     private var reviewScrollContent: some View {
@@ -3420,11 +3576,32 @@ private struct OperativeTimesheetReviewView: View {
                     .foregroundStyle(Color.green)
                     .background(Color.green.opacity(0.14))
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Button {
+                    beginOperativeInvoice()
+                } label: {
+                    HStack {
+                        Spacer()
+                        if isGeneratingInvoice {
+                            ProgressView().tint(.white)
+                        } else {
+                            Text("Generate Invoice")
+                                .fontWeight(.semibold)
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 14)
+                    .background(Color.green)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .accessibilityIdentifier("timesheets.generateInvoice")
+                .buttonStyle(.plain)
+                .disabled(isGeneratingInvoice)
                 Text("To edit this timesheet, please go to the signed off timesheets page, export it and then edit within the exported timesheets tab.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        } else if operative.hasLineManager, draft.managerSignedAt == nil {
+        } else if operative.hasLineManager, TimesheetApprovalPolicy.recordedSignatureDate(draft.managerSignedAt) == nil {
             if needsExtrasReviewMessage {
                 Text("Approve, decline or edit every expense and price-work line before signing off.")
                     .font(.caption)
@@ -3571,9 +3748,15 @@ private struct OperativeTimesheetReviewView: View {
                     .font(.subheadline)
                     .foregroundStyle(.primary)
                     .strikethrough(removed)
-                Text(row.details)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                if let caption = PayrollPayLineFormatter.scheduleCaption(row.details) {
+                    Text(caption)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .strikethrough(removed)
+                }
+                Text(row.payrollBreakdown(standardDayHours: PayrollPayLineFormatter.orgDayHours(firebaseBackend.payrollPolicy(for: row.date).standardPaidHours)).equationText)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.primary)
                     .strikethrough(removed)
             }
             Spacer()
@@ -3711,6 +3894,54 @@ private struct OperativeTimesheetReviewView: View {
         .padding(.vertical, 2)
     }
 
+    private func siblingUserIds() -> [String] {
+        var ids = userStore.payrollRateLookup(forUserId: operative.id).userIds
+        if !ids.contains(operative.id) { ids.append(operative.id) }
+        return ids
+    }
+
+    private func beginOperativeInvoice() {
+        if operative.trimmedUTRNumber == nil {
+            showInvoiceUTRWarning = true
+        } else {
+            Task { await runOperativeInvoiceGeneration() }
+        }
+    }
+
+    private func runOperativeInvoiceGeneration() async {
+        guard !isGeneratingInvoice else { return }
+        await MainActor.run { isGeneratingInvoice = true }
+        defer { Task { await MainActor.run { isGeneratingInvoice = false } } }
+        if dayRateHistoryCollection.byUserId.isEmpty && dayRateHistoryCollection.byOperativeId.isEmpty {
+            await loadDayRateHistory()
+        }
+        let period = InvoicePeriodOption(
+            id: "\(operative.id)|\(Int(week.start.timeIntervalSince1970))",
+            title: week.title,
+            dateRangeText: week.title,
+            startDate: week.start,
+            endDate: week.end
+        )
+        let pdfURL = InvoicePDFGenerationSupport.generatePDF(
+            period: period,
+            settings: settings,
+            firebaseBackend: firebaseBackend,
+            userStore: userStore,
+            bookingStore: bookingStore,
+            operativeStore: operativeStore,
+            projectStore: projectStore,
+            managerScheduleStore: managerScheduleStore,
+            dayRateHistoryCollection: dayRateHistoryCollection,
+            subjectUser: operative
+        )
+        await MainActor.run {
+            if let pdfURL {
+                generatedInvoiceURL = pdfURL
+                showInvoiceSuccess = true
+            }
+        }
+    }
+
     private func saveDraft() {
         TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
             to: &draft,
@@ -3725,50 +3956,71 @@ private struct OperativeTimesheetReviewView: View {
             policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
             organization: firebaseBackend.currentOrganization,
             scheduleOptions: firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions(),
-            viewer: userStore.displayUser
+            viewer: userStore.displayUser,
+            payrollUserIds: userStore.payrollRateLookup(forUserId: operative.id).userIds,
+            livePrefersHourly: userStore.payrollRateLookup(forUserId: operative.id).livePrefersHourly,
+            preferredHourlyRate: userStore.payrollRateLookup(forUserId: operative.id).preferredHourlyRate
         )
-        TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start)
+        let ids = siblingUserIds()
+        for id in ids {
+            TimesheetDraftStore.save(draft, userId: id, weekStart: week.start)
+        }
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let snapshot = draft
         Task {
-            await TimesheetDraftStore.saveToCloud(
-                snapshot,
-                userId: operative.id,
-                weekStart: week.start,
-                firebaseBackend: firebaseBackend,
-                organizationId: orgId
-            )
+            for id in ids {
+                await TimesheetDraftStore.saveToCloud(
+                    snapshot,
+                    userId: id,
+                    weekStart: week.start,
+                    firebaseBackend: firebaseBackend,
+                    organizationId: orgId
+                )
+            }
         }
     }
 
     private func refreshDraftFromCloud() async {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        guard let remote = await TimesheetDraftStore.refreshFromCloud(
-            userId: operative.id,
-            weekStart: week.start,
-            firebaseBackend: firebaseBackend,
-            organizationId: orgId
-        ) else { return }
-        await MainActor.run { draft = remote }
-        var updated = remote
-        TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &updated, user: operative)
-        if updated.managerSignedAt != remote.managerSignedAt {
-            draft = updated
+        var best = draft
+        for id in siblingUserIds() {
+            let local = TimesheetDraftStore.load(userId: id, weekStart: week.start)
+            best = TimesheetApprovalPolicy.preferringCounterSign(best, local)
+            if let remote = await TimesheetDraftStore.refreshFromCloud(
+                userId: id,
+                weekStart: week.start,
+                firebaseBackend: firebaseBackend,
+                organizationId: orgId
+            ) {
+                best = TimesheetApprovalPolicy.preferringCounterSign(best, remote)
+            }
+        }
+        var updated = best
+        if TimesheetApprovalPolicy.recordedSignatureDate(updated.managerSignedAt) == nil {
+            TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &updated, user: operative)
+        }
+        await MainActor.run { draft = updated }
+        if TimesheetApprovalPolicy.approvalRank(of: updated) > TimesheetApprovalPolicy.approvalRank(of: best)
+            || TimesheetApprovalPolicy.recordedSignatureDate(updated.managerSignedAt) != nil {
             saveDraft()
-        } else {
-            draft = remote
         }
     }
 
     private func loadDayRateHistory() async {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
-        await MainActor.run { dayRateHistoryCollection = history }
+        await MainActor.run {
+            dayRateHistoryCollection = history
+            if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative) {
+                saveDraft()
+            }
+        }
     }
 
     private var payrollSummary: TimesheetPayrollSummary {
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
+        let lookup = userStore.payrollRateLookup(forUserId: operative.id)
         return TimesheetPayrollCollector.collect(
             for: operative,
             week: week,
@@ -3780,7 +4032,10 @@ private struct OperativeTimesheetReviewView: View {
             history: dayRateHistoryCollection,
             policy: policy,
             organization: firebaseBackend.currentOrganization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            payrollUserIds: lookup.userIds,
+            livePrefersHourly: lookup.livePrefersHourly,
+            preferredHourlyRate: lookup.preferredHourlyRate
         )
     }
 
@@ -4505,9 +4760,10 @@ private enum InvoicePDFGenerationSupport {
         operativeStore: OperativeStore,
         projectStore: ProjectStore,
         managerScheduleStore: ManagerScheduleStore,
-        dayRateHistoryCollection: OperativeDayRateHistoryCollection
+        dayRateHistoryCollection: OperativeDayRateHistoryCollection,
+        subjectUser: AppUser? = nil
     ) -> URL? {
-        guard let currentUser = userStore.displayUser else { return nil }
+        guard let currentUser = subjectUser ?? userStore.displayUser else { return nil }
         let bookings = bookingStore.bookings
         let managerBookings = managerScheduleStore.managerSiteBookings
         let operatives = operativeStore.allOperatives
@@ -4520,6 +4776,7 @@ private enum InvoicePDFGenerationSupport {
         let userName = currentUser.fullName.isEmpty ? currentUser.email : currentUser.fullName
         let history = dayRateHistoryCollection
 
+        let lookup = userStore.payrollRateLookup(forUserId: currentUser.id)
         let rows = invoiceLineItems(
             for: period,
             currentUser: currentUser,
@@ -4531,7 +4788,10 @@ private enum InvoicePDFGenerationSupport {
             operatives: operatives,
             projects: projects,
             smallWorks: smallWorks,
-            history: history
+            history: history,
+            payrollUserIds: lookup.userIds,
+            livePrefersHourly: lookup.livePrefersHourly,
+            preferredHourlyRate: lookup.preferredHourlyRate
         )
         let total = rows.reduce(0) { $0 + $1.amount }
         let notes = rateChangeNotes(
@@ -4551,7 +4811,11 @@ private enum InvoicePDFGenerationSupport {
                 periodDateRange: period.dateRangeText,
                 lineItems: rows,
                 totalAmount: total,
-                rateChangeNotes: notes
+                rateChangeNotes: notes,
+                standardDayHoursForDate: { date in
+                    let dayPolicy = organization.map { PayrollTimePolicyCatalog.policy(for: date, organization: $0) } ?? policy
+                    return PayrollPayLineFormatter.orgDayHours(dayPolicy.standardPaidHours)
+                }
             )
         )
     }
@@ -4567,7 +4831,10 @@ private enum InvoicePDFGenerationSupport {
         operatives: [Operative],
         projects: [Project],
         smallWorks: [Project],
-        history: OperativeDayRateHistoryCollection
+        history: OperativeDayRateHistoryCollection,
+        payrollUserIds: [String] = [],
+        livePrefersHourly: Bool = false,
+        preferredHourlyRate: Double? = nil
     ) -> [InvoiceLineItem] {
         let summary = TimesheetPayrollCollector.collect(
             for: currentUser,
@@ -4580,7 +4847,10 @@ private enum InvoicePDFGenerationSupport {
             history: history,
             policy: policy,
             organization: organization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            payrollUserIds: payrollUserIds,
+            livePrefersHourly: livePrefersHourly,
+            preferredHourlyRate: preferredHourlyRate
         )
         var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
 
@@ -5298,6 +5568,25 @@ private struct InvoiceLineItem {
         return "rate not set"
     }
 
+    func payrollBreakdown(standardDayHours: Double) -> PayrollPayLineDisplay {
+        let rate: Double? = {
+            if isPayeDay { return 0 }
+            switch payrollBasis {
+            case .hourly: return hourlyRate
+            case .dayRate: return hasPayrollRate ? dayRate : nil
+            }
+        }()
+        return PayrollPayLineFormatter.line(
+            basis: payrollBasis,
+            paidHours: paidHours,
+            standardDayHours: standardDayHours,
+            rate: rate,
+            pay: amount,
+            isOvertime: isOvertimeLine,
+            isPaye: isPayeDay
+        )
+    }
+
     var shouldHighlightRateInOrange: Bool {
         isPayeDay || !hasPayrollRate
     }
@@ -5417,6 +5706,8 @@ private enum InvoicePDFBuilder {
         /// Optional override for the on-disk PDF filename.
         var preferredFileName: String? = nil
         var periodMetaLabel: String = "INVOICE PERIOD"
+        /// Paid hours that count as one day. Use the organisation setting, not a hardcoded 8.
+        var standardDayHoursForDate: (Date) -> Double = { _ in 8 }
         var totalLabel: String = "Total invoice amount"
         var emptyStateMessage: String = "No work entries were found for this invoice period."
     }
@@ -5583,7 +5874,13 @@ private enum InvoicePDFBuilder {
                 in: CGRect(x: middleX, y: y + 7, width: 190, height: 18),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: navy]
             )
-            let detail = "\(item.details) · \(hoursString(item.paidHours))h · \(item.timesheetRateAnnotation)"
+            let breakdown = item.payrollBreakdown(standardDayHours: context.standardDayHoursForDate(item.date))
+            let detail: String = {
+                if let caption = PayrollPayLineFormatter.scheduleCaption(item.details) {
+                    return "\(caption) · \(breakdown.equationText)"
+                }
+                return breakdown.equationText
+            }()
             (detail as NSString).draw(
                 in: CGRect(x: middleX, y: y + 22, width: 190, height: 28),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 9.5), .foregroundColor: slate]
@@ -5659,13 +5956,6 @@ private enum InvoicePDFBuilder {
         String(format: "£%.2f", value)
     }
 
-    private static func hoursString(_ value: Double) -> String {
-        let rounded = (value * 2).rounded() / 2
-        if abs(rounded - rounded.rounded()) < 0.001 {
-            return String(format: "%.0f", rounded)
-        }
-        return String(format: "%.1f", rounded)
-    }
 }
 
 private enum TimesheetExportHelper {
@@ -5738,6 +6028,10 @@ private enum TimesheetExportHelper {
                     documentTitle: "Timesheet",
                     preferredFileName: fileName,
                     periodMetaLabel: "PAYMENT RUN",
+                    standardDayHoursForDate: { date in
+                        let dayPolicy = organization.map { PayrollTimePolicyCatalog.policy(for: date, organization: $0) } ?? payrollPolicy
+                        return PayrollPayLineFormatter.orgDayHours(dayPolicy.standardPaidHours)
+                    },
                     totalLabel: "Total timesheet amount",
                     emptyStateMessage: "No work entries were found for this timesheet period."
                 )

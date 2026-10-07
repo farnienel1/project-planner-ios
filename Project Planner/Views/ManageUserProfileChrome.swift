@@ -254,34 +254,80 @@ struct ManageUserChevronRow: View {
 
 struct ManageUserDayRateEditRow: View {
     @Binding var dayRateText: String
+    @Binding var payBasis: PayrollRateBasis
     let currencySymbol: String
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            ManageUserIconChip(
-                systemName: "sterlingsign",
-                background: ManageUserProfilePalette.chipCoralBg,
-                foreground: ManageUserProfilePalette.chipCoralFg
-            )
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Day rate")
-                    .font(.system(size: 11))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
-                HStack(spacing: 4) {
-                    Text(currencySymbol)
-                        .font(.system(size: 13, weight: .medium))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                ManageUserIconChip(
+                    systemName: "sterlingsign",
+                    background: ManageUserProfilePalette.chipCoralBg,
+                    foreground: ManageUserProfilePalette.chipCoralFg
+                )
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(payBasis == .hourly ? "Hourly rate" : "Day rate")
+                        .font(.system(size: 11))
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
-                    TextField("Leave blank if not set", text: $dayRateText)
-                        .accessibilityIdentifier("manageUserDayRateEdit.leaveBlankIfNotSet")
-                        .keyboardType(.decimalPad)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                    HStack(spacing: 4) {
+                        Text(currencySymbol)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        TextField("Leave blank if not set", text: $dayRateText)
+                            .accessibilityIdentifier("manageUserDayRateEdit.leaveBlankIfNotSet")
+                            .keyboardType(.decimalPad)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                        Text(payBasis.amountUnit)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Picker("Pay basis", selection: $payBasis) {
+                Text("Day rate").tag(PayrollRateBasis.dayRate)
+                Text("Hourly rate").tag(PayrollRateBasis.hourly)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("manageUserDayRateEdit.payBasis")
+            Text(payBasis == .hourly
+                 ? "Hourly pay is worked hours × this rate, including 15-minute blocks. This person cannot also have a day rate. Other people can still be on a day rate."
+                 : "Day rate pays a share of the standard day. This person cannot also have an hourly rate. Other people can still be paid hourly.")
+                .font(.system(size: 11))
+                .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 14)
+    }
+}
+
+struct PayrollBasisAmountFields: View {
+    @Binding var basis: PayrollRateBasis
+    @Binding var amountText: String
+    var title: String = "Pay"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.headline)
+            Picker("Pay basis", selection: $basis) {
+                Text("Day rate").tag(PayrollRateBasis.dayRate)
+                Text("Hourly rate").tag(PayrollRateBasis.hourly)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("payrollBasis.choice")
+            TextField(basis == .hourly ? "Hourly rate, e.g. 18.50" : "Day rate, e.g. 250", text: $amountText)
+                .accessibilityIdentifier("payrollBasis.amount")
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .keyboardType(.decimalPad)
+            Text(basis == .hourly
+                 ? "One choice only. Pay is hours worked × this rate, including 15-minute blocks. Someone else in the organisation can stay on a day rate."
+                 : "One choice only. Pay is a share of the standard day. Someone else in the organisation can be paid hourly.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
     }
 }
 

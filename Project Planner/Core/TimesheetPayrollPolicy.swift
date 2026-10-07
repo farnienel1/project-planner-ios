@@ -278,6 +278,111 @@ enum TimesheetPayrollPolicy {
     }
 }
 
+/// Decides which signed timesheets a line manager can counter-sign.
+/// A manager on an hourly rate is included. A second `users` document with the same email
+/// (invite id vs auth id) is the same person: a sheet stored on either id counts.
+enum TimesheetSignOffQueue {
+    struct Person: Equatable {
+        var id: String
+        var email: String
+        var lineManagerUserIds: [String]
+        var hasNoLineManager: Bool
+        /// Manager, admin, or operative. Hourly vs day rate is not a filter.
+        var includedInQueue: Bool
+        var isActive: Bool
+    }
+
+    struct Sheet: Equatable {
+        var userId: String
+        var operativeSigned: Bool
+        var managerSigned: Bool
+        var exported: Bool
+    }
+
+    static func siblingIds(personId: String, documents: [Person]) -> [String] {
+        guard let person = documents.first(where: { $0.id == personId }) else { return [personId] }
+        let email = person.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if email.isEmpty { return [personId] }
+        let ids = documents.filter {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+        }.map(\.id)
+        return ids.isEmpty ? [personId] : ids
+    }
+
+    static func lineManagerIds(personId: String, documents: [Person]) -> [String] {
+        let ids = Set(siblingIds(personId: personId, documents: documents))
+        var seen = Set<String>()
+        return documents
+            .filter { ids.contains($0.id) && !$0.hasNoLineManager }
+            .flatMap(\.lineManagerUserIds)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    /// True when this roster person has a signed, not-yet-counter-signed sheet on any id
+    /// that shares their email, and `viewerUserId` is an assigned line manager.
+    /// Managers and hourly sheets are included. Pay basis is not consulted.
+    static func shouldQueueForLineManager(
+        rosterUserId: String,
+        viewerUserId: String,
+        documents: [Person],
+        sheets: [Sheet]
+    ) -> Bool {
+        guard let person = documents.first(where: { $0.id == rosterUserId }),
+              person.isActive,
+              person.includedInQueue else { return false }
+        let managers = lineManagerIds(personId: rosterUserId, documents: documents)
+        guard managers.contains(viewerUserId) else { return false }
+        let ids = Set(siblingIds(personId: rosterUserId, documents: documents))
+        return sheets.contains { sheet in
+            ids.contains(sheet.userId)
+                && sheet.operativeSigned
+                && !sheet.managerSigned
+                && !sheet.exported
+        }
+    }
+
+    /// The id whose copy should drive Generate Invoice.
+    /// A line-manager counter-sign on any document for this email wins over an operative-only copy.
+    static func invoiceSourceUserId(
+        ownerUserId: String,
+        siblingIds: [String],
+        sheets: [Sheet]
+    ) -> String? {
+        let ids = Set(siblingIds.isEmpty ? [ownerUserId] : siblingIds)
+        let signed = sheets.filter { ids.contains($0.userId) && $0.operativeSigned && !$0.exported }
+        if let counterSigned = signed.first(where: { $0.managerSigned }) {
+            return counterSigned.userId
+        }
+        if signed.contains(where: { $0.userId == ownerUserId }) {
+            return ownerUserId
+        }
+        return signed.first?.userId
+    }
+
+    /// Invoice is allowed once the operative has signed and, when a line manager is assigned,
+    /// that manager has counter-signed any copy stored for this email.
+    static func allowsInvoice(
+        ownerUserId: String,
+        documents: [Person],
+        sheets: [Sheet]
+    ) -> Bool {
+        guard let person = documents.first(where: { $0.id == ownerUserId }),
+              person.isActive else { return false }
+        let ids = siblingIds(personId: ownerUserId, documents: documents)
+        guard invoiceSourceUserId(ownerUserId: ownerUserId, siblingIds: ids, sheets: sheets) != nil else {
+            return false
+        }
+        if lineManagerIds(personId: ownerUserId, documents: documents).isEmpty {
+            return true
+        }
+        let idSet = Set(ids)
+        return sheets.contains { sheet in
+            idSet.contains(sheet.userId) && sheet.operativeSigned && sheet.managerSigned && !sheet.exported
+        }
+    }
+}
+
 extension RecurringPaymentDay {
     nonisolated var isoWeekOffset: Int {
         switch self {

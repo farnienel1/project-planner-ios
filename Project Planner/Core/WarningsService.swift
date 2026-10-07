@@ -58,6 +58,18 @@ enum WarningsDiskCacheStore {
         return folder.appendingPathComponent("warnings-live-cache-v2-\(safe).json")
     }
 
+    /// Badge count only. Does not decode `Warning` values, which deadlocks launch
+    /// when it happens on the main thread while SwiftUI is still updating.
+    static func storedWarningCount(organizationId: String) -> Int? {
+        guard !organizationId.isEmpty else { return nil }
+        let url = fileURL(organizationId: organizationId)
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return object["warningCount"] as? Int
+    }
+
     static func load(organizationId: String) -> WarningsDiskCache {
         guard !organizationId.isEmpty else { return .empty }
         let url = fileURL(organizationId: organizationId)
@@ -122,7 +134,21 @@ private struct LegacyWarningsDiskCache: Codable {
 @MainActor
 class WarningsService: ObservableObject {
     /// Shared instance for Warnings sheet / weekly report (avoid duplicating state on Home).
+    /// Do not touch this during the first frames. `init` decodes the Warning disk cache
+    /// and that teardown deadlocks AttributeGraph's type walk (main thread stuck in
+    /// `refreshSeverityCounts`, utility thread in `swift_conformsToProtocol`).
     static let shared = WarningsService()
+
+    /// Stays false until launch has left the first layout. Home must check this
+    /// before reading `shared`, or the singleton is created during that deadlock.
+    @MainActor static var allowsSharedMaterialization = false
+
+    /// Home badge read. Nil until launch has deferred the singleton past first layout.
+    @MainActor
+    static func warningCountIfMaterialized() -> Int? {
+        guard allowsSharedMaterialization else { return nil }
+        return shared.warningCount
+    }
 
     @Published private(set) var allGeneratedWarnings: [Warning] = []
     @Published private(set) var activeWarnings: [Warning] = []
@@ -145,28 +171,55 @@ class WarningsService: ObservableObject {
     private var updateTask: Task<Void, Never>?
     private var updateGeneration = 0
     private var cacheOrganizationId: String?
+    private var pendingAdoptOrganizationId: String?
 
-    init(resolutionStore: WarningResolutionStore? = nil, hydrateFromDisk: Bool = true) {
+    init(resolutionStore: WarningResolutionStore? = nil, hydrateFromDisk: Bool = false) {
         self.resolutionStore = resolutionStore ?? .shared
-        // Hydrate only the organisation that last owned this cache. A switch must not
-        // keep the previous organisation's warnings on Home.
-        if hydrateFromDisk, let organizationId = WarningsDiskCacheStore.activeOrganizationId, !organizationId.isEmpty {
-            cacheOrganizationId = organizationId
-            applyDiskCache(WarningsDiskCacheStore.load(organizationId: organizationId))
-        }
+        // Do not decode the warning cache here. `shared` is created inside
+        // `dispatch_once`. Publishing the decoded warnings from this init makes a
+        // SwiftUI update call `shared` again, and that wait never ends.
+        // Callers load the cache with `adoptOrganization` after `shared` exists.
+        _ = hydrateFromDisk
+    }
+
+    /// Forget the previous organisation's in-memory warnings. Does not read the disk cache.
+    /// Decoding that cache during a switch rebuilds Home and stalls the main thread.
+    func dropLiveWarningsForOrganizationSwitch() {
+        cancelInFlightUpdate()
+        cacheOrganizationId = nil
+        allGeneratedWarnings = []
+        activeWarnings = []
+        periodGeneratedWarnings = []
+        warningCount = 0
+        highCount = 0
+        mediumCount = 0
+        lowCount = 0
+        hasCompletedLiveDetection = false
+        hasCompletedPeriodDetection = false
     }
 
     /// Drop the previous organisation's warnings and show this organisation's own cache.
+    /// The disk decode is not done on this turn. The warnings sheet's first layout is
+    /// also the first access to `.shared`. Publishing the decoded list then stalls
+    /// the main thread, which looks like a crash on the Warnings tap.
     func adoptOrganization(_ organizationId: String) {
         let trimmed = organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard cacheOrganizationId != trimmed else { return }
-        cancelInFlightUpdate()
-        cacheOrganizationId = trimmed
-        WarningResolutionStore.shared.adoptOrganization(trimmed)
-        applyDiskCache(WarningsDiskCacheStore.load(organizationId: trimmed))
-        WarningsRefreshHelper.postWarningsCountDidChange()
-        print("🔥🔥🔥 DEBUG: WarningsService adopted org=\(trimmed) active=\(activeWarnings.count)")
+        pendingAdoptOrganizationId = trimmed
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self else { return }
+            guard self.pendingAdoptOrganizationId == trimmed else { return }
+            self.pendingAdoptOrganizationId = nil
+            guard self.cacheOrganizationId != trimmed else { return }
+            self.cancelInFlightUpdate()
+            self.cacheOrganizationId = trimmed
+            WarningResolutionStore.shared.adoptOrganization(trimmed)
+            self.applyDiskCache(WarningsDiskCacheStore.load(organizationId: trimmed))
+            WarningsRefreshHelper.postWarningsCountDidChange()
+            print("🔥🔥🔥 DEBUG: WarningsService adopted org=\(trimmed) active=\(self.activeWarnings.count)")
+        }
     }
 
     private func applyDiskCache(_ cache: WarningsDiskCache) {
@@ -298,6 +351,8 @@ class WarningsService: ObservableObject {
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
         materialOrderCutOffEnabled: Bool = true,
+        materialCutOffHour: Int = 16,
+        materialCutOffMinute: Int = 0,
         materialCutOffOnSaturday: Bool = false,
         materialCutOffOnSunday: Bool = false,
         projectsWithTomorrowBookings: [Project] = [],
@@ -322,6 +377,8 @@ class WarningsService: ObservableObject {
                 labourCoverageStart: labourCoverageStart,
                 labourCoverageEnd: labourCoverageEnd,
                 materialOrderCutOffEnabled: materialOrderCutOffEnabled,
+                materialCutOffHour: materialCutOffHour,
+                materialCutOffMinute: materialCutOffMinute,
                 materialCutOffOnSaturday: materialCutOffOnSaturday,
                 materialCutOffOnSunday: materialCutOffOnSunday,
                 projectsWithTomorrowBookings: projectsWithTomorrowBookings,
@@ -345,6 +402,8 @@ class WarningsService: ObservableObject {
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
         materialOrderCutOffEnabled: Bool = true,
+        materialCutOffHour: Int = 16,
+        materialCutOffMinute: Int = 0,
         materialCutOffOnSaturday: Bool = false,
         materialCutOffOnSunday: Bool = false,
         projectsWithTomorrowBookings: [Project] = [],
@@ -369,6 +428,8 @@ class WarningsService: ObservableObject {
             labourCoverageStart: labourCoverageStart,
             labourCoverageEnd: labourCoverageEnd,
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
+            materialCutOffHour: materialCutOffHour,
+            materialCutOffMinute: materialCutOffMinute,
             materialCutOffOnSaturday: materialCutOffOnSaturday,
             materialCutOffOnSunday: materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
@@ -390,6 +451,8 @@ class WarningsService: ObservableObject {
         labourCoverageStart: Date?,
         labourCoverageEnd: Date?,
         materialOrderCutOffEnabled: Bool,
+        materialCutOffHour: Int,
+        materialCutOffMinute: Int,
         materialCutOffOnSaturday: Bool,
         materialCutOffOnSunday: Bool,
         projectsWithTomorrowBookings: [Project],
@@ -443,6 +506,8 @@ class WarningsService: ObservableObject {
             coverageStart: coverageStart,
             coverageEnd: coverageEnd,
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
+            materialCutOffHour: materialCutOffHour,
+            materialCutOffMinute: materialCutOffMinute,
             materialCutOffOnSaturday: materialCutOffOnSaturday,
             materialCutOffOnSunday: materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,

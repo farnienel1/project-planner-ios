@@ -64,6 +64,7 @@ struct HomeView: View {
     @State private var hasLoadedAdminOverviewMetrics = false
     @State private var showingHomeProfileCard = false
     @State private var isRefreshingHomeConnection = false
+    @State private var bookingWarningsRefreshTask: Task<Void, Never>?
     @State private var homeTopInset: CGFloat = 0
     
     var body: some View {
@@ -554,12 +555,23 @@ struct HomeView: View {
             }
             print("🔥🔥🔥 DEBUG: HOME_APPEARED inset=\(Int(inset))")
             NotificationCenter.default.post(name: .plannerHomeDidDraw, object: nil)
-            // Do not touch WarningsService.shared here. This onAppear runs inside the
-            // first layout commit. Creating the shared service then publishes warning
-            // counts and the window stays white. The next turn is after that commit.
-            DispatchQueue.main.async {
-                homeWarningCount = WarningsService.shared.warningCount
+            // Tab switches rebuild Home. Show the last figures immediately, then refresh.
+            if cachedUpNextSections.isEmpty, cachedOverviewMetrics == HomeOverviewMetrics() {
+                let restored = HomeLaunchCache.restore(
+                    organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId
+                )
+                cachedOverviewMetrics = restored.metrics
+                cachedUpNextSections = restored.upNext
             }
+            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+               let count = WarningsDiskCacheStore.storedWarningCount(organizationId: orgId) {
+                homeWarningCount = count
+            }
+            // Do not read WarningsService.shared here, even on the next turn.
+            // Creating it while Home is still being laid out deadlocks the main
+            // thread (the window never appears, which looks like a crash).
+            // Bootstrap adopts the org cache a few seconds later; the badge
+            // updates from that notification, not from this appear.
             // Saved Light/Dark is applied after Home is on screen. The launch shell does not touch it.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 appSettings.settings.theme.applyToKeyWindows()
@@ -569,9 +581,10 @@ struct HomeView: View {
             // Coalesce rapid store updates while Firebase batches load.
             // Longer debounce during bootstrap / while core stores are still loading.
             let bootstrapping = firebaseBackend.isBootstrappingOrgDataLoad
-            let inQuiet = firebaseBackend.launchQuietUntil.map { Date() < $0 } ?? false
             let storesBusy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading
-            let delayNs: UInt64 = (bootstrapping || inQuiet || storesBusy) ? 2_500_000_000 : 1_000_000_000
+            // Coalesce a burst of store updates. The launch-quiet flag only skips warnings
+            // scans; it must not leave the dashboard blank for an extra couple of seconds.
+            let delayNs: UInt64 = (bootstrapping || storesBusy) ? 350_000_000 : 200_000_000
             try? await Task.sleep(nanoseconds: delayNs)
             guard !Task.isCancelled else { return }
             // Skip heavy derived work until home-critical bootstrap releases the lock.
@@ -589,21 +602,29 @@ struct HomeView: View {
             // and jetsamed Simulator. Badge updates when Home warms warnings or
             // when `.warningsDidRecompute` is posted.
             guard userStore.hasAdminAccess() else { return }
-            homeWarningCount = WarningsService.shared.warningCount
+            if let count = WarningsService.warningCountIfMaterialized() {
+                homeWarningCount = count
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .warningsDidRecompute)) { notification in
             if let count = notification.userInfo?["count"] as? Int {
                 homeWarningCount = count
-            } else {
-                homeWarningCount = WarningsService.shared.warningCount
+            } else if let count = WarningsService.warningCountIfMaterialized() {
+                homeWarningCount = count
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .warningsNeedsHomeRefresh)) { _ in
             // REBUILD: no auto Home warm — only sync badge from shared/disk cache.
-            homeWarningCount = WarningsService.shared.warningCount
+            if let count = WarningsService.warningCountIfMaterialized() {
+                homeWarningCount = count
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .bookingStoreDidChange)) { _ in
-            Task {
+            // Let the booking row paint before the warnings scan walks the stores.
+            bookingWarningsRefreshTask?.cancel()
+            bookingWarningsRefreshTask = Task {
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                guard !Task.isCancelled else { return }
                 await WarningsRefreshHelper.refreshSharedWarnings(
                     operativeStore: operativeStore,
                     bookingStore: bookingStore,
@@ -637,7 +658,9 @@ struct HomeView: View {
     // REBUILD stubs — auto warm removed. Badge reads shared/disk cache only.
     @MainActor
     private func syncHomeWarningBadgeFromCache() {
-        homeWarningCount = WarningsService.shared.warningCount
+        if let count = WarningsService.warningCountIfMaterialized() {
+            homeWarningCount = count
+        }
     }
 
 
@@ -1286,25 +1309,12 @@ struct HomeView: View {
             managerBookingCount: managerScheduleStore.managerSiteBookings.count,
             holidayCount: holidayStore.bookings.count,
             userCount: userStore.organizationUsers.count,
-            taskIncompleteCount: taskStore.tasks.filter { !$0.isCompleted }.count,
+            taskIncompleteCount: taskStore.incompleteCount,
             isHomeProfileLoading: userStore.isHomeProfileLoading,
             currentUserId: userStore.currentUser?.id,
-            worksRevision: worksRevision,
+            worksRevision: projectStore.worksContentRevision,
             orgDataReady: firebaseBackend.hasBootstrappedOrgDataLoad && !firebaseBackend.isBootstrappingOrgDataLoad
         )
-    }
-
-    /// Changes when a project or small work date, live flag, or type changes, so Home recounts active jobs.
-    private var worksRevision: Int {
-        var hash = 0
-        for project in projectStore.projects {
-            hash = hash &+ project.startDate.hashValue
-            hash = hash &+ project.endDate.hashValue
-            hash = hash &+ project.updatedAt.hashValue
-            hash = hash &+ (project.isLive ? 1 : 0)
-            hash = hash &+ project.jobType.hashValue
-        }
-        return hash
     }
 
     private func presentTasksDetail() {
@@ -1324,12 +1334,6 @@ struct HomeView: View {
         guard !Task.isCancelled else { return }
         guard !firebaseBackend.isBootstrappingOrgDataLoad else { return }
         guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
-
-        let storesStillLoading = bookingStore.isLoading
-            || operativeStore.isLoading
-            || projectStore.isLoading
-            || holidayStore.isLoading
-            || managerScheduleStore.isLoading
 
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let operatives = operativeStore.allOperatives
@@ -1394,16 +1398,19 @@ struct HomeView: View {
         cachedUpNextSections = await upNextTask
         guard !Task.isCancelled else { return }
 
-        if userStore.hasAdminAccess(),
-           !storesStillLoading,
-           firebaseBackend.hasBootstrappedOrgDataLoad {
+        if userStore.hasAdminAccess(), let count = WarningsService.warningCountIfMaterialized() {
             // Do not auto-run warnings on Home after every store refresh — that used to
             // freeze/crash Simulator. Badge stays at last known count; opening Warnings
             // refreshes off the main actor (and never during bootstrap/quiet).
-            homeWarningCount = WarningsService.shared.warningCount
-        } else if userStore.hasAdminAccess() {
-            homeWarningCount = WarningsService.shared.warningCount
+            // Skip entirely until bootstrap's deferred adopt — reading `shared` here
+            // on the first frames is the same AttributeGraph deadlock.
+            homeWarningCount = count
         }
+        HomeLaunchCache.store(
+            organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId,
+            metrics: cachedOverviewMetrics,
+            upNext: cachedUpNextSections
+        )
     }
     
     private var assignedTasksCount: Int {
@@ -1899,6 +1906,12 @@ private struct HomeProfileCardSheet: View {
         return operative.qualifications.map(\.name).joined(separator: ", ")
     }
 
+    private var homePayBasisLabel: String {
+        guard let user else { return "Day rate" }
+        let resolved = PayrollRateResolver.resolveCurrentProfileRate(user: user, operative: operative, standardDayHours: 8)
+        return resolved.basis == .hourly && resolved.hasRate ? "Hourly rate" : "Day rate"
+    }
+
     private var dayRateText: String {
         guard let user else { return "Not set" }
         let resolved = PayrollRateResolver.resolveCurrentProfileRate(
@@ -1947,7 +1960,7 @@ private struct HomeProfileCardSheet: View {
                     .background(Color(.systemBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                    profileRow("Day rate", dayRateText)
+                    profileRow(homePayBasisLabel, dayRateText)
                     profileRow("Employment type", user?.employmentType(on: Date()).title ?? "—")
                     profileRow("VAT number", user?.trimmedVATNumber ?? "Not set")
                     profileRow("UTR number", user?.trimmedUTRNumber ?? "Not set")
@@ -2046,6 +2059,31 @@ struct HomeQuickActionAddSheet: View {
     }
 }
 
+
+/// Last Home figures for this process, so leaving Home and coming back does not flash zeros.
+private enum HomeLaunchCache {
+    private static var organizationId: String?
+    private static var metrics = HomeOverviewMetrics()
+    private static var upNext: [HomeUpNextDaySection] = []
+
+    static func restore(organizationId: String?) -> (metrics: HomeOverviewMetrics, upNext: [HomeUpNextDaySection]) {
+        guard let organizationId, organizationId == self.organizationId else {
+            return (HomeOverviewMetrics(), [])
+        }
+        return (metrics, upNext)
+    }
+
+    static func store(
+        organizationId: String?,
+        metrics: HomeOverviewMetrics,
+        upNext: [HomeUpNextDaySection]
+    ) {
+        guard let organizationId, !organizationId.isEmpty else { return }
+        self.organizationId = organizationId
+        self.metrics = metrics
+        self.upNext = upNext
+    }
+}
 
 private struct HomeDataRefreshTrigger: Equatable {
     var operativeCount: Int

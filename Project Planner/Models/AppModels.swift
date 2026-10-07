@@ -273,9 +273,45 @@ struct OperativeDayRateHistoryEntry: Identifiable, Codable, Hashable {
     var userId: String?
     /// Local operative roster id when the change is tracked per-roster-row (including operatives without an app login).
     var operativeId: UUID?
+    /// The amount in force from `effectiveAt`. Per day or per hour depending on `payBasis`.
     var dayRate: Double
     var effectiveAt: Date
     var createdAt: Date
+    /// Missing on older documents, which were day rates.
+    var payBasis: PayrollRateBasis
+
+    init(
+        id: UUID,
+        userId: String?,
+        operativeId: UUID?,
+        dayRate: Double,
+        effectiveAt: Date,
+        createdAt: Date,
+        payBasis: PayrollRateBasis = .dayRate
+    ) {
+        self.id = id
+        self.userId = userId
+        self.operativeId = operativeId
+        self.dayRate = dayRate
+        self.effectiveAt = effectiveAt
+        self.createdAt = createdAt
+        self.payBasis = payBasis
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, userId, operativeId, dayRate, effectiveAt, createdAt, payBasis
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        userId = try container.decodeIfPresent(String.self, forKey: .userId)
+        operativeId = try container.decodeIfPresent(UUID.self, forKey: .operativeId)
+        dayRate = try container.decode(Double.self, forKey: .dayRate)
+        effectiveAt = try container.decode(Date.self, forKey: .effectiveAt)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        payBasis = try container.decodeIfPresent(PayrollRateBasis.self, forKey: .payBasis) ?? .dayRate
+    }
 }
 
 /// Loaded `operativeDayRateHistory` documents bucketed for lookups (a single doc may appear in both maps).

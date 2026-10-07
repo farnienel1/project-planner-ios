@@ -50,7 +50,30 @@ class UserStore: ObservableObject {
     private struct OperativeProfileOverride: Codable {
         var assignedManagerUserId: String?
         var dayRate: Double?
+        var hourlyRate: Double?
+        var payBasis: String?
         var updatedAt: Date
+
+        enum CodingKeys: String, CodingKey {
+            case assignedManagerUserId, dayRate, hourlyRate, payBasis, updatedAt
+        }
+
+        init(assignedManagerUserId: String?, dayRate: Double?, hourlyRate: Double? = nil, payBasis: String? = nil, updatedAt: Date) {
+            self.assignedManagerUserId = assignedManagerUserId
+            self.dayRate = dayRate
+            self.hourlyRate = hourlyRate
+            self.payBasis = payBasis
+            self.updatedAt = updatedAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            assignedManagerUserId = try container.decodeIfPresent(String.self, forKey: .assignedManagerUserId)
+            dayRate = try container.decodeIfPresent(Double.self, forKey: .dayRate)
+            hourlyRate = try container.decodeIfPresent(Double.self, forKey: .hourlyRate)
+            payBasis = try container.decodeIfPresent(String.self, forKey: .payBasis)
+            updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        }
     }
     
     init() {
@@ -533,8 +556,74 @@ class UserStore: ObservableObject {
         return collapseRosterByEmail(Array(byId.values))
     }
 
+    /// Every loaded `users` document, including invite-id and auth-id duplicates collapsed out of the list.
+    private var rosterDocuments: [AppUser] = []
+
+    struct PayrollRateLookup {
+        var user: AppUser?
+        var userIds: [String]
+        var livePrefersHourly: Bool
+        var preferredHourlyRate: Double?
+    }
+
+    /// Bookings may store a different `users` document id than the card that was edited.
+    func payrollRateLookup(forUserId userId: String) -> PayrollRateLookup {
+        let documents = rosterDocuments.isEmpty ? organizationUsers : rosterDocuments
+        let direct = documents.first(where: { $0.id == userId })
+            ?? organizationUsers.first(where: { $0.id == userId })
+        let email = direct?.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let siblings: [AppUser]
+        if email.isEmpty {
+            siblings = direct.map { [$0] } ?? []
+        } else {
+            siblings = documents.filter {
+                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+            }
+        }
+        let hourlySibling = siblings.first { $0.hourlyRate != nil && $0.dayRate == nil }
+        let livePrefersHourly = hourlySibling != nil
+        return PayrollRateLookup(
+            user: direct ?? organizationUsers.first(where: { $0.id == userId }),
+            userIds: siblings.map(\.id).isEmpty ? [userId] : siblings.map(\.id),
+            livePrefersHourly: livePrefersHourly,
+            preferredHourlyRate: hourlySibling?.hourlyRate
+        )
+    }
+
+    func timesheetSignOffPeople() -> [TimesheetSignOffQueue.Person] {
+        let documents = rosterDocuments.isEmpty ? organizationUsers : rosterDocuments
+        return documents.map { user in
+            TimesheetSignOffQueue.Person(
+                id: user.id,
+                email: user.email,
+                lineManagerUserIds: user.lineManagerUserIds,
+                hasNoLineManager: user.hasNoLineManager,
+                includedInQueue: user.isActive && (
+                    user.permissions.operativeMode
+                    || user.permissions.manager
+                    || user.permissions.adminAccess
+                    || user.role == .manager
+                    || user.role == .admin
+                ),
+                isActive: user.isActive
+            )
+        }
+    }
+
+    /// Line managers recorded on any `users` document that shares this email.
+    func lineManagerUserIds(forUserId userId: String) -> [String] {
+        let documents = rosterDocuments.isEmpty ? organizationUsers : rosterDocuments
+        let ids = Set(payrollRateLookup(forUserId: userId).userIds)
+        var seen = Set<String>()
+        return documents
+            .filter { ids.contains($0.id) }
+            .flatMap(\.lineManagerUserIds)
+            .filter { seen.insert($0).inserted }
+    }
+
     /// Two `users` documents can share an email. The Managers list must show that person once.
     private func collapseRosterByEmail(_ users: [AppUser]) -> [AppUser] {
+        rosterDocuments = users
         var byKey: [String: AppUser] = [:]
         for user in users {
             let emailKey = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1031,7 +1120,7 @@ class UserStore: ObservableObject {
              // MARK: - User Invitation
              
     /// For operative invitations, pass the line manager's Firebase Auth UID (`users` document id).
-    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .paye, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async -> Bool {
+    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .paye, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedPayBasis: PayrollRateBasis = .dayRate, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async -> Bool {
         print("🔥🔥🔥 DEBUG: inviteUser called with firstName: \(firstName), surname: \(surname), email: \(email)")
         
         errorMessage = nil
@@ -1203,6 +1292,7 @@ class UserStore: ObservableObject {
                 hasNoLineManager: hasNoLineManager,
                 invitedOperativeDayRate: invitedOperativeDayRate,
                 invitedManagerDayRate: invitedManagerDayRate,
+                invitedPayBasis: invitedPayBasis,
                 invitedTradeTypePreset: invitedTradeTypePreset,
                 invitedTradeTypeCustom: invitedTradeTypeCustom,
                 annualLeaveDaysPerYear: annualLeaveDaysPerYear,
@@ -1983,6 +2073,7 @@ class UserStore: ObservableObject {
                 assignedManagerUserIds: [String]? = nil,
                 hasNoLineManager: Bool? = nil,
                 dayRate: Double?,
+                payBasis: PayrollRateBasis = .dayRate,
                 operativeStore: OperativeStore?,
                 dayRateEffectiveAt: Date? = nil,
                 updateDayRate: Bool = true
@@ -2004,21 +2095,29 @@ class UserStore: ObservableObject {
                     }
                     updatedUser.setLineManagerUserIds(managerIds)
                 }
-                updatedUser.dayRate = dayRate
+                let previousUser = organizationUsers[index]
+                let previousBasis = Self.storedPayBasis(of: previousUser)
+                let previousAmount = Self.storedPayAmount(of: previousUser)
                 if updateDayRate {
-                    // Single rate field in Manage Users — clearing/setting day rate also clears hourly.
-                    updatedUser.hourlyRate = nil
+                    switch payBasis {
+                    case .dayRate:
+                        updatedUser.dayRate = dayRate
+                        updatedUser.hourlyRate = nil
+                    case .hourly:
+                        updatedUser.hourlyRate = dayRate
+                        updatedUser.dayRate = nil
+                    }
                 }
 
                 do {
-                    let previousDayRate = organizationUsers[index].dayRate
-                    let dayRateChanged = previousDayRate != dayRate
+                    let dayRateChanged = updateDayRate && (previousBasis != payBasis || previousAmount != dayRate)
                     try await firebaseBackend.updateOperativeProfileMetadata(
                         userId: updatedUser.id,
                         assignedManagerUserId: updatedUser.assignedManagerUserId,
                         assignedManagerUserIds: updatedUser.lineManagerUserIds,
                         hasNoLineManager: hasNoLineManager ?? updatedUser.hasNoLineManager,
                         dayRate: dayRate,
+                        payBasis: payBasis,
                         updateDayRate: updateDayRate
                     )
                     if updateDayRate && dayRateChanged,
@@ -2029,22 +2128,23 @@ class UserStore: ObservableObject {
                         })?.id
                         let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
                         let merged = collection.mergedEntries(userId: updatedUser.id, operativeId: linkedOperativeId)
-                        if merged.isEmpty, let previousDayRate, previousDayRate > 0 {
+                        if merged.isEmpty, let previousAmount, previousAmount > 0 {
                             try? await firebaseBackend.recordOperativeDayRateChange(
                                 organizationId: orgId,
                                 userId: updatedUser.id,
                                 operativeId: linkedOperativeId,
-                                dayRate: previousDayRate,
+                                dayRate: previousAmount,
+                                payBasis: previousBasis,
                                 effectiveAt: updatedUser.createdAt
                             )
                         }
                         let effective = dayRateEffectiveAt ?? Date()
-                        // Persist the new rate into history, including an explicit £0.
                         try? await firebaseBackend.recordOperativeDayRateChange(
                             organizationId: orgId,
                             userId: updatedUser.id,
                             operativeId: linkedOperativeId,
                             dayRate: dayRate ?? 0,
+                            payBasis: payBasis,
                             effectiveAt: effective
                         )
                     }
@@ -2057,7 +2157,9 @@ class UserStore: ObservableObject {
                             organizationId: updatedUser.organizationId,
                             userId: updatedUser.id,
                             assignedManagerUserId: updatedUser.assignedManagerUserId,
-                            dayRate: dayRate ?? 0
+                            dayRate: payBasis == .dayRate ? dayRate : nil,
+                            hourlyRate: payBasis == .hourly ? dayRate : nil,
+                            payBasis: payBasis
                         )
                     }
                     organizationUsers[index] = updatedUser
@@ -2074,7 +2176,9 @@ class UserStore: ObservableObject {
                                 organizationId: updatedUser.organizationId,
                                 userId: updatedUser.id,
                                 assignedManagerUserId: assignedManagerUserId,
-                                dayRate: dayRate ?? 0
+                                dayRate: payBasis == .dayRate ? (dayRate ?? 0) : nil,
+                                hourlyRate: payBasis == .hourly ? (dayRate ?? 0) : nil,
+                                payBasis: payBasis
                             )
                             clearOperativeProfileOverride(for: updatedUser.id)
                             organizationUsers[index] = updatedUser
@@ -2089,7 +2193,9 @@ class UserStore: ObservableObject {
                             saveOperativeProfileOverride(
                                 for: updatedUser.id,
                                 assignedManagerUserId: assignedManagerUserId,
-                                dayRate: dayRate ?? 0
+                                dayRate: payBasis == .dayRate ? (dayRate ?? 0) : nil,
+                                hourlyRate: payBasis == .hourly ? (dayRate ?? 0) : nil,
+                                payBasis: payBasis
                             )
                             organizationUsers[index] = updatedUser
                             errorMessage = "Cloud permissions blocked this update. Saved locally on this device."
@@ -2195,6 +2301,7 @@ class UserStore: ObservableObject {
     func updateManagerDayRate(
         for user: AppUser,
         dayRate: Double?,
+        payBasis: PayrollRateBasis = .dayRate,
         effectiveAt: Date? = nil,
         operativeStore: OperativeStore? = nil
     ) async -> Bool {
@@ -2205,42 +2312,59 @@ class UserStore: ObservableObject {
         guard isStaffDayRate, !row.permissions.operativeMode else { return false }
         
         var updatedUser = organizationUsers[index]
-        let previousDayRate = updatedUser.dayRate
-        let dayRateChanged = previousDayRate != dayRate
-        updatedUser.dayRate = dayRate
-        updatedUser.hourlyRate = nil
+        let previousBasis = Self.storedPayBasis(of: updatedUser)
+        let previousAmount = Self.storedPayAmount(of: updatedUser)
+        let dayRateChanged = previousBasis != payBasis || previousAmount != dayRate
+        switch payBasis {
+        case .dayRate:
+            updatedUser.dayRate = dayRate
+            updatedUser.hourlyRate = nil
+        case .hourly:
+            updatedUser.hourlyRate = dayRate
+            updatedUser.dayRate = nil
+        }
         
         do {
-            try await firebaseBackend.updateUserDayRateMetadata(userId: updatedUser.id, dayRate: dayRate)
+            let siblingIds = payrollRateLookup(forUserId: updatedUser.id).userIds
+            let idsToWrite = siblingIds.isEmpty ? [updatedUser.id] : siblingIds
+            for id in idsToWrite {
+                try await firebaseBackend.updateUserDayRateMetadata(userId: id, dayRate: dayRate, payBasis: payBasis)
+            }
             if dayRateChanged,
                let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
                 let effective = effectiveAt ?? Date()
                 let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
                 let merged = collection.mergedEntries(userId: updatedUser.id, operativeId: nil)
-                if let previousDayRate, merged.isEmpty {
+                if let previousAmount, merged.isEmpty {
                     try? await firebaseBackend.recordOperativeDayRateChange(
                         organizationId: orgId,
                         userId: updatedUser.id,
                         operativeId: nil,
-                        dayRate: previousDayRate,
+                        dayRate: previousAmount,
+                        payBasis: previousBasis,
                         effectiveAt: updatedUser.createdAt
                     )
                 }
-                try? await firebaseBackend.recordOperativeDayRateChange(
-                    organizationId: orgId,
-                    userId: updatedUser.id,
-                    operativeId: nil,
-                    dayRate: dayRate ?? 0,
-                    effectiveAt: effective
-                )
+                let historyIds = idsToWrite.isEmpty ? [updatedUser.id] : idsToWrite
+                for id in historyIds {
+                    try? await firebaseBackend.recordOperativeDayRateChange(
+                        organizationId: orgId,
+                        userId: id,
+                        operativeId: nil,
+                        dayRate: dayRate ?? 0,
+                        payBasis: payBasis,
+                        effectiveAt: effective
+                    )
+                }
             }
             clearOperativeProfileOverride(for: updatedUser.id)
-            // Mirror clear/set into cloud fallback so profile cards cannot resurrect a blanked rate.
             try? await firebaseBackend.saveOperativeProfileMetadataFallback(
                 organizationId: updatedUser.organizationId,
                 userId: updatedUser.id,
                 assignedManagerUserId: updatedUser.assignedManagerUserId,
-                dayRate: dayRate
+                dayRate: payBasis == .dayRate ? dayRate : nil,
+                hourlyRate: payBasis == .hourly ? dayRate : nil,
+                payBasis: payBasis
             )
             organizationUsers[index] = updatedUser
             if let operativeStore {
@@ -2497,11 +2621,29 @@ class UserStore: ObservableObject {
         }
     }
 
-    private func saveOperativeProfileOverride(for userId: String, assignedManagerUserId: String?, dayRate: Double?) {
+    private static func storedPayBasis(of user: AppUser) -> PayrollRateBasis {
+        if user.hourlyRate != nil, user.dayRate == nil { return .hourly }
+        return .dayRate
+    }
+
+    private static func storedPayAmount(of user: AppUser) -> Double? {
+        if user.hourlyRate != nil, user.dayRate == nil { return user.hourlyRate }
+        return user.dayRate
+    }
+
+    private func saveOperativeProfileOverride(
+        for userId: String,
+        assignedManagerUserId: String?,
+        dayRate: Double?,
+        hourlyRate: Double? = nil,
+        payBasis: PayrollRateBasis = .dayRate
+    ) {
         var overrides = loadOperativeProfileOverrides()
         overrides[userId] = OperativeProfileOverride(
             assignedManagerUserId: assignedManagerUserId,
             dayRate: dayRate,
+            hourlyRate: hourlyRate,
+            payBasis: payBasis.rawValue,
             updatedAt: Date()
         )
         saveOperativeProfileOverrides(overrides)
@@ -2523,8 +2665,11 @@ class UserStore: ObservableObject {
                !managerId.isEmpty {
                 updated.assignedManagerUserId = managerId
             }
-            // 0 is a valid £0 day rate (nil means the field was never stored).
-            if let rate = override.dayRate {
+            let basis = PayrollRateBasis(rawValue: override.payBasis ?? "") ?? .dayRate
+            if basis == .hourly, let rate = override.hourlyRate ?? override.dayRate {
+                updated.hourlyRate = rate
+                updated.dayRate = nil
+            } else if let rate = override.dayRate {
                 updated.dayRate = rate
                 updated.hourlyRate = nil
             }
@@ -2544,8 +2689,10 @@ class UserStore: ObservableObject {
                !managerId.isEmpty {
                 updated.assignedManagerUserId = managerId
             }
-            // Positive fallback restores a rate; 0 is a valid £0 day rate; missing field leaves the user doc as-is.
-            if let rate = override.dayRate {
+            if override.payBasis == .hourly, let rate = override.hourlyRate {
+                updated.hourlyRate = rate
+                updated.dayRate = nil
+            } else if let rate = override.dayRate {
                 updated.dayRate = rate
                 updated.hourlyRate = nil
             }

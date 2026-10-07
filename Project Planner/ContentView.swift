@@ -326,14 +326,11 @@ struct ContentView: View {
             let newOrgId = newValue?.firestoreDocumentId
             if let newOrgId, newOrgId != oldOrgId {
                 if oldOrgId != nil {
-                    // Real org switch — reset and reload once.
-                    print("🔥🔥🔥 DEBUG: Organization switched to \(newOrgId) - reloading all data once")
+                    // RootView.performQueuedOrganizationSwitch owns this reload.
+                    // Starting another bootstrap here discarded jobs mid-load and
+                    // created WarningsService while Home was being rebuilt.
+                    print("🔥🔥🔥 DEBUG: Organization switched to \(newOrgId) - RootView owns the reload")
                     lastLoadedOrganizationId = nil
-                    firebaseBackend.hasBootstrappedOrgDataLoad = false
-                    firebaseBackend.isBootstrappingOrgDataLoad = false
-                    Task {
-                        await performInitialDataLoadIfNeeded(force: true)
-                    }
                 } else {
                     // First org assignment: RootView owns store bootstrap. Do not call bootstrap
                     // here — racing the RootView wait-loop caused a second full load storm / freeze.

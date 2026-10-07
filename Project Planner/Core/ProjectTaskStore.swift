@@ -10,7 +10,11 @@ import Combine
 
 @MainActor
 class ProjectTaskStore: ObservableObject {
-    @Published private(set) var tasks: [ProjectTask] = []
+    /// Incomplete tasks, kept beside `tasks` so Home does not filter the whole list on every redraw.
+    private(set) var incompleteCount: Int = 0
+    @Published private(set) var tasks: [ProjectTask] = [] {
+        didSet { incompleteCount = tasks.reduce(into: 0) { if !$1.isCompleted { $0 += 1 } } }
+    }
     @Published var isLoading = false
     @Published var errorMessage: String?
     

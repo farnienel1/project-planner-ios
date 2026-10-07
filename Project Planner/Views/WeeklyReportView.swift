@@ -736,10 +736,9 @@ struct WeeklyReportView: View {
             }
             service.replaceWithPeriodWarnings(filtered)
             periodHighCount = service.operativeBookingClashes(in: range, source: .period).count
-                + service.unresolvedManagerClashes(in: range, source: .period).count
-                + service.approvedManagerClashes(in: range, source: .period).count
                 + service.unbookedLabourWarnings(in: range, source: .period).count
-            periodMediumCount = 0
+            periodMediumCount = service.unresolvedManagerClashes(in: range, source: .period).count
+                + service.approvedManagerClashes(in: range, source: .period).count
             periodLowCount = service.materialsCutoffWarnings(in: range, source: .period).count
             periodSummaryReady = true
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT period from LIVE cache count=\(filtered.count)")
@@ -759,10 +758,9 @@ struct WeeklyReportView: View {
         let range = reportDateRange
         let shared = WarningsService.shared
         periodHighCount = shared.operativeBookingClashes(in: range).count
-            + shared.unresolvedManagerClashes(in: range).count
-            + shared.approvedManagerClashes(in: range).count
             + shared.unbookedLabourWarnings(in: range).count
-        periodMediumCount = 0
+        periodMediumCount = shared.unresolvedManagerClashes(in: range).count
+            + shared.approvedManagerClashes(in: range).count
         periodLowCount = shared.materialsCutoffWarnings(in: range).count
         periodSummaryReady = true
     }
@@ -985,8 +983,8 @@ struct WeeklyReportView: View {
                     person.name,
                     person.role,
                     line.rateTypeLabel,
-                    formatDays(line.days),
-                    formatCurrency(line.rate),
+                    line.quantityText,
+                    line.rateText,
                     formatCurrency(line.pay),
                 ])
                 totalAmount += line.pay ?? 0
@@ -996,7 +994,7 @@ struct WeeklyReportView: View {
         sections.append(
             WeeklyReportExportBuilder.Section(
                 title: "💷  Pay Summary",
-                headers: ["Person", "Role", "Rate Type", "Days", "Rate", "Pay"],
+                headers: ["Person", "Role", "Rate Type", "Hours / Days", "Rate", "Pay"],
                 rows: payRows,
                 totalRow: ["", "", "Grand Total", "", "", formatCurrency(totalAmount)]
             )
@@ -1115,7 +1113,7 @@ struct WeeklyReportView: View {
         rows.append([])
 
         rows.append(["PAY SUMMARY"])
-        rows.append(["Person", "Role", "Rate Type", "Days", "Rate", "Pay"])
+        rows.append(["Person", "Role", "Rate Type", "Hours / Days", "Rate", "Pay"])
         var totalAmount = 0.0
         for person in payrollPersonSummaries() {
             for line in person.lines {
@@ -1123,8 +1121,8 @@ struct WeeklyReportView: View {
                     person.name,
                     person.role,
                     line.rateTypeLabel,
-                    formatDays(line.days),
-                    formatCurrency(line.rate),
+                    line.quantityText,
+                    line.rateText,
                     formatCurrency(line.pay)
                 ])
                 totalAmount += line.pay ?? 0
@@ -1374,13 +1372,18 @@ struct WeeklyReportView: View {
     /// Uses day-rate history keyed by user id; compares **calendar days** so a change effective “tomorrow” does not apply to today’s bookings.
     private func resolvedPayrollRate(user: AppUser?, operative: Operative?, on date: Date) -> ResolvedPayrollRate {
         let policy = firebaseBackend.payrollPolicy(for: date)
-        let standardDayHours = max(policy.standardPaidHours, 8)
+        let standardDayHours = PayrollPayLineFormatter.orgDayHours(policy.standardPaidHours)
+        let lookup = user.map { userStore.payrollRateLookup(forUserId: $0.id) }
+        let operativeHourly = operative?.hourlyRate != nil && operative?.dayRate == nil
         return PayrollRateResolver.resolveForTimesheetDay(
             user: user,
             operative: operative,
             on: date,
             history: dayRateHistoryCollection,
-            standardDayHours: standardDayHours
+            standardDayHours: standardDayHours,
+            userIds: lookup?.userIds ?? [],
+            livePrefersHourly: (lookup?.livePrefersHourly ?? false) || operativeHourly,
+            preferredHourlyRate: lookup?.preferredHourlyRate ?? (operativeHourly ? operative?.hourlyRate : nil)
         )
     }
 
@@ -1491,7 +1494,7 @@ struct WeeklyReportView: View {
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
             let normalHours = max(0, paid - (otHours * otMultiplier))
-            let standardDayHours = max(policy.standardPaidHours, 0.01)
+            let standardDayHours = PayrollPayLineFormatter.orgDayHours(policy.standardPaidHours)
             let rateKey = resolved.basis == .hourly
                 ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
                 : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
@@ -1523,7 +1526,7 @@ struct WeeklyReportView: View {
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
             let normalHours = max(0, paid - (otHours * otMultiplier))
-            let standardDayHours = max(policy.standardPaidHours, 0.01)
+            let standardDayHours = PayrollPayLineFormatter.orgDayHours(policy.standardPaidHours)
             let rateKey = resolved.basis == .hourly
                 ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
                 : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
@@ -1546,16 +1549,14 @@ struct WeeklyReportView: View {
                 if entry.normalHours > 0.0001 {
                     let standard = entry.standardDayHours
                     let pay = entry.resolved.payForHours(entry.normalHours, standardDayHours: standard)
-                    let days = entry.normalHours / standard
-                    let rateLabel = entry.resolved.basis == .hourly ? "Normal (hourly)" : "Normal"
-                    lines.append(
-                        PayrollRateLine(
-                            rateTypeLabel: rateLabel,
-                            days: days,
-                            rate: entry.resolved.reportRateValue(),
-                            pay: pay
-                        )
+                    let display = PayrollPayLineFormatter.line(
+                        basis: entry.resolved.basis,
+                        paidHours: entry.normalHours,
+                        standardDayHours: standard,
+                        rate: entry.resolved.reportRateValue(),
+                        pay: pay
                     )
+                    lines.append(PayrollRateLine(display: display))
                     total += pay
                 }
                 if entry.otHours > 0.0001 {
@@ -1565,7 +1566,6 @@ struct WeeklyReportView: View {
                         standardDayHours: standard,
                         otMultiplier: entry.otMultiplier
                     )
-                    let otDays = entry.otHours / standard
                     let otRate: Double?
                     switch entry.resolved.basis {
                     case .dayRate:
@@ -1573,18 +1573,16 @@ struct WeeklyReportView: View {
                     case .hourly:
                         otRate = entry.resolved.hourlyRate.map { $0 * entry.otMultiplier }
                     }
-                    let label = abs(entry.otMultiplier - entry.otMultiplier.rounded()) < 0.001
-                        ? "OT x\(Int(entry.otMultiplier.rounded()))"
-                        : String(format: "OT x%.1f", entry.otMultiplier)
-                    let otLabel = entry.resolved.basis == .hourly ? "\(label) (hourly)" : label
-                    lines.append(
-                        PayrollRateLine(
-                            rateTypeLabel: otLabel,
-                            days: otDays,
-                            rate: otRate,
-                            pay: otPay
-                        )
+                    let display = PayrollPayLineFormatter.line(
+                        basis: entry.resolved.basis,
+                        paidHours: entry.otHours,
+                        standardDayHours: standard,
+                        rate: otRate,
+                        pay: otPay,
+                        isOvertime: true,
+                        otMultiplier: entry.otMultiplier
                     )
+                    lines.append(PayrollRateLine(display: display))
                     total += otPay
                 }
             }
@@ -1702,30 +1700,24 @@ struct WeeklyReportView: View {
         }
         for (week, line) in timesheetFeed.labourLines(in: reportDateRange) {
             guard line.amount > 0.0001 else { continue }
-            let rate = line.days > 0.0001 ? line.amount / line.days : nil
             add(
                 name: week.personName,
                 role: week.role,
-                line: PayrollRateLine(
-                    rateTypeLabel: line.isOvertime ? "Timesheet OT" : "Timesheet",
-                    days: line.days,
-                    rate: rate,
-                    pay: line.amount
-                )
+                line: PayrollRateLine(timesheetLabour: line)
             )
         }
         for (week, line) in timesheetFeed.moneyLines(\.priceWork, in: reportDateRange) {
             add(
                 name: week.personName,
                 role: week.role,
-                line: PayrollRateLine(rateTypeLabel: "Price work", days: 0, rate: nil, pay: line.amount)
+                line: PayrollRateLine(rateTypeLabel: "Price work", quantityText: "", rateText: "", pay: line.amount)
             )
         }
         for (week, line) in timesheetFeed.moneyLines(\.expenses, in: reportDateRange) {
             add(
                 name: week.personName,
                 role: week.role,
-                line: PayrollRateLine(rateTypeLabel: "Expenses", days: 0, rate: nil, pay: line.amount)
+                line: PayrollRateLine(rateTypeLabel: "Expenses", quantityText: "", rateText: "", pay: line.amount)
             )
         }
         return map.values.map {
@@ -1827,9 +1819,44 @@ private struct ManagerAdditionalScheduleRow {
 
 private struct PayrollRateLine {
     let rateTypeLabel: String
-    let days: Double
-    let rate: Double?
+    let quantityText: String
+    let rateText: String
     let pay: Double?
+
+    init(rateTypeLabel: String, quantityText: String, rateText: String, pay: Double?) {
+        self.rateTypeLabel = rateTypeLabel
+        self.quantityText = quantityText
+        self.rateText = rateText
+        self.pay = pay
+    }
+
+    init(display: PayrollPayLineDisplay) {
+        self.init(
+            rateTypeLabel: display.rateTypeLabel,
+            quantityText: display.quantityText,
+            rateText: display.rateText,
+            pay: display.pay
+        )
+    }
+
+    /// Signed timesheet labour. Hourly rows stay in hours. Older snapshots without `payBasis` stay in days.
+    init(timesheetLabour line: TimesheetWeeklyReportLabourLine) {
+        let basis = PayrollRateBasis(rawValue: line.payBasis ?? "") ?? .dayRate
+        let unit: PayrollQuantityUnit = basis == .hourly ? .hours : .days
+        let quantity = basis == .hourly ? line.paidHours : line.days
+        let rate: Double? = {
+            guard quantity > 0.0001 else { return nil }
+            return line.amount / quantity
+        }()
+        let kind = basis == .hourly ? "Hourly" : "Day"
+        let label = line.isOvertime ? "\(kind) \(PayrollPayLineFormatter.overtimeLabel(line.otMultiplier))" : kind
+        self.init(
+            rateTypeLabel: label,
+            quantityText: PayrollPayLineFormatter.quantityText(quantity, unit: unit),
+            rateText: PayrollPayLineFormatter.rateText(rate, unit: unit),
+            pay: line.amount
+        )
+    }
 }
 
 private struct PayrollPersonSummary {
