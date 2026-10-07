@@ -31,6 +31,7 @@ struct PasswordResetView: View {
                 if !isEmailSent {
                     VStack(spacing: 16) {
                         TextField("Email Address", text: $email)
+                            .accessibilityIdentifier("passwordReset.emailAddress")
                             .keyboardType(.emailAddress)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
@@ -46,6 +47,7 @@ struct PasswordResetView: View {
                         Button("Send Reset Link") {
                             sendPasswordReset()
                         }
+                        .accessibilityIdentifier("passwordReset.sendResetLink")
                         .buttonStyle(PrimaryButtonStyle())
                         .disabled(email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !isValidEmail(email) || isSending)
 
@@ -72,6 +74,7 @@ struct PasswordResetView: View {
                         Button("Done") {
                             dismiss()
                         }
+                        .accessibilityIdentifier("passwordReset.done")
                         .buttonStyle(PrimaryButtonStyle())
                     }
                     .padding(.horizontal)
@@ -87,6 +90,7 @@ struct PasswordResetView: View {
                     Button("Cancel") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("passwordReset.cancel")
                 }
             }
         }

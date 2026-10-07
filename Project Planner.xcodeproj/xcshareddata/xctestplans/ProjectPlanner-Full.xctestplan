@@ -1,0 +1,29 @@
+{
+  "configurations" : [
+    {
+      "id" : "7E2B0D19-3A6D-4C00-8B5B-0D1E2F3A4B5C",
+      "name" : "Full",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:Project Planner.xcodeproj",
+      "identifier" : "E7A11F012F9B200100A1D001",
+      "name" : "ProjectPlannerUITests"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:Project Planner.xcodeproj",
+        "identifier" : "E7A11F012F9B200100A1D001",
+        "name" : "ProjectPlannerUITests"
+      }
+    }
+  ],
+  "version" : 1
+}

@@ -56,6 +56,7 @@ struct ScheduleOverlapWarningPanel: View {
                             .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
                     )
                 }
+                .accessibilityIdentifier("scheduleOverlapWarningPanel.close")
                 .buttonStyle(.plain)
                 Button(action: onConfirm) {
                     HStack(spacing: 6) {
@@ -70,6 +71,7 @@ struct ScheduleOverlapWarningPanel: View {
                     .background(ProjectWorksRevampColors.blue)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
+                .accessibilityIdentifier("scheduleOverlapWarningPanel.checkmark")
                 .buttonStyle(.plain)
             }
         }
@@ -136,6 +138,7 @@ struct OperativeClashReviewPanel: View {
                             .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
                     )
                 }
+                .accessibilityIdentifier("operativeClashReviewPanel.close")
                 .buttonStyle(.plain)
                 Button(action: onConfirmBooking) {
                     HStack(spacing: 6) {
@@ -149,6 +152,7 @@ struct OperativeClashReviewPanel: View {
                     .background(canConfirmBooking ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.muted.opacity(0.45))
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
+                .accessibilityIdentifier("operativeClashReviewPanel.checkmark")
                 .buttonStyle(.plain)
                 .disabled(!canConfirmBooking)
             }
@@ -202,6 +206,7 @@ struct OperativeClashReviewPanel: View {
                     .background(Color(red: 0.96, green: 0.97, blue: 0.98))
                     .clipShape(Circle())
             }
+            .accessibilityIdentifier("operativeClashReviewPanel.row.\(operative.id).close")
             .buttonStyle(.plain)
             Button { onApprove(operative.id) } label: {
                 Image(systemName: "checkmark")
@@ -211,6 +216,7 @@ struct OperativeClashReviewPanel: View {
                     .background(ProjectWorksRevampColors.blue)
                     .clipShape(Circle())
             }
+            .accessibilityIdentifier("operativeClashReviewPanel.row.\(operative.id).checkmark")
             .buttonStyle(.plain)
         }
         .padding(10)

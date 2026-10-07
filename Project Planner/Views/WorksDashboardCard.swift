@@ -314,6 +314,7 @@ struct WorksDashboardStatsRow: View {
                     .stroke(isSelected ? color.opacity(0.32) : WorksDashboardPalette.line, lineWidth: 1)
             )
         }
+        .accessibilityIdentifier("worksDashboardStats.\(AccessibilityID.token(label))")
         .buttonStyle(.plain)
         .accessibilityLabel("\(label), \(value)")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -332,6 +333,7 @@ struct WorksDashboardSearchRow<FilterMenu: View>: View {
                 .font(.body.weight(.medium))
                 .foregroundStyle(WorksDashboardPalette.ink3)
             TextField(placeholder, text: $text)
+                .accessibilityIdentifier("worksDashboardSearch.\(AccessibilityID.token(placeholder))")
                 .font(.callout)
                 .foregroundStyle(WorksDashboardPalette.ink)
             filterMenu()

@@ -165,13 +165,16 @@ struct MaterialsAddWithCatalogueSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("materialsAddWithCatalogue.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await save() } }
+                        .accessibilityIdentifier("materialsAddWithCatalogue.save")
                         .disabled(!canSave || isSaving)
                 }
             }
-            .task {
+            .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+                guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
                 catalogueStore.setFirebaseBackend(firebaseBackend)
                 await catalogueStore.load()
                 if let existing = existingMaterial {
@@ -208,7 +211,9 @@ struct MaterialsAddWithCatalogueSheet: View {
             }
             .alert("Duplicate material", isPresented: $showingDuplicateAlert) {
                 Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("materialsAddWithCatalogue.cancel2")
                 Button("Add anyway") { Task { await save(force: true) } }
+                    .accessibilityIdentifier("materialsAddWithCatalogue.addAnyway")
             } message: {
                 if let duplicateExisting {
                     Text("“\(duplicateExisting.name)” is already in your organisation catalogue. Add this line anyway?")
@@ -219,6 +224,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                 set: { if !$0 { saveError = nil } }
             )) {
                 Button("OK", role: .cancel) {}
+                    .accessibilityIdentifier("materialsAddWithCatalogue.ok")
             } message: {
                 Text(saveError ?? "")
             }
@@ -264,6 +270,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(MaterialsOrderingTheme.primary)
                 TextField("Search catalogue or type custom", text: $query)
+                    .accessibilityIdentifier("materialsAddWithCatalogue.searchCatalogueOrTypeCustom")
                     .font(.system(size: 13, weight: .medium))
             }
             .padding(10)
@@ -310,6 +317,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                             .background(MaterialsOrderingTheme.primaryTint)
                             .clipShape(Circle())
                     }
+                        .accessibilityIdentifier("materialsAddWithCatalogue.settings")
                     Button {
                         selectedCatalogue = nil
                         query = item.name
@@ -325,6 +333,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                             .background(MaterialsOrderingTheme.pageBackground)
                             .clipShape(Circle())
                     }
+                        .accessibilityIdentifier("materialsAddWithCatalogue.close")
                 }
             }
             Text(editMatchedLineItemDetails
@@ -372,6 +381,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                     .padding(9)
                     .background(MaterialsOrderingTheme.primaryTint.opacity(0.35))
                 }
+                .accessibilityIdentifier("materialsAddWithCatalogue.row.\(suggestion.id).shippingboxFill")
                 .buttonStyle(.plain)
                 if suggestion.id != suggestions.last?.id {
                     Divider()
@@ -400,6 +410,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                 }
                 .padding(9)
             }
+            .accessibilityIdentifier("materialsAddWithCatalogue.add")
             .buttonStyle(.plain)
         }
         .background(MaterialsOrderingTheme.cardBackground)
@@ -436,6 +447,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                         .foregroundStyle(MaterialsOrderingTheme.danger)
                 }
                 TextField("Item name *", text: $customItemName)
+                    .accessibilityIdentifier("materialsAddWithCatalogue.itemName")
                     .padding(10)
                     .background(MaterialsOrderingTheme.cardBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -449,6 +461,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                     .foregroundStyle(MaterialsOrderingTheme.danger)
             }
             TextField("Category *", text: $customCategory)
+                .accessibilityIdentifier("materialsAddWithCatalogue.category")
                 .padding(10)
                 .background(MaterialsOrderingTheme.cardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -467,25 +480,30 @@ struct MaterialsAddWithCatalogueSheet: View {
                                     .background(MaterialsOrderingTheme.primaryTint)
                                     .clipShape(Capsule())
                             }
+                            .accessibilityIdentifier("materialsAddWithCatalogue.row.\(suggestion).\(AccessibilityID.token(suggestion))")
                             .buttonStyle(.plain)
                         }
                     }
                 }
             }
             TextField("Manufacturer (Optional)", text: $customBrand)
+                .accessibilityIdentifier("materialsAddWithCatalogue.manufacturerOptional")
                 .padding(10)
                 .background(MaterialsOrderingTheme.cardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             TextField("Code (Optional)", text: $customProductCode)
+                .accessibilityIdentifier("materialsAddWithCatalogue.codeOptional")
                 .padding(10)
                 .background(MaterialsOrderingTheme.cardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             TextField("Size (Optional)", text: $sizeValue)
+                .accessibilityIdentifier("materialsAddWithCatalogue.sizeOptional")
                 .padding(10)
                 .background(MaterialsOrderingTheme.cardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             MaterialsLengthInputRow(lengthValue: $lengthValue, lengthUnit: $lengthUnit)
             TextField("Product website URL (Optional)", text: $websiteURL)
+                .accessibilityIdentifier("materialsAddWithCatalogue.productWebsiteURLOptional")
                 .textInputAutocapitalization(.never)
                 .keyboardType(.URL)
                 .padding(10)
@@ -516,6 +534,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(MaterialsOrderingTheme.muted)
             DatePicker("", selection: $neededDate, displayedComponents: .date)
+                .accessibilityIdentifier("materialsAddWithCatalogue.datePicker")
                 .labelsHidden()
                 .padding(10)
                 .background(MaterialsOrderingTheme.cardBackground)
@@ -529,6 +548,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(MaterialsOrderingTheme.muted)
             TextField("e.g. for Level 3 plant room", text: $notes, axis: .vertical)
+                .accessibilityIdentifier("materialsAddWithCatalogue.eGForLevel3Plant")
                 .lineLimit(2...4)
                 .padding(10)
                 .background(MaterialsOrderingTheme.cardBackground)

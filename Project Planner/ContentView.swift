@@ -29,6 +29,25 @@ extension EnvironmentValues {
     }
 }
 
+
+private enum TabAccessibility {
+    static func identifier(for title: String) -> String {
+        switch title.replacingOccurrences(of: "\n", with: " ") {
+        case "Home": return "tab.home"
+        case "Projects": return "tab.projects"
+        case "Small Works": return "tab.smallWorks"
+        case "Manage Operatives": return "tab.operatives"
+        case "Annual Leave": return "tab.leave"
+        case "Settings": return "tab.settings"
+        case "Managers": return "tab.managers"
+        case "Wholesalers": return "tab.wholesalers"
+        case "Sub Contractors": return "tab.subcontractors"
+        case "Help": return "tab.help"
+        default: return "tab.\(AccessibilityID.token(title))"
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var projectStore: ProjectStore
@@ -554,8 +573,8 @@ struct ContentView: View {
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(Color.theme.primary(for: appSettings.settings.colorScheme).opacity(0.15))
-                        .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
+                        .background(PPColor.brand.opacity(0.15))
+                        .foregroundColor(PPColor.brand)
                         .clipShape(Capsule())
                 }
                 .padding(.horizontal, 12)
@@ -614,6 +633,7 @@ struct ContentView: View {
                     .background(Color.white.opacity(0.22))
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
+            .accessibilityIdentifier("shell.stopRolePreview")
             .accessibilityLabel("Stop role preview")
         }
         .padding(.horizontal, 14)
@@ -658,6 +678,7 @@ extension ContentView {
         return Array(movable.dropFirst(max(defaultPrimaryMovableCount, 0)))
     }
     
+    // TODO(UI): Tab bar is a custom row, not a TabView, so .ppTabBarStyle() is not applied. Colours only.
     @ViewBuilder
     private func tabRow(for items: [TabButtonConfig], isSecondary: Bool, showsMoreToggle: Bool = true) -> some View {
         HStack(spacing: 12) {
@@ -679,8 +700,9 @@ extension ContentView {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
-                    .foregroundColor(isReorderingTabs ? Color.theme.primary(for: appSettings.settings.colorScheme) : .primary)
+                    .foregroundColor(isReorderingTabs ? PPColor.brand : .primary)
                 }
+                    .accessibilityIdentifier("tab.edit")
             } else {
                 if !showsMoreToggle || secondaryTabItems.isEmpty {
                     Spacer(minLength: 0)
@@ -701,22 +723,19 @@ extension ContentView {
                         .padding(.vertical, 8)
                         .foregroundColor(
                             showMoreMenuSheet
-                                ? Color.theme.primary(for: appSettings.settings.colorScheme)
+                                ? PPColor.brand
                                 : Color.primary.opacity(0.85)
                         )
                     }
+                        .accessibilityIdentifier("tab.more")
                 }
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.secondarySystemBackground).opacity(0.85))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.white.opacity(0.2), lineWidth: 0.5)
-                )
+            Capsule()
+                .fill(.ultraThinMaterial)
         )
     }
     
@@ -738,10 +757,10 @@ extension ContentView {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
-                    .foregroundColor(selectedTab == config.tag ? Color.theme.primary(for: appSettings.settings.colorScheme) : Color.primary.opacity(0.85))
+                    .foregroundColor(selectedTab == config.tag ? PPColor.brand : Color.primary.opacity(0.85))
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(selectedTab == config.tag ? Color.theme.primary(for: appSettings.settings.colorScheme).opacity(0.18) : Color.clear)
+                    .fill(selectedTab == config.tag ? PPColor.brand.opacity(0.18) : Color.clear)
                     .blur(radius: selectedTab == config.tag ? 0 : 0)
             )
             .rotationEffect(isReorderingTabs && isMovable ? .degrees(jiggleTabs ? 1.4 : -1.4) : .degrees(0))
@@ -754,6 +773,7 @@ extension ContentView {
                 }
             )
         }
+        .accessibilityIdentifier(TabAccessibility.identifier(for: config.title))
         .simultaneousGesture(
             DragGesture(minimumDistance: 6, coordinateSpace: .named("tabReorderArea"))
                 .onChanged { value in

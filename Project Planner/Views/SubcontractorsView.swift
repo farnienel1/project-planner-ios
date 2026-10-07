@@ -38,6 +38,7 @@ struct SubcontractorsView: View {
                         } label: {
                             subcontractorCard(subcontractor)
                         }
+                        .accessibilityIdentifier("subcontractors.row.\(subcontractor.id)")
                         .buttonStyle(.plain)
                     }
                 }
@@ -59,6 +60,7 @@ struct SubcontractorsView: View {
                     .foregroundColor(Color.theme.primary)
                     .fontWeight(.medium)
                 }
+                    .accessibilityIdentifier("subcontractors.gobacktoprevioustab")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 if userStore.canManageSubcontractors() {
@@ -67,6 +69,7 @@ struct SubcontractorsView: View {
                     } label: {
                         Image(systemName: "plus")
                     }
+                        .accessibilityIdentifier("subcontractors.add")
                 }
             }
         }
@@ -77,7 +80,8 @@ struct SubcontractorsView: View {
                 .environmentObject(subcontractorStore)
                 .environmentObject(firebaseBackend)
         }
-        .task {
+        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+            guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await subcontractorStore.loadData()
             if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
                 let orgTrades = await firebaseBackend.loadOrganizationTradeTypes(organizationId: orgId)
@@ -129,6 +133,7 @@ struct SubcontractorsView: View {
                     Capsule().stroke(Color(.systemGray5), lineWidth: isSelected ? 0 : 0.8)
                 )
         }
+        .accessibilityIdentifier("subcontractors.filter.all")
         .buttonStyle(.plain)
     }
 
@@ -160,6 +165,7 @@ struct SubcontractorsView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
             TextField("Search firms or trades…", text: $searchText)
+                .accessibilityIdentifier("subcontractors.searchFirmsOrTrades")
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
         }
@@ -368,6 +374,7 @@ private struct SubcontractorFirmDetailView: View {
                             Label("Add", systemImage: "plus")
                                 .font(.system(size: 11, weight: .medium))
                         }
+                            .accessibilityIdentifier("subcontractorFirmDetail.add")
                     }
 
                     operativesCard(subcontractor)
@@ -392,6 +399,7 @@ private struct SubcontractorFirmDetailView: View {
                     } label: {
                         Image(systemName: "pencil")
                     }
+                        .accessibilityIdentifier("subcontractorFirmDetail.edit")
                 }
             }
         }
@@ -533,6 +541,7 @@ private struct SubcontractorFirmDetailView: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                     }
+                    .accessibilityIdentifier("subcontractorFirmDetail.row.\(idx).chevronRight")
                     .buttonStyle(.plain)
                     if idx < subcontractor.contacts.count - 1 {
                         Divider().padding(.leading, 12)
@@ -656,6 +665,7 @@ private struct SubcontractorFirmEditorView: View {
                                     .stroke(Color(.systemGray4), style: StrokeStyle(lineWidth: 1, dash: [5]))
                             )
                     }
+                    .accessibilityIdentifier("subcontractorFirmEditor.add")
                     .buttonStyle(.plain)
                 }
                 .padding(16)
@@ -674,9 +684,11 @@ private struct SubcontractorFirmEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("subcontractorFirmEditor.cancel")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") { save() }
+                        .accessibilityIdentifier("subcontractorFirmEditor.save")
                         .fontWeight(.semibold)
                         .disabled(!isValid)
                 }
@@ -727,6 +739,7 @@ private struct SubcontractorFirmEditorView: View {
                                         .background(Color.theme.primary.opacity(0.1))
                                         .clipShape(Capsule())
                                 }
+                                .accessibilityIdentifier("subcontractorFirmEditor.row.\(suggestion).\(AccessibilityID.token(suggestion))")
                                 .buttonStyle(.plain)
                             }
                         }
@@ -755,6 +768,7 @@ private struct SubcontractorFirmEditorView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
             TextField(placeholder, text: text)
+                .accessibilityIdentifier("subcontractorFirmEditor.\(AccessibilityID.token(placeholder))")
                 .font(.system(size: 14, weight: .medium))
                 .textInputAutocapitalization(autocap)
                 .autocorrectionDisabled()
@@ -793,6 +807,7 @@ private struct SubcontractorFirmEditorView: View {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundStyle(.secondary)
                         }
+                            .accessibilityIdentifier("subcontractorFirmEditor.row.\(contact.id).clear")
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
@@ -919,6 +934,7 @@ private struct SubcontractorOperativeEditorSheet: View {
                                                     .background(Color.theme.primary.opacity(0.1))
                                                     .clipShape(Capsule())
                                             }
+                                            .accessibilityIdentifier("subcontractorOperativeEditor.row.\(suggestion).\(AccessibilityID.token(suggestion))")
                                             .buttonStyle(.plain)
                                         }
                                     }
@@ -936,11 +952,13 @@ private struct SubcontractorOperativeEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("subcontractorOperativeEditor.cancel")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") {
                         saveOperative()
                     }
+                    .accessibilityIdentifier("subcontractorOperativeEditor.save")
                     .disabled(!canSave)
                 }
             }
@@ -1051,6 +1069,7 @@ private struct SubcontractorOperativeEditorSheet: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
             TextField("", text: text)
+                .accessibilityIdentifier("subcontractorOperativeEditor.rowField")
                 .font(.system(size: 14, weight: .medium))
                 .textInputAutocapitalization(autocap)
                 .autocorrectionDisabled()

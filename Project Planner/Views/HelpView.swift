@@ -38,6 +38,7 @@ struct HelpView: View {
                         Image(systemName: "magnifyingglass")
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                         TextField("Search topics", text: $searchText)
+                            .accessibilityIdentifier("help.searchTopics")
                             .font(.system(size: 14))
                             .foregroundStyle(ProjectWorksRevampColors.ink)
                     }
@@ -58,6 +59,7 @@ struct HelpView: View {
                                 subtitle: category.description
                             )
                         }
+                        .accessibilityIdentifier("help.row.\(category.id)")
                         .buttonStyle(.plain)
                         if index < filteredCategories.count - 1 {
                             SettingsHubChrome.divider()
@@ -91,6 +93,7 @@ struct HelpView: View {
                             .font(.system(size: 17, weight: .semibold))
                             .foregroundStyle(ProjectWorksRevampColors.blue)
                     }
+                        .accessibilityIdentifier("help.gobacktoprevioustab")
                 }
             }
         }
@@ -142,6 +145,7 @@ struct FAQCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
+        .accessibilityIdentifier("faqCard.chevronUp")
         .buttonStyle(.plain)
     }
 }
@@ -217,6 +221,7 @@ struct CategoryHelpView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("categoryHelp.done")
                 }
             }
         }

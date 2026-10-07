@@ -141,6 +141,7 @@ struct OrganisationWorkingHoursView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(WorkingHoursPalette.ink)
                 }
+                    .accessibilityIdentifier("organisationWorkingHours.cancel")
             }
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
@@ -162,17 +163,21 @@ struct OrganisationWorkingHoursView: View {
         }
         .alert("Apply changes today?", isPresented: $showingImmediateSaveWarning) {
             Button("Decline Changes", role: .cancel) { }
+                .accessibilityIdentifier("organisationWorkingHours.declineChanges")
             Button("Approve Changes") {
                 Task { await saveImmediately() }
             }
+                .accessibilityIdentifier("organisationWorkingHours.approveChanges")
         } message: {
             Text("If you save these settings now, they will take immediate effect. Any bookings on today's schedule will have these new working hours applied. This will be reflected in the weekly report, timesheets and on invoices. If you would like these changes to take effect from a future date, then use the Schedule Changes Button.")
         }
         .alert("Discard changes?", isPresented: $showingCancelConfirm) {
             Button("Keep editing", role: .cancel) { }
+                .accessibilityIdentifier("organisationWorkingHours.keepEditing")
             Button("Discard", role: .destructive) {
                 dismiss()
             }
+                .accessibilityIdentifier("organisationWorkingHours.discard")
         } message: {
             Text("You have unsaved changes. Discard them and leave this screen?")
         }
@@ -650,6 +655,7 @@ struct OrganisationWorkingHoursView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                 }
+                .accessibilityIdentifier("organisationWorkingHours.save")
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
                 .background(WorkingHoursPalette.indigo)
@@ -666,6 +672,7 @@ struct OrganisationWorkingHoursView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }
+                .accessibilityIdentifier("organisationWorkingHours.schedule")
                 .buttonStyle(.plain)
                 .foregroundStyle(WorkingHoursPalette.indigo)
                 .background(Color(.systemBackground))
@@ -685,6 +692,7 @@ struct OrganisationWorkingHoursView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }
+                .accessibilityIdentifier("organisationWorkingHours.clear")
                 .buttonStyle(.plain)
                 .foregroundStyle(WorkingHoursPalette.muted)
                 .background(Color(.systemBackground))
@@ -860,6 +868,7 @@ struct OrganisationWorkingHoursView: View {
                     in: Calendar.current.startOfDay(for: Date())...,
                     displayedComponents: .date
                 )
+                    .accessibilityIdentifier("organisationWorkingHours.effectiveFrom")
                 Section {
                     Text("Bookings before this date keep the current working hours. From this date onward, these draft settings apply.")
                         .font(.caption)
@@ -871,11 +880,13 @@ struct OrganisationWorkingHoursView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { showingScheduleSheet = false }
+                        .accessibilityIdentifier("organisationWorkingHours.cancel2")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Schedule") {
                         Task { await saveScheduled() }
                     }
+                    .accessibilityIdentifier("organisationWorkingHours.schedule2")
                     .disabled(!isFormValid || isSaving)
                 }
             }
@@ -1100,6 +1111,7 @@ private struct WorkingHoursSegmentedPicker: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .shadow(color: selection.wrappedValue == option.0 ? Color.black.opacity(0.06) : .clear, radius: 2, y: 1)
                 }
+                .accessibilityIdentifier("workingHoursSegmentedPicker.row.\(option)")
                 .buttonStyle(.plain)
             }
         }
@@ -1127,6 +1139,7 @@ private struct WorkingHoursToggle: View {
                     .padding(2)
             }
         }
+        .accessibilityIdentifier("workingHoursToggle.button")
         .buttonStyle(.plain)
         .animation(.easeInOut(duration: 0.2), value: isOn)
     }
@@ -1148,6 +1161,7 @@ private struct WorkingHoursStepper: View {
                     .font(.system(size: 17, weight: .semibold))
                     .frame(width: 32, height: 32)
             }
+            .accessibilityIdentifier("workingHoursStepper.button")
             .buttonStyle(.plain)
 
             Text(displayValue)
@@ -1162,6 +1176,7 @@ private struct WorkingHoursStepper: View {
                     .font(.system(size: 17, weight: .semibold))
                     .frame(width: 32, height: 32)
             }
+            .accessibilityIdentifier("workingHoursStepper.button2")
             .buttonStyle(.plain)
         }
         .background(Color(red: 0.945, green: 0.961, blue: 0.976))
@@ -1191,6 +1206,7 @@ private struct WorkingHoursMultiplierField: View {
     var body: some View {
         HStack(spacing: 6) {
             TextField("×", value: $value, format: .number)
+                .accessibilityIdentifier("workingHoursMultiplierField.textField")
                 .keyboardType(.decimalPad)
                 .multilineTextAlignment(.center)
                 .font(.system(size: 15, weight: .bold))
@@ -1218,6 +1234,7 @@ private struct WorkingHoursTimeField: View {
     var body: some View {
         HStack {
             TextField("07:30", text: $draft)
+                .accessibilityIdentifier("workingHoursTimeField.n0730")
                 .keyboardType(.numbersAndPunctuation)
                 .multilineTextAlignment(.center)
                 .font(.system(size: 15, weight: .bold))

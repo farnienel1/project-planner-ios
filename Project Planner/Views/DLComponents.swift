@@ -307,6 +307,7 @@ struct DLDeadlineCard: View {
                         } label: {
                             Text("Update")
                         }
+                        .accessibilityIdentifier("dlDeadlineCard.update")
                         .buttonStyle(HSPillButton(tone: .teal))
                     }
                 }
@@ -325,7 +326,8 @@ struct DLDeadlineCard: View {
             .scaleEffect(pressed ? 0.985 : 1)
             .animation(.spring(response: 0.25, dampingFraction: 0.75), value: pressed)
             .contentShape(RoundedRectangle(cornerRadius: HSMetric.cardRadius, style: .continuous))
-            .onTapGesture {
+            
+            .accessibilityIdentifier("dlDeadlineCard.tap").onTapGesture {
                 HSHaptic.tap(); onOpen()
             }
             .simultaneousGesture(
@@ -425,6 +427,7 @@ struct DLWeekRail: View {
                                                       lineWidth: 1)
                                 )
                             }
+                            .accessibilityIdentifier("dlWeekRail.row.\(day.timeIntervalSince1970)")
                             .buttonStyle(HSPressStyle())
                         }
                     }
@@ -513,6 +516,7 @@ struct DLTimelineRow: View {
             .padding(.vertical, 9)
             .padding(.horizontal, 12)
         }
+        .accessibilityIdentifier("dlTimeline.flagFill")
         .buttonStyle(HSPressStyle())
     }
 }
@@ -583,6 +587,7 @@ struct DLDependencyRow: View {
             .padding(.vertical, 11)
             .contentShape(Rectangle())
         }
+        .accessibilityIdentifier("dlDependency.arrowTurnLeftUp")
         .buttonStyle(HSPressStyle())
     }
 }
@@ -655,6 +660,7 @@ struct DLProgressPicker: View {
                         .background(active ? accent : HS.fill)
                         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                 }
+                .accessibilityIdentifier("dlProgressPicker.row.\(s)")
                 .buttonStyle(HSPressStyle())
             }
         }
@@ -710,6 +716,7 @@ struct DLToggleRow: View {
             }
             Spacer(minLength: 8)
             Toggle("", isOn: $isOn)
+                .accessibilityIdentifier("dlToggle.toggle")
                 .labelsHidden()
                 .tint(tint)
         }
@@ -773,6 +780,7 @@ struct DLRiskBanner: View {
                         .strokeBorder((overdue > 0 ? HS.red : HS.amber).opacity(0.25), lineWidth: 1)
                 )
             }
+            .accessibilityIdentifier("dlRiskBanner.exclamationmarkTriangleFill")
             .buttonStyle(HSPressStyle())
         }
     }
@@ -793,6 +801,7 @@ struct DLGroupingButton: View {
                 } label: {
                     Label(g.label, systemImage: g.icon)
                 }
+                    .accessibilityIdentifier("dlGrouping.row.\(g.id)")
             }
         } label: {
             HStack(spacing: 5) {
@@ -808,6 +817,7 @@ struct DLGroupingButton: View {
             .clipShape(Capsule())
             .fixedSize()
         }
+            .accessibilityIdentifier("dlGrouping.chevronDown")
     }
 }
 

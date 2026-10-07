@@ -35,12 +35,15 @@ private struct SettingsProfileSheetsModifier: ViewModifier {
                         profilePhotoPickerSource = .camera
                         showingProfileImagePicker = true
                     }
+                        .accessibilityIdentifier("settingsProfileSheetsModifier.takePhoto")
                 }
                 Button("Photo Library") {
                     profilePhotoPickerSource = .photoLibrary
                     showingProfileImagePicker = true
                 }
+                    .accessibilityIdentifier("settingsProfileSheetsModifier.photoLibrary")
                 Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("settingsProfileSheetsModifier.cancel")
             }
             .sheet(isPresented: $showingProfileImagePicker) {
                 ProfileImagePicker(image: $pickedProfileImage, sourceType: profilePhotoPickerSource)
@@ -52,6 +55,7 @@ private struct SettingsProfileSheetsModifier: ViewModifier {
             }
             .alert("Profile photo", isPresented: profilePhotoUploadPresented) {
                 Button("OK") { profilePhotoUploadMessage = nil }
+                    .accessibilityIdentifier("settingsProfileSheetsModifier.ok")
             } message: {
                 if let profilePhotoUploadMessage {
                     Text(profilePhotoUploadMessage)
@@ -71,12 +75,14 @@ private struct SettingsProfileSheetsModifier: ViewModifier {
             Form {
                 Section("Link to organisation") {
                     TextField("Organisation ID", text: $manualLinkOrganizationId)
+                        .accessibilityIdentifier("settingsProfileSheetsModifier.organisationID")
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     if let linkError {
                         Text(linkError).font(.caption).foregroundStyle(.red)
                     }
                     Button("Link", action: onManualLink)
+                        .accessibilityIdentifier("settingsProfileSheetsModifier.link")
                         .disabled(isLinking || manualLinkOrganizationId.isEmpty)
                 }
             }
@@ -89,6 +95,7 @@ private struct SettingsProfileSheetsModifier: ViewModifier {
                         manualLinkOrganizationId = ""
                         linkError = nil
                     }
+                        .accessibilityIdentifier("settingsProfileSheetsModifier.cancel2")
                 }
             }
         }
@@ -180,6 +187,7 @@ struct SettingsProfileDetailView: View {
                             Button("Change") {
                                 showingProfilePhotoSourcePicker = true
                             }
+                            .accessibilityIdentifier("settingsProfileDetail.change")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(ProjectWorksRevampColors.blue)
                         }
@@ -212,12 +220,14 @@ struct SettingsProfileDetailView: View {
                 SettingsHubChrome.card {
                     VStack(alignment: .leading, spacing: 8) {
                         TextField("VAT number (if registered)", text: $vatNumberDraft)
+                            .accessibilityIdentifier("settingsProfileDetail.vatNumberIfRegistered")
                             .textInputAutocapitalization(.characters)
                             .autocorrectionDisabled()
                             .font(.system(size: 13, weight: .medium))
                             .padding(.top, 12)
                         SettingsHubChrome.divider()
                         TextField("UTR number", text: $utrNumberDraft)
+                            .accessibilityIdentifier("settingsProfileDetail.utrNumber")
                             .textInputAutocapitalization(.characters)
                             .autocorrectionDisabled()
                             .font(.system(size: 13, weight: .medium))
@@ -233,6 +243,7 @@ struct SettingsProfileDetailView: View {
                             .foregroundStyle(ProjectWorksRevampColors.blue)
                             .padding(.vertical, 12)
                         }
+                        .accessibilityIdentifier("settingsProfileDetail.saving")
                         .disabled(isSavingBillingDetails)
                         .buttonStyle(.plain)
                         if let billingSaveMessage {
@@ -250,6 +261,7 @@ struct SettingsProfileDetailView: View {
                         Button("Link organisation manually") {
                             showingManualLinkSheet = true
                         }
+                        .accessibilityIdentifier("settingsProfileDetail.linkOrganisationManually")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(ProjectWorksRevampColors.blue)
                         .padding(.vertical, 12)
@@ -407,6 +419,7 @@ struct SettingsNotificationsHubView: View {
                                         Task { await updateToggle(key, enabled: enabled) }
                                     }
                                 ))
+                                .accessibilityIdentifier("settingsNotificationsHub.row.\(key.id).toggle")
                                 .labelsHidden()
                                 .tint(ProjectWorksRevampColors.blue)
                             }

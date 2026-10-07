@@ -125,6 +125,7 @@ struct AddUserView: View {
         VStack(spacing: 0) {
             HStack {
                 Button("Cancel") { dismiss() }
+                    .accessibilityIdentifier("addUser.cancel")
                     .font(.system(size: 17))
                     .foregroundStyle(ManageUserProfilePalette.listBlue)
                 Spacer()
@@ -193,6 +194,7 @@ struct AddUserView: View {
                     .background(ManageUserProfilePalette.pageBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+            .accessibilityIdentifier("addUser.back")
             .buttonStyle(.plain)
             .disabled(currentStep <= 1)
             .opacity(currentStep <= 1 ? 0.35 : 1)
@@ -234,6 +236,7 @@ struct AddUserView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: Color(red: 0x4F / 255, green: 0x46 / 255, blue: 0xE5 / 255).opacity(0.28), radius: 6, y: 3)
             }
+            .accessibilityIdentifier("addUser.creating")
             .buttonStyle(.plain)
             .disabled(!canProceed || isCreating)
             .opacity((canProceed && !isCreating) ? 1 : 0.55)
@@ -329,6 +332,7 @@ struct AddUserView: View {
                     .stroke(selected ? ManageUserProfilePalette.avatarGradientTop : Color(red: 0xE5 / 255, green: 0xE5 / 255, blue: 0xEB / 255), lineWidth: selected ? 2 : 1.5)
             )
         }
+        .accessibilityIdentifier("addUser.checkmark")
         .buttonStyle(.plain)
     }
     
@@ -393,6 +397,7 @@ struct AddUserView: View {
                 .background(Color(.systemGray6))
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
+            .accessibilityIdentifier("addUser.chevronRight")
             .buttonStyle(.plain)
         }
         .sheet(isPresented: $showingLineManagerPicker) {
@@ -439,6 +444,7 @@ struct AddUserView: View {
                     Text("First Name")
                         .font(.headline)
                     TextField("Enter first name", text: $firstName)
+                        .accessibilityIdentifier("addUser.enterFirstName")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                 }
                 
@@ -446,6 +452,7 @@ struct AddUserView: View {
                     Text("Surname")
                         .font(.headline)
                     TextField("Enter surname", text: $surname)
+                        .accessibilityIdentifier("addUser.enterSurname")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                 }
                 
@@ -453,6 +460,7 @@ struct AddUserView: View {
                     Text("Email Address")
                         .font(.headline)
                     TextField("Enter email address", text: $email)
+                        .accessibilityIdentifier("addUser.enterEmailAddress")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.emailAddress)
                         .autocapitalization(.none)
@@ -462,6 +470,7 @@ struct AddUserView: View {
                     Text("Mobile Number")
                         .font(.headline)
                     TextField("Enter mobile number", text: $mobileNumber)
+                        .accessibilityIdentifier("addUser.enterMobileNumber")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.phonePad)
                 }
@@ -474,6 +483,7 @@ struct AddUserView: View {
                             Text(type.title).tag(type)
                         }
                     }
+                    .accessibilityIdentifier("addUser.employmentType")
                     .pickerStyle(.segmented)
                 }
                 
@@ -491,6 +501,7 @@ struct AddUserView: View {
                         Text("Day rate (optional)")
                             .font(.headline)
                         TextField("e.g. 250", text: dayRateBindingForSelectedType)
+                            .accessibilityIdentifier("addUser.eG250")
                             .textFieldStyle(RoundedBorderTextFieldStyle())
                             .keyboardType(.decimalPad)
                         Text(invitedAccountType == .manager ? "Optional for managers. Leave blank if not needed." : "Stored on the operative profile when their account is linked.")
@@ -503,6 +514,7 @@ struct AddUserView: View {
                     Text("VAT number (optional)")
                         .font(.headline)
                     TextField("If VAT registered", text: $vatNumber)
+                        .accessibilityIdentifier("addUser.ifVATRegistered")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .textInputAutocapitalization(.characters)
                 }
@@ -511,6 +523,7 @@ struct AddUserView: View {
                     Text("UTR number (optional)")
                         .font(.headline)
                     TextField("Unique Taxpayer Reference", text: $utrNumber)
+                        .accessibilityIdentifier("addUser.uniqueTaxpayerReference")
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .textInputAutocapitalization(.characters)
                 }
@@ -985,6 +998,7 @@ struct AddUserView: View {
             Button("Done") {
                 dismiss()
             }
+            .accessibilityIdentifier("addUser.done")
             .buttonStyle(.borderedProminent)
             .tint(.indigo)
         }
@@ -1221,6 +1235,7 @@ struct PermissionToggle: View {
                             .rotationEffect(.degrees(expanded ? 0 : -90))
                     }
                 }
+                .accessibilityIdentifier("permissionToggle.chevronDown")
                 .buttonStyle(.plain)
                 if expanded {
                     Text(description)
@@ -1232,6 +1247,7 @@ struct PermissionToggle: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Toggle("", isOn: $isOn)
+                .accessibilityIdentifier("permissionToggle.toggle")
                 .tint(.indigo)
                 .disabled(isDisabled)
         }

@@ -49,6 +49,7 @@ struct QualificationsManagementView: View {
                             Text(tab.title).tag(tab)
                         }
                     }
+                    .accessibilityIdentifier("qualificationsManagement.qualifications")
                     .pickerStyle(.segmented)
                     .padding(.horizontal, 16)
                     .padding(.top, 12)
@@ -72,6 +73,7 @@ struct QualificationsManagementView: View {
                         Image(systemName: "xmark")
                             .foregroundColor(.blue)
                     }
+                        .accessibilityIdentifier("qualificationsManagement.close")
                 }
 
                 if canManageOrganisation && mode == .organisation {
@@ -79,6 +81,7 @@ struct QualificationsManagementView: View {
                         Button("Add") {
                             showingAddQualification = true
                         }
+                            .accessibilityIdentifier("qualificationsManagement.add")
                     }
                 }
             }
@@ -130,6 +133,7 @@ struct QualificationsManagementView: View {
                 Button("Create New Qualification") {
                     showingAddQualification = true
                 }
+                .accessibilityIdentifier("qualificationsManagement.createNewQualification")
                 .buttonStyle(.borderedProminent)
                 Spacer()
             }
@@ -142,6 +146,7 @@ struct QualificationsManagementView: View {
                     } label: {
                         QualificationRowView(qualification: qualification)
                     }
+                    .accessibilityIdentifier("qualificationsManagement.row.\(qualification.id)")
                     .buttonStyle(.plain)
                 }
                 .onDelete(perform: deleteQualifications)
@@ -250,6 +255,7 @@ struct AddQualificationView: View {
         Form {
             Section("Qualification Details") {
                 TextField("Qualification Name", text: $qualificationName)
+                    .accessibilityIdentifier("addQualification.qualificationName")
                     .textInputAutocapitalization(.words)
 
                 Text("Expiration dates and certificates are set when someone assigns this qualification on My Qualifications.")
@@ -271,12 +277,14 @@ struct AddQualificationView: View {
                 Button("Cancel") {
                     dismiss()
                 }
+                    .accessibilityIdentifier("addQualification.cancel")
             }
 
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("Save") {
                     saveQualification()
                 }
+                .accessibilityIdentifier("addQualification.save")
                 .disabled(!isFormValid || isLoading)
                 .foregroundStyle(isFormValid && !isLoading ? Color.blue : Color.secondary)
             }
@@ -349,6 +357,7 @@ struct EditOrganisationQualificationView: View {
         Form {
             Section("Qualification") {
                 TextField("Name", text: $qualificationName)
+                    .accessibilityIdentifier("editOrganisationQualification.name")
                     .textInputAutocapitalization(.words)
             }
 
@@ -362,6 +371,7 @@ struct EditOrganisationQualificationView: View {
                         Text("Delete Qualification")
                     }
                 }
+                .accessibilityIdentifier("editOrganisationQualification.deleteQualification")
                 .disabled(isLoading || isDeleting)
             } footer: {
                 Text("Deleting removes this template from the organisation list. Existing assignments on staff profiles are not automatically removed.")
@@ -379,11 +389,13 @@ struct EditOrganisationQualificationView: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
+                    .accessibilityIdentifier("editOrganisationQualification.cancel")
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button(isLoading ? "Saving…" : "Save") {
                     Task { await saveChanges() }
                 }
+                .accessibilityIdentifier("editOrganisationQualification.saving")
                 .disabled(!canSave)
                 .foregroundStyle(canSave ? Color.blue : Color.secondary)
                 .fontWeight(canSave ? .semibold : .regular)
@@ -397,7 +409,9 @@ struct EditOrganisationQualificationView: View {
             Button("Delete", role: .destructive) {
                 Task { await deleteQualification() }
             }
+                .accessibilityIdentifier("editOrganisationQualification.delete")
             Button("Cancel", role: .cancel) {}
+                .accessibilityIdentifier("editOrganisationQualification.cancel2")
         } message: {
             Text("This cannot be undone.")
         }

@@ -13,12 +13,6 @@ struct MainMenuMoreSheet: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @Environment(\.dismiss) private var dismiss
 
-    private let sheetBg = ProjectWorksRevampColors.canvas
-    private let cardBg = ProjectWorksRevampColors.surface
-    private let ink = ProjectWorksRevampColors.ink
-    private let muted = ProjectWorksRevampColors.muted
-    private let border = ProjectWorksRevampColors.border
-
     private var grouped: [(section: MainMenuShellSection, rows: [MainMenuRowSpec])] {
         MainMenuCatalog.groupedVisibleRows(
             userStore: userStore,
@@ -30,7 +24,19 @@ struct MainMenuMoreSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 0) {
+                    PPInlineSheetHeader("More") {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .symbolRenderingMode(.hierarchical)
+                        }
+                        .accessibilityIdentifier("mainMenu.close")
+                        .accessibilityLabel("Close")
+                        .ppGlassCircle()
+                    }
+
                     if let editGroup = grouped.first(where: { $0.section == .editBar }) {
                         ForEach(editGroup.rows) { row in
                             editMenuBarRow(spec: row)
@@ -38,12 +44,12 @@ struct MainMenuMoreSheet: View {
                     }
 
                     if MainMenuCatalog.showQuickCreateSection(userStore: userStore) {
-                        sectionHeader("Quick create")
+                        PPGroupLabel(text: "Quick create")
                         moreQuickCreateCard
                     }
 
                     ForEach(grouped.filter { $0.section != .editBar }, id: \.section) { group in
-                        sectionHeader(group.section.headerTitle)
+                        PPGroupLabel(text: group.section.headerTitle)
                         moreGroupedCard(rows: group.rows)
                     }
 
@@ -54,41 +60,22 @@ struct MainMenuMoreSheet: View {
                     ).first(where: { $0.id == "sign_out" }) {
                         signOutButton(spec: signOut)
                     }
+
+                    // TODO(UI): More sheet has no existing version string, so PPVersionFooter is not added.
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 8)
                 .padding(.bottom, 28)
             }
-            .background(sheetBg.ignoresSafeArea())
-            .navigationTitle("More")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(muted)
-                    }
-                    .accessibilityLabel("Close")
-                }
-            }
+            .background(PPColor.page.ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
         }
         .presentationDragIndicator(.visible)
         .presentationCornerRadius(24)
     }
 
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(muted)
-            .tracking(0.4)
-            .padding(.leading, 4)
-    }
-
     private var moreQuickCreateCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        PPGroupedCard {
             HStack(spacing: 8) {
                 if MainMenuCatalog.canCreateProject(userStore: userStore) {
                     moreQuickPill(icon: "folder.badge.plus", title: "Project") {
@@ -109,133 +96,68 @@ struct MainMenuMoreSheet: View {
                     performAfterDismiss(.openSurface(.tasksDetail))
                 }
             }
+            .padding(10)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(border, lineWidth: 0.5))
     }
 
     private func moreQuickPill(icon: String, title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Color(red: 0.09, green: 0.373, blue: 0.647))
-                Text(title)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .padding(.horizontal, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(red: 0.902, green: 0.945, blue: 0.984).opacity(0.55))
+            PPQuickCreateTileLabel(
+                title: title,
+                symbol: PPMidnightAppearance.quickCreateSymbol(title: title, fallback: icon),
+                family: PPMidnightAppearance.quickCreateFamily(title: title),
+                onNavy: false
             )
         }
-        .buttonStyle(.plain)
+        .accessibilityIdentifier("mainMenu.\(AccessibilityID.token(title))")
+        .buttonStyle(PPPressableButtonStyle())
     }
 
     private func moreGroupedCard(rows: [MainMenuRowSpec]) -> some View {
         let rowsSansSignOut = rows.filter { $0.id != "sign_out" }
-        return VStack(spacing: 0) {
+        return PPGroupedCard {
             ForEach(Array(rowsSansSignOut.enumerated()), id: \.element.id) { idx, row in
                 moreRow(for: row)
                 if idx < rowsSansSignOut.count - 1 {
-                    Divider().overlay(border)
+                    PPRowDivider()
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .background(cardBg)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(border, lineWidth: 0.5))
     }
 
     private func editMenuBarRow(spec: MainMenuRowSpec) -> some View {
-        Button {
-            performAfterDismiss(spec.action)
-        } label: {
-            HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(spec.iconBackground)
-                    .frame(width: 32, height: 32)
-                    .overlay(
-                        Image(systemName: spec.icon)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(spec.iconTint)
-                    )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(MainMenuCatalog.displayTitle(for: spec, userStore: userStore))
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(ink)
-                    if let detail = spec.detail {
-                        Text(detail)
-                            .font(.system(size: 11))
-                            .foregroundStyle(muted)
-                    }
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.77, green: 0.79, blue: 0.82))
+        PPGroupedCard {
+            Button {
+                performAfterDismiss(spec.action)
+            } label: {
+                PPMenuRowLabel(
+                    title: MainMenuCatalog.displayTitle(for: spec, userStore: userStore),
+                    symbol: PPMidnightAppearance.menuSymbol(rowId: spec.id, fallback: spec.icon),
+                    family: PPMidnightAppearance.menuFamily(rowId: spec.id),
+                    subtitle: spec.detail
+                )
             }
-            .padding(.vertical, 12)
-            .padding(.horizontal, 12)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(border, lineWidth: 0.5))
+            .accessibilityIdentifier("mainMenu.row.\(spec.id)")
+            .buttonStyle(PPMenuRowButtonStyle())
         }
-        .buttonStyle(.plain)
+        .padding(.top, 14)
     }
 
     private func moreRow(for spec: MainMenuRowSpec) -> some View {
-        Button {
+        let subtitle = MainMenuCatalog.subtitle(for: spec.id, projectStore: projectStore, operativeStore: operativeStore)
+        let badge = MainMenuCatalog.toolBadge(for: spec.id, operativeStore: operativeStore)
+        return Button {
             performAfterDismiss(spec.action)
         } label: {
-            HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(spec.iconBackground)
-                    .frame(width: 32, height: 32)
-                    .overlay(
-                        Image(systemName: spec.icon)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(spec.iconTint)
-                    )
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(MainMenuCatalog.displayTitle(for: spec, userStore: userStore))
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(ink)
-                        if let badge = MainMenuCatalog.toolBadge(for: spec.id, operativeStore: operativeStore) {
-                            Text(badge)
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundStyle(Color(red: 0.639, green: 0.176, blue: 0.176))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color(red: 0.988, green: 0.922, blue: 0.922))
-                                .clipShape(Capsule())
-                        }
-                    }
-                    if let sub = MainMenuCatalog.subtitle(for: spec.id, projectStore: projectStore, operativeStore: operativeStore) {
-                        Text(sub)
-                            .font(.system(size: 11))
-                            .foregroundStyle(muted)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.77, green: 0.79, blue: 0.82))
-            }
-            .padding(.vertical, 11)
+            PPMenuRowLabel(
+                title: MainMenuCatalog.displayTitle(for: spec, userStore: userStore),
+                symbol: PPMidnightAppearance.menuSymbol(rowId: spec.id, fallback: spec.icon),
+                family: PPMidnightAppearance.menuFamily(rowId: spec.id),
+                detail: subtitle ?? badge
+            )
         }
-        .buttonStyle(.plain)
+        .accessibilityIdentifier("mainMenu.moreRow")
+        .buttonStyle(PPMenuRowButtonStyle())
     }
 
     private func signOutButton(spec: MainMenuRowSpec) -> some View {
@@ -244,21 +166,11 @@ struct MainMenuMoreSheet: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: spec.icon)
-                    .font(.system(size: 16, weight: .medium))
                 Text(MainMenuCatalog.displayTitle(for: spec, userStore: userStore))
-                    .font(.system(size: 13, weight: .medium))
             }
-            .foregroundStyle(spec.iconTint)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color(red: 0.988, green: 0.922, blue: 0.922), lineWidth: 0.5)
-            )
         }
-        .buttonStyle(.plain)
+        .accessibilityIdentifier("mainMenu.signOut")
+        .buttonStyle(PPSignOutButtonStyle())
     }
 
     private func performAfterDismiss(_ action: MainMenuRowAction) {

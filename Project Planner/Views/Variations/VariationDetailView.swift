@@ -15,7 +15,7 @@ struct VariationDetailView: View {
     @EnvironmentObject var notificationService: NotificationService
     @State private var showingEditor = false
     @State private var confirmSubmitted = false
-    @State private var pendingStatus: VariationStatus?
+    @State private var statusError: String?
     @State private var fullscreenURL: URL?
 
     private var variation: Variation? {
@@ -96,6 +96,7 @@ struct VariationDetailView: View {
             if canEdit, variation != nil {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Edit") { showingEditor = true }
+                        .accessibilityIdentifier("variationDetail.edit")
                 }
             }
         }
@@ -109,9 +110,20 @@ struct VariationDetailView: View {
             Button("Mark submitted") {
                 Task { await applyStatus(.submitted) }
             }
+                .accessibilityIdentifier("variationDetail.markSubmitted")
             Button("Cancel", role: .cancel) {}
+                .accessibilityIdentifier("variationDetail.cancel")
         } message: {
             Text("This variation has gone to the client and its number will be locked.")
+        }
+        .alert("Could not update status", isPresented: Binding(
+            get: { statusError != nil },
+            set: { if !$0 { statusError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+                .accessibilityIdentifier("variationDetail.statusOk")
+        } message: {
+            Text(statusError ?? "")
         }
         .sheet(item: Binding(
             get: { fullscreenURL.map { IdentifiableURL($0) } },
@@ -151,23 +163,44 @@ struct VariationDetailView: View {
     }
 
     private func statusControl(_ variation: Variation) -> some View {
-        Picker("Status", selection: Binding(
-            get: { variation.status },
-            set: { newValue in
-                if newValue == .submitted && variation.status != .submitted {
-                    pendingStatus = newValue
-                    confirmSubmitted = true
-                } else {
-                    Task { await applyStatus(newValue) }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Status")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+            HStack(spacing: 8) {
+                ForEach(VariationStatus.allCases, id: \.self) { status in
+                    Button {
+                        guard canEdit, status != variation.status else { return }
+                        if status == .submitted {
+                            confirmSubmitted = true
+                        } else {
+                            Task { await applyStatus(status) }
+                        }
+                    } label: {
+                        Text(status.title)
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .foregroundStyle(variation.status == status ? .white : ProjectWorksRevampColors.ink)
+                            .background(variation.status == status ? headerColor(status) : ProjectWorksRevampColors.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(headerColor(status).opacity(variation.status == status ? 0 : 0.45), lineWidth: 1)
+                            )
+                    }
+                    .accessibilityIdentifier("variationDetail.status.\(status.rawValue)")
+                    .buttonStyle(.plain)
+                    .disabled(!canEdit || status == variation.status)
                 }
             }
-        )) {
-            ForEach(VariationStatus.allCases, id: \.self) { status in
-                Text(status.title).tag(status)
-            }
+            .accessibilityIdentifier("variationDetail.status")
+            Text(canEdit
+                 ? "An admin, or a manager assigned to this job, can mark it submitted or closed."
+                 : "Only an admin, or a manager assigned to this job, can change the status.")
+                .font(.caption)
+                .foregroundStyle(ProjectWorksRevampColors.muted)
         }
-        .pickerStyle(.segmented)
-        .disabled(!canEdit)
     }
 
     private func applyStatus(_ status: VariationStatus) async {
@@ -175,7 +208,10 @@ struct VariationDetailView: View {
         let orgId = (await firebaseBackend.resolveOrganizationIdForFirebaseWrites(
             preferredFallback: firebaseBackend.currentOrganization?.firestoreDocumentId
         )) ?? ""
-        guard !orgId.isEmpty else { return }
+        guard !orgId.isEmpty else {
+            statusError = "The organisation is still loading. Wait a moment and try again."
+            return
+        }
         let uid = userStore.displayUser?.id ?? ""
         let name = userStore.displayUser?.fullName.isEmpty == false ? (userStore.displayUser?.fullName ?? "") : (userStore.displayUser?.email ?? "")
         variation.status = status
@@ -193,7 +229,7 @@ struct VariationDetailView: View {
             try await firebaseBackend.saveVariation(variation, organizationId: orgId)
             store.upsert(variation)
         } catch {
-            print("❌ [Variations] status save failed: \(error.localizedDescription)")
+            statusError = error.localizedDescription
         }
     }
 
@@ -213,6 +249,7 @@ struct VariationDetailView: View {
             .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
+        .accessibilityIdentifier("variationDetail.pdf")
         .buttonStyle(.plain)
     }
 

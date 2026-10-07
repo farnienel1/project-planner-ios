@@ -18,6 +18,13 @@ enum ManagerScheduleInterval {
         return h * 60 + m
     }
 
+    /// Minutes from midnight. An end that is earlier than the start is the next morning.
+    nonisolated static func clockSpanMinutes(start: String, end: String) -> (Int, Int)? {
+        guard let sm = parseMinutes(start), let em = parseMinutes(end), sm != em else { return nil }
+        if em > sm { return (sm, em) }
+        return (sm, em + 24 * 60)
+    }
+
     /// Closed intervals [start, end] in minutes from midnight; touching endpoints do not overlap.
     static func closedIntervalsOverlap(_ a: (Int, Int), _ b: (Int, Int)) -> Bool {
         a.0 < b.1 && b.0 < a.1

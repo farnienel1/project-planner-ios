@@ -58,6 +58,7 @@ struct PrivacyPolicyView: View {
                                 .background(Color.blue)
                                 .cornerRadius(12)
                         }
+                        .accessibilityIdentifier("privacyPolicy.iAccept")
                         .padding(.bottom)
                     }
                 }
@@ -70,6 +71,7 @@ struct PrivacyPolicyView: View {
                 if !isAcceptanceRequired {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Done") { dismiss() }
+                            .accessibilityIdentifier("privacyPolicy.done")
                     }
                 }
             }

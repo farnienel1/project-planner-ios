@@ -204,6 +204,7 @@ fileprivate struct MyScheduleBookingStripeRow: View {
                     HStack(spacing: 16) {
                         if let onEdit {
                             Button("Edit", action: onEdit)
+                                .accessibilityIdentifier("myScheduleBookingStripe.edit")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(ProjectWorksRevampColors.blue)
                                 .buttonStyle(.plain)
@@ -215,6 +216,7 @@ fileprivate struct MyScheduleBookingStripeRow: View {
                                     .font(.system(size: 15, weight: .medium))
                                     .foregroundStyle(ProjectWorksRevampColors.muted)
                             }
+                            .accessibilityIdentifier("myScheduleBookingStripe.delete")
                             .buttonStyle(.plain)
                         }
                     }
@@ -244,7 +246,10 @@ fileprivate struct MyScheduleDayNavigatorCard: View {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
+            .accessibilityIdentifier("myScheduleDayNavigatorCard.back")
             .buttonStyle(.plain)
             Button(action: onSelectDay) {
                 VStack(spacing: 2) {
@@ -255,14 +260,19 @@ fileprivate struct MyScheduleDayNavigatorCard: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.blue)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(Rectangle())
             }
+            .accessibilityIdentifier("myScheduleDayNavigatorCard.todayTapToPickADay")
             .buttonStyle(.plain)
             Button(action: onNext) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
+            .accessibilityIdentifier("myScheduleDayNavigatorCard.chevronRight")
             .buttonStyle(.plain)
         }
         .padding(12)
@@ -472,10 +482,13 @@ fileprivate struct ManagerCustomHoursSheet: View {
             Form {
                 Section {
                     TextField("Start (HH:mm)", text: $startText)
+                        .accessibilityIdentifier("managerCustomHours.startHHMm")
                         .keyboardType(.numbersAndPunctuation)
                     TextField("End (HH:mm)", text: $endText)
+                        .accessibilityIdentifier("managerCustomHours.endHHMm")
                         .keyboardType(.numbersAndPunctuation)
                     Toggle("No break (on this booking)", isOn: $breakRemoved)
+                        .accessibilityIdentifier("managerCustomHours.noBreakOnThisBooking")
                 } footer: {
                     Text("Uses your organisation standard day (\(policy.standardDayStart)–\(policy.standardDayEnd)) as the default. Touching times (e.g. one job ends when the next starts) are allowed.")
                 }
@@ -491,9 +504,11 @@ fileprivate struct ManagerCustomHoursSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { onCancel() }
+                        .accessibilityIdentifier("managerCustomHours.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { validateAndSave() }
+                        .accessibilityIdentifier("managerCustomHours.save")
                 }
             }
         }
@@ -576,6 +591,7 @@ struct MyScheduleView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("mySchedule.done")
                 }
             }
             .appChromeNavigationBarSurface()
@@ -761,17 +777,34 @@ struct ManagerScheduleContentView: View {
 
     /// Some admins/managers also have an operative profile and can be booked onto projects/small works.
     private func myOperativeBookings(on day: Date) -> [Booking] {
-        guard let email = userStore.currentUser.map({ $0.email.lowercased() }),
-              let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == email }) else { return [] }
+        guard let user = userStore.currentUser else { return [] }
+        guard let op = WorkAccess.signedInOperative(
+            email: user.email,
+            firstName: user.firstName,
+            surname: user.surname,
+            operatives: operativeStore.allOperatives
+        ) else { return [] }
         return bookingStore.bookings.filter {
             $0.operativeId == op.id &&
-            ($0.status == .confirmed || $0.status == .tentative) &&
+            $0.status != .cancelled &&
             calendar.isDate($0.date, inSameDayAs: day)
         }
     }
 
+    private var signedInAccountIds: Set<String> {
+        WorkAccess.signedInAccountIds(
+            authUid: firebaseBackend.currentUser?.uid,
+            currentUser: userStore.displayUser ?? userStore.currentUser,
+            organizationUsers: userStore.organizationUsers
+        )
+    }
+
+    private func mySiteBookings(on date: Date) -> [ManagerSiteBooking] {
+        managerScheduleStore.myBookings(on: date, matching: signedInAccountIds)
+    }
+
     private func hasScheduleDot(on date: Date) -> Bool {
-        !managerScheduleStore.myBookings(on: date).isEmpty || !myOperativeBookings(on: date).isEmpty
+        !mySiteBookings(on: date).isEmpty || !myOperativeBookings(on: date).isEmpty
     }
 
     private func myHolidayBookings(on day: Date) -> [HolidayBooking] {
@@ -933,9 +966,11 @@ struct ManagerScheduleContentView: View {
                 secondBookingDialog = nil
                 run?()
             }
+                .accessibilityIdentifier("managerScheduleContent.addBooking")
             Button("Cancel", role: .cancel) {
                 secondBookingDialog = nil
             }
+                .accessibilityIdentifier("managerScheduleContent.cancel")
         } message: {
             if let m = secondBookingDialog?.message {
                 Text(m)
@@ -943,6 +978,7 @@ struct ManagerScheduleContentView: View {
         }
         .alert("Calendar", isPresented: .constant(addToCalendarMessage != nil)) {
             Button("OK") { addToCalendarMessage = nil }
+                .accessibilityIdentifier("managerScheduleContent.ok")
         } message: {
             if let msg = addToCalendarMessage { Text(msg) }
         }
@@ -963,6 +999,7 @@ struct ManagerScheduleContentView: View {
                     ),
                     displayedComponents: .date
                 )
+                .accessibilityIdentifier("managerScheduleContent.day")
                 .datePickerStyle(.graphical)
                 .padding()
                 .navigationTitle("Choose a day")
@@ -970,6 +1007,7 @@ struct ManagerScheduleContentView: View {
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { showingDayPicker = false }
+                            .accessibilityIdentifier("managerScheduleContent.done")
                     }
                 }
             }
@@ -1040,7 +1078,7 @@ struct ManagerScheduleContentView: View {
 
     private func wouldClashProbe(on date: Date, probe: ManagerSiteBooking, ignoringBookingId: UUID? = nil) -> Bool {
         let policy = payrollPolicy(for: date)
-        let existing = managerScheduleStore.myBookings(on: date).filter { $0.id != ignoringBookingId }
+        let existing = mySiteBookings(on: date).filter { $0.id != ignoringBookingId }
         return existing.contains { ManagerScheduleInterval.bookingsOverlap(probe, $0, policy: policy) }
     }
 
@@ -1055,7 +1093,7 @@ struct ManagerScheduleContentView: View {
         customLocationName: String?,
         ignoringBookingId: UUID? = nil
     ) -> Bool {
-        managerScheduleStore.myBookings(on: day)
+        mySiteBookings(on: day)
             .filter { $0.id != ignoringBookingId }
             .contains { existing in
                 existing.timeSlot == timeSlot &&
@@ -1197,7 +1235,7 @@ struct ManagerScheduleContentView: View {
                 )
                 if wouldClashProbe(on: day, probe: probe, ignoringBookingId: replaceBookingId) {
                     let policy = payrollPolicy(for: day)
-                    let existing = managerScheduleStore.myBookings(on: day)
+                    let existing = mySiteBookings(on: day)
                         .filter { $0.id != replaceBookingId }
                         .filter { ManagerScheduleInterval.bookingsOverlap(probe, $0, policy: policy) }
                     detailLines = existing.map {
@@ -1251,7 +1289,7 @@ struct ManagerScheduleContentView: View {
         }
 
         if !allowOverlap, normalizedDays.count == 1, let only = normalizedDays.first {
-            let existing = managerScheduleStore.myBookings(on: only).filter { $0.id != replaceBookingId }
+            let existing = mySiteBookings(on: only).filter { $0.id != replaceBookingId }
             if !existing.isEmpty {
                 let newLabel = newBookingSummaryLabel(
                     timeSlot: timeSlot,
@@ -1392,6 +1430,7 @@ struct ManagerScheduleContentView: View {
             )
             .shadow(color: isSelected ? ProjectWorksRevampColors.blue.opacity(0.28) : .clear, radius: 4, x: 0, y: 2)
         }
+        .accessibilityIdentifier("managerScheduleContent.day2")
         .buttonStyle(PlainButtonStyle())
         .simultaneousGesture(TapGesture().onEnded {
             guard isMultiDaySelectionEnabled else { return }
@@ -1433,12 +1472,13 @@ struct ManagerScheduleContentView: View {
                         .foregroundStyle(ProjectWorksRevampColors.border)
                 )
         }
+        .accessibilityIdentifier("managerScheduleContent.addBooking2")
         .buttonStyle(.plain)
     }
 
     private func dayContent(for day: Date) -> some View {
         let policy = firebaseBackend.payrollPolicy(for: day)
-        let bookings = managerScheduleStore.myBookings(on: day)
+        let bookings = mySiteBookings(on: day)
         let operativeBookings = myOperativeBookings(on: day)
         let holidayBookings = myHolidayBookings(on: day)
         let annualLeaveLabel = annualLeaveDisplayLabel(on: day)
@@ -1460,12 +1500,14 @@ struct ManagerScheduleContentView: View {
                                 selectedDates = []
                             }
                         }
+                        .accessibilityIdentifier("managerScheduleContent.bookingDays")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(ProjectWorksRevampColors.blue)
                         .buttonStyle(.plain)
                         Spacer()
                         if isMultiDaySelectionEnabled {
                             Button("Clear") { selectedDates = [] }
+                                .accessibilityIdentifier("managerScheduleContent.clear")
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(ProjectWorksRevampColors.muted)
                                 .buttonStyle(.plain)
@@ -1507,6 +1549,7 @@ struct ManagerScheduleContentView: View {
                                 }
                                 .padding(.vertical, 4)
                             }
+                            .accessibilityIdentifier("managerScheduleContent.row.\(holiday.id).openholiday")
                             .buttonStyle(.plain)
                         }
                     } header: {
@@ -1517,12 +1560,12 @@ struct ManagerScheduleContentView: View {
                 }
 
                 Section {
-                    if bookings.isEmpty {
+                    if bookings.isEmpty && operativeBookings.isEmpty {
                         Text("No bookings for this day.")
                             .font(.system(size: 15))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
+                    } else if !bookings.isEmpty {
                         ForEach(bookings) { b in
                             bookingRow(b: b)
                         }
@@ -1612,6 +1655,7 @@ struct ManagerScheduleContentView: View {
                     .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
             )
         }
+        .accessibilityIdentifier("managerScheduleContent.chevronDown")
         .buttonStyle(.plain)
     }
     
@@ -1661,6 +1705,7 @@ struct ManagerScheduleContentView: View {
                         .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
                 )
             }
+            .accessibilityIdentifier("managerScheduleContent.chevronDown2")
             .buttonStyle(.plain)
             if isExpanded {
                 slotButtons(day: day, locationType: type, locationId: nil, customLocationName: customName)
@@ -1690,6 +1735,7 @@ struct ManagerScheduleContentView: View {
                             customLocationName: customLocationName
                         )
                     }
+                    .accessibilityIdentifier("managerScheduleContent.row.\(slot).slotButtons")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                     .padding(.horizontal, 14)
@@ -1707,6 +1753,7 @@ struct ManagerScheduleContentView: View {
                         customLocationName: customLocationName
                     )
                 }
+                .accessibilityIdentifier("managerScheduleContent.custom")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
                 .padding(.horizontal, 14)
@@ -1748,9 +1795,10 @@ struct ManagerScheduleContentView: View {
     }
 
     private var myManagerBookingsThisWeek: [ManagerSiteBooking] {
-        guard let uid = firebaseBackend.currentUser?.uid else { return [] }
+        let ids = signedInAccountIds
+        guard !ids.isEmpty else { return [] }
         return managerScheduleStore.managerSiteBookings.filter { booking in
-            booking.userId == uid &&
+            ids.contains(booking.userId) &&
             weekDates.contains { calendar.isDate(booking.date, inSameDayAs: $0) }
         }
     }
@@ -1797,6 +1845,7 @@ struct ManagerScheduleContentView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
         }
+        .accessibilityIdentifier("managerScheduleContent.noBookingsThisWeekToAdd")
         .buttonStyle(.borderedProminent)
         .tint(ProjectWorksRevampColors.blue)
         .padding(.top, 4)
@@ -1908,6 +1957,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
                         Image(systemName: "magnifyingglass")
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                         TextField("Search office, project, small works...", text: $searchText)
+                            .accessibilityIdentifier("managerSelfBookingLocationPicker.searchOfficeProjectSmallWorks")
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                     }
@@ -1943,6 +1993,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
                         } label: {
                             navRow(title: "Projects", subtitle: "\(filteredProjects.count) active")
                         }
+                        .accessibilityIdentifier("managerSelfBookingLocationPicker.projects")
                         .buttonStyle(.plain)
                         NavigationLink {
                             ManagerSelfBookingJobListView(
@@ -1955,6 +2006,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
                         } label: {
                             navRow(title: "Small works", subtitle: "\(filteredSmallWorks.count) active")
                         }
+                        .accessibilityIdentifier("managerSelfBookingLocationPicker.smallWorks")
                         .buttonStyle(.plain)
                     }
                 }
@@ -1965,6 +2017,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Close") { dismiss() }
+                        .accessibilityIdentifier("managerSelfBookingLocationPicker.close")
                 }
             }
         }
@@ -2010,6 +2063,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
                     .padding(.vertical, 11)
                     .padding(.horizontal, 12)
                 }
+                .accessibilityIdentifier("managerSelfBookingLocationPicker.row.\(target.id).chevronRight")
                 .buttonStyle(.plain)
                 if idx < targets.count - 1 {
                     Divider().padding(.leading, 12)
@@ -2116,8 +2170,10 @@ fileprivate struct ManagerSelfBookingEntryView: View {
 
                 VStack(spacing: 10) {
                     DatePicker("Start time", selection: $startTime, displayedComponents: .hourAndMinute)
+                        .accessibilityIdentifier("managerSelfBookingEntry.startTime")
                         .datePickerStyle(.compact)
                     DatePicker("End time", selection: $endTime, displayedComponents: .hourAndMinute)
+                        .accessibilityIdentifier("managerSelfBookingEntry.endTime")
                         .datePickerStyle(.compact)
                 }
                 .font(.system(size: 14, weight: .medium))
@@ -2148,6 +2204,7 @@ fileprivate struct ManagerSelfBookingEntryView: View {
                 Button("Save booking") {
                     validateAndSave()
                 }
+                .accessibilityIdentifier("managerSelfBookingEntry.saveBooking")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
@@ -2200,6 +2257,7 @@ fileprivate struct ManagerSelfBookingEntryView: View {
             startTime = times.start
             endTime = times.end
         }
+        .accessibilityIdentifier("managerSelfBookingEntry.\(AccessibilityID.token(label))")
         .font(.system(size: 12, weight: .semibold))
         .foregroundStyle(selectedSlot == slot ? .white : ProjectWorksRevampColors.ink)
         .padding(.vertical, 10)
@@ -2307,6 +2365,7 @@ fileprivate struct ManagerSelfBookingJobListView: View {
                                 .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
                         )
                     }
+                    .accessibilityIdentifier("managerSelfBookingJobList.row.\(target.id).chevronRight")
                     .buttonStyle(.plain)
                 }
             }
@@ -2361,11 +2420,13 @@ struct ManagerBookingSheet: View {
                         onDelete()
                         dismiss()
                     }
+                        .accessibilityIdentifier("managerBooking.removeBooking")
                 } else {
                     Button("Confirm booking") {
                         onSave()
                         dismiss()
                     }
+                    .accessibilityIdentifier("managerBooking.confirmBooking")
                     .buttonStyle(.borderedProminent)
                 }
                 Spacer()
@@ -2376,6 +2437,7 @@ struct ManagerBookingSheet: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("managerBooking.cancel")
                 }
             }
         }
@@ -2399,8 +2461,13 @@ struct OperativeScheduleContentView: View {
     @State private var showingCalendarDestinationPicker = false
 
     private var currentOperative: Operative? {
-        guard let email = userStore.currentUser?.email else { return nil }
-        return operativeStore.allOperatives.first { $0.email.lowercased() == email.lowercased() }
+        guard let user = userStore.currentUser else { return nil }
+        return WorkAccess.signedInOperative(
+            email: user.email,
+            firstName: user.firstName,
+            surname: user.surname,
+            operatives: operativeStore.allOperatives
+        )
     }
 
     private var weekDates: [Date] {
@@ -2412,16 +2479,21 @@ struct OperativeScheduleContentView: View {
         guard let op = currentOperative else { return [] }
         return bookingStore.bookings.filter { b in
             b.operativeId == op.id &&
-            (b.status == .confirmed || b.status == .tentative) &&
+            b.status != .cancelled &&
             weekDates.contains { calendar.isDate(b.date, inSameDayAs: $0) }
         }
     }
 
     /// Office / site self-bookings from when this account was a manager or admin (same Firebase Auth uid).
     private var myManagerAttendanceThisWeek: [ManagerSiteBooking] {
-        guard let uid = userStore.currentUser?.id else { return [] }
+        let ids = WorkAccess.signedInAccountIds(
+            authUid: firebaseBackend.currentUser?.uid,
+            currentUser: userStore.displayUser ?? userStore.currentUser,
+            organizationUsers: userStore.organizationUsers
+        )
+        guard !ids.isEmpty else { return [] }
         return managerScheduleStore.managerSiteBookings.filter { booking in
-            booking.userId == uid &&
+            ids.contains(booking.userId) &&
             weekDates.contains { calendar.isDate(booking.date, inSameDayAs: $0) }
         }
     }
@@ -2493,6 +2565,7 @@ struct OperativeScheduleContentView: View {
         .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
         .alert("Calendar", isPresented: .constant(addToCalendarMessage != nil)) {
             Button("OK") { addToCalendarMessage = nil }
+                .accessibilityIdentifier("operativeScheduleContent.ok")
         } message: {
             if let msg = addToCalendarMessage { Text(msg) }
         }
@@ -2513,6 +2586,7 @@ struct OperativeScheduleContentView: View {
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .frame(width: 44, height: 44)
             }
+            .accessibilityIdentifier("operativeScheduleContent.back")
             .buttonStyle(.plain)
             Spacer()
             Text(weekRangeText)
@@ -2525,6 +2599,7 @@ struct OperativeScheduleContentView: View {
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .frame(width: 44, height: 44)
             }
+            .accessibilityIdentifier("operativeScheduleContent.chevronRight")
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
@@ -2624,17 +2699,16 @@ struct OperativeScheduleContentView: View {
                             .padding(.top, 6)
                     }
                     ForEach(dayBookings) { b in
-                        if let project = projectStore.projects.first(where: { $0.id == b.projectId }) ??
-                            projectStore.smallWorks.first(where: { $0.id == b.projectId }) {
-                            let title = "\(project.jobNumber) \(project.siteName)"
-                            MyScheduleBookingStripeRow(
-                                stripeColor: ProjectWorksRevampColors.activeGreen,
-                                title: title,
-                                subtitle: operativeBookingClockSubtitle(b, day: date, policy: policy),
-                                otChip: operativeBookingOtChipText(b, policy: policy),
-                                showActions: false
-                            )
-                        }
+                        let project = projectStore.projects.first(where: { $0.id == b.projectId }) ??
+                            projectStore.smallWorks.first(where: { $0.id == b.projectId })
+                        let title = project.map { "\($0.jobNumber) \($0.siteName)" } ?? "Scheduled work"
+                        MyScheduleBookingStripeRow(
+                            stripeColor: ProjectWorksRevampColors.activeGreen,
+                            title: title,
+                            subtitle: operativeBookingClockSubtitle(b, day: date, policy: policy),
+                            otChip: operativeBookingOtChipText(b, policy: policy),
+                            showActions: false
+                        )
                     }
                 }
             }
@@ -2682,6 +2756,7 @@ struct OperativeScheduleContentView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
         }
+        .accessibilityIdentifier("operativeScheduleContent.noBookingsThisWeekToAdd")
         .buttonStyle(.borderedProminent)
         .tint(ProjectWorksRevampColors.blue)
         .padding(.horizontal, 16)

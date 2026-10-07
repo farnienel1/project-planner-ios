@@ -120,6 +120,7 @@ struct WarningsFilterChipsRow: View {
                                     .stroke(Color.black.opacity(0.10), lineWidth: isOn ? 0 : 0.5)
                             )
                     }
+                    .accessibilityIdentifier("warningsFilterChips.row.\(chip.id)")
                     .buttonStyle(.plain)
                 }
             }
@@ -169,6 +170,7 @@ struct WarningRemoveButton: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
         }
+        .accessibilityIdentifier("warningRemove.dismiss")
         .buttonStyle(.plain)
     }
 }

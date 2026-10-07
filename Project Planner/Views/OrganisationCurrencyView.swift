@@ -28,6 +28,7 @@ struct OrganisationCurrencyView: View {
                                 .tag(option.code)
                         }
                     }
+                    .accessibilityIdentifier("organisationCurrency.currency")
                     .pickerStyle(.menu)
                     .font(.system(size: 13, weight: .medium))
                     .padding(.vertical, 12)

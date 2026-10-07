@@ -185,6 +185,7 @@ struct ProjectDetailView: View {
                         .clipShape(Circle())
                         .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                 }
+                    .accessibilityIdentifier("projectDetail.back")
             }
             if canEditCurrentWorkItem {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -199,6 +200,7 @@ struct ProjectDetailView: View {
                             .clipShape(Circle())
                             .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                     }
+                    .accessibilityIdentifier("projectDetail.edit")
                     .accessibilityLabel("Edit project details")
                 }
             }
@@ -507,6 +509,7 @@ struct ProjectDetailView: View {
             .background(Color(red: 0.902, green: 0.945, blue: 0.984).opacity(0.55))
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
+        .accessibilityIdentifier("projectDetail.location")
         .buttonStyle(.plain)
         .padding(.vertical, 6)
         .accessibilityLabel("Location")
@@ -611,6 +614,7 @@ struct ProjectDetailView: View {
                 } label: {
                     manageTileContents(for: tile)
                 }
+                .accessibilityIdentifier("projectDetail.row.\(tile.id)")
                 .buttonStyle(.plain)
             }
         }
@@ -888,6 +892,7 @@ struct ProjectDetailView: View {
                     .foregroundStyle(SchedulingV2Palette.muted)
                     .frame(width: 28, height: 28)
             }
+            .accessibilityIdentifier("projectDetail.back2")
             .buttonStyle(.plain)
             VStack(spacing: 5) {
                 Text(schedulingWeekOfTitle)
@@ -927,6 +932,7 @@ struct ProjectDetailView: View {
                     .foregroundStyle(SchedulingV2Palette.muted)
                     .frame(width: 28, height: 28)
             }
+            .accessibilityIdentifier("projectDetail.chevronRight")
             .buttonStyle(.plain)
         }
     }
@@ -971,6 +977,7 @@ struct ProjectDetailView: View {
                 .background(SchedulingV2Palette.opsBtn)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+            .accessibilityIdentifier("projectDetail.person2Fill")
             .buttonStyle(.plain)
             Button(action: { showingScheduleSubcontractor = true }) {
                 HStack(spacing: 6) {
@@ -987,6 +994,7 @@ struct ProjectDetailView: View {
                 .background(SchedulingV2Palette.subsBtn)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+            .accessibilityIdentifier("projectDetail.building2Fill")
             .buttonStyle(.plain)
         }
     }
@@ -1608,6 +1616,7 @@ struct ProjectDetailView: View {
                         .foregroundStyle(ProjectWorksRevampColors.muted)
                 }
             }
+            .accessibilityIdentifier("projectDetail.hOT")
             .buttonStyle(.plain)
 
             if isExpanded, hasRows {
@@ -1664,6 +1673,7 @@ struct ProjectDetailView: View {
                         .background(ProjectWorksRevampColors.blue.opacity(0.08))
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
+                    .accessibilityIdentifier("projectDetail.row.\(key).person2Fill")
                     .buttonStyle(.plain)
                     ForEach(rows, id: \.id) { booking in
                         schedulingOperativeBookingRow(booking: booking) {
@@ -1734,6 +1744,7 @@ struct ProjectDetailView: View {
             .background(ProjectWorksRevampColors.canvas)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+        .accessibilityIdentifier("projectDetail.row.\(booking.id).chevronRight")
         .buttonStyle(.plain)
     }
 
@@ -1770,6 +1781,7 @@ struct ProjectDetailView: View {
             .background(ProjectWorksRevampColors.canvas)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+        .accessibilityIdentifier("projectDetail.\(AccessibilityID.token(managerName))")
         .buttonStyle(.plain)
     }
 
@@ -1813,6 +1825,7 @@ struct ProjectDetailView: View {
             .background(ProjectWorksRevampColors.canvas)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+        .accessibilityIdentifier("projectDetail.chevronRight2")
         .buttonStyle(.plain)
     }
 
@@ -1900,6 +1913,7 @@ struct ProjectDetailView: View {
                             .foregroundStyle(Color.theme.primary)
                             .clipShape(Capsule())
                     }
+                    .accessibilityIdentifier("projectDetail.activeUsers")
                     .buttonStyle(.plain)
                 }
             }
@@ -1920,6 +1934,7 @@ struct ProjectDetailView: View {
                                 .background(Color.theme.primary)
                                 .cornerRadius(8)
                         }
+                        .accessibilityIdentifier("projectDetail.appleMaps")
                         .buttonStyle(.plain)
 
                         Button(action: openInGoogleMaps) {
@@ -1931,6 +1946,7 @@ struct ProjectDetailView: View {
                                 .background(Color(.systemGray6))
                                 .cornerRadius(8)
                         }
+                        .accessibilityIdentifier("projectDetail.googleMaps")
                         .buttonStyle(.plain)
                     }
                     
@@ -2165,6 +2181,7 @@ struct ProjectDetailView: View {
                         .stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: isSelected ? 0 : 0.5)
                 )
         }
+        .accessibilityIdentifier("projectDetail.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
     }
 
@@ -2446,6 +2463,7 @@ struct ProjectDetailView: View {
                         .background(ProjectMyTasksPalette.blue)
                         .clipShape(Circle())
                 }
+                .accessibilityIdentifier("projectDetail.add")
                 .buttonStyle(.plain)
             }
             
@@ -2461,6 +2479,7 @@ struct ProjectDetailView: View {
                     .font(.system(size: 14))
                     .foregroundStyle(ProjectMyTasksPalette.muted)
                 TextField("Search tasks…", text: $projectTasksSearchText)
+                    .accessibilityIdentifier("projectDetail.searchTasks")
                     .font(.system(size: 12))
                 Spacer(minLength: 0)
                 Button { showingTaskFilter = true } label: {
@@ -2468,6 +2487,7 @@ struct ProjectDetailView: View {
                         .font(.system(size: 15))
                         .foregroundStyle(ProjectMyTasksPalette.blue)
                 }
+                .accessibilityIdentifier("projectDetail.filter")
                 .buttonStyle(.plain)
                 .opacity(userStore.isOperativeMode() ? 0.35 : 1)
                 .disabled(userStore.isOperativeMode())
@@ -2526,6 +2546,7 @@ struct ProjectDetailView: View {
                             .background(ProjectMyTasksPalette.blue)
                             .clipShape(Capsule())
                         }
+                        .accessibilityIdentifier("projectDetail.add2")
                         .buttonStyle(.plain)
                     }
                 }
@@ -2605,6 +2626,7 @@ struct ProjectDetailView: View {
                     .background(Color.theme.primary)
                     .cornerRadius(12)
                 }
+                    .accessibilityIdentifier("projectDetail.edit2")
             }
             
             if let notes = project.notes, !notes.isEmpty {
@@ -2682,16 +2704,19 @@ private struct ProjectVisibilitySettingsView: View {
                     Text(tab.rawValue).tag(tab)
                 }
             }
+            .accessibilityIdentifier("projectVisibilitySettings.role")
             .pickerStyle(.segmented)
             
             HStack(spacing: 12) {
                 Menu {
                     ForEach(VisibilityFilterMode.allCases) { mode in
                         Button(mode.rawValue) { filterMode = mode }
+                            .accessibilityIdentifier("projectVisibilitySettings.row.\(mode.id)")
                     }
                 } label: {
                     Label("Filter: \(filterMode.rawValue)", systemImage: "line.3.horizontal.decrease.circle")
                 }
+                .accessibilityIdentifier("projectVisibilitySettings.filter")
                 .buttonStyle(.bordered)
                 
                 Button {
@@ -2700,11 +2725,13 @@ private struct ProjectVisibilitySettingsView: View {
                 } label: {
                     Label("Search", systemImage: "magnifyingglass")
                 }
+                .accessibilityIdentifier("projectVisibilitySettings.button")
                 .buttonStyle(.bordered)
             }
             
             if showSearch {
                 TextField("Search user", text: $searchText)
+                    .accessibilityIdentifier("projectVisibilitySettings.searchUser")
                     .textFieldStyle(.roundedBorder)
             }
             
@@ -2726,6 +2753,7 @@ private struct ProjectVisibilitySettingsView: View {
                                 .foregroundStyle(isVisible(user) ? .blue : .gray)
                         }
                     }
+                    .accessibilityIdentifier("projectVisibilitySettings.row.\(user.id)")
                     .buttonStyle(.plain)
                 }
             }
@@ -2850,6 +2878,7 @@ private struct ProjectTaskRow: View {
                                 .font(.caption)
                                 .foregroundColor(.blue)
                         }
+                            .accessibilityIdentifier("projectTask.settings")
                     }
                     statusBadge
                 }
@@ -2903,7 +2932,8 @@ private struct ProjectTaskRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .contentShape(Rectangle())
-        .onTapGesture {
+        
+        .accessibilityIdentifier("projectTask.createdBy").onTapGesture {
             showingTaskDetail = true
         }
         .padding()
@@ -3000,6 +3030,7 @@ private struct ProjectTaskFilterSheet: View {
                             Text(type.rawValue).tag(type)
                         }
                     }
+                    .accessibilityIdentifier("projectTaskFilter.filter")
                     .pickerStyle(.inline)
                 }
                 
@@ -3013,6 +3044,7 @@ private struct ProjectTaskFilterSheet: View {
                                 Text(operative.name).tag(operative.id as UUID?)
                             }
                         }
+                            .accessibilityIdentifier("projectTaskFilter.operative")
                     }
                 }
                 
@@ -3026,6 +3058,7 @@ private struct ProjectTaskFilterSheet: View {
                                 Text(manager.fullName).tag(manager.id as UUID?)
                             }
                         }
+                            .accessibilityIdentifier("projectTaskFilter.manager")
                     }
                 }
                 
@@ -3045,6 +3078,7 @@ private struct ProjectTaskFilterSheet: View {
                             ),
                             displayedComponents: .date
                         )
+                            .accessibilityIdentifier("projectTaskFilter.startDate")
                         DatePicker(
                             "End Date",
                             selection: Binding(
@@ -3059,6 +3093,7 @@ private struct ProjectTaskFilterSheet: View {
                             ),
                             displayedComponents: .date
                         )
+                            .accessibilityIdentifier("projectTaskFilter.endDate")
                     }
                 }
                 
@@ -3066,6 +3101,7 @@ private struct ProjectTaskFilterSheet: View {
                     Button("Reset Filters") {
                         localFilter.reset()
                     }
+                        .accessibilityIdentifier("projectTaskFilter.resetFilters")
                 }
             }
             .navigationTitle("Task Filters")
@@ -3075,12 +3111,14 @@ private struct ProjectTaskFilterSheet: View {
                     Button("Cancel") {
                         isPresented = false
                     }
+                        .accessibilityIdentifier("projectTaskFilter.cancel")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Apply") {
                         filter = localFilter
                         isPresented = false
                     }
+                        .accessibilityIdentifier("projectTaskFilter.apply")
                 }
             }
             .onChange(of: localFilter.type) { oldValue, newValue in
@@ -3284,6 +3322,7 @@ private struct TaskPeoplePickerSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("taskPeoplePicker.done")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(NewTaskScreenPalette.blue)
                 }
@@ -3354,6 +3393,7 @@ private struct TaskPeoplePickerSheet: View {
                     .font(.system(size: 14))
                     .foregroundStyle(NewTaskScreenPalette.placeholder)
             }
+            .accessibilityIdentifier("taskPeoplePicker.clear")
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 10)
@@ -3369,6 +3409,7 @@ private struct TaskPeoplePickerSheet: View {
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(NewTaskScreenPalette.placeholder)
             TextField("Search name, email, or trade…", text: $searchText)
+                .accessibilityIdentifier("taskPeoplePicker.searchNameEmailOrTrade")
                 .font(.system(size: 15))
                 .foregroundStyle(NewTaskScreenPalette.ink)
             if !searchText.isEmpty {
@@ -3378,6 +3419,7 @@ private struct TaskPeoplePickerSheet: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(NewTaskScreenPalette.placeholder)
                 }
+                .accessibilityIdentifier("taskPeoplePicker.clear2")
                 .buttonStyle(.plain)
             }
         }
@@ -3405,10 +3447,12 @@ private struct TaskPeoplePickerSheet: View {
                     Button("All trades") {
                         tradeFilter = nil
                     }
+                        .accessibilityIdentifier("taskPeoplePicker.allTrades2")
                     ForEach(tradeChoices, id: \.self) { t in
                         Button(t) {
                             tradeFilter = t
                         }
+                            .accessibilityIdentifier("taskPeoplePicker.row.\(t).\(AccessibilityID.token(t))")
                     }
                 } label: {
                     HStack {
@@ -3421,6 +3465,7 @@ private struct TaskPeoplePickerSheet: View {
                             .foregroundStyle(NewTaskScreenPalette.placeholder)
                     }
                 }
+                    .accessibilityIdentifier("taskPeoplePicker.allTrades")
             }
             Spacer(minLength: 0)
         }
@@ -3458,6 +3503,7 @@ private struct TaskPeoplePickerSheet: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
         }
+        .accessibilityIdentifier("taskPeoplePicker.checkmarkSquareFill")
         .buttonStyle(.plain)
     }
 
@@ -3489,6 +3535,7 @@ private struct TaskPeoplePickerSheet: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
         }
+        .accessibilityIdentifier("taskPeoplePicker.row.\(operative.id).checkmarkSquareFill")
         .buttonStyle(.plain)
     }
 }
@@ -3608,6 +3655,7 @@ private struct AddProjectTaskView: View {
                     Button("Cancel") {
                         isPresented = false
                     }
+                    .accessibilityIdentifier("addProjectTask.cancel")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(NewTaskScreenPalette.ink)
                     .padding(.horizontal, 14)
@@ -3650,6 +3698,7 @@ private struct AddProjectTaskView: View {
                 Button("OK") {
                     showingError = false
                 }
+                    .accessibilityIdentifier("addProjectTask.ok")
             } message: {
                 if let errorMessage = errorMessage {
                     Text(errorMessage)
@@ -3729,9 +3778,11 @@ private struct AddProjectTaskView: View {
     private var taskFieldsCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             TextField("Task title…", text: $taskTitle)
+                .accessibilityIdentifier("addProjectTask.taskTitle")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(NewTaskScreenPalette.ink)
             TextField("Add a description (optional)", text: $taskDescription, axis: .vertical)
+                .accessibilityIdentifier("addProjectTask.addADescriptionOptional")
                 .font(.system(size: 12))
                 .lineLimit(3...8)
                 .foregroundStyle(NewTaskScreenPalette.ink)
@@ -3765,8 +3816,10 @@ private struct AddProjectTaskView: View {
                             }
                         }
                     }
+                    .accessibilityIdentifier("addProjectTask.checkmark")
                     .buttonStyle(.plain)
                     TextField("Checklist item", text: $item.title)
+                        .accessibilityIdentifier("addProjectTask.checklistItem")
                         .font(.system(size: 13))
                         .foregroundStyle(NewTaskScreenPalette.ink)
                     Image(systemName: "line.3.horizontal")
@@ -3781,6 +3834,7 @@ private struct AddProjectTaskView: View {
                             .font(.system(size: 18))
                             .foregroundStyle(NewTaskScreenPalette.placeholder.opacity(0.85))
                     }
+                    .accessibilityIdentifier("addProjectTask.minusCircleFill")
                     .buttonStyle(.plain)
                 }
                 .padding(.vertical, 11)
@@ -3806,6 +3860,7 @@ private struct AddProjectTaskView: View {
                 }
                 .padding(.vertical, 11)
             }
+            .accessibilityIdentifier("addProjectTask.add")
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 14)
@@ -3871,6 +3926,7 @@ private struct AddProjectTaskView: View {
                     .stroke(isOn.wrappedValue ? NewTaskScreenPalette.blue : NewTaskScreenPalette.border, lineWidth: isOn.wrappedValue ? 1.5 : 0.5)
             )
         }
+        .accessibilityIdentifier("addProjectTask.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
     }
 
@@ -3907,6 +3963,7 @@ private struct AddProjectTaskView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
             }
+            .accessibilityIdentifier("addProjectTask.person2BadgePlus")
             .buttonStyle(.plain)
         }
     }
@@ -4013,6 +4070,7 @@ private struct AddProjectTaskView: View {
                     .stroke(priorityBorder(level, selected: selected), lineWidth: selected && level == .normal ? 1.5 : 0.5)
             )
         }
+        .accessibilityIdentifier("addProjectTask.priorityChip")
         .buttonStyle(.plain)
     }
 
@@ -4078,6 +4136,7 @@ private struct AddProjectTaskView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(NewTaskScreenPalette.muted)
                 DatePicker("", selection: $dueDate, displayedComponents: .date)
+                    .accessibilityIdentifier("addProjectTask.datePicker")
                     .labelsHidden()
                     .tint(NewTaskScreenPalette.blue)
             }
@@ -4158,6 +4217,7 @@ private struct AddProjectTaskView: View {
                     .foregroundStyle(NewTaskScreenPalette.placeholder)
             )
         }
+        .accessibilityIdentifier("addProjectTask.\(AccessibilityID.token(title))2")
         .buttonStyle(.plain)
     }
 
@@ -4179,6 +4239,7 @@ private struct AddProjectTaskView: View {
                                 .foregroundStyle(.white)
                                 .shadow(radius: 2)
                         }
+                        .accessibilityIdentifier("addProjectTask.row.\(index).clear")
                         .padding(4)
                     }
                 }
@@ -4200,6 +4261,7 @@ private struct AddProjectTaskView: View {
                         selectedFile = nil
                         selectedFileName = nil
                     }
+                    .accessibilityIdentifier("addProjectTask.remove")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(NewTaskScreenPalette.requiredFg)
                 }
@@ -4228,6 +4290,7 @@ private struct AddProjectTaskView: View {
                 .foregroundStyle(Color.white)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+            .accessibilityIdentifier("addProjectTask.rectangleStackBadgePlus")
             .disabled(!canSaveTask || isSaving)
             if isSaving {
                 Text("Saving…")
@@ -4473,7 +4536,9 @@ private struct EditProjectTaskView: View {
             Form {
                 Section {
                     TextField("Task title", text: $taskTitle)
+                        .accessibilityIdentifier("editProjectTask.taskTitle")
                     TextField("Description", text: $taskDescription, axis: .vertical)
+                        .accessibilityIdentifier("editProjectTask.description")
                         .lineLimit(3...10)
                 } header: {
                     Text("Task")
@@ -4485,6 +4550,7 @@ private struct EditProjectTaskView: View {
                             Text(level.rawValue).tag(level)
                         }
                     }
+                    .accessibilityIdentifier("editProjectTask.priority")
                     .pickerStyle(.segmented)
                 } header: {
                     Text("Priority")
@@ -4499,7 +4565,9 @@ private struct EditProjectTaskView: View {
                         ForEach($checklistRows) { $item in
                             VStack(alignment: .leading, spacing: 8) {
                                 TextField("Checklist item", text: $item.title)
+                                    .accessibilityIdentifier("editProjectTask.checklistItem")
                                 TextField("Note (optional)", text: $item.description, axis: .vertical)
+                                    .accessibilityIdentifier("editProjectTask.noteOptional")
                                     .lineLimit(2...4)
                             }
                             .padding(.vertical, 4)
@@ -4516,6 +4584,7 @@ private struct EditProjectTaskView: View {
                                 .foregroundColor(.green)
                         }
                     }
+                        .accessibilityIdentifier("editProjectTask.plusCircleFill")
                 } header: {
                     Text("Checklist")
                 }
@@ -4527,6 +4596,7 @@ private struct EditProjectTaskView: View {
                             Text(trade.rawValue).tag(Optional<String>.some(trade.rawValue))
                         }
                     }
+                        .accessibilityIdentifier("editProjectTask.tradeFilter")
                     
                     Button(action: {
                         showingManagerSelection = true
@@ -4546,6 +4616,7 @@ private struct EditProjectTaskView: View {
                                 .font(.caption)
                         }
                     }
+                    .accessibilityIdentifier("editProjectTask.managers")
                     .sheet(isPresented: $showingManagerSelection) {
                         ManagerMultiSelectView(
                             selectedManagers: $selectedManagers,
@@ -4566,6 +4637,7 @@ private struct EditProjectTaskView: View {
                                         Image(systemName: "xmark.circle.fill")
                                             .foregroundColor(.red)
                                     }
+                                        .accessibilityIdentifier("editProjectTask.row.\(managerId).clear")
                                 }
                             }
                         }
@@ -4589,6 +4661,7 @@ private struct EditProjectTaskView: View {
                                 .font(.caption)
                         }
                     }
+                    .accessibilityIdentifier("editProjectTask.operatives")
                     .sheet(isPresented: $showingOperativeSelection) {
                         OperativeMultiSelectView(
                             selectedOperatives: $selectedOperatives,
@@ -4610,6 +4683,7 @@ private struct EditProjectTaskView: View {
                                         Image(systemName: "xmark.circle.fill")
                                             .foregroundColor(.red)
                                     }
+                                        .accessibilityIdentifier("editProjectTask.row.\(operativeId).clear")
                                 }
                             }
                         }
@@ -4620,6 +4694,7 @@ private struct EditProjectTaskView: View {
                 
                 Section {
                     DatePicker("Schedule", selection: $dueDate, displayedComponents: .date)
+                        .accessibilityIdentifier("editProjectTask.schedule")
                 } header: {
                     Text("Schedule")
                 }
@@ -4630,6 +4705,7 @@ private struct EditProjectTaskView: View {
                             Text(st.rawValue).tag(st)
                         }
                     }
+                        .accessibilityIdentifier("editProjectTask.status")
                 }
             }
             .navigationTitle("Edit Task")
@@ -4639,11 +4715,13 @@ private struct EditProjectTaskView: View {
                     Button("Cancel") {
                         isPresented = false
                     }
+                        .accessibilityIdentifier("editProjectTask.cancel")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
                         saveTask()
                     }
+                    .accessibilityIdentifier("editProjectTask.save")
                     .disabled(!canSaveTask || isSaving)
                 }
             }
@@ -4814,6 +4892,7 @@ struct TaskCompletionPopupView: View {
                     Button("Cancel") {
                         isPresented = false
                     }
+                    .accessibilityIdentifier("taskCompletionPopup.cancel")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(CompleteTaskUXPalette.ink)
                     .padding(.horizontal, 16)
@@ -4840,6 +4919,7 @@ struct TaskCompletionPopupView: View {
                         .background(hasUnsavedChanges && !isUploading ? CompleteTaskUXPalette.blue : CompleteTaskUXPalette.disabledBar)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
+                    .accessibilityIdentifier("taskCompletionPopup.button")
                     .disabled(!hasUnsavedChanges || isUploading)
                     if !markCompleteEnabled {
                         Text(tickRemainingHint)
@@ -4874,6 +4954,7 @@ struct TaskCompletionPopupView: View {
                 set: { isPresented in if !isPresented { validationMessage = nil } }
             )) {
                 Button("OK", role: .cancel) {}
+                    .accessibilityIdentifier("taskCompletionPopup.ok")
             } message: {
                 Text(validationMessage ?? "")
             }
@@ -5006,6 +5087,7 @@ struct TaskCompletionPopupView: View {
                         }
                         .padding(.vertical, 9)
                     }
+                    .accessibilityIdentifier("taskCompletionPopup.row.\(item.id).checkmark")
                     .buttonStyle(.plain)
                     if index < displayTask.effectiveItems.count - 1 {
                         Divider().overlay(CompleteTaskUXPalette.border)
@@ -5071,6 +5153,7 @@ struct TaskCompletionPopupView: View {
                                         .clipShape(Circle())
                                         .overlay(Circle().stroke(Color.white, lineWidth: 2))
                                 }
+                                .accessibilityIdentifier("taskCompletionPopup.row.\(captured.id).close")
                                 .offset(x: 5, y: -5)
                             }
                         }
@@ -5106,6 +5189,7 @@ struct TaskCompletionPopupView: View {
                     .foregroundStyle(Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255))
             )
         }
+        .accessibilityIdentifier("taskCompletionPopup.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
     }
     
@@ -5122,6 +5206,7 @@ struct TaskCompletionPopupView: View {
             }
             .padding(.leading, 4)
             TextField("", text: $completionNotes, prompt: Text("Anything the manager should know about how the job went…").foregroundStyle(CompleteTaskUXPalette.muted), axis: .vertical)
+                .accessibilityIdentifier("taskCompletionPopup.textField")
                 .font(.system(size: 13))
                 .lineLimit(4...8)
                 .padding(16)
@@ -5517,6 +5602,7 @@ private struct TaskCompletionFileRow: View {
             }
             .padding(.vertical, 4)
         }
+            .accessibilityIdentifier("taskCompletionFile.docFill")
     }
 }
 
@@ -5694,11 +5780,13 @@ struct CompletedTaskDetailView: View {
                             .clipShape(Circle())
                             .overlay(Circle().stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: 0.5))
                     }
+                        .accessibilityIdentifier("completedTaskDetail.back")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if canEditTaskHere {
                         Menu {
                             Button("Edit task") { showingEditTask = true }
+                                .accessibilityIdentifier("completedTaskDetail.editTask2")
                         } label: {
                             Image(systemName: "ellipsis")
                                 .font(.system(size: 17, weight: .medium))
@@ -5708,6 +5796,7 @@ struct CompletedTaskDetailView: View {
                                 .clipShape(Circle())
                                 .overlay(Circle().stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: 0.5))
                         }
+                            .accessibilityIdentifier("completedTaskDetail.editTask")
                     }
                 }
             }
@@ -5995,6 +6084,7 @@ struct CompletedTaskDetailView: View {
                         .padding(14)
                     }
             }
+            .accessibilityIdentifier("completedTaskDetail.carryOutTasks")
             .buttonStyle(.plain)
         } else {
             readOnlyChecklistCard
@@ -6072,6 +6162,7 @@ struct CompletedTaskDetailView: View {
             .background(CompleteTaskUXPalette.blue)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
+        .accessibilityIdentifier("completedTaskDetail.playFill")
         .buttonStyle(.plain)
     }
 
@@ -6132,6 +6223,7 @@ struct CompletedTaskDetailView: View {
                 }
                 .padding(.vertical, 11)
             }
+            .accessibilityIdentifier("completedTaskDetail.arrowDownCircle")
             .buttonStyle(.plain)
             if showDivider { Divider().overlay(CompleteTaskUXPalette.border) }
         }
@@ -6263,6 +6355,7 @@ private struct OperativeMultiSelectView: View {
                             }
                         }
                     }
+                        .accessibilityIdentifier("operativeMultiSelect.row.\(operative.id).checkmark")
                 }
             }
             .navigationTitle("Select Operatives")
@@ -6272,6 +6365,7 @@ private struct OperativeMultiSelectView: View {
                     Button("Done") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("operativeMultiSelect.done")
                 }
             }
         }
@@ -6312,6 +6406,7 @@ private struct ManagerMultiSelectView: View {
                             }
                         }
                     }
+                        .accessibilityIdentifier("managerMultiSelect.row.\(manager.id).checkmark")
                 }
             }
             .navigationTitle("Select Managers")
@@ -6321,6 +6416,7 @@ private struct ManagerMultiSelectView: View {
                     Button("Done") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("managerMultiSelect.done")
                 }
             }
         }

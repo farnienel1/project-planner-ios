@@ -76,6 +76,7 @@ struct WholesalersListContent: View {
                         NavigationLink(value: wholesaler.id) {
                             WholesalerListCard(wholesaler: wholesaler)
                         }
+                        .accessibilityIdentifier("wholesalersListContent.row.\(wholesaler.id)")
                         .buttonStyle(.plain)
                     }
                 }
@@ -107,6 +108,7 @@ struct WholesalersListContent: View {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                     }
                 }
+                .accessibilityIdentifier("wholesalersListContent.done")
                 .fontWeight(.semibold)
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -118,6 +120,7 @@ struct WholesalersListContent: View {
                         .background(Color(red: 0.145, green: 0.388, blue: 0.922))
                         .clipShape(Circle())
                 }
+                    .accessibilityIdentifier("wholesalersListContent.add")
             }
         }
         .sheet(isPresented: $showingAdd) {
@@ -127,7 +130,10 @@ struct WholesalersListContent: View {
             .environmentObject(userStore)
             .environmentObject(firebaseBackend)
         }
-        .task { await reloadSendRecords() }
+        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+            guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
+            await reload()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("reloadWholesalers"))) { _ in
             Task { await reload() }
         }
@@ -177,6 +183,7 @@ struct WholesalersListContent: View {
                     .stroke(WholesalersTheme.border, lineWidth: 0.8)
             )
         }
+        .accessibilityIdentifier("wholesalersListContent.plusCircleFill")
         .buttonStyle(.plain)
     }
 
@@ -208,6 +215,7 @@ struct WholesalersListContent: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(WholesalersTheme.inkMut)
             TextField("Search by name, trade or contact…", text: $searchText)
+                .accessibilityIdentifier("wholesalersListContent.searchByNameTradeOrContact")
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
         }
@@ -244,6 +252,7 @@ struct WholesalersListContent: View {
                     .background(Color(red: 0.145, green: 0.388, blue: 0.922))
                     .clipShape(RoundedRectangle(cornerRadius: 14))
             }
+                .accessibilityIdentifier("wholesalersListContent.addWholesaler")
         }
         .padding(24)
         .frame(maxWidth: .infinity)
@@ -401,6 +410,7 @@ struct WholesalerDetailView: View {
                 Button { showingEdit = true } label: {
                     Image(systemName: "square.and.pencil")
                 }
+                    .accessibilityIdentifier("wholesalerDetail.edit")
             }
         }
         .sheet(isPresented: $showingEdit) {
@@ -517,6 +527,7 @@ struct WholesalerDetailView: View {
                         .stroke(WholesalersTheme.border, lineWidth: 0.8)
                 )
             }
+            .accessibilityIdentifier("wholesalerDetail.clockArrowCirclepath")
             .buttonStyle(.plain)
         }
     }
@@ -541,6 +552,7 @@ struct WholesalerDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: 13))
             .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
         }
+        .accessibilityIdentifier("wholesalerDetail.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
     }
 
@@ -587,6 +599,7 @@ struct WholesalerDetailView: View {
                                     .background(WholesalersTheme.chipBlueBg)
                                     .clipShape(RoundedRectangle(cornerRadius: 8))
                             }
+                            .accessibilityIdentifier("wholesalerDetail.row.\(contact.id).envelopeFill")
                             .disabled(contact.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                         .padding(.vertical, 13)
@@ -633,6 +646,7 @@ struct WholesalerDetailView: View {
                             Image(systemName: "doc.on.doc")
                                 .foregroundStyle(WholesalersTheme.inkMut)
                         }
+                            .accessibilityIdentifier("wholesalerDetail.docOnDoc")
                     }
                     .padding(.vertical, 13)
                     .padding(.horizontal, 16)
@@ -812,6 +826,7 @@ struct WholesalerSendHistoryView: View {
                         Text(tab.rawValue).tag(tab)
                     }
                 }
+                .accessibilityIdentifier("wholesalerSendHistory.type")
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -840,6 +855,7 @@ struct WholesalerSendHistoryView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .accessibilityIdentifier("wholesalerSendHistory.close")
                 }
             }
         }
@@ -864,6 +880,7 @@ struct WholesalerSendHistoryView: View {
                         useDateFilter = false
                         materialSearch = ""
                     }
+                    .accessibilityIdentifier("wholesalerSendHistory.clear")
                     .font(.system(size: 12, weight: .semibold))
                 }
             }
@@ -871,27 +888,34 @@ struct WholesalerSendHistoryView: View {
                 Menu {
                     ForEach(jobOptions, id: \.self) { job in
                         Button(job) { jobFilter = job }
+                            .accessibilityIdentifier("wholesalerSendHistory.row.\(job).\(AccessibilityID.token(job))")
                     }
                 } label: {
                     filterChip(title: "Job", value: jobFilter)
                 }
+                    .accessibilityIdentifier("wholesalerSendHistory.job")
                 Menu {
                     ForEach(orderedByOptions, id: \.self) { name in
                         Button(name) { orderedByFilter = name }
+                            .accessibilityIdentifier("wholesalerSendHistory.row.\(name).\(AccessibilityID.token(name))")
                     }
                 } label: {
                     filterChip(title: "Ordered by", value: orderedByFilter)
                 }
+                    .accessibilityIdentifier("wholesalerSendHistory.orderedBy")
             }
             HStack(spacing: 8) {
                 Toggle("Filter by materials day", isOn: $useDateFilter)
+                    .accessibilityIdentifier("wholesalerSendHistory.filterByMaterialsDay")
                     .font(.system(size: 12, weight: .medium))
                 if useDateFilter {
                     DatePicker("", selection: $dateFilter, displayedComponents: .date)
+                        .accessibilityIdentifier("wholesalerSendHistory.datePicker")
                         .labelsHidden()
                 }
             }
             TextField("Search materials (name, brand, code)", text: $materialSearch)
+                .accessibilityIdentifier("wholesalerSendHistory.searchMaterialsNameBrandCode")
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 14))
         }
@@ -956,6 +980,7 @@ struct WholesalerSendHistoryView: View {
                 }
                 .padding(14)
             }
+            .accessibilityIdentifier("wholesalerSendHistory.quote")
             .buttonStyle(.plain)
             if isExpanded {
                 VStack(alignment: .leading, spacing: 8) {
@@ -1069,6 +1094,7 @@ struct WholesalerEditorSheet: View {
                             }
                             .foregroundStyle(Color(red: 0.145, green: 0.388, blue: 0.922))
                         }
+                        .accessibilityIdentifier("wholesalerEditor.add")
                         .padding(.top, 4)
                     }
                     .padding(12)
@@ -1088,6 +1114,7 @@ struct WholesalerEditorSheet: View {
                             .clipShape(RoundedRectangle(cornerRadius: 14))
                             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.red.opacity(0.35), lineWidth: 1))
                         }
+                        .accessibilityIdentifier("wholesalerEditor.delete")
                         .padding(.top, 8)
                     }
                 }
@@ -1099,6 +1126,7 @@ struct WholesalerEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { isPresented = false }
+                        .accessibilityIdentifier("wholesalerEditor.cancel")
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .background(Color(.systemGray6))
@@ -1106,6 +1134,7 @@ struct WholesalerEditorSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await save() } }
+                        .accessibilityIdentifier("wholesalerEditor.save")
                         .fontWeight(.bold)
                         .disabled(!canSave || isSaving)
                         .padding(.horizontal, 14)
@@ -1118,7 +1147,9 @@ struct WholesalerEditorSheet: View {
             .onAppear(perform: loadInitial)
             .alert("Delete Wholesaler", isPresented: $showingDeleteConfirmation) {
                 Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("wholesalerEditor.cancel2")
                 Button("Delete", role: .destructive) { Task { await deleteWholesaler() } }
+                    .accessibilityIdentifier("wholesalerEditor.delete2")
             } message: {
                 Text("Are you sure you want to delete \(name)? This cannot be undone.")
             }
@@ -1162,8 +1193,10 @@ struct WholesalerEditorSheet: View {
                     .clipShape(Circle())
                 VStack(alignment: .leading, spacing: 6) {
                     TextField("Name", text: nameBinding)
+                        .accessibilityIdentifier("wholesalerEditor.name")
                         .font(.system(size: 14, weight: .bold))
                     TextField("Email", text: emailBinding)
+                        .accessibilityIdentifier("wholesalerEditor.email")
                         .font(.system(size: 12))
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
@@ -1179,6 +1212,7 @@ struct WholesalerEditorSheet: View {
                         Button("Make primary") {
                             setPrimary(contactId: contact.id)
                         }
+                        .accessibilityIdentifier("wholesalerEditor.makePrimary")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(Color(red: 0.145, green: 0.388, blue: 0.922))
                     }
@@ -1189,11 +1223,13 @@ struct WholesalerEditorSheet: View {
                             contacts.removeAll { $0.id == contact.id }
                             ensurePrimary()
                         } label: { Label("Remove", systemImage: "trash") }
+                            .accessibilityIdentifier("wholesalerEditor.remove2")
                     }
                 } label: {
                     Image(systemName: "ellipsis")
                         .frame(width: 30, height: 30)
                 }
+                    .accessibilityIdentifier("wholesalerEditor.remove")
             }
         }
         .padding(12)
@@ -1238,6 +1274,7 @@ struct WholesalerEditorSheet: View {
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(WholesalersTheme.inkMut)
                 TextField(required ? "Required" : "Optional", text: text)
+                    .accessibilityIdentifier("wholesalerEditor.required")
                     .font(.system(size: 14.5, weight: .semibold))
             }
             .padding(.vertical, 13)

@@ -98,6 +98,7 @@ struct SiteAuditProjectListView: View {
                                 Button { onSelect(audit) } label: {
                                     SiteAuditAuditListCard(audit: audit)
                                 }
+                                .accessibilityIdentifier("siteAuditProjectList.row.\(audit.id)")
                                 .buttonStyle(.plain)
                             }
                         }
@@ -152,6 +153,7 @@ struct SiteAuditAuditListCard: View {
                 Button(action: onTap) {
                     cardContent
                 }
+                .accessibilityIdentifier("siteAuditAuditListCard.button")
                 .buttonStyle(.plain)
             } else {
                 cardContent
@@ -237,6 +239,7 @@ struct SiteAuditDetailsStepView: View {
                             label: "Author"
                         ) {
                             TextField("Author", text: $authorName)
+                                .accessibilityIdentifier("siteAuditDetailsStep.author")
                                 .font(.system(size: 13, weight: .medium))
                         }
                         divider
@@ -247,6 +250,7 @@ struct SiteAuditDetailsStepView: View {
                             label: "Date"
                         ) {
                             DatePicker("", selection: $selectedDate, displayedComponents: .date)
+                                .accessibilityIdentifier("siteAuditDetailsStep.datePicker")
                                 .labelsHidden()
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -274,6 +278,7 @@ struct SiteAuditDetailsStepView: View {
                                 }
                             }
                         }
+                        .accessibilityIdentifier("siteAuditDetailsStep.eyeFill")
                         .tint(SiteAuditColors.primary)
                         .padding(12)
                     }
@@ -296,6 +301,7 @@ struct SiteAuditDetailsStepView: View {
                     return "\(kind) · \(job.jobNumber) · \(job.siteName)"
                 } ?? "Select Project/Small Works", showChevron: true) { EmptyView() }
             }
+            .accessibilityIdentifier("siteAuditDetailsStep.folderFill")
             .buttonStyle(.plain)
         }
     }
@@ -308,6 +314,7 @@ struct SiteAuditDetailsStepView: View {
             label: "Title · optional"
         ) {
             TextField("e.g. Plant room snags", text: $customTitle)
+                .accessibilityIdentifier("siteAuditDetailsStep.eGPlantRoomSnags")
                 .font(.system(size: 13, weight: .medium))
         }
     }
@@ -422,6 +429,7 @@ struct SiteAuditItemsStepView: View {
                                     .strokeBorder(SiteAuditColors.primary, lineWidth: 0.5)
                             )
                         }
+                        .accessibilityIdentifier("siteAuditItemsStep.photoOnRectangleAngled")
                         .disabled(isProcessingPhotos)
                     }
 
@@ -450,6 +458,7 @@ struct SiteAuditItemsStepView: View {
                                     }
                                 )
                             }
+                            .accessibilityIdentifier("siteAuditItemsStep.row.\(item.id)")
                             .buttonStyle(.plain)
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
@@ -459,6 +468,7 @@ struct SiteAuditItemsStepView: View {
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
+                                    .accessibilityIdentifier("siteAuditItemsStep.row.\(item.id).delete")
                             }
                             .contextMenu {
                                 Button(role: .destructive) {
@@ -468,6 +478,7 @@ struct SiteAuditItemsStepView: View {
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
+                                    .accessibilityIdentifier("siteAuditItemsStep.row.\(item.id).delete2")
                             }
                         }
                     }
@@ -591,6 +602,7 @@ struct SiteAuditDraftItemCard: View {
                                 .background(SiteAuditColors.dangerTint)
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }
+                        .accessibilityIdentifier("siteAuditDraftItemCard.delete")
                         .buttonStyle(.plain)
                     }
                     Image(systemName: "line.3.horizontal")

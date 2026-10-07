@@ -223,14 +223,17 @@ struct SiteAuditHubView: View {
                 Button { showingCreate = true } label: {
                     hubTile(icon: "plus", title: "New site audit", subtitle: "Start a new walkthrough", tint: SiteAuditColors.primary)
                 }
+                    .accessibilityIdentifier("siteAuditHub.button")
 
                 Button { worksBrowserKind = .projects } label: {
                     hubTile(icon: "folder.fill", title: "Projects", subtitle: "Browse audits by project", tint: SiteAuditColors.success)
                 }
+                    .accessibilityIdentifier("siteAuditHub.folderFill")
 
                 Button { worksBrowserKind = .smallWorks } label: {
                     hubTile(icon: "wrench.and.screwdriver.fill", title: "Small works", subtitle: "Browse audits by small works job", tint: SiteAuditColors.purple)
                 }
+                    .accessibilityIdentifier("siteAuditHub.wrenchAndScrewdriverFill")
 
                 Spacer()
             }
@@ -238,7 +241,8 @@ struct SiteAuditHubView: View {
             .siteAuditScreenBackground()
             .navigationTitle("Site Audit")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() }
+                .accessibilityIdentifier("siteAuditHub.done") } }
             .sheet(isPresented: $showingCreate) {
                 SiteAuditCreateFlowView()
                     .environmentObject(projectStore)
@@ -364,6 +368,7 @@ struct SiteAuditProjectsBrowserView: View {
                                         .environmentObject(userStore)
                                         .environmentObject(operativeStore)
                                 }
+                                .accessibilityIdentifier("siteAuditProjectsBrowser.row.\(project.id)")
                                 .buttonStyle(.plain)
                             }
                         }
@@ -377,7 +382,8 @@ struct SiteAuditProjectsBrowserView: View {
             .navigationTitle(kind.navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
             .appChromeNavigationBarSurface()
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() }
+                .accessibilityIdentifier("siteAuditProjectsBrowser.done") } }
             .sheet(item: $selectedProject) { project in
                 SiteAuditProjectAuditsView(project: project)
                     .environmentObject(projectStore)
@@ -397,22 +403,34 @@ struct SiteAuditProjectsBrowserView: View {
                     title: "All · \(listCounts.all)",
                     isSelected: selectedFilter == .all,
                     selectedForeground: ProjectWorksRevampColors.activeGreen
-                ) { selectedFilter = .all }
+                ,
+                    accessibilityIdentifier: "siteAuditProjectsBrowser.filter.all",
+                    action: { selectedFilter = .all }
+                )
                 WorksRevampFilterChip(
                     title: "Active · \(listCounts.active)",
                     isSelected: selectedFilter == .active,
                     selectedForeground: ProjectWorksRevampColors.activeGreen
-                ) { selectedFilter = .active }
+                ,
+                    accessibilityIdentifier: "siteAuditProjectsBrowser.filter.active",
+                    action: { selectedFilter = .active }
+                )
                 WorksRevampFilterChip(
                     title: "Upcoming · \(listCounts.upcoming)",
                     isSelected: selectedFilter == .upcoming,
                     selectedForeground: ProjectWorksRevampColors.upcomingAmber
-                ) { selectedFilter = .upcoming }
+                ,
+                    accessibilityIdentifier: "siteAuditProjectsBrowser.filter.upcoming",
+                    action: { selectedFilter = .upcoming }
+                )
                 WorksRevampFilterChip(
                     title: "Completed · \(listCounts.completed)",
                     isSelected: selectedFilter == .completed,
                     selectedForeground: ProjectWorksRevampColors.muted
-                ) { selectedFilter = .completed }
+                ,
+                    accessibilityIdentifier: "siteAuditProjectsBrowser.filter.completed",
+                    action: { selectedFilter = .completed }
+                )
             }
         }
     }
@@ -516,9 +534,13 @@ struct SiteAuditProjectAuditsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("siteAuditProjectAudits.done")
                 }
             }
-            .task { await loadAudits() }
+            .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+                guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
+                await loadAudits()
+            }
             .sheet(isPresented: $showingCreate, onDismiss: {
                 Task { await loadAudits() }
             }) {
@@ -587,7 +609,10 @@ struct SiteAuditProjectHubView: View {
             onSelect: { selectedAudit = $0 },
             onCreate: { showingCreate = true }
         )
-        .task { await loadAudits() }
+        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+            guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
+            await loadAudits()
+        }
         .sheet(isPresented: $showingCreate, onDismiss: {
             Task { await loadAudits() }
         }) {
@@ -820,6 +845,7 @@ struct SiteAuditCreateFlowView: View {
                     set: { if !$0 { errorMessage = nil } }
                 )) {
                     Button("OK", role: .cancel) { }
+                        .accessibilityIdentifier("siteAuditCreateFlow.ok")
                 } message: {
                     Text(errorMessage ?? "")
                 }
@@ -1358,6 +1384,7 @@ private struct SiteAuditSubmitSuccessView: View {
                                         .strokeBorder(SiteAuditColors.primary, lineWidth: 1)
                                 )
                         }
+                        .accessibilityIdentifier("siteAuditSubmitSuccess.download")
                         .padding(.bottom, 7)
                     }
 
@@ -1447,6 +1474,7 @@ struct SiteAuditProjectPickerView: View {
                     Text("Projects").tag(false)
                     Text("Small Works").tag(true)
                 }
+                .accessibilityIdentifier("siteAuditProjectPicker.jobType")
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -1463,7 +1491,10 @@ struct SiteAuditProjectPickerView: View {
                                 titleFont: .subheadline.weight(.semibold),
                                 horizontalPadding: 15,
                                 verticalPadding: 9
-                            ) { selectedFilter = filter }
+                            ,
+                                accessibilityIdentifier: "siteAuditProjectPicker.filter.\(AccessibilityID.token(filter.rawValue))",
+                                action: { selectedFilter = filter }
+                            )
                         }
                     }
                     .padding(.horizontal, 16)
@@ -1490,6 +1521,7 @@ struct SiteAuditProjectPickerView: View {
                                         showsClientAndManager: true
                                     )
                                 }
+                                .accessibilityIdentifier("siteAuditProjectPicker.row.\(project.id)")
                                 .buttonStyle(.plain)
                             }
                         }
@@ -1504,6 +1536,7 @@ struct SiteAuditProjectPickerView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Close") { dismiss() }
+                        .accessibilityIdentifier("siteAuditProjectPicker.close")
                 }
             }
         }
@@ -1542,11 +1575,13 @@ struct SiteAuditAddItemView: View {
                         VStack(spacing: 0) {
                             fieldBlock("Title", required: true) {
                                 TextField("Front courtyard", text: $draft.title)
+                                    .accessibilityIdentifier("siteAuditAddItem.frontCourtyard")
                                     .font(.system(size: 13, weight: .medium))
                             }
                             divider
                             fieldBlock("Comments", required: false) {
                                 TextField("Notes…", text: $draft.comments, axis: .vertical)
+                                    .accessibilityIdentifier("siteAuditAddItem.notes")
                                     .lineLimit(3...6)
                                     .font(.system(size: 12))
                             }
@@ -1555,6 +1590,7 @@ struct SiteAuditAddItemView: View {
                             divider
                             fieldBlock("Location tag", required: false) {
                                 TextField("e.g. Front entrance courtyard", text: $draft.location)
+                                    .accessibilityIdentifier("siteAuditAddItem.eGFrontEntranceCourtyard")
                                     .font(.system(size: 12, weight: .medium))
                             }
                             divider
@@ -1609,6 +1645,7 @@ struct SiteAuditAddItemView: View {
                     }
                     .foregroundStyle(SiteAuditColors.primary)
                 }
+                    .accessibilityIdentifier("siteAuditAddItem.cameraFill")
             }
             .frame(maxWidth: .infinity)
             .aspectRatio(4 / 3, contentMode: .fit)
@@ -1624,6 +1661,7 @@ struct SiteAuditAddItemView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(SiteAuditColors.textSecondary)
                 TextField("Name", text: $draft.assignee)
+                    .accessibilityIdentifier("siteAuditAddItem.name")
                     .font(.system(size: 12, weight: .medium))
             }
         }
@@ -1638,6 +1676,7 @@ struct SiteAuditAddItemView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(SiteAuditColors.textSecondary)
                 TextField("Notes on photo", text: $draft.annotations)
+                    .accessibilityIdentifier("siteAuditAddItem.notesOnPhoto")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(SiteAuditColors.primary)
             }
@@ -1678,6 +1717,7 @@ struct SiteAuditAddItemView: View {
                     .strokeBorder(SiteAuditColors.borderStrong, lineWidth: 0.5)
             )
         }
+        .accessibilityIdentifier("siteAuditAddItem.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
     }
 
@@ -1783,6 +1823,7 @@ struct SiteAuditDetailView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("siteAuditDetail.done")
                 }
             }
             .task {
@@ -1823,7 +1864,8 @@ struct SiteAuditDetailView: View {
                         image.resizable().scaledToFit()
                     } placeholder: { ProgressView() }
                     .padding()
-                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { selectedImageURL = nil } } }
+                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { selectedImageURL = nil }
+                        .accessibilityIdentifier("siteAuditDetail.close") } }
                 }
             }
         }
@@ -1867,6 +1909,7 @@ struct SiteAuditDetailView: View {
                         .frame(height: 140)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
+                    .accessibilityIdentifier("siteAuditDetail.itemCard")
                     .buttonStyle(.plain)
                 }
             }

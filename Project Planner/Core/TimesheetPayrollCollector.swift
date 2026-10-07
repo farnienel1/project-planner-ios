@@ -48,6 +48,8 @@ enum TimesheetPayrollCollector {
         scheduleOptions: MyScheduleOptions = MyScheduleOptions()
     ) -> TimesheetPayrollSummary {
         let cal = Calendar.current
+        let rangeStart = cal.startOfDay(for: range.lowerBound)
+        let rangeEnd = cal.startOfDay(for: range.upperBound)
         func dayPolicy(for day: Date) -> OrgPayrollTimePolicy {
             if let organization {
                 return PayrollTimePolicyCatalog.policy(for: day, organization: organization)
@@ -68,12 +70,21 @@ enum TimesheetPayrollCollector {
 
         let projectsById = Dictionary(projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let smallWorksById = Dictionary(smallWorks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for booking in bookings where booking.status != .cancelled {
-            guard operativeIds.contains(booking.operativeId) else { continue }
+        let eligibleBookings = bookings.filter { booking in
+            guard booking.status != .cancelled, operativeIds.contains(booking.operativeId) else { return false }
             let day = cal.startOfDay(for: booking.date)
-            guard day >= range.lowerBound && day <= range.upperBound else { continue }
-            guard TimesheetPayrollPolicy.isBillableSelfEmployedDay(user, on: day, calendar: cal) else { continue }
+            guard day >= rangeStart && day <= rangeEnd else { return false }
+            return TimesheetPayrollPolicy.isBillableSelfEmployedDay(user, on: day, calendar: cal)
+        }
+        let bookingsByDay = Dictionary(grouping: eligibleBookings) {
+            "\($0.operativeId.uuidString)-\(cal.startOfDay(for: $0.date).timeIntervalSince1970)"
+        }
+        for group in bookingsByDay.values {
+            guard let first = group.first else { continue }
+            let day = cal.startOfDay(for: first.date)
             let policy = dayPolicy(for: day)
+            for cluster in OperativeBookingInterval.payClusters(on: group, policy: policy) {
+            let booking = cluster.payable
             let standardDayHours = max(policy.standardPaidHours, 0.01)
             shiftCount += 1
             let matchedOperative = matchedOperatives.first(where: { $0.id == booking.operativeId })
@@ -133,12 +144,13 @@ enum TimesheetPayrollCollector {
                     )
                 )
             }
+            }
         }
 
         for booking in managerBookings where booking.userId == user.id {
             guard scheduleOptions.includesManagerScheduleLocation(booking) else { continue }
             let day = cal.startOfDay(for: booking.date)
-            guard day >= range.lowerBound && day <= range.upperBound else { continue }
+            guard day >= rangeStart && day <= rangeEnd else { continue }
             guard TimesheetPayrollPolicy.isBillableSelfEmployedDay(user, on: day, calendar: cal) else { continue }
             let policy = dayPolicy(for: day)
             let standardDayHours = max(policy.standardPaidHours, 0.01)

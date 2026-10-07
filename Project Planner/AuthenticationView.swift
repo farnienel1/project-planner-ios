@@ -187,7 +187,9 @@ struct AuthenticationView: View {
                     keyboardType: .emailAddress,
                     returnKey: .next,
                     onSubmit: { focusedField = .password }
-                )
+                ,
+                    accessibilityIdentifier: "signIn.email")
+                    .accessibilityIdentifier("signIn.email")
             }
             .padding(.bottom, 16)
 
@@ -201,7 +203,9 @@ struct AuthenticationView: View {
                         keyboardType: .default,
                         returnKey: .done,
                         onSubmit: signIn
-                    )
+                    ,
+                        accessibilityIdentifier: "signIn.password")
+                        .accessibilityIdentifier("signIn.password")
 
                     Button {
                         showPassword.toggle()
@@ -211,6 +215,7 @@ struct AuthenticationView: View {
                             .foregroundStyle(showPassword ? LoginBrand.cyan : LoginBrand.textMuted)
                             .frame(width: 40, height: 52)
                     }
+                    .accessibilityIdentifier("signIn.button")
                     .buttonStyle(.plain)
                 }
             }
@@ -237,6 +242,7 @@ struct AuthenticationView: View {
                 Button("Forgot password?") {
                     showingForgotPassword = true
                 }
+                .accessibilityIdentifier("signIn.forgotPassword")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(LoginBrand.cyan.opacity(0.8))
             }
@@ -269,6 +275,7 @@ struct AuthenticationView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .shadow(color: LoginBrand.blue.opacity(isFormValid ? 0.45 : 0.15), radius: 16, x: 0, y: 4)
             }
+            .accessibilityIdentifier("signIn.signIn")
             .buttonStyle(.plain)
             .disabled(firebaseBackend.isLoading || !isFormValid)
             .padding(.bottom, 24)
@@ -298,6 +305,7 @@ struct AuthenticationView: View {
                         .stroke(LoginBrand.cyan.opacity(0.2), lineWidth: 1)
                 )
             }
+            .accessibilityIdentifier("signIn.globe")
             .buttonStyle(.plain)
 
             Text(versionLine)
@@ -397,6 +405,7 @@ private struct LoginAutofillField: UIViewRepresentable {
     var keyboardType: UIKeyboardType
     var returnKey: UIReturnKeyType
     var onSubmit: () -> Void
+    var accessibilityIdentifier: String = "field"
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text, onSubmit: onSubmit)
@@ -421,6 +430,7 @@ private struct LoginAutofillField: UIViewRepresentable {
         )
         field.addTarget(context.coordinator, action: #selector(Coordinator.editingChanged(_:)), for: .editingChanged)
         applyChrome(to: field)
+        field.accessibilityIdentifier = accessibilityIdentifier
         return field
     }
 
@@ -430,6 +440,7 @@ private struct LoginAutofillField: UIViewRepresentable {
             field.text = text
         }
         applyChrome(to: field)
+        field.accessibilityIdentifier = accessibilityIdentifier
     }
 
     private func applyChrome(to field: UITextField) {

@@ -34,6 +34,7 @@ struct JobTypesManagementView: View {
                         Button("Add Your First Job Type") {
                             showingAddJobType = true
                         }
+                        .accessibilityIdentifier("jobTypesManagement.addYourFirstJobType")
                         .buttonStyle(.borderedProminent)
                     }
                     .padding()
@@ -64,12 +65,14 @@ struct JobTypesManagementView: View {
                         Image(systemName: "xmark")
                             .foregroundColor(.blue)
                     }
+                        .accessibilityIdentifier("jobTypesManagement.close")
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Add Job Type") {
                         showingAddJobType = true
                     }
+                        .accessibilityIdentifier("jobTypesManagement.addJobType")
                 }
             }
             .sheet(isPresented: $showingAddJobType) {
@@ -112,6 +115,7 @@ struct AddJobTypeView: View {
                         .font(.headline)
                     
                     TextField("e.g., Renovation, New Build, Repair", text: $jobTypeName)
+                        .accessibilityIdentifier("addJobType.eGRenovationNewBuildRepair")
                         .textFieldStyle(.roundedBorder)
                 }
                 .padding(.horizontal)
@@ -128,6 +132,7 @@ struct AddJobTypeView: View {
                 Button("Create New Job Type") {
                     addJobType()
                 }
+                .accessibilityIdentifier("addJobType.createNewJobType")
                 .buttonStyle(.borderedProminent)
                 .disabled(jobTypeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .padding()
@@ -138,6 +143,7 @@ struct AddJobTypeView: View {
                     Button("Done") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("addJobType.done")
                 }
             }
         }

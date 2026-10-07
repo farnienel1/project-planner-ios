@@ -31,6 +31,7 @@ struct OrganisationAnnualLeaveDefaultsView: View {
                             }
                         }
                     }
+                    .accessibilityIdentifier("organisationAnnualLeaveDefaults.region")
                     .pickerStyle(.menu)
                     .font(.system(size: 13, weight: .medium))
                     .padding(.vertical, 12)

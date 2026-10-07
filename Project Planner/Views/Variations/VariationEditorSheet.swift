@@ -288,11 +288,13 @@ struct VariationEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("variationEditor.cancel")
                         .fontWeight(.semibold)
                         .foregroundStyle(VariationFormColors.blue)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await save() } }
+                        .accessibilityIdentifier("variationEditor.save")
                         .fontWeight(.semibold)
                         .foregroundStyle(VariationFormColors.blue)
                         .disabled(!canSave)
@@ -308,6 +310,7 @@ struct VariationEditorSheet: View {
                                 commitMaterial()
                             }
                         }
+                        .accessibilityIdentifier("variationEditor.addMaterial")
                         .fontWeight(.bold)
                     }
                 }
@@ -357,19 +360,28 @@ struct VariationEditorSheet: View {
             }
             .confirmationDialog("Evidence", isPresented: $showingEvidenceChoices, titleVisibility: .visible) {
                 Button("Take photo") { showingCamera = true }
+                    .accessibilityIdentifier("variationEditor.takePhoto")
                 Button("Photo library") { showingLibrary = true }
+                    .accessibilityIdentifier("variationEditor.photoLibrary")
                 Button("Choose files") { showingFileImporter = true }
+                    .accessibilityIdentifier("variationEditor.chooseFiles")
                 Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("variationEditor.cancel2")
             }
             .alert("VO number", isPresented: $showingVOEdit) {
                 TextField("VO number", text: $voDraft)
+                    .accessibilityIdentifier("variationEditor.voNumber")
                 Button("Save") {
                     let trimmed = voDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmed.isEmpty { voNumber = trimmed }
                 }
+                    .accessibilityIdentifier("variationEditor.save2")
                 Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("variationEditor.cancel3")
             }
-            .task { await loadCatalogue() }
+            .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId) {
+                await loadCatalogue()
+            }
         }
     }
 
@@ -388,17 +400,20 @@ struct VariationEditorSheet: View {
                     .background(VariationFormColors.violetTint)
                     .clipShape(Capsule())
             }
+            .accessibilityIdentifier("variationEditor.voNumber2")
             .buttonStyle(.plain)
             .disabled(trackerOn)
             .accessibilityLabel("VO number \(voNumber)")
 
             TextField("Heading", text: $heading)
+                .accessibilityIdentifier("variationEditor.heading")
                 .font(.system(size: 21, weight: .bold))
                 .foregroundStyle(VariationFormColors.ink)
                 .padding(.top, 10)
                 .padding(.bottom, 4)
 
             TextField("What changed, who asked for it, and where.", text: $descriptionText, axis: .vertical)
+                .accessibilityIdentifier("variationEditor.whatChangedWhoAskedForIt")
                 .font(.system(size: 15))
                 .foregroundStyle(VariationFormColors.ink2)
                 .lineLimit(descriptionExpanded ? 8 : 3, reservesSpace: true)
@@ -406,6 +421,7 @@ struct VariationEditorSheet: View {
             Button(descriptionExpanded ? "Less" : "More detail") {
                 descriptionExpanded.toggle()
             }
+            .accessibilityIdentifier("variationEditor.less")
             .font(.system(size: 13.5, weight: .bold))
             .foregroundStyle(VariationFormColors.blue)
             .padding(.vertical, 6)
@@ -448,6 +464,7 @@ struct VariationEditorSheet: View {
                             )
                             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
+                    .accessibilityIdentifier("variationEditor.addLabourItem")
                     .buttonStyle(.plain)
                     .padding(.top, 10)
                 }
@@ -519,6 +536,7 @@ struct VariationEditorSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
             }
+            .accessibilityIdentifier("variationEditor.chooseATrade")
             .buttonStyle(.plain)
             .accessibilityLabel(labourComposer.trade.isEmpty ? "Choose a trade" : "Change \(labourComposer.trade)")
 
@@ -527,6 +545,7 @@ struct VariationEditorSheet: View {
                     HStack(spacing: 7) {
                         ForEach(tradeChips, id: \.self) { trade in
                             Button(trade) { chooseTrade(trade) }
+                                .accessibilityIdentifier("variationEditor.row.\(trade).\(AccessibilityID.token(trade))")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(VariationFormColors.ink)
                                 .padding(.horizontal, 13)
@@ -536,6 +555,7 @@ struct VariationEditorSheet: View {
                                 .clipShape(Capsule())
                         }
                         Button("All trades") { showingTrades = true }
+                            .accessibilityIdentifier("variationEditor.allTrades")
                             .font(.system(size: 13, weight: .bold))
                             .foregroundStyle(VariationFormColors.blue)
                             .padding(.horizontal, 13)
@@ -560,6 +580,7 @@ struct VariationEditorSheet: View {
                         onIncrement: { labourComposer.operatives += 1 }
                     ) {
                         TextField("1", value: $labourComposer.operatives, format: .number)
+                            .accessibilityIdentifier("variationEditor.numberOfOperatives")
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.center)
                             .font(.system(size: 17, weight: .heavy))
@@ -579,6 +600,7 @@ struct VariationEditorSheet: View {
                         onIncrement: { bumpHours(0.5) }
                     ) {
                         TextField("0", value: $labourComposer.hoursEach, format: .number)
+                            .accessibilityIdentifier("variationEditor.hoursPerOperative")
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.center)
                             .font(.system(size: 17, weight: .heavy))
@@ -595,6 +617,7 @@ struct VariationEditorSheet: View {
             HStack(spacing: 6) {
                 ForEach(hourPresets, id: \.label) { preset in
                     Button(preset.label) { labourComposer.hoursEach = preset.hours }
+                        .accessibilityIdentifier("variationEditor.row.\(preset.label)")
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(VariationFormColors.blue)
                         .padding(.horizontal, 12)
@@ -731,6 +754,7 @@ struct VariationEditorSheet: View {
                 .formMicroLabel()
             HStack(spacing: 8) {
                 TextField("Material name", text: $materialComposer.name)
+                    .accessibilityIdentifier("variationEditor.materialName")
                     .font(.system(size: 16))
                     .focused($focusedField, equals: .materialName)
                     .submitLabel(.done)
@@ -741,6 +765,7 @@ struct VariationEditorSheet: View {
                     .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
                     .accessibilityLabel("Material name")
                 TextField("Qty", text: $materialComposer.quantity)
+                    .accessibilityIdentifier("variationEditor.quantityOrLength")
                     .font(.system(size: 16, weight: .bold))
                     .focused($focusedField, equals: .materialQuantity)
                     .keyboardType(.decimalPad)
@@ -757,6 +782,7 @@ struct VariationEditorSheet: View {
             HStack(spacing: 3) {
                 ForEach(Self.units, id: \.self) { unit in
                     Button(unit) { materialComposer.unit = unit }
+                        .accessibilityIdentifier("variationEditor.row.\(unit).unit")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(materialComposer.unit == unit ? Color.white : VariationFormColors.ink2)
                         .frame(maxWidth: .infinity)
@@ -794,6 +820,7 @@ struct VariationEditorSheet: View {
                             .padding(.horizontal, 13)
                             .padding(.vertical, 12)
                         }
+                        .accessibilityIdentifier("variationEditor.row.\(suggestion.name)")
                         .buttonStyle(.plain)
                         Divider().overlay(VariationFormColors.line)
                     }
@@ -842,6 +869,7 @@ struct VariationEditorSheet: View {
                             .foregroundStyle(VariationFormColors.ink2)
                             .multilineTextAlignment(.center)
                         Button("Take photos or choose files") { presentEvidencePicker() }
+                            .accessibilityIdentifier("variationEditor.takePhotosOrChooseFiles")
                             .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(VariationFormColors.ink)
                             .frame(maxWidth: .infinity)
@@ -883,6 +911,7 @@ struct VariationEditorSheet: View {
                         }
                     }
                     Button("+ Add more evidence") { presentEvidencePicker() }
+                        .accessibilityIdentifier("variationEditor.addMoreEvidence")
                         .font(.system(size: 14.5, weight: .bold))
                         .foregroundStyle(VariationFormColors.blue)
                         .frame(maxWidth: .infinity)
@@ -936,6 +965,7 @@ struct VariationEditorSheet: View {
                     .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
                     .shadow(color: canSave ? VariationFormColors.blue.opacity(0.32) : .clear, radius: 12, y: 8)
             }
+            .accessibilityIdentifier("variationEditor.saving")
             .buttonStyle(.plain)
             .disabled(!canSave)
             .opacity(canSave ? 1 : 0.42)
@@ -961,6 +991,7 @@ struct VariationEditorSheet: View {
                 Spacer(minLength: 8)
                 if undoNotice.canUndo {
                     Button("Undo") { performUndo() }
+                        .accessibilityIdentifier("variationEditor.undo")
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(Color(red: 0.498, green: 0.690, blue: 1))
                 }
@@ -984,6 +1015,7 @@ struct VariationEditorSheet: View {
                         chooseTrade(trade)
                         showingTrades = false
                     }
+                    .accessibilityIdentifier("variationEditor.row.\(trade).\(AccessibilityID.token(trade))2")
                     .font(.system(size: 15.5))
                     .foregroundStyle(VariationFormColors.ink)
                 }
@@ -1015,6 +1047,7 @@ struct VariationEditorSheet: View {
             if customTradeOpen {
                 HStack(spacing: 8) {
                     TextField("Trade name", text: $customTradeDraft)
+                        .accessibilityIdentifier("variationEditor.customTradeName")
                         .focused($focusedField, equals: .customTrade)
                         .submitLabel(.done)
                         .onSubmit { commitCustomTrade() }
@@ -1024,6 +1057,7 @@ struct VariationEditorSheet: View {
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .accessibilityLabel("Custom trade name")
                     Button("Add") { commitCustomTrade() }
+                        .accessibilityIdentifier("variationEditor.add")
                         .font(.system(size: 14.5, weight: .bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 18)
@@ -1041,6 +1075,7 @@ struct VariationEditorSheet: View {
                     customTradeOpen = true
                     focusedField = .customTrade
                 }
+                .accessibilityIdentifier("variationEditor.customTrade")
                 .font(.system(size: 14.5, weight: .bold))
                 .foregroundStyle(VariationFormColors.blue)
                 .frame(maxWidth: .infinity)
@@ -1099,6 +1134,7 @@ struct VariationEditorSheet: View {
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         }
+        .accessibilityIdentifier("variationEditor.icon")
         .buttonStyle(.plain)
         .accessibilityLabel(label)
     }
@@ -1128,6 +1164,7 @@ struct VariationEditorSheet: View {
     ) -> some View {
         HStack(spacing: 2) {
             Button("−", action: onDecrement)
+                .accessibilityIdentifier("variationEditor.stepper")
                 .font(.system(size: 19, weight: .bold))
                 .foregroundStyle(VariationFormColors.blue)
                 .frame(width: 36, height: 36)
@@ -1139,6 +1176,7 @@ struct VariationEditorSheet: View {
             field()
                 .frame(maxWidth: .infinity)
             Button("+", action: onIncrement)
+                .accessibilityIdentifier("variationEditor.stepper2")
                 .font(.system(size: 19, weight: .bold))
                 .foregroundStyle(VariationFormColors.blue)
                 .frame(width: 36, height: 36)
@@ -1160,6 +1198,7 @@ struct VariationEditorSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: primary ? .clear : .black.opacity(0.06), radius: 1, y: 1)
         }
+        .accessibilityIdentifier("variationEditor.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
     }
 

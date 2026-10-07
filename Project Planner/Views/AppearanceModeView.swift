@@ -95,6 +95,7 @@ struct AppearanceModeView: View {
                     .stroke(isSelected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.border, lineWidth: isSelected ? 1.5 : 0.5)
             )
         }
+        .accessibilityIdentifier("appearanceMode.dimCanvasLightText")
         .buttonStyle(.plain)
         .animation(.easeInOut(duration: 0.18), value: isSelected)
     }

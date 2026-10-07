@@ -83,6 +83,9 @@ enum PayrollHoursEngine {
     // MARK: - Weekday
 
     private static func computeWeekday(booking: Booking, policy: OrgPayrollTimePolicy) -> PayrollHoursResult {
+        if let overnight = overnightWallResult(booking: booking) {
+            return overnight
+        }
         if isHalfDayPaidSlot(booking: booking, policy: policy) {
             return halfDayPaidResult(booking: booking, policy: policy, weekend: nil)
         }
@@ -165,6 +168,9 @@ enum PayrollHoursEngine {
         policy: OrgPayrollTimePolicy,
         dayLabel: String
     ) -> PayrollHoursResult {
+        if let overnight = overnightWallResult(booking: booking) {
+            return overnight
+        }
         guard let interval = OperativeBookingInterval.clashInterval(for: booking, policy: policy) else {
             return legacySlotResult(booking: booking, policy: policy)
         }
@@ -256,6 +262,23 @@ enum PayrollHoursEngine {
     }
 
     // MARK: - Helpers
+
+    /// A finish time before the start is the next morning (22:00–02:00 is 4 hours), paid as those hours.
+    private static func overnightWallResult(booking: Booking) -> PayrollHoursResult? {
+        guard let start = booking.workStartTime, let end = booking.workEndTime,
+              let sm = ManagerScheduleInterval.parseMinutes(start),
+              let em = ManagerScheduleInterval.parseMinutes(end),
+              em < sm else { return nil }
+        let hours = Double(em + 24 * 60 - sm) / 60.0
+        let segment = PayrollHoursSegment(
+            kind: .standardWindow,
+            clockStart: start,
+            clockEnd: end,
+            baseHours: hours,
+            multiplier: 1
+        )
+        return PayrollHoursResult(totalPaidHours: hours, segments: [segment])
+    }
 
     /// AM/PM (and custom hours that match those half-windows) pay half the standard day rate, not wall-clock minus break.
     static func isHalfDayPaidSlot(booking: Booking, policy: OrgPayrollTimePolicy) -> Bool {

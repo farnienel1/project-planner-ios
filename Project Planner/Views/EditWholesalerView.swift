@@ -36,7 +36,9 @@ struct EditWholesalerView: View {
             Form {
                 Section("Wholesaler Details") {
                     TextField("Wholesaler Name", text: $name)
+                        .accessibilityIdentifier("editWholesaler.wholesalerName")
                     TextField("Address (Optional)", text: $address)
+                        .accessibilityIdentifier("editWholesaler.addressOptional")
                 }
                 
                 Section("Staff / Contacts") {
@@ -58,6 +60,7 @@ struct EditWholesalerView: View {
                         }
                         .foregroundColor(.blue)
                     }
+                        .accessibilityIdentifier("editWholesaler.plusCircleFill")
                 }
                 
                 Section {
@@ -71,6 +74,7 @@ struct EditWholesalerView: View {
                             Spacer()
                         }
                     }
+                    .accessibilityIdentifier("editWholesaler.deleteWholesaler")
                     .disabled(isDeleting)
                 }
             }
@@ -81,19 +85,23 @@ struct EditWholesalerView: View {
                     Button("Cancel") {
                         isPresented = false
                     }
+                        .accessibilityIdentifier("editWholesaler.cancel")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
                         saveWholesaler()
                     }
+                    .accessibilityIdentifier("editWholesaler.save")
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
                 }
             }
             .alert("Delete Wholesaler", isPresented: $showingDeleteConfirmation) {
                 Button("Cancel", role: .cancel) { }
+                    .accessibilityIdentifier("editWholesaler.cancel2")
                 Button("Delete", role: .destructive) {
                     performDeleteWholesaler()
                 }
+                    .accessibilityIdentifier("editWholesaler.delete")
             } message: {
                 Text("Are you sure you want to delete \(wholesaler.name)? This action cannot be undone.")
             }

@@ -1,5 +1,6 @@
-# Local tooling and editor state
-.cursor/
+# Local tooling and editor state. Keep the shared MCP config.
+.cursor/*
+!.cursor/mcp.json
 .build/
 Project Planner.xcodeproj/xcuserdata/
 Project Planner.xcodeproj/project.xcworkspace/
@@ -15,3 +16,11 @@ Project Planner 2026-05-14 07-58-10/
 
 # Local static-site cache
 website/.netlify/
+
+# Rules-unit tests (Firebase emulator). The suite lives at the repo root so it is
+# not a second app; node_modules is local only.
+node_modules/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+*-debug.log

@@ -79,6 +79,7 @@ struct AdminManagerMaterialsView: View {
         }
         .alert("Could Not Delete Material", isPresented: $showingDeleteErrorAlert) {
             Button("OK", role: .cancel) { }
+                .accessibilityIdentifier("adminManagerMaterials.ok")
         } message: {
             Text(deleteErrorMessage)
         }
@@ -103,6 +104,7 @@ struct AdminManagerMaterialsView: View {
                 Button("Quote/Order History") {
                     showingHistory = true
                 }
+                .accessibilityIdentifier("adminManagerMaterials.quoteOrderHistory")
                 .font(.system(size: 11, weight: .medium))
                 .buttonStyle(.bordered)
                 .tint(MaterialsOrderingTheme.muted)
@@ -111,6 +113,7 @@ struct AdminManagerMaterialsView: View {
                 Label("Add", systemImage: "plus")
                     .font(.system(size: 11, weight: .medium))
             }
+            .accessibilityIdentifier("adminManagerMaterials.add")
             .buttonStyle(.borderedProminent)
             .tint(MaterialsOrderingTheme.primary)
             Button {
@@ -120,6 +123,7 @@ struct AdminManagerMaterialsView: View {
                 Image(systemName: "paperplane.fill")
                     .foregroundStyle(MaterialsOrderingTheme.success)
             }
+            .accessibilityIdentifier("adminManagerMaterials.paperplaneFill")
             .disabled(dayMaterials.isEmpty)
         }
         .padding(.horizontal, 16)
@@ -149,6 +153,7 @@ struct AdminManagerMaterialsView: View {
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
+                                .accessibilityIdentifier("adminManagerMaterials.row.\(material.id).delete")
                         }
                     }
                 }
@@ -177,6 +182,7 @@ struct AdminManagerMaterialsView: View {
             Button { showingAddMaterial = true } label: {
                 Label("Add material", systemImage: "plus")
             }
+            .accessibilityIdentifier("adminManagerMaterials.addMaterial")
             .buttonStyle(.borderedProminent)
             .tint(MaterialsOrderingTheme.primary)
         }

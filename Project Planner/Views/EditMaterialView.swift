@@ -54,6 +54,7 @@ struct EditMaterialView: View {
             Form {
                 Section("Material Details") {
                     DatePicker("Date", selection: $selectedDate, displayedComponents: .date)
+                        .accessibilityIdentifier("editMaterial.date")
                         .datePickerStyle(.compact)
                     
                     Picker("Quantity", selection: $quantity) {
@@ -61,14 +62,17 @@ struct EditMaterialView: View {
                             Text("\(num)").tag(num)
                         }
                     }
+                        .accessibilityIdentifier("editMaterial.quantity")
                     
                     Picker(MaterialUnit.typePickerTitle, selection: $unit) {
                         ForEach(MaterialUnit.allCases, id: \.self) { unit in
                             Text(unit.displayName).tag(unit)
                         }
                     }
+                        .accessibilityIdentifier("editMaterial.picker")
                     
                     TextField("Material Description", text: $materialDescription, axis: .vertical)
+                        .accessibilityIdentifier("editMaterial.materialDescription")
                         .lineLimit(3...6)
                 }
                 
@@ -96,6 +100,7 @@ struct EditMaterialView: View {
                     Button("Cancel") {
                         isPresented = false
                     }
+                        .accessibilityIdentifier("editMaterial.cancel")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
@@ -105,17 +110,20 @@ struct EditMaterialView: View {
                             showingPermissionAlert = true
                         }
                     }
+                    .accessibilityIdentifier("editMaterial.save")
                     .disabled(materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving || !canManageMaterial)
                 }
             }
         }
         .alert("Permission Required", isPresented: $showingPermissionAlert) {
             Button("OK", role: .cancel) { }
+                .accessibilityIdentifier("editMaterial.ok")
         } message: {
             Text("You can only edit materials that you booked.")
         }
         .alert("Could Not Save Material", isPresented: $showingSaveErrorAlert) {
             Button("OK", role: .cancel) { }
+                .accessibilityIdentifier("editMaterial.ok2")
         } message: {
             Text(saveErrorMessage)
         }

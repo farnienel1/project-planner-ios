@@ -90,6 +90,7 @@ struct ManageUsersView: View {
                     Button("Done") {
                         dismiss()
                     }
+                    .accessibilityIdentifier("manageUsers.done")
                     .font(.system(size: 17))
                     .foregroundStyle(ManageUserProfilePalette.listBlue)
                 }
@@ -99,6 +100,7 @@ struct ManageUsersView: View {
                         Button("Add") {
                             showingAddUser = true
                         }
+                        .accessibilityIdentifier("manageUsers.add")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(ManageUserProfilePalette.listBlue)
                     }
@@ -121,6 +123,7 @@ struct ManageUsersView: View {
                 Button("Cancel", role: .cancel) {
                     userToDelete = nil
                 }
+                    .accessibilityIdentifier("manageUsers.cancel")
                 Button("Delete", role: .destructive) {
                     if let user = userToDelete {
                         if userStore.canDeleteUser(user) {
@@ -135,6 +138,7 @@ struct ManageUsersView: View {
                         }
                     }
                 }
+                    .accessibilityIdentifier("manageUsers.delete")
             } message: {
                 if let user = userToDelete {
                     if !userStore.canDeleteUser(user) {
@@ -255,6 +259,7 @@ struct ManageUsersView: View {
                         .shadow(color: selectedTab == tab ? Color.black.opacity(0.08) : .clear, radius: 2, y: 1)
                 )
         }
+        .accessibilityIdentifier("manageUsers.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
     }
 
@@ -291,6 +296,7 @@ struct ManageUsersView: View {
                     )
                     .shadow(color: selected ? ManageUserProfilePalette.listBlue.opacity(0.25) : .clear, radius: 4, y: 2)
                 }
+                .accessibilityIdentifier("manageUsers.row.\(segment.id)")
                 .buttonStyle(.plain)
             }
         }
@@ -302,6 +308,7 @@ struct ManageUsersView: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(ManageUserProfilePalette.listBlue)
             TextField(searchPlaceholder, text: $searchText)
+                .accessibilityIdentifier("manageUsers.\(AccessibilityID.token(searchPlaceholder))")
                 .font(.system(size: 16))
                 .textInputAutocapitalization(.words)
                 .autocorrectionDisabled()
@@ -314,6 +321,7 @@ struct ManageUsersView: View {
                         .font(.system(size: 16))
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
                 }
+                .accessibilityIdentifier("manageUsers.clearSearch")
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear search")
             }
@@ -376,6 +384,7 @@ struct ManageUsersView: View {
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
+                                .accessibilityIdentifier("manageUsers.row.\(user.id).delete")
                         }
                     }
                 }
@@ -438,6 +447,7 @@ struct ManageUsersView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
             }
+            .accessibilityIdentifier("manageUsers.dismissmanageusersandselecttab")
             .buttonStyle(.plain)
             .foregroundStyle(ManageUserProfilePalette.chipPurpleFg)
             .background(ManageUserProfilePalette.chipPurpleBg)
@@ -457,6 +467,7 @@ struct ManageUsersView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 13)
                 }
+                .accessibilityIdentifier("manageUsers.dismissmanageusersandselecttab2")
                 .buttonStyle(.plain)
                 .foregroundStyle(ManageUserProfilePalette.chipPurpleFg)
                 .background(ManageUserProfilePalette.chipPurpleBg)
@@ -542,6 +553,7 @@ struct ManageUsersView: View {
             Button("Add First User") {
                 showingAddUser = true
             }
+            .accessibilityIdentifier("manageUsers.addFirstUser")
             .buttonStyle(.borderedProminent)
             .tint(.indigo)
             }
@@ -610,6 +622,7 @@ struct ManageUsersView: View {
                         }) {
                             Label("Delete", systemImage: "trash")
                         }
+                            .accessibilityIdentifier("manageUsers.row.\(user.id).delete2")
                     }
                 }
             }
@@ -636,6 +649,7 @@ struct ManageUsersView: View {
                         }) {
                             Label("Delete", systemImage: "trash")
                         }
+                            .accessibilityIdentifier("manageUsers.row.\(user.id).delete3")
                     }
                 }
             }
@@ -662,6 +676,7 @@ struct ManageUsersView: View {
                         }) {
                             Label("Delete", systemImage: "trash")
                         }
+                            .accessibilityIdentifier("manageUsers.row.\(user.id).delete4")
                     }
                 }
             }
@@ -827,12 +842,14 @@ struct ManageUserRowView: View {
             )
             .shadow(color: Color.black.opacity(0.04), radius: 2, y: 1)
         }
+        .accessibilityIdentifier("manageUserRow.chevronRight")
         .buttonStyle(.plain)
         .alert("Email", isPresented: Binding(
             get: { rowEmailFeedback != nil },
             set: { if !$0 { rowEmailFeedback = nil } }
         )) {
             Button("OK") { rowEmailFeedback = nil }
+                .accessibilityIdentifier("manageUserRow.ok")
         } message: {
             if let message = rowEmailFeedback {
                 Text(message)
@@ -936,6 +953,7 @@ struct ManageUserRowView: View {
             .background(ManageUserProfilePalette.chipPurpleBg)
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
+        .accessibilityIdentifier("manageUserRow.sendPasswordReset")
         .buttonStyle(.plain)
         .disabled(isSendingResetPassword || isSendingSignUpEmail)
         .accessibilityLabel("Send password reset email")
@@ -957,6 +975,7 @@ struct ManageUserRowView: View {
             .background(ManageUserProfilePalette.chipBlueBg)
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
+        .accessibilityIdentifier("manageUserRow.resendSignUp")
         .buttonStyle(.plain)
         .disabled(isSendingSignUpEmail || isSendingResetPassword)
         .accessibilityLabel("Resend sign-up email with verification code")
@@ -1088,18 +1107,23 @@ private struct EditUserDialogModifier: ViewModifier {
         content
             .alert("Delete user?", isPresented: $showingDeleteConfirmation) {
                 Button("Cancel", role: .cancel) { }
+                    .accessibilityIdentifier("editUserDialogModifier.cancel")
                 Button("Delete", role: .destructive, action: onDelete)
+                    .accessibilityIdentifier("editUserDialogModifier.delete")
             } message: {
                 deleteUserAlertMessage
             }
             .alert("Deactivate user?", isPresented: $showingDeactivateConfirmation) {
                 Button("Cancel", role: .cancel) { }
+                    .accessibilityIdentifier("editUserDialogModifier.cancel2")
                 Button("Deactivate", role: .destructive, action: onDeactivate)
+                    .accessibilityIdentifier("editUserDialogModifier.deactivate")
             } message: {
                 Text("Are you sure you want to deactivate \(user.fullName)? They will not be able to sign in until an administrator reactivates them.")
             }
             .alert("Could Not Save", isPresented: saveErrorPresented) {
                 Button("OK") { saveErrorMessage = nil }
+                    .accessibilityIdentifier("editUserDialogModifier.ok")
             } message: {
                 if let msg = saveErrorMessage {
                     Text(msg)
@@ -1109,11 +1133,13 @@ private struct EditUserDialogModifier: ViewModifier {
                 Button("Cancel", role: .cancel) {
                     employmentTypeConfirmationAccepted = false
                 }
+                    .accessibilityIdentifier("editUserDialogModifier.cancel3")
                 Button("Confirm Change") {
                     employmentTypeConfirmationAccepted = true
                     employmentTypeEffectiveDate = calendarStartOfDay(Date())
                     showingEmploymentTypeEffectiveDatePicker = true
                 }
+                    .accessibilityIdentifier("editUserDialogModifier.confirmChange")
             } message: {
                 Text("You are changing employment type to \(employmentTypeDraft.title). This affects timesheet access and day-rate handling.")
             }
@@ -1121,6 +1147,7 @@ private struct EditUserDialogModifier: ViewModifier {
                 Button("OK", role: .cancel) {
                     pendingPayeDayRateText = nil
                 }
+                    .accessibilityIdentifier("editUserDialogModifier.ok2")
             } message: {
                 Text("This user is currently set as PAYE. If you add a day rate, then their rate will appear on the weekly report, as well as their timesheet.")
             }
@@ -1135,10 +1162,13 @@ private struct EditUserDialogModifier: ViewModifier {
                 Button("Today") {
                     onPersistEdits(calendarStartOfDay(Date()), nil)
                 }
+                    .accessibilityIdentifier("editUserDialogModifier.today")
                 Button("Tomorrow") {
                     onPersistEdits(calendarStartOfTomorrow(), nil)
                 }
+                    .accessibilityIdentifier("editUserDialogModifier.tomorrow")
                 Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("editUserDialogModifier.cancel4")
             } message: {
                 Text("When the day rate is changed, the weekly report and invoicing (invoicing will be available in a future update) use the new rate from the working day you choose. If you want the new rate to apply from tomorrow, choose Tomorrow.")
             }
@@ -1151,12 +1181,15 @@ private struct EditUserDialogModifier: ViewModifier {
                         profilePhotoPickerSource = .camera
                         showingProfileImagePicker = true
                     }
+                        .accessibilityIdentifier("editUserDialogModifier.takePhoto")
                 }
                 Button("Photo Library") {
                     profilePhotoPickerSource = .photoLibrary
                     showingProfileImagePicker = true
                 }
+                    .accessibilityIdentifier("editUserDialogModifier.photoLibrary")
                 Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("editUserDialogModifier.cancel5")
             }
             .sheet(isPresented: $showingProfileImagePicker) {
                 ProfileImagePicker(image: $pickedProfileImage, sourceType: profilePhotoPickerSource)
@@ -1168,6 +1201,7 @@ private struct EditUserDialogModifier: ViewModifier {
             }
             .alert("Profile photo", isPresented: profilePhotoUploadPresented) {
                 Button("OK") { profilePhotoUploadMessage = nil }
+                    .accessibilityIdentifier("editUserDialogModifier.ok3")
             } message: {
                 if let profilePhotoUploadMessage {
                     Text(profilePhotoUploadMessage)
@@ -1231,6 +1265,7 @@ private struct EditUserDialogModifier: ViewModifier {
                         in: ...Date.distantFuture,
                         displayedComponents: .date
                     )
+                        .accessibilityIdentifier("editUserDialogModifier.selectTheDateThisUserStarts")
                 }
                 Section {
                     Text("Timesheets and day-rate application use this date. Days before this date follow the previous employment type.")
@@ -1246,6 +1281,7 @@ private struct EditUserDialogModifier: ViewModifier {
                         employmentTypeConfirmationAccepted = false
                         showingEmploymentTypeEffectiveDatePicker = false
                     }
+                        .accessibilityIdentifier("editUserDialogModifier.cancel6")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
@@ -1253,6 +1289,7 @@ private struct EditUserDialogModifier: ViewModifier {
                         showingEmploymentTypeEffectiveDatePicker = false
                         onPersistEdits(nil, selected)
                     }
+                        .accessibilityIdentifier("editUserDialogModifier.save")
                 }
             }
         }
@@ -1881,11 +1918,13 @@ struct EditUserView: View {
                 Button("Cancel", role: .cancel) {
                     pendingSuperAdminUserId = nil
                 }
+                    .accessibilityIdentifier("editUser.cancel")
                 Button("Change Super Admin") {
                     if let candidate = pendingSuperAdminCandidate {
                         transferSuperAdmin(to: candidate)
                     }
                 }
+                    .accessibilityIdentifier("editUser.changeSuperAdmin")
             } message: {
                 Text(pendingSuperAdminConfirmationMessage)
             }
@@ -1893,10 +1932,12 @@ struct EditUserView: View {
             Button("Cancel", role: .cancel) {
                 selfBookOffConfirmationAccepted = false
             }
+                .accessibilityIdentifier("editUser.cancel2")
             Button("Continue") {
                 selfBookOffConfirmationAccepted = true
                 saveChanges()
             }
+                .accessibilityIdentifier("editUser.continue")
         } message: {
             Text("Any annual leave that this user had booked in themselves, will disappear. They will be notified about this and will need to request annual leave bookings moving forward.")
         }
@@ -1909,6 +1950,7 @@ struct EditUserView: View {
         .onAppear(perform: syncEditUserDraftsFromStore)
         .alert("Admin Access", isPresented: $showingAdminAccessLockedMessage) {
             Button("OK", role: .cancel) { }
+                .accessibilityIdentifier("editUser.ok")
         } message: {
             Text("Change user type at the bottom of their profile, to enable admin level access.")
         }
@@ -1968,6 +2010,7 @@ struct EditUserView: View {
     private var editUserToolbarContent: some ToolbarContent {
         ToolbarItem(placement: .navigationBarLeading) {
             Button("Cancel") { dismiss() }
+                .accessibilityIdentifier("editUser.cancel3")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(ManageUserProfilePalette.textPrimary)
                 .padding(.horizontal, 14)
@@ -1981,6 +2024,7 @@ struct EditUserView: View {
         ToolbarItem(placement: .navigationBarTrailing) {
             if canEditPermissionsMatrix {
                 Button("Save") { saveChanges() }
+                    .accessibilityIdentifier("editUser.save")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(hasChanges ? Color.white : ManageUserProfilePalette.textSecondary)
                     .padding(.horizontal, 18)
@@ -2028,6 +2072,7 @@ struct EditUserView: View {
                             Text(kind.title).tag(kind)
                         }
                     }
+                    .accessibilityIdentifier("editUser.accountType")
                     .pickerStyle(.segmented)
                     .onChange(of: changeUserTypeDraft) { oldKind, newKind in
                         guard oldKind != newKind else { return }
@@ -2203,6 +2248,7 @@ struct EditUserView: View {
                                 .frame(maxWidth: .infinity)
                         }
                     }
+                    .accessibilityIdentifier("editUser.apply")
                     .buttonStyle(.borderedProminent)
                     .tint(ManageUserProfilePalette.primaryBlue)
                     .disabled(isApplyingUserType || changeUserTypeIsNoOp)
@@ -2219,6 +2265,7 @@ struct EditUserView: View {
                         userTypeChangeMessage = nil
                         showingPromoteToAdminConfirmation = false
                     }
+                        .accessibilityIdentifier("editUser.close")
                 }
             }
         }
@@ -2233,7 +2280,8 @@ struct EditUserView: View {
         ZStack {
             Color.black.opacity(0.4)
                 .ignoresSafeArea()
-                .onTapGesture {
+                
+                .accessibilityIdentifier("editUser.tap").onTapGesture {
                     guard !isApplyingUserType else { return }
                     showingPromoteToAdminConfirmation = false
                 }
@@ -2266,6 +2314,7 @@ struct EditUserView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                     }
+                    .accessibilityIdentifier("editUser.yesMakeAdministrator")
                     .buttonStyle(.borderedProminent)
                     .tint(ManageUserProfilePalette.primaryBlue)
                     .disabled(isApplyingUserType)
@@ -2278,6 +2327,7 @@ struct EditUserView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
                     }
+                    .accessibilityIdentifier("editUser.cancel4")
                     .buttonStyle(.plain)
                     .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     .disabled(isApplyingUserType)
@@ -2411,6 +2461,7 @@ struct EditUserView: View {
                                 .clipShape(Circle())
                                 .overlay(Circle().stroke(Color.white, lineWidth: 2.5))
                         }
+                        .accessibilityIdentifier("editUser.cameraFill")
                         .buttonStyle(.plain)
                         .disabled(isUploadingProfilePhoto)
                         .offset(x: 2, y: 2)
@@ -2576,6 +2627,7 @@ struct EditUserView: View {
                                     employmentTypeDraft = type
                                     employmentTypeConfirmationAccepted = false
                                 }
+                                    .accessibilityIdentifier("editUser.row.\(type.id)")
                             }
                         } label: {
                             ManageUserChevronRow(
@@ -2586,6 +2638,7 @@ struct EditUserView: View {
                                 value: employmentTypeDraft.title
                             )
                         }
+                        .accessibilityIdentifier("editUser.briefcaseFill")
                         .buttonStyle(.plain)
                     } else {
                         ManageUserDetailStaticRow(
@@ -2690,6 +2743,7 @@ struct EditUserView: View {
                 value: lineManagerSummary
             )
         }
+        .accessibilityIdentifier("editUser.personBadgePlus")
         .buttonStyle(.plain)
         .sheet(isPresented: $showingLineManagerPicker) {
             LineManagersMultiSelectSheet(
@@ -2714,6 +2768,7 @@ struct EditUserView: View {
                             tradeCustomText = ""
                         }
                     }
+                        .accessibilityIdentifier("editUser.row.\(trade.id)")
                 }
             } label: {
                 ManageUserChevronRow(
@@ -2724,10 +2779,12 @@ struct EditUserView: View {
                     value: StaffTradeType.displayLabel(presetRaw: tradePresetRaw, custom: tradeCustomText)
                 )
             }
+            .accessibilityIdentifier("editUser.menu")
             .buttonStyle(.plain)
 
             if tradePresetRaw == StaffTradeType.other.rawValue {
                 TextField("Enter trade name", text: $tradeCustomText)
+                    .accessibilityIdentifier("editUser.enterTradeName")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ManageUserProfilePalette.textPrimary)
                     .padding(.horizontal, 14)
@@ -3052,6 +3109,7 @@ struct EditUserView: View {
                                 }
                             }
                         }
+                            .accessibilityIdentifier("editUser.button")
                     }
                 }
             }
@@ -3060,6 +3118,7 @@ struct EditUserView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { showingChangeSuperAdminPicker = false }
+                        .accessibilityIdentifier("editUser.cancel5")
                 }
             }
         }
@@ -3817,6 +3876,7 @@ struct TabButton: View {
                     .frame(height: 2)
             }
         }
+        .accessibilityIdentifier("tab.\(AccessibilityID.token(title))")
         .frame(maxWidth: .infinity)
     }
 }

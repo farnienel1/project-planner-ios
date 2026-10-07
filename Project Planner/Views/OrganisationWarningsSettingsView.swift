@@ -84,12 +84,14 @@ struct OrganisationWarningsSettingsView: View {
                             Text("Warnings")
                         }
                     }
+                        .accessibilityIdentifier("organisationWarningsSettings.back")
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Save") {
                     Task { await save() }
                 }
+                .accessibilityIdentifier("organisationWarningsSettings.save")
                 .fontWeight(.semibold)
                 .disabled(isSaving || !userHasEdited)
                 .foregroundStyle((userHasEdited && !isSaving) ? Color.accentColor : Color.secondary)
@@ -192,6 +194,7 @@ struct OrganisationWarningsSettingsView: View {
                     .strokeBorder(draft.clashLookaheadMode == mode ? ProjectWorksRevampColors.blue : Color.clear, lineWidth: 2)
             )
         }
+        .accessibilityIdentifier("organisationWarningsSettings.\(AccessibilityID.token(label))")
         .buttonStyle(.plain)
     }
 
@@ -323,6 +326,7 @@ struct OrganisationWarningsSettingsView: View {
                 .background(Color(.secondarySystemBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+            .accessibilityIdentifier("organisationWarningsSettings.person2")
             .buttonStyle(.plain)
 
             NavigationLink {
@@ -344,6 +348,7 @@ struct OrganisationWarningsSettingsView: View {
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(ProjectWorksRevampColors.blue)
             }
+            .accessibilityIdentifier("organisationWarningsSettings.openFullExclusionList")
             .padding(.top, 4)
 
             if excludedExpanded {
@@ -393,6 +398,7 @@ struct OrganisationWarningsSettingsView: View {
                                 .background(Color.red.opacity(0.12))
                                 .clipShape(Circle())
                         }
+                        .accessibilityIdentifier("organisationWarningsSettings.row.\(user.id).close")
                         .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 10)
@@ -500,6 +506,7 @@ struct OrganisationWarningsSettingsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color(.separator), lineWidth: 0.5))
         }
+        .accessibilityIdentifier("organisationWarningsSettings.step")
         .buttonStyle(.plain)
     }
 
@@ -521,6 +528,7 @@ struct OrganisationWarningsSettingsView: View {
                 }
             }
             Toggle("", isOn: isOn)
+                .accessibilityIdentifier("organisationWarningsSettings.\(AccessibilityID.token(title))")
                 .labelsHidden()
                 .tint(ProjectWorksRevampColors.blue)
                 .onChange(of: isOn.wrappedValue) { _, _ in markEdited() }
@@ -688,6 +696,7 @@ private struct WarningExcludedUsersPickerView: View {
                             }
                         }
                     }
+                    .accessibilityIdentifier("warningExcludedUsersPicker.row.\(user.id).done")
                     .buttonStyle(.plain)
                 }
             }
@@ -706,6 +715,7 @@ private struct WarningExcludedUsersPickerView: View {
                         saveSucceeded = true
                     }
                 }
+                .accessibilityIdentifier("warningExcludedUsersPicker.save")
                 .fontWeight(.semibold)
                 .disabled(isSaving)
             }

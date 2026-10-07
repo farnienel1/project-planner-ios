@@ -9,6 +9,7 @@ struct CustomSecureField: View {
         HStack {
             if isSecure {
                 SecureField(title, text: $text)
+                    .accessibilityIdentifier("customSecureField.\(AccessibilityID.token(title))")
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .textContentType(.none)
                     .autocorrectionDisabled()
@@ -18,6 +19,7 @@ struct CustomSecureField: View {
                     .submitLabel(.done)
             } else {
                 TextField(title, text: $text)
+                    .accessibilityIdentifier("customSecureField.\(AccessibilityID.token(title))2")
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .textContentType(.none)
                     .autocorrectionDisabled()
@@ -33,6 +35,7 @@ struct CustomSecureField: View {
                 Image(systemName: isSecure ? "eye.slash" : "eye")
                     .foregroundColor(.gray)
             }
+                .accessibilityIdentifier("customSecureField.\(AccessibilityID.token(title))3")
         }
     }
 }

@@ -86,6 +86,7 @@ struct ManagersView: View {
                         .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
                         .font(.system(size: 17, weight: .semibold))
                 }
+                    .accessibilityIdentifier("managers.gobacktoprevioustab")
                 Spacer()
                 Text("Managers")
                     .font(.headline)
@@ -94,6 +95,7 @@ struct ManagersView: View {
                     Image(systemName: "line.3.horizontal.decrease.circle")
                         .foregroundColor(.primary)
                 }
+                    .accessibilityIdentifier("managers.filter")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -159,6 +161,7 @@ struct ManagersView: View {
                     Button("Clear") {
                         filterText = ""
                     }
+                    .accessibilityIdentifier("managers.clear")
                     .font(.caption)
                 }
                 .padding(.horizontal)
@@ -291,6 +294,7 @@ struct ManagerUserRowView: View {
             }
             .padding(.vertical, 8)
         }
+        .accessibilityIdentifier("managerUserRow.admin")
         .buttonStyle(PlainButtonStyle())
     }
 }
@@ -310,10 +314,12 @@ struct ManagerFilterOptionsView: View {
                             Text(type.rawValue).tag(type)
                         }
                     }
+                        .accessibilityIdentifier("managerFilterOptions.filterType")
                 }
                 
                 Section("Search") {
                     TextField("Enter search term", text: $filterText)
+                        .accessibilityIdentifier("managerFilterOptions.enterSearchTerm")
                 }
             }
             .navigationTitle("Filter Managers")
@@ -323,6 +329,7 @@ struct ManagerFilterOptionsView: View {
                     Button("Done") {
                         dismiss()
                     }
+                        .accessibilityIdentifier("managerFilterOptions.done")
                 }
             }
         }

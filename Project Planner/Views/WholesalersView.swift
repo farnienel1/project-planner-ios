@@ -18,7 +18,8 @@ struct WholesalersView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         }
-        .task {
+        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+            guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await loadWholesalers()
         }
     }
@@ -60,7 +61,9 @@ struct EditWholesalerContactView: View {
             Form {
                 Section("Contact Details") {
                     TextField("Contact Name", text: $contactName)
+                        .accessibilityIdentifier("editWholesalerContact.contactName")
                     TextField("Email", text: $contactEmail)
+                        .accessibilityIdentifier("editWholesalerContact.email")
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
                 }
@@ -68,6 +71,7 @@ struct EditWholesalerContactView: View {
                     Button(role: .destructive) { showingDeleteConfirmation = true } label: {
                         Text("Remove contact from wholesaler")
                     }
+                    .accessibilityIdentifier("editWholesalerContact.removeContactFromWholesaler")
                     .disabled(isDeleting)
                 }
             }
@@ -76,9 +80,11 @@ struct EditWholesalerContactView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { onDismiss() }
+                        .accessibilityIdentifier("editWholesalerContact.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { saveContact() }
+                        .accessibilityIdentifier("editWholesalerContact.save")
                         .disabled(
                             contactName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                 || contactEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -88,7 +94,9 @@ struct EditWholesalerContactView: View {
             }
             .alert("Remove Contact", isPresented: $showingDeleteConfirmation) {
                 Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("editWholesalerContact.cancel2")
                 Button("Remove", role: .destructive) { deleteContact() }
+                    .accessibilityIdentifier("editWholesalerContact.remove")
             } message: {
                 Text("Remove \(contact.name) from \(wholesaler.name)?")
             }
@@ -172,7 +180,9 @@ struct AddWholesalerContactView: View {
             Form {
                 Section("Contact Details") {
                     TextField("Contact Name", text: $contactName)
+                        .accessibilityIdentifier("addWholesalerContact.contactName")
                     TextField("Email", text: $contactEmail)
+                        .accessibilityIdentifier("addWholesalerContact.email")
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
                 }
@@ -182,9 +192,11 @@ struct AddWholesalerContactView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { isPresented = false }
+                        .accessibilityIdentifier("addWholesalerContact.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { saveContact() }
+                        .accessibilityIdentifier("addWholesalerContact.save")
                         .disabled(
                             contactName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                 || contactEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

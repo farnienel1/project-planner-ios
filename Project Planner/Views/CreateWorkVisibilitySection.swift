@@ -103,6 +103,7 @@ struct CreateWorkVisibilitySection: View {
                             }
                             .padding(.vertical, 10)
                         }
+                        .accessibilityIdentifier("createWorkVisibilitySection.row.\(user.id).eyeSlashCircleFill")
                         .buttonStyle(.plain)
                         if idx < candidates.count - 1 {
                             Divider().overlay(palette.border)

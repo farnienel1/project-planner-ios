@@ -12,16 +12,46 @@
 		2747794A2EA6AEF90000D1F8 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 274779492EA6AEF90000D1F8 /* FirebaseFirestore */; };
 		2747794C2EA6AEF90000D1F9 /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 2747794B2EA6AEF90000D1F9 /* FirebaseStorage */; };
 		274779502EA6AEF90000D1FC /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 2747794F2EA6AEF90000D1FC /* FirebaseMessaging */; };
+		F8B22E0E2F9C300100A1D00E /* SnapshotTesting in Frameworks */ = {isa = PBXBuildFile; productRef = F8B22E0D2F9C300100A1D00D /* SnapshotTesting */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		E7A11F072F9B200100A1D007 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 27090EB32E8ADF3000528ADD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 27090EBA2E8ADF3000528ADD;
+			remoteInfo = "Project Planner";
+		};
+		F8B22E072F9C300100B2E007 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 27090EB32E8ADF3000528ADD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 27090EBA2E8ADF3000528ADD;
+			remoteInfo = "Project Planner";
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		27090EBB2E8ADF3000528ADD /* Project Planner.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Project Planner.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E7A11F022F9B200100A1D002 /* ProjectPlannerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ProjectPlannerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F8B22E022F9C300100B2E002 /* ProjectPlannerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ProjectPlannerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		27090EBD2E8ADF3000528ADD /* Project Planner */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Project Planner";
+			sourceTree = "<group>";
+		};
+		E7A11F032F9B200100A1D003 /* ProjectPlannerUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ProjectPlannerUITests;
+			sourceTree = "<group>";
+		};
+		F8B22E032F9C300100B2E003 /* ProjectPlannerTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ProjectPlannerTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -39,6 +69,21 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E7A11F052F9B200100A1D005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F8B22E052F9C300100B2E005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F8B22E0E2F9C300100A1D00E /* SnapshotTesting in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -46,6 +91,8 @@
 			isa = PBXGroup;
 			children = (
 				27090EBD2E8ADF3000528ADD /* Project Planner */,
+				E7A11F032F9B200100A1D003 /* ProjectPlannerUITests */,
+				F8B22E032F9C300100B2E003 /* ProjectPlannerTests */,
 				27090EBC2E8ADF3000528ADD /* Products */,
 			);
 			sourceTree = "<group>";
@@ -54,6 +101,8 @@
 			isa = PBXGroup;
 			children = (
 				27090EBB2E8ADF3000528ADD /* Project Planner.app */,
+				E7A11F022F9B200100A1D002 /* ProjectPlannerUITests.xctest */,
+				F8B22E022F9C300100B2E002 /* ProjectPlannerTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -91,6 +140,53 @@
 			productReference = 27090EBB2E8ADF3000528ADD /* Project Planner.app */;
 			productType = "com.apple.product-type.application";
 		};
+		E7A11F012F9B200100A1D001 /* ProjectPlannerUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E7A11F092F9B200100A1D009 /* Build configuration list for PBXNativeTarget "ProjectPlannerUITests" */;
+			buildPhases = (
+				E7A11F042F9B200100A1D004 /* Sources */,
+				E7A11F052F9B200100A1D005 /* Frameworks */,
+				E7A11F062F9B200100A1D006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E7A11F082F9B200100A1D008 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				E7A11F032F9B200100A1D003 /* ProjectPlannerUITests */,
+			);
+			name = ProjectPlannerUITests;
+			packageProductDependencies = (
+			);
+			productName = ProjectPlannerUITests;
+			productReference = E7A11F022F9B200100A1D002 /* ProjectPlannerUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		F8B22E012F9C300100B2E001 /* ProjectPlannerTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F8B22E092F9C300100B2E009 /* Build configuration list for PBXNativeTarget "ProjectPlannerTests" */;
+			buildPhases = (
+				F8B22E042F9C300100B2E004 /* Sources */,
+				F8B22E052F9C300100B2E005 /* Frameworks */,
+				F8B22E062F9C300100B2E006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F8B22E082F9C300100B2E008 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				F8B22E032F9C300100B2E003 /* ProjectPlannerTests */,
+			);
+			name = ProjectPlannerTests;
+			packageProductDependencies = (
+				F8B22E0D2F9C300100A1D00D /* SnapshotTesting */,
+			);
+			productName = ProjectPlannerTests;
+			productReference = F8B22E022F9C300100B2E002 /* ProjectPlannerTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -103,6 +199,14 @@
 				TargetAttributes = {
 					27090EBA2E8ADF3000528ADD = {
 						CreatedOnToolsVersion = 26.0;
+					};
+					E7A11F012F9B200100A1D001 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = 27090EBA2E8ADF3000528ADD;
+					};
+					F8B22E012F9C300100B2E001 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = 27090EBA2E8ADF3000528ADD;
 					};
 				};
 			};
@@ -117,6 +221,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				274779442EA6AE970000D1F8 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				F8B22E0C2F9C300100A1D00C /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 27090EBC2E8ADF3000528ADD /* Products */;
@@ -124,6 +229,8 @@
 			projectRoot = "";
 			targets = (
 				27090EBA2E8ADF3000528ADD /* Project Planner */,
+				E7A11F012F9B200100A1D001 /* ProjectPlannerUITests */,
+				F8B22E012F9C300100B2E001 /* ProjectPlannerTests */,
 			);
 		};
 /* End PBXProject section */
@@ -136,10 +243,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E7A11F062F9B200100A1D006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F8B22E062F9C300100B2E006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		27F1A0B12F9A100100A1D1F2 /* Lock launch shell */ = {
+		27F1A0B12F9A100100A1D1F0 /* Generate Third-Party Framework dSYMs */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -147,12 +268,12 @@
 			);
 			inputPaths = (
 			);
-			name = "Lock launch shell";
+			name = "Generate Third-Party Framework dSYMs";
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "/bin/sh \"${SRCROOT}/scripts/verify-launch-shell.sh\"\n";
+			shellScript = "\"${SRCROOT}/scripts/generate-third-party-dsyms.sh\"\n";
 		};
 		27F1A0B12F9A100100A1D1F1 /* Disable Firebase App Delegate Proxy */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -169,7 +290,7 @@
 			shellPath = /bin/sh;
 			shellScript = "set +e\nPLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nif [ -f \"$PLIST\" ]; then\n  /usr/libexec/PlistBuddy -c \"Delete :FirebaseAppDelegateProxyEnabled\" \"$PLIST\" >/dev/null 2>&1\n  /usr/libexec/PlistBuddy -c \"Add :FirebaseAppDelegateProxyEnabled bool false\" \"$PLIST\"\n  echo \"FirebaseAppDelegateProxyEnabled=false in $PLIST\"\nfi\nexit 0\n";
 		};
-		27F1A0B12F9A100100A1D1F0 /* Generate Third-Party Framework dSYMs */ = {
+		27F1A0B12F9A100100A1D1F2 /* Lock launch shell */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -177,12 +298,12 @@
 			);
 			inputPaths = (
 			);
-			name = "Generate Third-Party Framework dSYMs";
+			name = "Lock launch shell";
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"${SRCROOT}/scripts/generate-third-party-dsyms.sh\"\n";
+			shellScript = "/bin/sh \"${SRCROOT}/scripts/verify-launch-shell.sh\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -194,7 +315,34 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E7A11F042F9B200100A1D004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F8B22E042F9C300100B2E004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		E7A11F082F9B200100A1D008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 27090EBA2E8ADF3000528ADD /* Project Planner */;
+			targetProxy = E7A11F072F9B200100A1D007 /* PBXContainerItemProxy */;
+		};
+		F8B22E082F9C300100B2E008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 27090EBA2E8ADF3000528ADD /* Project Planner */;
+			targetProxy = F8B22E072F9C300100B2E007 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		27090EC42E8ADF3100528ADD /* Debug */ = {
@@ -411,6 +559,94 @@
 			};
 			name = Release;
 		};
+		E7A11F0A2F9B200100A1D00A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = RTUL47LH55;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "farnie.Project-Planner.UITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "Project Planner";
+			};
+			name = Debug;
+		};
+		E7A11F0B2F9B200100A1D00B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = RTUL47LH55;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "farnie.Project-Planner.UITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "Project Planner";
+			};
+			name = Release;
+		};
+		F8B22E0A2F9C300100B2E00A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = RTUL47LH55;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "farnie.Project-Planner.tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Project Planner.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Project Planner";
+			};
+			name = Debug;
+		};
+		F8B22E0B2F9C300100B2E00B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = RTUL47LH55;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "farnie.Project-Planner.tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Project Planner.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Project Planner";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -432,6 +668,24 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		E7A11F092F9B200100A1D009 /* Build configuration list for PBXNativeTarget "ProjectPlannerUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E7A11F0A2F9B200100A1D00A /* Debug */,
+				E7A11F0B2F9B200100A1D00B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F8B22E092F9C300100B2E009 /* Build configuration list for PBXNativeTarget "ProjectPlannerTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F8B22E0A2F9C300100B2E00A /* Debug */,
+				F8B22E0B2F9C300100B2E00B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -441,6 +695,14 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 12.4.0;
+			};
+		};
+		F8B22E0C2F9C300100A1D00C /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/pointfreeco/swift-snapshot-testing";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.18.9;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -470,6 +732,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 274779442EA6AE970000D1F8 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseMessaging;
+		};
+		F8B22E0D2F9C300100A1D00D /* SnapshotTesting */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F8B22E0C2F9C300100A1D00C /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */;
+			productName = SnapshotTesting;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

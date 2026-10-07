@@ -36,14 +36,16 @@ struct ResolvedPayrollRate: Equatable {
 
     func payForHours(_ paidHours: Double, standardDayHours: Double, otMultiplier: Double = 1) -> Double {
         guard paidHours > 0 else { return 0 }
+        let raw: Double
         switch basis {
         case .dayRate:
             let rate = dayRate ?? 0
-            return rate * (paidHours / max(standardDayHours, 0.01)) * otMultiplier
+            raw = rate * (paidHours / max(standardDayHours, 0.01)) * otMultiplier
         case .hourly:
             let rate = hourlyRate ?? 0
-            return rate * paidHours * otMultiplier
+            raw = rate * paidHours * otMultiplier
         }
+        return (raw * 100).rounded() / 100
     }
 
     func splitPay(

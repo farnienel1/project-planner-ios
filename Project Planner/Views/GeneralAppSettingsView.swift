@@ -31,6 +31,7 @@ struct GeneralAppSettingsView: View {
                         }
                         .padding(.vertical, 11)
                     }
+                    .accessibilityIdentifier("generalAppSettings.calendarBadgeClock")
                     .buttonStyle(.plain)
                 }
             }
@@ -103,6 +104,7 @@ struct MyScheduleGeneralOptionsView: View {
                                         .font(.system(size: 13))
                                         .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                                 }
+                                .accessibilityIdentifier("myScheduleGeneralOptions.row.\(index).delete")
                                 .buttonStyle(.plain)
                             }
                             .padding(.vertical, 12)
@@ -129,12 +131,16 @@ struct MyScheduleGeneralOptionsView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
+                    .accessibilityIdentifier("myScheduleGeneralOptions.add")
             }
         }
         .alert("Add My Schedule Item", isPresented: $showingAddItemAlert) {
             TextField("Item name", text: $newItemName)
+                .accessibilityIdentifier("myScheduleGeneralOptions.itemName")
             Button("Cancel", role: .cancel) { }
+                .accessibilityIdentifier("myScheduleGeneralOptions.cancel")
             Button("Add") { addCustomItem() }
+                .accessibilityIdentifier("myScheduleGeneralOptions.add2")
         } message: {
             Text("Create an extra booking option for admin/manager My Schedule.")
         }
@@ -146,6 +152,7 @@ struct MyScheduleGeneralOptionsView: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(ProjectWorksRevampColors.ink)
         }
+        .accessibilityIdentifier("myScheduleGeneralOptions.\(AccessibilityID.token(title))")
         .tint(ProjectWorksRevampColors.blue)
         .padding(.vertical, 11)
     }
