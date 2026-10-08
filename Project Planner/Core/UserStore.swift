@@ -912,6 +912,15 @@ class UserStore: ObservableObject {
         guard let u = displayUser else { return false }
         return u.permissions.dailyOverview
     }
+
+    /// Staff warning rows are the organisation canonical list. Admins and managers see that list.
+    /// Operative mode does not. The exclusion list still applies only inside those rows.
+    func canViewStaffWarnings() -> Bool {
+        if isOperativeMode() { return false }
+        if hasAdminAccess() { return true }
+        guard let u = displayUser else { return isHomeProfileLoading }
+        return u.permissions.manager || u.role == .manager
+    }
     
     /// Super admins, admins, and managers may set whether a site audit is visible to operative-mode users.
     func canManageSiteAuditOperativeVisibility() -> Bool {

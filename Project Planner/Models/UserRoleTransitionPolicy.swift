@@ -42,6 +42,7 @@ struct OperativeUserTypeTransitionConfig: Equatable {
 }
 
 enum UserRoleTransitionPolicy {
+    static let adminAccessLockedUntilAccountTypeChanges = "Change user type at the bottom of their profile, to enable admin level access."
 
     /// Maps stored permissions to a coarse account kind for the Change user type UI.
     static func kind(for permissions: UserPermissions) -> ManagedAccountKind {

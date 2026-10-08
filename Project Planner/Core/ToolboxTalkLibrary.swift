@@ -85,10 +85,32 @@ enum ToolboxTalkLibrary {
         if let catalog = catalogById()[talkId] {
             return catalog.title
         }
-        if let talk = storedTalks.first(where: { $0.id == talkId }), !isPlaceholderTitle(talk.title) {
-            return talk.title
+        if let talk = storedTalks.first(where: { $0.id == talkId }) {
+            if !isPlaceholderTitle(talk.title) {
+                let stripped = strippingStorageObjectPrefix(talk.title)
+                if !isPlaceholderTitle(stripped) { return stripped }
+            }
+            if let fileName = talk.fileNameHint, !isPlaceholderTitle(fileName) {
+                return fileName
+            }
         }
         return "Toolbox talk"
+    }
+
+    /// Drops a leading "{uid} {unix milliseconds} " storage-object prefix from an issued title.
+    static func strippingStorageObjectPrefix(_ raw: String) -> String {
+        let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let regex = try? NSRegularExpression(pattern: #"^[A-Za-z0-9]{20,36} [0-9]{9,13} "#) else {
+            return title
+        }
+        let range = NSRange(title.startIndex..., in: title)
+        guard let match = regex.firstMatch(in: title, range: range),
+              match.range.location == 0,
+              let swiftRange = Range(match.range, in: title) else {
+            return title
+        }
+        let rest = String(title[swiftRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return rest.isEmpty ? title : rest
     }
 
     // MARK: - Repair
@@ -296,11 +318,16 @@ private extension HSToolboxTalk {
     var fileNameHint: String? {
         guard let raw = fileURL?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty,
               let url = URL(string: raw) else { return nil }
-        let name = url.deletingPathExtension().lastPathComponent
+        var name = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
+        if let decoded = name.removingPercentEncoding { name = decoded }
+        if let slash = name.lastIndex(of: "/") {
+            name = String(name[name.index(after: slash)...])
+        }
+        name = (name as NSString).deletingPathExtension
+        name = name
             .replacingOccurrences(of: "+", with: " ")
             .replacingOccurrences(of: "_", with: " ")
-            .replacingOccurrences(of: "%20", with: " ")
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = ToolboxTalkLibrary.strippingStorageObjectPrefix(name)
         return trimmed.isEmpty ? nil : trimmed
     }
 }

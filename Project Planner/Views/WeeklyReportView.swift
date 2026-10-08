@@ -1177,8 +1177,8 @@ struct WeeklyReportView: View {
                 projectName: projectName,
                 jobNumber: jobNumber,
                 personName: personName,
-                tradeDisplay: operative.displayTradeType,
-                tradeSortKey: StaffTradeType.sortKey(presetRaw: operative.tradeTypePreset, custom: operative.tradeTypeCustom),
+                tradeDisplay: StaffEmailIdentity.reportTrade(for: linkedUser),
+                tradeSortKey: StaffTradeType.sortKey(presetRaw: linkedUser?.tradeTypePreset, custom: linkedUser?.tradeTypeCustom),
                 role: roleLabel,
                 days: totals[key] ?? 0
             )
@@ -1198,8 +1198,9 @@ struct WeeklyReportView: View {
         var totals: [String: Double] = [:]
         var rowsMap: [String: ProjectWorkRow] = [:]
         for booking in filtered {
-            guard let user = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { continue }
-            if timesheetFeed.covers(userId: user.id, day: booking.date) { continue }
+            guard let user = reportingUser(for: booking.userId) else { continue }
+            if timesheetFeed.covers(userId: user.id, day: booking.date)
+                || timesheetFeed.covers(userId: booking.userId, day: booking.date) { continue }
             let project = projectStore.projects.first(where: { $0.id == booking.locationId })
                 ?? projectStore.smallWorks.first(where: { $0.id == booking.locationId })
             let projectName = project?.siteName ?? "Unknown"
@@ -1213,7 +1214,7 @@ struct WeeklyReportView: View {
                 projectName: projectName,
                 jobNumber: jobNumber,
                 personName: personName,
-                tradeDisplay: user.displayTradeType,
+                tradeDisplay: StaffEmailIdentity.reportTrade(for: user),
                 tradeSortKey: StaffTradeType.sortKey(presetRaw: user.tradeTypePreset, custom: user.tradeTypeCustom),
                 role: roleLabel,
                 days: totals[key] ?? 0
@@ -1277,10 +1278,11 @@ struct WeeklyReportView: View {
         
         for booking in managerBookings {
             guard appSettings.settings.myScheduleOptions.includesManagerScheduleLocation(booking) else { continue }
-            guard let manager = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { continue }
-            if timesheetFeed.covers(userId: manager.id, day: booking.date) { continue }
+            guard let manager = reportingUser(for: booking.userId) else { continue }
+            if timesheetFeed.covers(userId: manager.id, day: booking.date)
+                || timesheetFeed.covers(userId: booking.userId, day: booking.date) { continue }
             let managerName = manager.fullName.isEmpty ? manager.email : manager.fullName
-            let rate = dayRateForUserOnDay(userId: manager.id, fallback: manager.dayRate, date: booking.date)
+            let rate = dayRateForUserOnDay(userId: manager.id, fallback: manager.hourlyRate ?? manager.dayRate, date: booking.date)
             let days = managerDayValue(from: booking)
             let key = labourRateKey(name: managerName, role: "Manager", rate: rate)
             var summary = totals[key] ?? LabourRateSummary(name: managerName, role: "Manager", rate: rate, days: 0)
@@ -1377,7 +1379,7 @@ struct WeeklyReportView: View {
         let standardDayHours = max(policy.standardPaidHours, 8)
         return PayrollRateResolver.resolveForTimesheetDay(
             user: user,
-            operative: operative,
+            operative: StaffEmailIdentity.operativeUsedForPay(user: user, operative: operative),
             on: date,
             history: dayRateHistoryCollection,
             standardDayHours: standardDayHours
@@ -1422,11 +1424,12 @@ struct WeeklyReportView: View {
     }
 
     private func linkedAppUser(for operative: Operative) -> AppUser? {
-        let email = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !email.isEmpty else { return nil }
-        return userStore.organizationUsers.first {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
-        }
+        StaffEmailIdentity.preferredUser(sharing: operative.email, in: userStore.organizationUsers)
+    }
+
+    private func reportingUser(for userId: String) -> AppUser? {
+        guard let user = userStore.organizationUsers.first(where: { $0.id == userId }) else { return nil }
+        return StaffEmailIdentity.preferredUser(sharing: user.email, in: userStore.organizationUsers) ?? user
     }
 
     private func reportRoleLabel(for user: AppUser?, fallback: String) -> String {
@@ -1486,7 +1489,11 @@ struct WeeklyReportView: View {
             let policy = firebaseBackend.payrollPolicy(for: booking.date)
             let role = reportRoleLabel(for: linkedUser, fallback: "Operative")
             let name = (linkedUser?.fullName.isEmpty == false) ? (linkedUser?.fullName ?? operative.name) : operative.name
-            let resolved = resolvedPayrollRate(user: linkedUser, operative: operative, on: booking.date)
+            let resolved = resolvedPayrollRate(
+                user: linkedUser,
+                operative: StaffEmailIdentity.operativeUsedForPay(user: linkedUser, operative: operative),
+                on: booking.date
+            )
             let paid = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
@@ -1509,16 +1516,20 @@ struct WeeklyReportView: View {
                 && appSettings.settings.myScheduleOptions.includesManagerScheduleLocation($0)
         }
         for booking in managerBookings {
-            guard let manager = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { continue }
-            if timesheetFeed.covers(userId: manager.id, day: booking.date) { continue }
+            guard let manager = reportingUser(for: booking.userId) else { continue }
+            if timesheetFeed.covers(userId: manager.id, day: booking.date)
+                || timesheetFeed.covers(userId: booking.userId, day: booking.date) { continue }
             let policy = firebaseBackend.payrollPolicy(for: booking.date)
             let role = reportRoleLabel(for: manager, fallback: "Manager")
             let name = manager.fullName.isEmpty ? manager.email : manager.fullName
             let linkedOperative = operativeStore.allOperatives.first {
-                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                    == manager.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                StaffEmailIdentity.emailKey($0.email) == StaffEmailIdentity.emailKey(manager.email)
             }
-            let resolved = resolvedPayrollRate(user: manager, operative: linkedOperative, on: booking.date)
+            let resolved = resolvedPayrollRate(
+                user: manager,
+                operative: StaffEmailIdentity.operativeUsedForPay(user: manager, operative: linkedOperative),
+                on: booking.date
+            )
             let paid = booking.paidBookedHours(policy: policy)
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)

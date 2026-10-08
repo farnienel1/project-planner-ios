@@ -17,9 +17,11 @@ enum WorkAccess {
         }
     }
 
-    /// Admins see every job. Managers with the Projects / Small Works slider on see the full catalogue
-    /// (except jobs hidden from them). With the slider off they only see jobs they are assigned to as a
-    /// manager or booked onto.
+    /// Admins and managers see every job in the catalogue, including jobs they are not assigned to.
+    /// `permissions.projects` and `permissions.smallWorks` do not hide those lists. They only gate
+    /// create and edit (`UserStore.canManageWorkCatalogue`). Super admin ignores those two toggles.
+    /// A job explicitly hidden from a manager stays off that manager's list. Operatives still see
+    /// only jobs they are booked onto.
     static func visibleWorks(
         from projects: [Project],
         catalogue: JobCatalogue,
@@ -53,12 +55,12 @@ enum WorkAccess {
         }
 
         let notHidden = scoped.filter { !$0.hiddenManagerUserIds.contains(user.id) }
+        let isManager = user.permissions.manager || user.role == .manager
+        if isManager {
+            return notHidden
+        }
         return notHidden.filter { project in
-            let jobCatalogue: JobCatalogue = project.jobType == .smallWorks ? .smallWorks : .projects
-            if userStore.canManageWorkCatalogue(jobCatalogue) {
-                return true
-            }
-            return isAssignedOrBookedOnto(
+            isAssignedOrBookedOnto(
                 project,
                 user: user,
                 operativeStore: operativeStore,
@@ -197,6 +199,25 @@ enum WorkAccess {
         }
     }
 
+    /// Every operative profile for this email. Bookings are stored on one profile;
+    /// My Schedule has to read the others as the same person.
+    static func signedInOperativeIds(
+        email: String?,
+        firstName: String?,
+        surname: String?,
+        operatives: [Operative]
+    ) -> Set<UUID> {
+        let needle = normalizedEmail(email)
+        if !needle.isEmpty {
+            let matches = Set(operatives.filter { normalizedEmail($0.email) == needle }.map(\.id))
+            if !matches.isEmpty { return matches }
+        }
+        if let one = signedInOperative(email: email, firstName: firstName, surname: surname, operatives: operatives) {
+            return [one.id]
+        }
+        return []
+    }
+
     /// Auth uid plus every `users` document id for the same email.
     /// An invited account can keep a legacy document id, and bookings are often stored against that id.
     static func signedInAccountIds(
@@ -217,7 +238,9 @@ enum WorkAccess {
         guard !needle.isEmpty else { return ids }
         for user in organizationUsers where user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == needle {
             add(user.id)
+            for alias in user.sameEmailUserIds { add(alias) }
         }
+        for alias in currentUser?.sameEmailUserIds ?? [] { add(alias) }
         return ids
     }
 

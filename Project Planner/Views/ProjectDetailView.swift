@@ -67,11 +67,8 @@ struct ProjectDetailView: View {
 
     /// Admins and managers with project/small-works management access can configure View visibility and see all tasks on the job.
     private var canConfigureProjectVisibility: Bool {
-        guard let u = userStore.currentUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if userStore.hasAdminAccess() { return true }
-        guard u.permissions.manager else { return false }
-        return project.jobType == .smallWorks ? u.permissions.smallWorks : u.permissions.projects
+        let catalogue: WorkAccess.JobCatalogue = project.jobType == .smallWorks ? .smallWorks : .projects
+        return userStore.canManageWorkCatalogue(catalogue)
     }
 
     private var canViewAllTasksOnThisJob: Bool { canConfigureProjectVisibility }
@@ -1082,31 +1079,30 @@ struct ProjectDetailView: View {
             for b in bookingsForDate(day) { opIds.insert(b.operativeId) }
             for b in managerBookingsForDate(day) { mgrIds.insert(b.userId) }
         }
-
-        var rows: [SchedulingGridPersonRow] = []
-        for id in opIds {
-            let name = rosterNameForLabourBooking(
-                operativeId: id,
+        let buckets = StaffEmailIdentity.scheduleBuckets(
+            operativeIds: opIds,
+            userIds: mgrIds,
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers
+        )
+        return buckets.map { bucket in
+            let name = StaffEmailIdentity.bucketDisplayName(
+                bucket,
                 operatives: operativeStore.allOperatives,
                 users: userStore.organizationUsers
             )
-            rows.append(makeSchedulingPersonRow(
-                id: "op-\(id.uuidString)",
+            let kind: SchedulingGridPersonKind = bucket.operativeIds.isEmpty
+                ? .manager(bucket.userIds.first ?? bucket.key)
+                : .operative(bucket.operativeIds[0])
+            return makeSchedulingPersonRow(
+                id: bucket.key,
                 name: name,
-                kind: .operative(id)
-            ))
+                kind: kind,
+                operativeIds: bucket.operativeIds,
+                userIds: bucket.userIds
+            )
         }
-        for id in mgrIds {
-            let name = userStore.organizationUsers.first(where: { $0.id == id })?.fullName ?? "Manager"
-            rows.append(makeSchedulingPersonRow(
-                id: "mgr-\(id)",
-                name: name.isEmpty ? "Manager" : name,
-                kind: .manager(id)
-            ))
-        }
-        return rows.sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private var schedulingSubcontractorRows: [SchedulingGridPersonRow] {
@@ -1125,13 +1121,106 @@ struct ProjectDetailView: View {
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    private func schedulingCombinedDayCell(
+        day: Date,
+        dayId: TimeInterval,
+        operativeIds: [UUID],
+        userIds: [String]
+    ) -> SchedulingGridDayCell {
+        var paid = 0.0
+        var overtime = 0.0
+        var count = 0
+        var slot: TimeSlot?
+        var operativeBooking: Booking?
+        var managerBooking: ManagerSiteBooking?
+        var bestPaid = -1.0
+        for booking in bookingsForDate(day) where operativeIds.contains(booking.operativeId) {
+            let policy = firebaseBackend.payrollPolicy(for: booking.date)
+            let hours = booking.paidBookedHours(policy: policy)
+            paid += hours
+            overtime += booking.overtimeHoursBeyondPaidStandard(policy: policy)
+            count += 1
+            slot = booking.timeSlot
+            if hours >= bestPaid {
+                bestPaid = hours
+                operativeBooking = booking
+            }
+        }
+        for booking in managerBookingsForDate(day) where userIds.contains(booking.userId) {
+            let policy = firebaseBackend.payrollPolicy(for: booking.date)
+            let hours = booking.paidBookedHours(policy: policy)
+            paid += hours
+            overtime += booking.overtimeHoursBeyondPaidStandard(policy: policy)
+            count += 1
+            if operativeBooking == nil {
+                slot = {
+                    switch booking.timeSlot {
+                    case .morning: return .morning
+                    case .afternoon: return .afternoon
+                    case .fullDay: return .fullDay
+                    case .customHours: return .customHours
+                    }
+                }()
+                if hours >= bestPaid {
+                    bestPaid = hours
+                    managerBooking = booking
+                }
+            }
+        }
+        if count > 0 {
+            let cell = SchedulingV2CellKindBuilder.fromBooking(
+                paidHours: paid,
+                overtimeHours: overtime,
+                timeSlot: count == 1 ? slot : nil
+            )
+            return SchedulingGridDayCell(
+                id: dayId,
+                date: day,
+                kind: cell,
+                operativeBooking: operativeBooking,
+                managerBooking: operativeBooking == nil ? managerBooking : nil,
+                subcontractorBooking: nil
+            )
+        }
+        if isPersonOnAnnualLeave(operativeIds: operativeIds, userIds: userIds, date: day) {
+            return SchedulingGridDayCell(
+                id: dayId, date: day, kind: .annualLeave,
+                operativeBooking: nil, managerBooking: nil, subcontractorBooking: nil
+            )
+        }
+        return SchedulingGridDayCell(
+            id: dayId, date: day, kind: .empty,
+            operativeBooking: nil, managerBooking: nil, subcontractorBooking: nil
+        )
+    }
+
     private func makeSchedulingPersonRow(
         id: String,
         name: String,
-        kind: SchedulingGridPersonKind
+        kind: SchedulingGridPersonKind,
+        operativeIds: [UUID] = [],
+        userIds: [String] = []
     ) -> SchedulingGridPersonRow {
+        let resolvedOperativeIds: [UUID] = {
+            if !operativeIds.isEmpty { return operativeIds }
+            if case .operative(let opId) = kind { return [opId] }
+            return []
+        }()
+        let resolvedUserIds: [String] = {
+            if !userIds.isEmpty { return userIds }
+            if case .manager(let userId) = kind { return [userId] }
+            return []
+        }()
         let days: [SchedulingGridDayCell] = weekDays.map { day in
             let dayId = Calendar.current.startOfDay(for: day).timeIntervalSince1970
+            if !resolvedOperativeIds.isEmpty || !resolvedUserIds.isEmpty {
+                return schedulingCombinedDayCell(
+                    day: day,
+                    dayId: dayId,
+                    operativeIds: resolvedOperativeIds,
+                    userIds: resolvedUserIds
+                )
+            }
             switch kind {
             case .operative(let opId):
                 let booking = bookingsForDate(day).first(where: { $0.operativeId == opId })
@@ -1225,9 +1314,19 @@ struct ProjectDetailView: View {
     }
 
     private func isPersonOnAnnualLeave(operativeId: UUID?, userId: String?, date: Date) -> Bool {
-        holidayStore.approvedBookings(covering: date).contains { booking in
-            if let operativeId, booking.operativeId == operativeId { return true }
-            if let userId, booking.userId == userId { return true }
+        isPersonOnAnnualLeave(
+            operativeIds: operativeId.map { [$0] } ?? [],
+            userIds: userId.map { [$0] } ?? [],
+            date: date
+        )
+    }
+
+    private func isPersonOnAnnualLeave(operativeIds: [UUID], userIds: [String], date: Date) -> Bool {
+        let operativeSet = Set(operativeIds)
+        let userSet = Set(userIds)
+        return holidayStore.approvedBookings(covering: date).contains { booking in
+            if let operativeId = booking.operativeId, operativeSet.contains(operativeId) { return true }
+            if let userId = booking.userId, userSet.contains(userId) { return true }
             return false
         }
     }
@@ -2645,11 +2744,8 @@ struct ProjectDetailView: View {
     }
     
     private var canEditCurrentWorkItem: Bool {
-        guard let u = userStore.currentUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if u.isSuperAdmin || u.permissions.adminAccess { return true }
-        guard u.permissions.manager else { return false }
-        return project.jobType == .smallWorks ? u.permissions.smallWorks : u.permissions.projects
+        let catalogue: WorkAccess.JobCatalogue = project.jobType == .smallWorks ? .smallWorks : .projects
+        return userStore.canManageWorkCatalogue(catalogue)
     }
 }
 

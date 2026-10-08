@@ -98,15 +98,15 @@ enum HomeUpNextSupport {
             .lowercased()
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let op = WorkAccess.signedInOperative(
+        let operativeIds = WorkAccess.signedInOperativeIds(
             email: emailKey,
             firstName: currentUserFirstName,
             surname: currentUserSurname,
             operatives: operatives
         )
-        if let op {
+        if !operativeIds.isEmpty {
             let mine = bookings.filter { b in
-                b.operativeId == op.id && b.status != .cancelled && b.status != .completed
+                operativeIds.contains(b.operativeId) && b.status != .cancelled && b.status != .completed
             }
             let today = calendar.startOfDay(for: now)
             for b in mine {

@@ -15,10 +15,12 @@ enum ProjectManagerPickerSupport {
         excluding selected: [Manager]
     ) -> [Manager] {
         let selectedIds = Set(selected.map(\.id))
-        let selectedEmails = Set(selected.map { $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) })
-        var roster = operativeStore.allManagers.filter {
-            !$0.email.isEmpty && !selectedIds.contains($0.id) && !selectedEmails.contains($0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)) && $0.isActive
-        }
+        let selectedEmails = Set(selected.map { StaffEmailIdentity.emailKey($0.email) })
+        var roster = eligibleCatalogueManagers(
+            roster: operativeStore.allManagers,
+            users: userStore.organizationUsers,
+            excluding: selected
+        )
         let rosterEmails = Set(roster.map { $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) })
 
         for user in userStore.organizationUsers where user.isActive && user.passwordSet {
@@ -45,6 +47,23 @@ enum ProjectManagerPickerSupport {
 
         return roster.sorted {
             $0.fullName.localizedCaseInsensitiveCompare($1.fullName) == .orderedAscending
+        }
+    }
+
+    /// A catalogue row with no active user account is not offered. Inactive people are not offered.
+    /// Someone already assigned is left off this list; the job still shows them.
+    static func eligibleCatalogueManagers(
+        roster: [Manager],
+        users: [AppUser],
+        excluding selected: [Manager]
+    ) -> [Manager] {
+        let selectedIds = Set(selected.map(\.id))
+        let selectedEmails = Set(selected.map { StaffEmailIdentity.emailKey($0.email) })
+        return roster.filter { manager in
+            let email = StaffEmailIdentity.emailKey(manager.email)
+            guard manager.isActive, !email.isEmpty else { return false }
+            guard !selectedIds.contains(manager.id), !selectedEmails.contains(email) else { return false }
+            return users.contains { StaffEmailIdentity.emailKey($0.email) == email && $0.isActive }
         }
     }
 

@@ -980,8 +980,9 @@ class FirebaseBackend: ObservableObject {
         if let warningDict {
             settings.warningDetection = OrgWarningDetectionSettings.fromFirestore(warningDict)
         }
-        let canonicalExclusionPresent = warningDict?["excludedUserIdsFromUnbookedWarnings"] != nil
-        if !canonicalExclusionPresent {
+        // An empty top-level list must not hide ids stored on settings.warningDetection.
+        // Clearing the list writes the empty array in both places.
+        if settings.warningDetection.excludedUserIdsFromUnbookedWarnings.isEmpty {
             if let settingsDict = data["settings"] as? [String: Any],
                let nested = settingsDict["warningDetection"] as? [String: Any] {
                 let nestedIds = OrgWarningDetectionSettings.excludedUserIds(from: nested)
@@ -989,11 +990,11 @@ class FirebaseBackend: ObservableObject {
                     settings.warningDetection.excludedUserIdsFromUnbookedWarnings = nestedIds
                 }
             }
-            if settings.warningDetection.excludedUserIdsFromUnbookedWarnings.isEmpty {
-                let siblingIds = OrgWarningDetectionSettings.excludedUserIds(from: data)
-                if !siblingIds.isEmpty {
-                    settings.warningDetection.excludedUserIdsFromUnbookedWarnings = siblingIds
-                }
+        }
+        if settings.warningDetection.excludedUserIdsFromUnbookedWarnings.isEmpty {
+            let siblingIds = OrgWarningDetectionSettings.excludedUserIds(from: data)
+            if !siblingIds.isEmpty {
+                settings.warningDetection.excludedUserIdsFromUnbookedWarnings = siblingIds
             }
         }
         if let invoicingDict = data["invoicing"] as? [String: Any] {
@@ -4153,16 +4154,11 @@ class FirebaseBackend: ObservableObject {
             let emailKey = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             let key = emailKey.isEmpty ? "id:\(user.id)" : emailKey
             if let existing = byKey[key] {
-                if Self.rosterDocumentRank(user) > Self.rosterDocumentRank(existing) {
-                    var chosen = user
-                    if existing.placedByManagersRecord { chosen.placedByManagersRecord = true }
-                    byKey[key] = chosen
-                    print("🔥🔥🔥 DEBUG: Preferring user doc \(user.id) over \(existing.id) for \(key)")
-                } else if user.placedByManagersRecord {
-                    var kept = existing
-                    kept.placedByManagersRecord = true
-                    byKey[key] = kept
+                let chosen = Self.collapsedRosterUser(existing, user)
+                if chosen.id != existing.id {
+                    print("🔥🔥🔥 DEBUG: Preferring user doc \(chosen.id) over \(existing.id) for \(key)")
                 }
+                byKey[key] = chosen
             } else {
                 byKey[key] = user
             }
@@ -4171,6 +4167,29 @@ class FirebaseBackend: ObservableObject {
 
         print("🔥🔥🔥 DEBUG: Returning \(uniqueUsers.count) unique users")
         return uniqueUsers
+    }
+
+    /// One email stays one roster row. The signed-in account stays the id. A readable
+    /// trade on the other document is kept, so the weekly report does not fall back to General.
+    static func collapsedRosterUser(_ existing: AppUser, _ incoming: AppUser) -> AppUser {
+        let incomingWins = rosterDocumentRank(incoming) > rosterDocumentRank(existing)
+        var chosen = incomingWins ? incoming : existing
+        let other = incomingWins ? existing : incoming
+        if chosen.placedByManagersRecord == false && other.placedByManagersRecord {
+            chosen.placedByManagersRecord = true
+        }
+        var aliases = Set(chosen.sameEmailUserIds)
+        aliases.formUnion(other.sameEmailUserIds)
+        aliases.insert(other.id)
+        aliases.remove(chosen.id)
+        chosen.sameEmailUserIds = aliases.sorted()
+        let chosenTrade = StaffEmailIdentity.reportTrade(for: chosen)
+        let otherTrade = StaffEmailIdentity.reportTrade(for: other)
+        if chosenTrade == "General", otherTrade != "General" {
+            chosen.tradeTypePreset = other.tradeTypePreset
+            chosen.tradeTypeCustom = other.tradeTypeCustom
+        }
+        return chosen
     }
 
     /// Higher wins when two documents share an email. A classified, named, signed-in account beats a stub.

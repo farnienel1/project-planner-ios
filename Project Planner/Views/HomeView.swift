@@ -588,7 +588,7 @@ struct HomeView: View {
             // Do not recompute warnings here — that raced launch quiet / deferred loads
             // and jetsamed Simulator. Badge updates when Home warms warnings or
             // when `.warningsDidRecompute` is posted.
-            guard userStore.hasAdminAccess() else { return }
+            guard userStore.canViewStaffWarnings() else { return }
             homeWarningCount = WarningsService.shared.warningCount
         }
         .onReceive(NotificationCenter.default.publisher(for: .warningsDidRecompute)) { notification in
@@ -833,7 +833,7 @@ struct HomeView: View {
 
     private var homeSecondaryStatusRow: some View {
         HStack(spacing: 8) {
-            if userStore.hasAdminAccess() || userStore.isHomeProfileLoading {
+            if userStore.canViewStaffWarnings() {
                 secondaryPill(
                     icon: "exclamationmark.triangle.fill",
                     iconTint: Color(red: 0.64, green: 0.18, blue: 0.18),
@@ -920,6 +920,20 @@ struct HomeView: View {
         } else {
             persistedQuickActionIds = HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
         }
+        mergeOperativeHomeDefaultsIfNeeded()
+    }
+
+    /// Operative permissions already decide what they may open. A saved layout must not hide those actions.
+    private func mergeOperativeHomeDefaultsIfNeeded() {
+        guard userStore.isOperativeMode() else { return }
+        let defaults = HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore)
+        var merged = persistedQuickActionIds
+        for id in defaults where !merged.contains(id) {
+            merged.append(id)
+        }
+        guard merged != persistedQuickActionIds else { return }
+        persistedQuickActionIds = merged
+        savePersistedQuickActions()
     }
 
     private func savePersistedQuickActions() {
@@ -943,6 +957,7 @@ struct HomeView: View {
                 : cleaned
             savePersistedQuickActions()
         }
+        mergeOperativeHomeDefaultsIfNeeded()
     }
 
     private func isGeneralAppQuickActionTitle(_ title: String) -> Bool {
@@ -1164,10 +1179,16 @@ struct HomeView: View {
     }
 
     private var displayedQuickActionIds: [String] {
-        persistedQuickActionIds.filter { id in
+        var ids = persistedQuickActionIds.filter { id in
             HomeQuickActionRegistry.isEligible(id: id, userStore: userStore)
                 && !isGeneralAppQuickActionTitle(displayTitleForQuickAction(id: id))
         }
+        if userStore.isOperativeMode() {
+            for id in HomeQuickActionRegistry.defaultOrderedIds(userStore: userStore) where !ids.contains(id) {
+                ids.append(id)
+            }
+        }
+        return ids
     }
 
     private var quickActionsIconGrid: some View {
@@ -1325,12 +1346,6 @@ struct HomeView: View {
         guard !firebaseBackend.isBootstrappingOrgDataLoad else { return }
         guard !userStore.isHomeProfileLoading, userStore.currentUser != nil else { return }
 
-        let storesStillLoading = bookingStore.isLoading
-            || operativeStore.isLoading
-            || projectStore.isLoading
-            || holidayStore.isLoading
-            || managerScheduleStore.isLoading
-
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let operatives = operativeStore.allOperatives
         let bookings = bookingStore.bookings
@@ -1394,14 +1409,10 @@ struct HomeView: View {
         cachedUpNextSections = await upNextTask
         guard !Task.isCancelled else { return }
 
-        if userStore.hasAdminAccess(),
-           !storesStillLoading,
-           firebaseBackend.hasBootstrappedOrgDataLoad {
+        if userStore.canViewStaffWarnings() {
             // Do not auto-run warnings on Home after every store refresh — that used to
             // freeze/crash Simulator. Badge stays at last known count; opening Warnings
             // refreshes off the main actor (and never during bootstrap/quiet).
-            homeWarningCount = WarningsService.shared.warningCount
-        } else if userStore.hasAdminAccess() {
             homeWarningCount = WarningsService.shared.warningCount
         }
     }

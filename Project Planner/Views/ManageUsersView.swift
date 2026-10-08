@@ -1952,7 +1952,7 @@ struct EditUserView: View {
             Button("OK", role: .cancel) { }
                 .accessibilityIdentifier("editUser.ok")
         } message: {
-            Text("Change user type at the bottom of their profile, to enable admin level access.")
+            Text(UserRoleTransitionPolicy.adminAccessLockedUntilAccountTypeChanges)
         }
         .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
         .navigationTitle(editNavigationTitle)

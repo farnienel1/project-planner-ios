@@ -50,6 +50,8 @@ final class WarningsLogicTests: XCTestCase {
                 standardPaidHours: 8,
                 standardDayStart: "07:30",
                 standardDayEnd: "16:00",
+                breakWindowStart: "12:00",
+                breakWindowEnd: "12:30",
                 standardUnpaidBreakHours: 0.5,
                 saturdayCountsAsHours: 8,
                 sundayCountsAsHours: 8

@@ -45,7 +45,8 @@ enum TimesheetPayrollCollector {
         history: OperativeDayRateHistoryCollection,
         policy: OrgPayrollTimePolicy,
         organization: Organization? = nil,
-        scheduleOptions: MyScheduleOptions = MyScheduleOptions()
+        scheduleOptions: MyScheduleOptions = MyScheduleOptions(),
+        relatedUsers: [AppUser] = []
     ) -> TimesheetPayrollSummary {
         let cal = Calendar.current
         let rangeStart = cal.startOfDay(for: range.lowerBound)
@@ -147,7 +148,9 @@ enum TimesheetPayrollCollector {
             }
         }
 
-        for booking in managerBookings where booking.userId == user.id {
+        let managerUserIds = StaffEmailIdentity.userIds(sharing: user.email, in: relatedUsers + [user])
+        let managerIds = managerUserIds.isEmpty ? Set([user.id]) : managerUserIds
+        for booking in managerBookings where managerIds.contains(booking.userId) {
             guard scheduleOptions.includesManagerScheduleLocation(booking) else { continue }
             let day = cal.startOfDay(for: booking.date)
             guard day >= rangeStart && day <= rangeEnd else { continue }
@@ -244,7 +247,8 @@ enum TimesheetPayrollCollector {
         history: OperativeDayRateHistoryCollection,
         policy: OrgPayrollTimePolicy,
         organization: Organization? = nil,
-        scheduleOptions: MyScheduleOptions = MyScheduleOptions()
+        scheduleOptions: MyScheduleOptions = MyScheduleOptions(),
+        relatedUsers: [AppUser] = []
     ) -> TimesheetPayrollSummary {
         collect(
             for: user,
@@ -257,7 +261,8 @@ enum TimesheetPayrollCollector {
             history: history,
             policy: policy,
             organization: organization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            relatedUsers: relatedUsers
         )
     }
 

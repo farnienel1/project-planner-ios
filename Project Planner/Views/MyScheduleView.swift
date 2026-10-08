@@ -778,14 +778,15 @@ struct ManagerScheduleContentView: View {
     /// Some admins/managers also have an operative profile and can be booked onto projects/small works.
     private func myOperativeBookings(on day: Date) -> [Booking] {
         guard let user = userStore.currentUser else { return [] }
-        guard let op = WorkAccess.signedInOperative(
+        let ids = WorkAccess.signedInOperativeIds(
             email: user.email,
             firstName: user.firstName,
             surname: user.surname,
             operatives: operativeStore.allOperatives
-        ) else { return [] }
+        )
+        guard !ids.isEmpty else { return [] }
         return bookingStore.bookings.filter {
-            $0.operativeId == op.id &&
+            ids.contains($0.operativeId) &&
             $0.status != .cancelled &&
             calendar.isDate($0.date, inSameDayAs: day)
         }
@@ -2476,9 +2477,16 @@ struct OperativeScheduleContentView: View {
     }
 
     private var myBookingsThisWeek: [Booking] {
-        guard let op = currentOperative else { return [] }
+        guard let user = userStore.currentUser else { return [] }
+        let ids = WorkAccess.signedInOperativeIds(
+            email: user.email,
+            firstName: user.firstName,
+            surname: user.surname,
+            operatives: operativeStore.allOperatives
+        )
+        guard !ids.isEmpty else { return [] }
         return bookingStore.bookings.filter { b in
-            b.operativeId == op.id &&
+            ids.contains(b.operativeId) &&
             b.status != .cancelled &&
             weekDates.contains { calendar.isDate(b.date, inSameDayAs: $0) }
         }

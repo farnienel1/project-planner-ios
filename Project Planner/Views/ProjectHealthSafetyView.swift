@@ -495,6 +495,7 @@ struct ProjectHealthSafetyView: View {
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject var notificationService: NotificationService
     @StateObject private var vm: ProjectHealthSafetyViewModel
 
     @State private var managerTab: HSManagerTab = .hub
@@ -752,6 +753,17 @@ struct ProjectHealthSafetyView: View {
                         issuedByUserId: userStore.currentUser?.id ?? "unknown",
                         firebaseBackend: firebaseBackend,
                         userStore: userStore
+                    )
+                    guard vm.errorMessage == nil else { return }
+                    let rawIssuer = userStore.currentUser?.fullName
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    await notificationService.notifyToolboxTalkIssued(
+                        projectId: project.id,
+                        siteName: project.siteName,
+                        talkTitle: selectedTalk.displayTitle,
+                        issuedByName: rawIssuer.isEmpty ? "Someone" : rawIssuer,
+                        issuedByUserId: userStore.currentUser?.id,
+                        recipientUserIds: recipients
                     )
                 }
             }

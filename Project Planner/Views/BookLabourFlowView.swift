@@ -1836,99 +1836,29 @@ struct BookLabourFlowView: View {
     }
 
     private func buildCandidates() -> [BookLabourCandidate] {
-        guard canBookLabourOnThisDay else { return [] }
-
-        let policy = dayPayrollPolicy
-        let required = max(policy.standardPaidHours, 0)
-        let focused = Set(focusedUserIds)
-
-        func isWarningFocus(_ candidate: BookLabourCandidate) -> Bool {
-            if focused.contains(candidate.user.id) { return true }
-            if let op = candidate.linkedOperative, focused.contains(op.id.uuidString) { return true }
-            return false
-        }
-
-        let operativeUsers = userStore.organizationUsers.filter {
-            $0.permissions.operativeMode && $0.isActive && ($0.passwordSet || focused.contains($0.id))
-        }
-        let managerUsers = userStore.organizationUsers.filter {
-            $0.isActive &&
-                ($0.passwordSet || focused.contains($0.id)) &&
-                ($0.permissions.manager || $0.permissions.adminAccess || $0.isSuperAdmin || $0.role == .admin)
-        }
-        let operativeOnlyUsers = operativeUsers.filter {
-            !$0.permissions.manager &&
-                !$0.permissions.adminAccess &&
-                !$0.isSuperAdmin &&
-                $0.role != .admin
-        }
-
-        var out: [BookLabourCandidate] = []
-        var seenUserIds: Set<String> = []
-
-        func appendCandidate(_ candidate: BookLabourCandidate, paid: Double) {
-            guard seenUserIds.insert(candidate.user.id).inserted else { return }
-            let isFocused = isWarningFocus(candidate)
-            // Always keep people named on the warning. Otherwise skip a full paid day.
-            if !isFocused, paid + 0.08 >= required { return }
-            out.append(candidate)
-        }
-
-        for user in operativeOnlyUsers {
-            let linked = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
-            if hasApprovedHoliday(userId: user.id, operativeId: linked?.id) { continue }
-            guard let linked else { continue }
-            let paid = operativePaidHours(operativeId: linked.id) + managerScheduledPaidHours(userId: user.id)
-            appendCandidate(
-                BookLabourCandidate(user: user, linkedOperative: linked, usesOperativeProjectBookings: true),
-                paid: paid
+        let choices = BookLabourCandidateSelection.choices(
+            day: day,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives,
+            operativeBookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            holidays: holidayStore.bookings,
+            policy: dayPayrollPolicy,
+            focusedIds: Set(focusedUserIds),
+            includeThisDay: canBookLabourOnThisDay,
+            calendar: calendar
+        )
+        return choices.compactMap { choice in
+            guard let user = userStore.organizationUsers.first(where: { $0.id == choice.userId }) else { return nil }
+            let linked = choice.operativeId.flatMap { id in
+                operativeStore.allOperatives.first { $0.id == id }
+            }
+            return BookLabourCandidate(
+                user: user,
+                linkedOperative: linked,
+                usesOperativeProjectBookings: choice.usesOperativeProjectBookings
             )
         }
-
-        for user in managerUsers {
-            let linked = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
-            if hasApprovedHoliday(userId: user.id, operativeId: linked?.id) { continue }
-            let paid = managerScheduledPaidHours(userId: user.id) + (linked.map { operativePaidHours(operativeId: $0.id) } ?? 0)
-            appendCandidate(
-                BookLabourCandidate(user: user, linkedOperative: linked, usesOperativeProjectBookings: false),
-                paid: paid
-            )
-        }
-
-        return out.sorted { a, b in
-            let aFocus = isWarningFocus(a)
-            let bFocus = isWarningFocus(b)
-            if aFocus != bFocus { return aFocus }
-            return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
-        }
-    }
-
-    private func hasApprovedHoliday(userId: String, operativeId: UUID?) -> Bool {
-        let approved = holidayStore.approvedBookings(covering: day)
-        return approved.contains { holiday in
-            if holiday.status != .approved { return false }
-            if holiday.userId == userId { return true }
-            if let operativeId, holiday.operativeId == operativeId { return true }
-            return false
-        }
-    }
-
-    private func operativePaidHours(operativeId: UUID) -> Double {
-        let policy = dayPayrollPolicy
-        let bookings = bookingStore.bookings.filter {
-            $0.operativeId == operativeId &&
-                calendar.isDate($0.date, inSameDayAs: day) &&
-                ($0.status == .confirmed || $0.status == .tentative)
-        }
-        return bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: policy) }
-    }
-
-    private func managerScheduledPaidHours(userId: String) -> Double {
-        let policy = dayPayrollPolicy
-        let bookings = managerScheduleStore.managerSiteBookings.filter { booking in
-            calendar.isDate(booking.date, inSameDayAs: day) && booking.userId == userId
-        }
-        return ManagerScheduleInterval.combinedPaidBookedHours(for: bookings, policy: policy)
     }
 }
 

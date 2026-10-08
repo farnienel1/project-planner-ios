@@ -145,12 +145,12 @@ struct DailyOverviewView: View {
         let cal = Calendar.current
         var keys = Set<String>()
         for b in dayBookings where b.status == .confirmed || b.status == .tentative {
-            keys.insert("op:\(b.operativeId.uuidString)")
+            keys.insert(overviewPersonKey(operativeId: b.operativeId))
         }
         for b in managerScheduleStore.managerSiteBookings {
             guard cal.isDate(b.date, inSameDayAs: overviewDate) else { continue }
             guard b.locationType == .project || b.locationType == .smallWork else { continue }
-            keys.insert("u:\(b.userId)")
+            keys.insert(overviewPersonKey(userId: b.userId))
         }
         for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
             keys.insert("sub:\(b.subcontractorId.uuidString)")
@@ -159,15 +159,15 @@ struct DailyOverviewView: View {
     }
 
     private var officePeopleCount: Int {
-        Set(visibleOfficeBookings.map(\.userId)).count
+        Set(visibleOfficeBookings.map { overviewPersonKey(userId: $0.userId) }).count
     }
 
     private var wfhPeopleCount: Int {
-        Set(visibleWFHBookings.map(\.userId)).count
+        Set(visibleWFHBookings.map { overviewPersonKey(userId: $0.userId) }).count
     }
 
     private var unbookedAllNames: [String] {
-        (unbookedManagerNames + unbookedOperativeNames).sorted()
+        Array(Set(unbookedManagerNames + unbookedOperativeNames)).sorted()
     }
 
     /// Unique people with any same-day booking (operatives on jobs, managers on jobs or “other” locations, subs on jobs).
@@ -175,11 +175,11 @@ struct DailyOverviewView: View {
         let cal = Calendar.current
         var keys = Set<String>()
         for b in dayBookings where b.status == .confirmed || b.status == .tentative {
-            keys.insert("op:\(b.operativeId.uuidString)")
+            keys.insert(overviewPersonKey(operativeId: b.operativeId))
         }
         for b in managerScheduleStore.managerSiteBookings where cal.isDate(b.date, inSameDayAs: overviewDate) {
             if scheduleOptions.includesManagerScheduleLocation(b) {
-                keys.insert("u:\(b.userId)")
+                keys.insert(overviewPersonKey(userId: b.userId))
             }
         }
         for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
@@ -282,49 +282,42 @@ struct DailyOverviewView: View {
         }
     }
 
-    private func hasApprovedHoliday(userId: String, operativeId: UUID?) -> Bool {
-        dayHolidays.contains { holiday in
-            if holiday.status != .approved { return false }
-            if holiday.userId == userId { return true }
-            if let operativeId, holiday.operativeId == operativeId { return true }
-            return false
-        }
+    private func overviewPersonKey(operativeId: UUID) -> String {
+        let email = operativeStore.allOperatives.first { $0.id == operativeId }?.email
+        return StaffEmailIdentity.personKey(email: email, fallbackId: "op:\(operativeId.uuidString)")
     }
 
-    private func hasLabourBooking(userId: String, operativeId: UUID?) -> Bool {
-        if let operativeId {
-            let booked = dayBookings.contains {
-                $0.operativeId == operativeId && ($0.status == .confirmed || $0.status == .tentative)
-            }
-            if booked { return true }
-        }
-        return managerScheduleStore.managerSiteBookings.contains {
-            $0.userId == userId && Calendar.current.isDate($0.date, inSameDayAs: overviewDate)
-        }
+    private func overviewPersonKey(userId: String) -> String {
+        let email = StaffEmailIdentity.account(forUserId: userId, in: userStore.organizationUsers)?.email
+        return StaffEmailIdentity.personKey(email: email, fallbackId: "u:\(userId)")
     }
 
     private var unbookedOperativeNames: [String] {
-        let required = max(payrollTimePolicy.standardPaidHours, 0)
-        return operativeUsers.compactMap { user in
-            let linkedOperative = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
-            if hasApprovedHoliday(userId: user.id, operativeId: linkedOperative?.id) { return nil }
-            if hasLabourBooking(userId: user.id, operativeId: linkedOperative?.id) { return nil }
-            let display = user.fullName.isEmpty ? user.email : user.fullName
-            return "\(display) (missing \(ScheduleCoverageFormat.hours(required))h)"
-        }
-        .sorted()
+        LabourDayCoverage.unbookedLines(
+            day: overviewDate,
+            users: operativeUsers,
+            operatives: operativeStore.allOperatives,
+            operativeBookings: dayBookings,
+            managerBookings: managerScheduleStore.managerSiteBookings.filter {
+                Calendar.current.isDate($0.date, inSameDayAs: overviewDate)
+            },
+            holidays: dayHolidays,
+            policy: payrollTimePolicy
+        )
     }
 
     private var unbookedManagerNames: [String] {
-        let required = max(payrollTimePolicy.standardPaidHours, 0)
-        return managerUsers.compactMap { user in
-            let linkedOperative = operativeStore.allOperatives.first { $0.email.lowercased() == user.email.lowercased() }
-            if hasApprovedHoliday(userId: user.id, operativeId: linkedOperative?.id) { return nil }
-            if hasLabourBooking(userId: user.id, operativeId: linkedOperative?.id) { return nil }
-            let display = user.fullName.isEmpty ? user.email : user.fullName
-            return "\(display) (missing \(ScheduleCoverageFormat.hours(required))h)"
-        }
-        .sorted()
+        LabourDayCoverage.unbookedLines(
+            day: overviewDate,
+            users: managerUsers,
+            operatives: operativeStore.allOperatives,
+            operativeBookings: dayBookings,
+            managerBookings: managerScheduleStore.managerSiteBookings.filter {
+                Calendar.current.isDate($0.date, inSameDayAs: overviewDate)
+            },
+            holidays: dayHolidays,
+            policy: payrollTimePolicy
+        )
     }
     
     // Group bookings by project
@@ -1263,7 +1256,7 @@ private extension DailyOverviewView {
     }
     
     func managerName(for userId: String) -> String {
-        if let user = userStore.organizationUsers.first(where: { $0.id == userId }) {
+        if let user = StaffEmailIdentity.account(forUserId: userId, in: userStore.organizationUsers) {
             return user.fullName.isEmpty ? user.email : user.fullName
         }
         return userId
@@ -1524,7 +1517,7 @@ struct ManagerScheduleRowView: View {
     }
 
     private var userName: String {
-        guard let u = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else {
+        guard let u = StaffEmailIdentity.account(forUserId: booking.userId, in: userStore.organizationUsers) else {
             return booking.userId
         }
         return u.fullName
@@ -1616,14 +1609,26 @@ struct ProjectBookingCard: View {
     }
 
     private var cardPeopleCount: Int {
-        sortedBookings.count + managerBookingsThisProjectDay.count + subcontractorBookingsThisProjectDay.count
+        var keys = Set<String>()
+        for booking in sortedBookings {
+            let email = operativeStore.allOperatives.first { $0.id == booking.operativeId }?.email
+            keys.insert(StaffEmailIdentity.personKey(email: email, fallbackId: "op:\(booking.operativeId.uuidString)"))
+        }
+        for booking in managerBookingsThisProjectDay {
+            let email = StaffEmailIdentity.account(forUserId: booking.userId, in: userStore.organizationUsers)?.email
+            keys.insert(StaffEmailIdentity.personKey(email: email, fallbackId: "u:\(booking.userId)"))
+        }
+        for booking in subcontractorBookingsThisProjectDay {
+            keys.insert("sub:\(booking.subcontractorId.uuidString)")
+        }
+        return keys.count
     }
 
     private var cardBookedHours: Double {
         let p = payrollTimePolicy
-        var t = sortedBookings.reduce(0.0) { $0 + $1.totalBookedHours(policy: p) }
-        t += managerBookingsThisProjectDay.reduce(0.0) { $0 + $1.totalBookedHours(policy: p) }
-        t += subcontractorBookingsThisProjectDay.reduce(0.0) { $0 + $1.payrollMirrorBooking().totalBookedHours(policy: p) }
+        var t = sortedBookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: p) }
+        t += managerBookingsThisProjectDay.reduce(0.0) { $0 + $1.paidBookedHours(policy: p) }
+        t += subcontractorBookingsThisProjectDay.reduce(0.0) { $0 + $1.payrollMirrorBooking().paidBookedHours(policy: p) }
         return t
     }
 
@@ -1826,7 +1831,7 @@ struct ProjectBookingCard: View {
     }
 
     private func managerName(userId: String) -> String {
-        if let user = userStore.organizationUsers.first(where: { $0.id == userId }) {
+        if let user = StaffEmailIdentity.account(forUserId: userId, in: userStore.organizationUsers) {
             return user.fullName.isEmpty ? user.email : user.fullName
         }
         return userId
