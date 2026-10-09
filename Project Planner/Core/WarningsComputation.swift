@@ -59,6 +59,7 @@ struct WarningsComputationSnapshot: Sendable {
         let hasAdminAccess: Bool
         let isSuperAdmin: Bool
         let isAdminRole: Bool
+        var sameEmailUserIds: [String] = []
     }
 
     struct ProjectSnapshot: Sendable {
@@ -78,6 +79,10 @@ struct WarningsComputationSnapshot: Sendable {
         let paidHours: Double
         let scheduleLabel: String
         let clashInterval: (Int, Int)?
+        /// Raw slot label for the shared script (`AM`, `PM`, `FULL DAY`, `CUSTOM_HOURS`).
+        let timeSlot: String
+        let workStart: String?
+        let workEnd: String?
     }
 
     enum ManagerLocationKind: Sendable {
@@ -104,6 +109,9 @@ struct WarningsComputationSnapshot: Sendable {
         let paidHours: Double
         let scheduleLabel: String
         let clashInterval: (Int, Int)?
+        let timeSlot: String
+        let workStart: String?
+        let workEnd: String?
     }
 
     struct HolidaySnapshot: Sendable {
@@ -130,6 +138,8 @@ struct WarningsComputationSnapshot: Sendable {
         let standardPaidHours: Double
         let standardDayStart: String
         let standardDayEnd: String
+        let breakWindowStart: String
+        let breakWindowEnd: String
         let standardUnpaidBreakHours: Double
         let saturdayCountsAsHours: Double
         let sundayCountsAsHours: Double
@@ -204,7 +214,8 @@ enum WarningsComputation {
                 isManager: user.permissions.manager,
                 hasAdminAccess: user.permissions.adminAccess,
                 isSuperAdmin: user.isSuperAdmin,
-                isAdminRole: user.role == .admin
+                isAdminRole: user.role == .admin,
+                sameEmailUserIds: user.sameEmailUserIds
             )
         }
 
@@ -227,7 +238,10 @@ enum WarningsComputation {
                 isActiveStatus: booking.status == .confirmed || booking.status == .tentative,
                 paidHours: booking.paidBookedHours(policy: input.payrollTimePolicy),
                 scheduleLabel: booking.scheduleLabel(policy: input.payrollTimePolicy),
-                clashInterval: OperativeBookingInterval.clashInterval(for: booking, policy: input.payrollTimePolicy)
+                clashInterval: OperativeBookingInterval.clashInterval(for: booking, policy: input.payrollTimePolicy),
+                timeSlot: booking.timeSlot.rawValue,
+                workStart: booking.workStartTime,
+                workEnd: booking.workEndTime
             )
         }
 
@@ -265,7 +279,10 @@ enum WarningsComputation {
                 isProjectLikeLocation: booking.locationType == .project || booking.locationType == .smallWork,
                 paidHours: booking.paidBookedHours(policy: input.payrollTimePolicy),
                 scheduleLabel: booking.scheduleLabel(policy: input.payrollTimePolicy),
-                clashInterval: ManagerScheduleInterval.clashInterval(for: booking, policy: input.payrollTimePolicy)
+                clashInterval: ManagerScheduleInterval.clashInterval(for: booking, policy: input.payrollTimePolicy),
+                timeSlot: booking.timeSlot.rawValue,
+                workStart: booking.workStartTime,
+                workEnd: booking.workEndTime
             )
         }
 
@@ -310,6 +327,8 @@ enum WarningsComputation {
                 standardPaidHours: input.payrollTimePolicy.standardPaidHours,
                 standardDayStart: input.payrollTimePolicy.standardDayStart,
                 standardDayEnd: input.payrollTimePolicy.standardDayEnd,
+                breakWindowStart: input.payrollTimePolicy.breakWindowStart,
+                breakWindowEnd: input.payrollTimePolicy.breakWindowEnd,
                 standardUnpaidBreakHours: input.payrollTimePolicy.standardUnpaidBreakHours,
                 saturdayCountsAsHours: input.payrollTimePolicy.saturday.resolvedCountsAsHours(
                     fallback: input.payrollTimePolicy.standardPaidHours
@@ -390,17 +409,6 @@ enum WarningsComputation {
             managerBookings: coverageManagerBookings,
             approvedHolidays: input.holidayBookings.filter(\.isApproved)
         )
-
-        let operativeUsers = input.users.filter {
-            $0.isActive &&
-                $0.passwordSet &&
-                $0.isOperativeMode &&
-                !$0.isManager &&
-                !$0.hasAdminAccess &&
-                !$0.isSuperAdmin &&
-                !$0.isAdminRole
-        }
-        let managerUsers = managerOrAdminUsers.filter(\.passwordSet)
 
         if let rows = qualificationRows(input, reference: now) {
             for row in rows {
@@ -563,53 +571,10 @@ enum WarningsComputation {
             }
         }
 
-        let activeOperatives = input.operatives.filter(\.isActive)
-        // coverageStart is:
-        // - numberOfDays: today
-        // - Full week: Monday of this week (past days included)
-        // - Invoicing period: payment-run segment start (past days in that timeframe included)
-        // Never clamp to today here — that hid past invoicing/full-week warnings.
+        // Unbooked labour comes only from canonical-business.js. A second loop that
+        // treats any booking as a full day would hide a morning gap.
         if let rows = unbookedRows(input, coverageStart: coverageStart, coverageEnd: coverageEnd) {
             generated.append(contentsOf: rows)
-        } else {
-            let unbookedScanStart = coverageStart
-            var day = unbookedScanStart
-            while day <= coverageEnd {
-                let weekday = cal.component(.weekday, from: day)
-                if isUnbookedLabourWeekday(weekday, includeWeekends: input.warningDetection.includeWeekendsForUnbookedLabour) {
-                    let requiredHours = paidHoursRequired(on: day, policy: input.payrollTimePolicy, calendar: cal)
-                    if requiredHours > 0.001 {
-                        let people = scheduleIndex.unbookedPeople(
-                            on: day,
-                            operativeUsers: operativeUsers,
-                            managerUsers: managerUsers,
-                            rosterOperatives: activeOperatives,
-                            operativesByEmail: operativesByEmail,
-                            usersById: usersById,
-                            managerAdminUserIds: managerAdminUserIds,
-                            excludedUserIds: input.warningDetection.excludedUserIdsFromUnbookedWarnings,
-                            standardPaidHours: requiredHours
-                        )
-                        for person in people {
-                            generated.append(Warning(
-                                resolutionKey: "unbooked-\(day.timeIntervalSince1970)-\(person.personKey)",
-                                type: .unbookedLabour,
-                                title: "Unbooked labour",
-                                message: "\(person.displayName) is not booked on \(formatDay(day)).",
-                                severity: .high,
-                                occurrenceDate: day,
-                                unbookedLabour: Warning.UnbookedLabourWarningDetails(
-                                    date: day,
-                                    names: [person.displayLine],
-                                    personKeys: [person.personKey]
-                                )
-                            ))
-                        }
-                    }
-                }
-                guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
-                day = next
-            }
         }
 
         let hour = cal.component(.hour, from: now)
@@ -758,6 +723,178 @@ enum WarningsComputation {
         }
     }
 
+    /// The shared script looks up one user id and one operative id. Repeat each
+    /// manager booking and holiday onto every id that shares the email so that
+    /// lookup sees the whole person. Identical clock spans merge inside the script.
+    nonisolated static func shareCoverageAcrossEmail(
+        bookings: [[String: Any]],
+        holidays: [[String: Any]],
+        people: [[String: Any]],
+        operatives: [[String: Any]]
+    ) -> (bookings: [[String: Any]], holidays: [[String: Any]]) {
+        func text(_ value: Any?) -> String {
+            (value as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func email(_ value: Any?) -> String {
+            text(value).lowercased()
+        }
+        var emailByUser: [String: String] = [:]
+        var usersByEmail: [String: [String]] = [:]
+        for person in people {
+            let id = text(person["id"])
+            let key = email(person["email"])
+            guard !id.isEmpty, !key.isEmpty else { continue }
+            emailByUser[id] = key
+            if usersByEmail[key]?.contains(id) != true {
+                usersByEmail[key, default: []].append(id)
+            }
+        }
+        var emailByOperative: [String: String] = [:]
+        var operativesByEmail: [String: [String]] = [:]
+        for operative in operatives {
+            let id = text(operative["id"])
+            let key = email(operative["email"])
+            guard !id.isEmpty, !key.isEmpty else { continue }
+            emailByOperative[id] = key
+            if operativesByEmail[key]?.contains(id) != true {
+                operativesByEmail[key, default: []].append(id)
+            }
+        }
+
+        var kept: [[String: Any]] = []
+        var managerSlotsByEmail: [String: [String: [String: Any]]] = [:]
+        for booking in bookings {
+            let kind = text(booking["kind"])
+            let personId = text(booking["personId"])
+            let ownerEmail = emailByUser[personId] ?? emailByOperative[personId]
+            guard kind == "manager", let key = ownerEmail else {
+                kept.append(booking)
+                continue
+            }
+            let signature = [
+                text(booking["dayKey"]),
+                text(booking["timeSlot"]),
+                text(booking["workStart"]),
+                text(booking["workEnd"])
+            ].joined(separator: "|")
+            managerSlotsByEmail[key, default: [:]][signature] = booking
+        }
+        for (key, slots) in managerSlotsByEmail {
+            for id in usersByEmail[key] ?? [] {
+                for slot in slots.values {
+                    var copy = slot
+                    copy["personId"] = id
+                    kept.append(copy)
+                }
+            }
+        }
+
+        var expandedHolidays: [[String: Any]] = []
+        var seenHolidays = Set<String>()
+        func emit(_ holiday: [String: Any], userId: String, operativeId: String) {
+            let marker = [
+                userId,
+                operativeId,
+                text(holiday["startDayKey"]),
+                text(holiday["endDayKey"])
+            ].joined(separator: "|")
+            guard seenHolidays.insert(marker).inserted else { return }
+            var copy = holiday
+            copy["userId"] = userId
+            copy["operativeId"] = operativeId
+            expandedHolidays.append(copy)
+        }
+        for holiday in holidays {
+            let userId = text(holiday["userId"])
+            let operativeId = text(holiday["operativeId"])
+            let key = emailByUser[userId] ?? emailByOperative[operativeId]
+            guard let key else {
+                emit(holiday, userId: userId, operativeId: operativeId)
+                continue
+            }
+            let userIds = usersByEmail[key] ?? []
+            let operativeIds = operativesByEmail[key] ?? []
+            let users = userIds.isEmpty ? [userId] : userIds
+            let ops = operativeIds.isEmpty ? [operativeId] : operativeIds
+            for uid in users {
+                for oid in ops {
+                    emit(holiday, userId: uid, operativeId: oid)
+                }
+            }
+        }
+        return (kept, expandedHolidays)
+    }
+
+    /// The exclusion list names user ids. One email is one person, so every account
+    /// that shares an excluded email is excluded from the warning rows too.
+    nonisolated static func expandedExcludedUserIds(_ excluded: Set<String>, people: [[String: Any]]) -> [String] {
+        func text(_ value: Any?) -> String {
+            (value as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var emailById: [String: String] = [:]
+        var idsByEmail: [String: [String]] = [:]
+        for person in people {
+            let id = text(person["id"])
+            let email = text(person["email"]).lowercased()
+            guard !id.isEmpty, !email.isEmpty else { continue }
+            emailById[id] = email
+            if idsByEmail[email]?.contains(id) != true {
+                idsByEmail[email, default: []].append(id)
+            }
+        }
+        var expanded = Set(excluded.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+        for id in excluded {
+            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let email = emailById[trimmed], !email.isEmpty else { continue }
+            for alias in idsByEmail[email] ?? [] {
+                expanded.insert(alias)
+            }
+        }
+        return Array(expanded)
+    }
+
+    /// The script keeps the first finished account it sees for an email. Put the same
+    /// account first on every phone: the finished, active account with the smaller id.
+    nonisolated static func orderedPeopleForUnbookedScript(_ people: [[String: Any]]) -> [[String: Any]] {
+        func text(_ value: Any?) -> String {
+            (value as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func finished(_ person: [String: Any]) -> Bool {
+            (person["passwordSet"] as? Bool) == true && (person["isActive"] as? Bool) == true
+        }
+        var groups: [String: [[String: Any]]] = [:]
+        for person in people {
+            let email = text(person["email"]).lowercased()
+            guard !email.isEmpty else { continue }
+            groups[email, default: []].append(person)
+        }
+        var placed = Set<String>()
+        var ordered: [[String: Any]] = []
+        for email in groups.keys.sorted() {
+            let winner = groups[email]?.filter(finished).min { text($0["id"]) < text($1["id"]) }
+            if let winner {
+                ordered.append(winner)
+                placed.insert(text(winner["id"]))
+            }
+        }
+        for person in people where !placed.contains(text(person["id"])) {
+            ordered.append(person)
+        }
+        return ordered
+    }
+
+    /// A full-day "missing" row is wrong when this email's bookings already cover the
+    /// standard day. The script looks up one account id and can miss the alias that holds the hours.
+    nonisolated static func unbookedRowIsAlreadyCovered(
+        paidHours: Double,
+        missingHours: Double,
+        requiredHours: Double
+    ) -> Bool {
+        guard requiredHours > 0.08 else { return false }
+        guard paidHours + 0.08 >= requiredHours else { return false }
+        return missingHours + 0.2 >= requiredHours
+    }
+
     nonisolated private static func unbookedRows(
         _ input: WarningsComputationSnapshot,
         coverageStart: Date,
@@ -770,6 +907,9 @@ enum WarningsComputation {
                 "personId": booking.operativeId.uuidString,
                 "dayKey": dayKeyString(booking.dayStart, calendar: calendar),
                 "kind": "operative",
+                "timeSlot": booking.timeSlot,
+                "workStart": booking.workStart ?? "",
+                "workEnd": booking.workEnd ?? "",
             ])
         }
         for booking in input.managerSiteBookings where booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
@@ -777,10 +917,14 @@ enum WarningsComputation {
                 "personId": booking.userId,
                 "dayKey": dayKeyString(booking.dayStart, calendar: calendar),
                 "kind": "manager",
+                "timeSlot": booking.timeSlot,
+                "workStart": booking.workStart ?? "",
+                "workEnd": booking.workEnd ?? "",
             ])
         }
-        let people: [[String: Any]] = input.users.map { user in
-            [
+        var peopleRows: [[String: Any]] = []
+        for user in input.users {
+            let row: [String: Any] = [
                 "id": user.id,
                 "email": user.emailLowercased,
                 "name": user.displayName,
@@ -791,7 +935,14 @@ enum WarningsComputation {
                 "isAdmin": user.hasAdminAccess || user.isAdminRole,
                 "isSuperAdmin": user.isSuperAdmin,
             ]
+            peopleRows.append(row)
+            for alias in user.sameEmailUserIds where !alias.isEmpty && alias != user.id {
+                var copy = row
+                copy["id"] = alias
+                peopleRows.append(copy)
+            }
         }
+        let people: [[String: Any]] = orderedPeopleForUnbookedScript(peopleRows)
         let operatives: [[String: Any]] = input.operatives.map { operative in
             [
                 "id": operative.id.uuidString,
@@ -811,6 +962,56 @@ enum WarningsComputation {
                 "approved": holiday.isApproved,
             ]
         }
+        var emailById: [String: String] = [:]
+        for user in input.users where !user.emailLowercased.isEmpty {
+            emailById[user.id] = user.emailLowercased
+            for alias in user.sameEmailUserIds where !alias.isEmpty {
+                emailById[alias] = user.emailLowercased
+            }
+        }
+        for operative in input.operatives where !operative.emailLowercased.isEmpty {
+            emailById[operative.id.uuidString] = operative.emailLowercased
+        }
+        var paidByEmailDay: [String: Double] = [:]
+        let standardDay = input.payrollTimePolicy.standardPaidHours
+        func notePaid(email: String, day: Date, hours: Double, coversStandardDay: Bool) {
+            guard !email.isEmpty else { return }
+            let key = "\(email)|\(dayKeyString(day, calendar: calendar))"
+            if coversStandardDay {
+                paidByEmailDay[key] = max(paidByEmailDay[key] ?? 0, standardDay)
+            } else if hours > 0 {
+                paidByEmailDay[key, default: 0] += hours
+            }
+        }
+        func legacyFullDay(_ slot: String, _ start: String?, _ end: String?) -> Bool {
+            let name = slot.trimmingCharacters(in: .whitespacesAndNewlines)
+            let startText = start?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let endText = end?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return name == "FULL DAY" && startText.isEmpty && endText.isEmpty
+        }
+        for booking in input.bookings where booking.isActiveStatus {
+            notePaid(
+                email: emailById[booking.operativeId.uuidString] ?? "",
+                day: booking.dayStart,
+                hours: booking.paidHours,
+                coversStandardDay: legacyFullDay(booking.timeSlot, booking.workStart, booking.workEnd)
+            )
+        }
+        for booking in input.managerSiteBookings {
+            notePaid(
+                email: emailById[booking.userId] ?? "",
+                day: booking.dayStart,
+                hours: booking.paidHours,
+                coversStandardDay: booking.isFullDaySlot
+                    && (booking.workStart ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && (booking.workEnd ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
+        }
+        let shared = shareCoverageAcrossEmail(bookings: bookings, holidays: holidays, people: people, operatives: operatives)
+        let excluded = expandedExcludedUserIds(
+            input.warningDetection.excludedUserIdsFromUnbookedWarnings,
+            people: people
+        )
         guard let rows = CanonicalBusinessEngine.objectRows(
             function: "unbookedLabourRows",
             payload: [
@@ -818,14 +1019,18 @@ enum WarningsComputation {
                 "startDayKey": dayKeyString(coverageStart, calendar: calendar),
                 "endDayKey": dayKeyString(coverageEnd, calendar: calendar),
                 "includeWeekends": input.warningDetection.includeWeekendsForUnbookedLabour,
-                "excludedUserIds": Array(input.warningDetection.excludedUserIdsFromUnbookedWarnings),
+                "excludedUserIds": excluded,
+                "standardDayStart": input.payrollTimePolicy.standardDayStart,
+                "standardDayEnd": input.payrollTimePolicy.standardDayEnd,
+                "breakWindowStart": input.payrollTimePolicy.breakWindowStart,
+                "breakWindowEnd": input.payrollTimePolicy.breakWindowEnd,
                 "standardPaidHours": input.payrollTimePolicy.standardPaidHours,
                 "saturdayCountsAsHours": input.payrollTimePolicy.saturdayCountsAsHours,
                 "sundayCountsAsHours": input.payrollTimePolicy.sundayCountsAsHours,
                 "people": people,
                 "operatives": operatives,
-                "bookings": bookings,
-                "holidays": holidays,
+                "bookings": shared.bookings,
+                "holidays": shared.holidays,
             ]
         ) else {
             return nil
@@ -840,6 +1045,15 @@ enum WarningsComputation {
             let name = row["operativeName"] as? String ?? ""
             let personKey = row["personKey"] as? String ?? ""
             let hours = (row["missingHours"] as? NSNumber)?.doubleValue ?? 0
+            let email = emailById[personKey] ?? ""
+            let paid = paidByEmailDay["\(email)|\(dayKey)"] ?? 0
+            if unbookedRowIsAlreadyCovered(
+                paidHours: paid,
+                missingHours: hours,
+                requiredHours: input.payrollTimePolicy.standardPaidHours
+            ) {
+                return nil
+            }
             return Warning(
                 resolutionKey: id,
                 type: .unbookedLabour,
@@ -867,24 +1081,6 @@ enum WarningsComputation {
             current = next
         }
         return count
-    }
-
-    nonisolated private static func isUnbookedLabourWeekday(_ weekday: Int, includeWeekends: Bool) -> Bool {
-        if includeWeekends {
-            return weekday >= 1 && weekday <= 7
-        }
-        return weekday >= 2 && weekday <= 6
-    }
-
-    nonisolated private static func paidHoursRequired(
-        on day: Date,
-        policy: WarningsComputationSnapshot.PayrollPolicySnapshot,
-        calendar: Calendar
-    ) -> Double {
-        let weekday = calendar.component(.weekday, from: day)
-        if weekday == 7 { return max(policy.saturdayCountsAsHours, 0) }
-        if weekday == 1 { return max(policy.sundayCountsAsHours, 0) }
-        return max(policy.standardPaidHours, 0)
     }
 
     nonisolated private static func clashPersonKind(

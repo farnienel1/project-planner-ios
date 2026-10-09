@@ -427,6 +427,9 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// In memory only. A `managers` record can place a non-admin who has no role flags on Managers.
     /// `saveUser` does not write this field.
     var placedByManagersRecord: Bool = false
+    /// Other `users` document ids for this email. The roster shows one row. Bookings stored
+    /// on a dropped id still belong to this person.
+    var sameEmailUserIds: [String] = []
     
     init(
         id: String,
@@ -464,7 +467,8 @@ struct AppUser: Identifiable, Codable, Hashable {
         timesheetsEnabled: Bool? = nil,
         vatNumber: String? = nil,
         utrNumber: String? = nil,
-        placedByManagersRecord: Bool = false
+        placedByManagersRecord: Bool = false,
+        sameEmailUserIds: [String] = []
     ) {
         self.id = id
         self.email = email
@@ -502,6 +506,7 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.vatNumber = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.utrNumber = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.placedByManagersRecord = placedByManagersRecord
+        self.sameEmailUserIds = sameEmailUserIds
     }
     
     var fullName: String {
@@ -526,7 +531,7 @@ extension AppUser {
         case dayRate, hourlyRate, tradeTypePreset, tradeTypeCustom, profilePhotoURL, lastSeenAt
         case employmentType, employmentTypeTransitionFrom, employmentTypeEffectiveAt
         case annualLeaveEnabled, annualLeaveDaysPerYear, annualLeaveYearStartMonth, annualLeaveYearEndMonth
-        case annualLeaveCarriesOver, timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord
+        case annualLeaveCarriesOver, timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds
     }
 
     init(from decoder: Decoder) throws {
@@ -567,6 +572,7 @@ extension AppUser {
         vatNumber = try container.decodeIfPresent(String.self, forKey: .vatNumber)
         utrNumber = try container.decodeIfPresent(String.self, forKey: .utrNumber)
         placedByManagersRecord = try container.decodeIfPresent(Bool.self, forKey: .placedByManagersRecord) ?? false
+        sameEmailUserIds = try container.decodeIfPresent([String].self, forKey: .sameEmailUserIds) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -607,6 +613,7 @@ extension AppUser {
         try container.encodeIfPresent(vatNumber, forKey: .vatNumber)
         try container.encodeIfPresent(utrNumber, forKey: .utrNumber)
         try container.encode(placedByManagersRecord, forKey: .placedByManagersRecord)
+        try container.encode(sameEmailUserIds, forKey: .sameEmailUserIds)
     }
 
     /// Operatives default on; self-employed managers/admins default on; PAYE managers/admins default off.

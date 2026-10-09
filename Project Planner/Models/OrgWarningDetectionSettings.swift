@@ -231,11 +231,12 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         return s
     }
 
-    /// Canonical key wins when it is present, including an empty list. Older names are only a fallback.
+    /// Canonical key wins when it parses to at least one id. An empty or unreadable
+    /// value falls through to older names. Firestore often hands the array back as
+    /// `NSArray`, which does not cast to `[String]`.
     static func excludedUserIds(from data: [String: Any]) -> [String] {
-        if data["excludedUserIdsFromUnbookedWarnings"] != nil {
-            return stringIds(from: data["excludedUserIdsFromUnbookedWarnings"])
-        }
+        let canonical = stringIds(from: data["excludedUserIdsFromUnbookedWarnings"])
+        if !canonical.isEmpty { return canonical }
         let keys = [
             "excludedUserIds",
             "excludedUsers",
@@ -253,33 +254,56 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     }
 
     private static func stringIds(from value: Any?) -> [String] {
+        guard let value else { return [] }
+        if value is NSNull { return [] }
         if let ids = value as? [String] {
-            return ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            return cleaned(ids)
         }
         if let text = value as? String {
-            return text
-                .split(separator: ",")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+            return cleaned(text.split(separator: ",").map(String.init))
+        }
+        if let map = value as? [String: Any] {
+            if let one = idString(from: map) { return [one] }
+            return cleaned(map.compactMap { key, raw -> String? in
+                if raw is NSNull { return nil }
+                if let flag = raw as? Bool, flag == false { return nil }
+                return key
+            })
         }
         if let rows = value as? [Any] {
-            return rows.compactMap { item -> String? in
-                if let text = item as? String {
-                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    return trimmed.isEmpty ? nil : trimmed
-                }
-                if let map = item as? [String: Any] {
-                    for key in ["id", "userId", "uid", "userID"] {
-                        if let text = map[key] as? String {
-                            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !trimmed.isEmpty { return trimmed }
-                        }
-                    }
-                }
-                return nil
-            }
+            return cleaned(rows.compactMap(idString(from:)))
+        }
+        if let rows = value as? NSArray {
+            return cleaned(rows.compactMap { idString(from: $0) })
+        }
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .collection || mirror.displayStyle == .set {
+            return cleaned(mirror.children.compactMap { idString(from: $0.value) })
         }
         return []
+    }
+
+    private static func idString(from value: Any) -> String? {
+        if let text = value as? String {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let map = value as? [String: Any] {
+            for key in ["id", "userId", "uid", "userID"] {
+                if let text = map[key] as? String {
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { return trimmed }
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func cleaned(_ ids: [String]) -> [String] {
+        var seen = Set<String>()
+        return ids
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
     private static func firestoreInt(_ value: Any?) -> Int? {

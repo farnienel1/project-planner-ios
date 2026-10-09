@@ -486,6 +486,41 @@ class NotificationService: ObservableObject {
             await saveNotification(notification)
         }
     }
+
+    /// Writes one inbox row per recipient when a toolbox talk is issued. The issuer is excluded.
+    /// Recipient ids are resolved across same-email accounts so the signed-in phone sees the alert.
+    func notifyToolboxTalkIssued(
+        projectId: UUID,
+        siteName: String,
+        talkTitle: String,
+        issuedByName: String,
+        issuedByUserId: String?,
+        recipientUserIds: [String]
+    ) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let issuer = issuedByUserId.map(resolvedRecipientUserId)
+        var recipientIds = Set(recipientUserIds.map(resolvedRecipientUserId))
+        if let issuer {
+            recipientIds.remove(issuer)
+        }
+        guard !recipientIds.isEmpty else { return }
+        let trimmedTitle = talkTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let detail = trimmedTitle.isEmpty ? "a toolbox talk" : trimmedTitle
+        let site = siteName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let place = site.isEmpty ? "a job" : site
+        for userId in recipientIds {
+            let notification = AppNotification(
+                organizationId: organizationId,
+                type: .toolboxTalkIssued,
+                title: "Toolbox talk issued",
+                message: "\(issuedByName) issued \(detail) on \(place).",
+                userId: userId,
+                relatedId: projectId
+            )
+            await saveNotification(notification)
+        }
+    }
     
     func notifyBookingClash(booking1Id: UUID, booking2Id: UUID, operativeName: String, date: Date, userId1: String, userId2: String) async {
         guard let firebaseBackend = firebaseBackend,
@@ -1558,17 +1593,8 @@ class NotificationService: ObservableObject {
             let canonical = await resolvedRecipientUserIdResolvingStaleIds(mid)
             return [canonical]
         }
-        // Fallback priority: active managers first, then super admins, then admins.
-        // This keeps annual leave approval routing aligned with the line-manager flow.
-        let managers = userStore.organizationUsers.filter {
-            $0.isActive &&
-            $0.passwordSet &&
-            $0.permissions.manager &&
-            !$0.permissions.operativeMode
-        }.map(\.id)
-        if !managers.isEmpty {
-            return uniqueCanonicalUserIds(from: managers)
-        }
+        // No line manager and no assigned project manager: do not tell every manager.
+        // Super admins and admins still receive it so the request is not dropped.
         let superAdmins = userStore.organizationUsers.filter {
             $0.isActive && $0.isSuperAdmin && !$0.permissions.operativeMode
         }.map(\.id)
@@ -1583,7 +1609,10 @@ class NotificationService: ObservableObject {
 
     private func resolvedRecipientUserId(_ userId: String) -> String {
         guard let userStore else { return userId }
-        guard let seed = userStore.organizationUsers.first(where: { $0.id == userId }) else { return userId }
+        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let seed = userStore.organizationUsers.first(where: {
+            $0.id == trimmed || $0.sameEmailUserIds.contains(trimmed)
+        }) else { return userId }
         let normalizedEmail = seed.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         let sameEmail = userStore.organizationUsers.filter {
             $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail

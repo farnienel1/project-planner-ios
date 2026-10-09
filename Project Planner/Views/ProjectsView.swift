@@ -34,10 +34,7 @@ struct ProjectsView: View {
     }
 
     private var canCreateProjects: Bool {
-        guard let u = userStore.currentUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if u.isSuperAdmin || u.permissions.adminAccess { return true }
-        return u.permissions.manager && u.permissions.projects
+        userStore.canManageWorkCatalogue(.projects)
     }
 
     var body: some View {

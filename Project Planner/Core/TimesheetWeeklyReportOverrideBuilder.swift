@@ -22,7 +22,8 @@ enum TimesheetWeeklyReportOverrideBuilder {
         policy: OrgPayrollTimePolicy,
         organization: Organization?,
         scheduleOptions: MyScheduleOptions,
-        viewer: AppUser?
+        viewer: AppUser?,
+        relatedUsers: [AppUser] = []
     ) {
         guard TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) else {
             draft.weeklyReportOverride = nil
@@ -52,7 +53,8 @@ enum TimesheetWeeklyReportOverrideBuilder {
             policy: policy,
             organization: organization,
             scheduleOptions: scheduleOptions,
-            viewer: viewer
+            viewer: viewer,
+            relatedUsers: relatedUsers
         )
     }
 
@@ -69,7 +71,8 @@ enum TimesheetWeeklyReportOverrideBuilder {
         policy: OrgPayrollTimePolicy,
         organization: Organization?,
         scheduleOptions: MyScheduleOptions,
-        viewer: AppUser?
+        viewer: AppUser?,
+        relatedUsers: [AppUser] = []
     ) -> TimesheetWeeklyReportOverride {
         let summary = TimesheetPayrollCollector.collect(
             for: user,
@@ -82,7 +85,8 @@ enum TimesheetWeeklyReportOverrideBuilder {
             history: history,
             policy: policy,
             organization: organization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            relatedUsers: relatedUsers
         )
         let managerHasSigned = draft.managerSignedAt != nil
         let applyLiveReview = true

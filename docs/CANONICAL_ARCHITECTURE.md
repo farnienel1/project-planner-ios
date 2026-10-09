@@ -16,6 +16,8 @@ The executable business rules live in the web repository at `lib/canonical/engin
 
 Rebuild the script from the web repo with `npm run build:canonical` and commit `canonical-business.js`. Do not edit the script by hand.
 
+Manager catalogue visibility is not in the script. In Swift, a manager sees every project and every small works job, including jobs they are not assigned to. `permissions.projects` and `permissions.smallWorks` hide create and edit only. Super admin ignores those two toggles. Staff warning rows are the same canonical list for admins and managers. One email is one person: Swift sends the finished account with the smaller id first, and repeats that email's manager hours onto every account id, because `unbookedLabourRows` keeps the first finished account and looks up a single id. A full-day unbooked row is dropped when that email's paid hours already cover the standard day. `excludedUserIdsFromUnbookedWarnings` still filters warning rows only. The script itself does not merge those alias hours; do not hand-edit it. A notification for a job still goes to the line manager or the assigned project manager, not to every manager. The web bundle must catch up if it still hides those lists or warning rows by assignment.
+
 Clash timelines and the material cut-off message still live in `Core/WarningsComputation.swift`. Those dates use `CanonicalBusinessEngine.businessCalendar`, not `Calendar.current`. Payroll overtime still lives in `Core/PayrollHoursEngine.swift`. Named `FULL DAY`, `AM`, and `PM` hours are defined in the canonical script.
 
 ## Agent windows

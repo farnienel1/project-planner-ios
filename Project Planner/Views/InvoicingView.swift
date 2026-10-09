@@ -1268,7 +1268,8 @@ private struct MyTimesheetView: View {
             history: dayRateHistoryCollection,
             policy: policy,
             organization: firebaseBackend.currentOrganization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            relatedUsers: userStore.organizationUsers
         )
         return summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
     }
@@ -1981,7 +1982,8 @@ private struct MyTimesheetView: View {
                 policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
                 organization: firebaseBackend.currentOrganization,
                 scheduleOptions: firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions(),
-                viewer: current
+                viewer: current,
+                relatedUsers: userStore.organizationUsers
             )
         }
         TimesheetDraftStore.save(draft, userId: currentUserId, weekStart: week.start)
@@ -2399,7 +2401,8 @@ private struct PreviousTimesheetsView: View {
             history: dayRateHistoryCollection,
             policy: policy,
             organization: firebaseBackend.currentOrganization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            relatedUsers: userStore.organizationUsers
         )
         return (summary.totalHours, summary.overtimeHours, summary.baseAmount, summary.overtimeAmount)
     }
@@ -2966,6 +2969,7 @@ private struct OperativeTimesheetsView: View {
             organization: firebaseBackend.currentOrganization,
             organizationName: orgName,
             scheduleOptions: scheduleOptions,
+            organizationUsers: userStore.organizationUsers,
             recipientEmail: recipientEmail,
             recipientName: exporter.fullName.isEmpty ? exporter.email : exporter.fullName,
             firebaseBackend: firebaseBackend
@@ -2999,7 +3003,8 @@ private struct OperativeTimesheetsView: View {
                 policy: policy,
                 organization: firebaseBackend.currentOrganization,
                 scheduleOptions: scheduleOptions,
-                viewer: exporter
+                viewer: exporter,
+                relatedUsers: userStore.organizationUsers
             )
             TimesheetDraftStore.save(d, userId: op.id, weekStart: week.start)
             let snapshot = d
@@ -3124,7 +3129,8 @@ private struct OperativeTimesheetsView: View {
             history: dayRateHistoryCollection,
             policy: policy,
             organization: firebaseBackend.currentOrganization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            relatedUsers: userStore.organizationUsers
         )
         return (
             summary.totalHours,
@@ -3725,7 +3731,8 @@ private struct OperativeTimesheetReviewView: View {
             policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
             organization: firebaseBackend.currentOrganization,
             scheduleOptions: firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions(),
-            viewer: userStore.displayUser
+            viewer: userStore.displayUser,
+            relatedUsers: userStore.organizationUsers
         )
         TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
@@ -3780,7 +3787,8 @@ private struct OperativeTimesheetReviewView: View {
             history: dayRateHistoryCollection,
             policy: policy,
             organization: firebaseBackend.currentOrganization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            relatedUsers: userStore.organizationUsers
         )
     }
 
@@ -4531,7 +4539,8 @@ private enum InvoicePDFGenerationSupport {
             operatives: operatives,
             projects: projects,
             smallWorks: smallWorks,
-            history: history
+            history: history,
+            relatedUsers: userStore.organizationUsers
         )
         let total = rows.reduce(0) { $0 + $1.amount }
         let notes = rateChangeNotes(
@@ -4567,7 +4576,8 @@ private enum InvoicePDFGenerationSupport {
         operatives: [Operative],
         projects: [Project],
         smallWorks: [Project],
-        history: OperativeDayRateHistoryCollection
+        history: OperativeDayRateHistoryCollection,
+        relatedUsers: [AppUser] = []
     ) -> [InvoiceLineItem] {
         let summary = TimesheetPayrollCollector.collect(
             for: currentUser,
@@ -4580,7 +4590,8 @@ private enum InvoicePDFGenerationSupport {
             history: history,
             policy: policy,
             organization: organization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            relatedUsers: relatedUsers
         )
         var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
 
@@ -5031,7 +5042,8 @@ private struct GenerateInvoiceView: View {
             history: dayRateHistoryCollection,
             policy: policy,
             organization: firebaseBackend.currentOrganization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            relatedUsers: userStore.organizationUsers
         )
         var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
 
@@ -5694,6 +5706,7 @@ private enum TimesheetExportHelper {
         organization: Organization?,
         organizationName: String,
         scheduleOptions: MyScheduleOptions = MyScheduleOptions(),
+        organizationUsers: [AppUser] = [],
         recipientEmail: String,
         recipientName: String,
         firebaseBackend: FirebaseBackend? = nil
@@ -5718,7 +5731,8 @@ private enum TimesheetExportHelper {
                 dayRateHistory: dayRateHistory,
                 payrollPolicy: payrollPolicy,
                 organization: organization,
-                scheduleOptions: scheduleOptions
+                scheduleOptions: scheduleOptions,
+                relatedUsers: organizationUsers
             )
             let grandTotal = rows.reduce(0) { $0 + $1.amount }
             let fileName = timesheetPDFFileName(userName: userName, paymentRunStamp: paymentRunStamp)
@@ -5838,7 +5852,8 @@ private enum TimesheetExportHelper {
         dayRateHistory: OperativeDayRateHistoryCollection,
         payrollPolicy: OrgPayrollTimePolicy,
         organization: Organization?,
-        scheduleOptions: MyScheduleOptions = MyScheduleOptions()
+        scheduleOptions: MyScheduleOptions = MyScheduleOptions(),
+        relatedUsers: [AppUser] = []
     ) -> [InvoiceLineItem] {
         let summary = TimesheetPayrollCollector.collect(
             for: user,
@@ -5851,7 +5866,8 @@ private enum TimesheetExportHelper {
             history: dayRateHistory,
             policy: payrollPolicy,
             organization: organization,
-            scheduleOptions: scheduleOptions
+            scheduleOptions: scheduleOptions,
+            relatedUsers: relatedUsers
         )
         var rows: [InvoiceLineItem] = []
         let managerHasSigned = draft.managerSignedAt != nil || TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user)

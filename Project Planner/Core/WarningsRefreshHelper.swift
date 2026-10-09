@@ -33,7 +33,7 @@ enum WarningsRefreshHelper {
         allowWhileSheetVisible: Bool = false,
         bypassLaunchQuiet: Bool = false
     ) async -> Bool {
-        guard userStore.hasAdminAccess() else { return false }
+        guard userStore.canViewStaffWarnings() else { return false }
 
         if isWarningsSheetVisible && !manualUserInitiated && !allowWhileSheetVisible {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (Warnings sheet visible)")
@@ -163,6 +163,9 @@ enum WarningsRefreshHelper {
     ) async {
         let cal = CanonicalBusinessEngine.businessCalendar
         let today = cal.startOfDay(for: Date())
+        // The phone can still be on the default horizon until settings is opened.
+        // Re-read the organisation document so exclusion and the scan window match Firestore.
+        await firebaseBackend.refreshWarningDetectionFromServer()
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
         let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
