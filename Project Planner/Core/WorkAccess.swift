@@ -70,20 +70,16 @@ enum WorkAccess {
         }
     }
 
-    /// Variations: admins see every job. Managers see only jobs they are assigned on.
-    /// Operatives never see the feature.
+    /// Variations: every admin and every manager, on every job. Assignment does not hide a job.
+    /// Operative mode wins, including over a stale admin or manager flag.
     static func canAccessVariations(
         project: Project,
         userStore: UserStore,
         operativeStore: OperativeStore
     ) -> Bool {
-        if userStore.isOperativeMode() { return false }
+        _ = (project, operativeStore)
         guard let user = userStore.displayUser ?? userStore.currentUser else { return false }
-        if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
-            return true
-        }
-        guard user.permissions.manager || user.role == .manager else { return false }
-        return isAssignedManager(on: project, user: user, operativeStore: operativeStore)
+        return CanonicalBusinessEngine.canSeeVariations(UserStore.staffAccountRole(for: user))
     }
 
     static func isAssignedManager(

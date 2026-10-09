@@ -606,9 +606,9 @@ class UserStore: ObservableObject {
         return currentUser.isRosterAdmin
     }
 
-    /// When false, hide the Holiday tab and annual-leave entry points (managed per user).
+    /// Holiday stays available when a person has no paid allowance. `annualLeaveEnabled` is the allowance, not this switch.
     func isAnnualLeaveFeatureEnabled() -> Bool {
-        displayUser?.annualLeaveEnabled ?? true
+        true
     }
 
     /// Shared cross-platform nav label from `organizations/{orgId}.settings.uiLabels.navigationLabels`.
@@ -913,13 +913,32 @@ class UserStore: ObservableObject {
         return u.permissions.dailyOverview
     }
 
-    /// Staff warning rows are the organisation canonical list. Admins and managers see that list.
-    /// Operative mode does not. The exclusion list still applies only inside those rows.
+    /// Flags for `canViewStaffWarnings`, `isStaffAccount`, and `seesEveryJob`. Operative mode is passed through; the script decides it wins.
+    static func staffAccountRole(for user: AppUser) -> CanonicalBusinessEngine.CanonicalStaffAccountRole {
+        CanonicalBusinessEngine.CanonicalStaffAccountRole(
+            isSuperAdmin: user.isSuperAdmin,
+            isAdmin: user.permissions.adminAccess || user.role == .admin,
+            isManager: user.permissions.manager || user.role == .manager,
+            isOperativeMode: user.permissions.operativeMode || user.role == .operative
+        )
+    }
+
+    /// Staff warning rows are the organisation canonical list. The script decides who sees them.
     func canViewStaffWarnings() -> Bool {
-        if isOperativeMode() { return false }
-        if hasAdminAccess() { return true }
         guard let u = displayUser else { return isHomeProfileLoading }
-        return u.permissions.manager || u.role == .manager
+        return CanonicalBusinessEngine.canViewStaffWarnings(Self.staffAccountRole(for: u))
+    }
+
+    /// Every admin and every manager sees variations on every job. Operatives do not.
+    func canSeeVariations() -> Bool {
+        guard let u = displayUser else { return false }
+        return CanonicalBusinessEngine.canSeeVariations(Self.staffAccountRole(for: u))
+    }
+
+    /// Tracker numbering is admin and super admin only. Managers can see variations without this.
+    func canManageVariationTracker() -> Bool {
+        guard let u = displayUser else { return false }
+        return CanonicalBusinessEngine.canManageVariationTracker(Self.staffAccountRole(for: u))
     }
     
     /// Super admins, admins, and managers may set whether a site audit is visible to operative-mode users.
@@ -1040,7 +1059,7 @@ class UserStore: ObservableObject {
              // MARK: - User Invitation
              
     /// For operative invitations, pass the line manager's Firebase Auth UID (`users` document id).
-    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .paye, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async -> Bool {
+    func inviteUser(firstName: String, surname: String, email: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .paye, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, annualLeaveYearAllowance: Double? = nil, annualLeaveYearAllowanceKey: String? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async -> Bool {
         print("🔥🔥🔥 DEBUG: inviteUser called with firstName: \(firstName), surname: \(surname), email: \(email)")
         
         errorMessage = nil
@@ -1218,6 +1237,9 @@ class UserStore: ObservableObject {
                 annualLeaveYearStartMonth: annualLeaveYearStartMonth,
                 annualLeaveYearEndMonth: annualLeaveYearEndMonth,
                 annualLeaveCarriesOver: annualLeaveCarriesOver,
+                annualLeaveEnabled: annualLeaveEnabled,
+                annualLeaveYearAllowance: annualLeaveYearAllowance,
+                annualLeaveYearAllowanceKey: annualLeaveYearAllowanceKey,
                 timesheetsEnabled: timesheetsEnabled,
                 vatNumber: vatNumber,
                 utrNumber: utrNumber
@@ -1852,7 +1874,10 @@ class UserStore: ObservableObject {
         daysPerYear: Double,
         startMonth: Int,
         endMonth: Int,
-        carriesOver: Bool
+        carriesOver: Bool,
+        yearAllowance: Double? = nil,
+        yearAllowanceKey: String? = nil,
+        writeYearAllowance: Bool = false
     ) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
@@ -1868,6 +1893,10 @@ class UserStore: ObservableObject {
         updated.annualLeaveYearStartMonth = sm
         updated.annualLeaveYearEndMonth = em
         updated.annualLeaveCarriesOver = carriesOver
+        if writeYearAllowance {
+            updated.annualLeaveYearAllowance = yearAllowance
+            updated.annualLeaveYearAllowanceKey = yearAllowanceKey
+        }
 
         do {
             if hasAdminAccess() {
@@ -1879,7 +1908,10 @@ class UserStore: ObservableObject {
                     daysPerYear: clampedDays,
                     startMonth: sm,
                     endMonth: em,
-                    carriesOver: carriesOver
+                    carriesOver: carriesOver,
+                    yearAllowance: yearAllowance,
+                    yearAllowanceKey: yearAllowanceKey,
+                    writeYearAllowance: writeYearAllowance
                 )
             } else {
                 return false
@@ -1890,6 +1922,10 @@ class UserStore: ObservableObject {
                 cu.annualLeaveYearStartMonth = sm
                 cu.annualLeaveYearEndMonth = em
                 cu.annualLeaveCarriesOver = carriesOver
+                if writeYearAllowance {
+                    cu.annualLeaveYearAllowance = yearAllowance
+                    cu.annualLeaveYearAllowanceKey = yearAllowanceKey
+                }
                 currentUser = cu
             }
             return true
@@ -1942,18 +1978,20 @@ class UserStore: ObservableObject {
         if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
             return false
         }
-        let calendar = Calendar.current
-        let effectiveStart = effectiveAt.map { calendar.startOfDay(for: $0) } ?? calendar.startOfDay(for: Date())
-        let transitionFrom: EmploymentType? = (employmentType != updated.employmentType) ? updated.employmentType : nil
-        updated.employmentType = employmentType
-        updated.timesheetsEnabled = employmentType == .selfEmployed
-        if transitionFrom != nil {
-            updated.employmentTypeTransitionFrom = transitionFrom
-            updated.employmentTypeEffectiveAt = effectiveStart
-        } else {
-            updated.employmentTypeTransitionFrom = nil
-            updated.employmentTypeEffectiveAt = nil
+        guard let change = CanonicalBusinessEngine.applyEmploymentTypeChange(
+            previousType: updated.employmentType.rawValue,
+            nextType: employmentType.rawValue,
+            previousTransitionFrom: updated.employmentTypeTransitionFrom?.rawValue,
+            previousEffectiveAt: updated.employmentTypeEffectiveAt,
+            effectiveAt: effectiveAt
+        ) else {
+            errorMessage = "Could not save employment type."
+            return false
         }
+        updated.employmentType = EmploymentType.fromCanonical(change.employmentType)
+        updated.employmentTypeTransitionFrom = change.employmentTypeTransitionFrom.map { EmploymentType.fromCanonical($0) }
+        updated.employmentTypeEffectiveAt = change.employmentTypeEffectiveAt
+        updated.timesheetsEnabled = updated.employmentType(on: Date()) == .selfEmployed
 
         do {
             if hasAdminAccess() {
@@ -2014,10 +2052,6 @@ class UserStore: ObservableObject {
                     updatedUser.setLineManagerUserIds(managerIds)
                 }
                 updatedUser.dayRate = dayRate
-                if updateDayRate {
-                    // Single rate field in Manage Users — clearing/setting day rate also clears hourly.
-                    updatedUser.hourlyRate = nil
-                }
 
                 do {
                     let previousDayRate = organizationUsers[index].dayRate

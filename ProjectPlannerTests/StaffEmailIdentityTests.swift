@@ -367,10 +367,80 @@ final class StaffEmailIdentityTests: XCTestCase {
         XCTAssertEqual(firstFinished?["id"] as? String, "463952DE-0375-435D-8AB3-67570C902C56")
     }
 
-    func testFullDayUnbookedRowDropsWhenTheEmailIsAlreadyCovered() {
-        XCTAssertTrue(WarningsComputation.unbookedRowIsAlreadyCovered(paidHours: 8, missingHours: 8, requiredHours: 8))
-        XCTAssertFalse(WarningsComputation.unbookedRowIsAlreadyCovered(paidHours: 0, missingHours: 8, requiredHours: 8))
-        XCTAssertFalse(WarningsComputation.unbookedRowIsAlreadyCovered(paidHours: 4, missingHours: 4, requiredHours: 8))
+    func testEveningPaidHoursDoNotHideAnUnbookedStandardDay() throws {
+        let calendar = CanonicalBusinessEngine.businessCalendar
+        let monday = try XCTUnwrap(CanonicalBusinessEngine.date(fromDayKey: "2026-10-05", calendar: calendar))
+        let operativeId = UUID()
+        let snapshot = WarningsComputationSnapshot(
+            operatives: [
+                .init(
+                    id: operativeId,
+                    name: "Ada Lovelace",
+                    emailLowercased: "ada@example.com",
+                    isActive: true,
+                    qualificationExpiries: []
+                )
+            ],
+            bookings: [
+                .init(
+                    id: UUID(),
+                    operativeId: operativeId,
+                    projectId: UUID(),
+                    date: monday,
+                    dayStart: monday,
+                    isActiveStatus: true,
+                    paidHours: 8,
+                    scheduleLabel: "Evening",
+                    clashInterval: nil,
+                    timeSlot: "CUSTOM_HOURS",
+                    workStart: "18:00",
+                    workEnd: "20:00"
+                )
+            ],
+            projects: [],
+            users: [
+                .init(
+                    id: "ada-user",
+                    emailLowercased: "ada@example.com",
+                    displayName: "Ada Lovelace",
+                    isActive: true,
+                    passwordSet: true,
+                    createdAt: monday,
+                    isOperativeMode: true,
+                    isManager: false,
+                    hasAdminAccess: false,
+                    isSuperAdmin: false,
+                    isAdminRole: false
+                )
+            ],
+            managerSiteBookings: [],
+            holidayBookings: [],
+            payrollTimePolicy: .init(
+                standardPaidHours: 8,
+                standardDayStart: "07:30",
+                standardDayEnd: "16:00",
+                breakWindowStart: "12:00",
+                breakWindowEnd: "12:30",
+                standardUnpaidBreakHours: 0.5,
+                saturdayCountsAsHours: 0,
+                sundayCountsAsHours: 0
+            ),
+            warningDetection: .init(
+                detectClashes: false,
+                includeWeekendsForUnbookedLabour: false,
+                excludedUserIdsFromUnbookedWarnings: []
+            ),
+            coverageStart: monday,
+            coverageEnd: monday,
+            materialOrderCutOffEnabled: false,
+            materialCutOffOnSaturday: false,
+            materialCutOffOnSunday: false,
+            projectsWithTomorrowBookingIds: [],
+            materialItemsForTomorrow: []
+        )
+        let unbooked = WarningsComputation.generate(snapshot).filter { $0.type == .unbookedLabour }
+        XCTAssertEqual(unbooked.count, 1)
+        XCTAssertTrue(unbooked[0].message.contains("Ada Lovelace"))
     }
 
     func testWarningPayloadRepeatsAliasCoverage() {
@@ -597,8 +667,21 @@ final class StaffEmailIdentityTests: XCTestCase {
                 ],
             ],
         ])
-        XCTAssertEqual(org.warningDetection.excludedUserIdsFromUnbookedWarnings, [uid])
+        XCTAssertEqual(org.warningDetection.excludedUserIdsFromUnbookedWarnings, [])
         XCTAssertEqual(org.warningDetection.clashLookaheadMode, .endOfInvoicingPeriod)
+        XCTAssertEqual(org.warningDetection.clashLookaheadDays, 7)
+
+        let filledFromNested = FirebaseBackend.organizationSettingsFromOrgDocument([
+            "warningDetection": [
+                "clashLookaheadMode": "numberOfDays",
+            ],
+            "settings": [
+                "warningDetection": [
+                    "excludedUserIdsFromUnbookedWarnings": [uid],
+                ],
+            ],
+        ])
+        XCTAssertEqual(filledFromNested.warningDetection.excludedUserIdsFromUnbookedWarnings, [uid])
     }
 
     private func labourLine(id: String, bookingId: String, amount: Double) -> TimesheetWeeklyReportLabourLine {

@@ -230,6 +230,17 @@ struct MaterialCatalogItem: Identifiable, Codable, Hashable {
 }
 
 extension MaterialCatalogItem {
+    var canonicalSearchRecord: CanonicalBusinessEngine.CanonicalMaterialRecord {
+        CanonicalBusinessEngine.CanonicalMaterialRecord(
+            name: name,
+            brand: brand,
+            productCode: productCode ?? "",
+            category: category ?? "",
+            size: size ?? "",
+            length: length ?? sizeOrLength ?? ""
+        )
+    }
+
     /// Backward compatibility for older call sites and persisted data migrations.
     var sizeOrLength: String? {
         get {

@@ -65,6 +65,7 @@ struct WarningsDetailView: View {
     @State private var warningPendingDismiss: Warning?
     @State private var isRefreshingWarnings = false
     @State private var refreshMessage: String?
+    @State private var operativeUserToEdit: AppUser?
 
     private var organisationSubtitle: String {
         firebaseBackend.currentOrganization?.name ?? "Organisation"
@@ -156,6 +157,17 @@ struct WarningsDetailView: View {
                         .environmentObject(taskStore)
                         .environmentObject(notificationService)
                 }
+            }
+            .sheet(item: $operativeUserToEdit) { user in
+                NavigationStack {
+                    EditUserView(user: user)
+                }
+                .environmentObject(userStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(holidayStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
             }
             .sheet(item: $warningPendingDismiss) { warning in
                 WarningDismissConfirmationSheet(
@@ -711,6 +723,7 @@ struct WarningsDetailView: View {
 
     private func qualificationCard(_ warning: Warning) -> some View {
         let canDismiss = warning.qualificationExpiry?.canDismiss == true
+        let openUser = openOperativeTarget(for: warning)
         return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(warning.title)
@@ -737,16 +750,33 @@ struct WarningsDetailView: View {
                 .foregroundStyle(WarningsUI.textBody)
                 .padding(16)
 
-            if canDismiss {
-                Button { dismissExpiredQualification(warning) } label: {
-                    Text("Dismiss")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.420, green: 0.447, blue: 0.502))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
+            if openUser != nil || canDismiss {
+                HStack(spacing: 0) {
+                    if let openUser {
+                        Button {
+                            operativeUserToEdit = openUser
+                        } label: {
+                            Text("Open operative")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(WarningsUI.blue)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .accessibilityIdentifier("warnings.openOperative")
+                        .buttonStyle(.plain)
+                    }
+                    if canDismiss {
+                        Button { dismissExpiredQualification(warning) } label: {
+                            Text("Dismiss")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color(red: 0.420, green: 0.447, blue: 0.502))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .accessibilityIdentifier("warnings.dismissQualification")
+                        .buttonStyle(.plain)
+                    }
                 }
-                .accessibilityIdentifier("warnings.dismissQualification")
-                .buttonStyle(.plain)
                 .padding(.horizontal, 14)
                 .padding(.bottom, 14)
                 .background(Color(red: 0.980, green: 0.980, blue: 0.980))
@@ -759,6 +789,30 @@ struct WarningsDetailView: View {
                 .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
         )
         .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+    }
+
+    private func openOperativeTarget(for warning: Warning) -> AppUser? {
+        guard let actor = userStore.displayUser ?? userStore.currentUser,
+              let detail = warning.qualificationExpiry else { return nil }
+        guard let target = loginUser(forOperativeId: detail.operativeId) else { return nil }
+        guard WarningOperativeAccess.destination(actor: actor, target: target) != nil else { return nil }
+        return target
+    }
+
+    private func loginUser(forOperativeId operativeId: String) -> AppUser? {
+        let needle = operativeId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return nil }
+        if let direct = userStore.organizationUsers.first(where: { $0.id.lowercased() == needle && $0.isStoredUserDocument }) {
+            return direct
+        }
+        guard let operative = operativeStore.allOperatives.first(where: { $0.id.uuidString.lowercased() == needle }) else {
+            return nil
+        }
+        let email = operative.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !email.isEmpty else { return nil }
+        return userStore.organizationUsers.first {
+            $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == email && $0.isStoredUserDocument
+        }
     }
 
     private func dismissExpiredQualification(_ warning: Warning) {

@@ -432,7 +432,12 @@ class NotificationService: ObservableObject {
         var recipientIds = Set<String>()
         for user in userStore?.organizationUsers ?? [] {
             guard user.isActive else { continue }
-            if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
+            let notified = CanonicalBusinessEngine.receivesJobNotification(
+                userId: user.id,
+                role: UserStore.staffAccountRole(for: user),
+                assignedManagerUserIds: []
+            )
+            if notified {
                 recipientIds.insert(resolvedRecipientUserId(user.id))
             }
         }

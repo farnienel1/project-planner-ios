@@ -22,6 +22,8 @@ struct WarningsComputationInput: @unchecked Sendable {
     let warningDetection: OrgWarningDetectionSettings
     let coverageStart: Date
     let coverageEnd: Date
+    /// Saturday and Sunday after a Monday–Friday week, only when unbooked labour includes weekends.
+    var unbookedCoverageEnd: Date? = nil
     let materialOrderCutOffEnabled: Bool
     let materialCutOffOnSaturday: Bool
     let materialCutOffOnSunday: Bool
@@ -159,6 +161,7 @@ struct WarningsComputationSnapshot: Sendable {
     let warningDetection: WarningDetectionSnapshot
     let coverageStart: Date
     let coverageEnd: Date
+    var unbookedCoverageEnd: Date? = nil
     let materialOrderCutOffEnabled: Bool
     let materialCutOffOnSaturday: Bool
     let materialCutOffOnSunday: Bool
@@ -351,6 +354,7 @@ enum WarningsComputation {
             ),
             coverageStart: cal.startOfDay(for: input.coverageStart),
             coverageEnd: cal.startOfDay(for: input.coverageEnd),
+            unbookedCoverageEnd: input.unbookedCoverageEnd.map { cal.startOfDay(for: $0) },
             materialOrderCutOffEnabled: input.materialOrderCutOffEnabled,
             materialCutOffOnSaturday: input.materialCutOffOnSaturday,
             materialCutOffOnSunday: input.materialCutOffOnSunday,
@@ -420,59 +424,11 @@ enum WarningsComputation {
         )
 
         if let rows = qualificationRows(input, reference: now, dismissedKeys: input.dismissedQualificationKeys) {
-            for row in rows {
-                generated.append(row)
-            }
-        } else {
-            let oneMonthFromNow = cal.date(byAdding: .month, value: 1, to: today) ?? today
-            for operative in input.operatives where operative.isActive {
-                for expiry in operative.qualificationExpiries {
-                    let expiryDate = expiry.expiryDate
-                    guard expiryDate <= oneMonthFromNow else { continue }
-                    let daysUntilExpiry = cal.dateComponents([.day], from: today, to: expiryDate).day ?? 0
-                    let message: String
-                    if daysUntilExpiry < 0 {
-                        let ago = abs(daysUntilExpiry)
-                        message = "\(operative.name)'s \(expiry.qualificationName) expired \(ago) day\(ago == 1 ? "" : "s") ago"
-                    } else if daysUntilExpiry == 0 {
-                        message = "\(operative.name)'s \(expiry.qualificationName) expires today"
-                    } else {
-                        message = "\(operative.name)'s \(expiry.qualificationName) expires in \(daysUntilExpiry) day\(daysUntilExpiry == 1 ? "" : "s")"
-                    }
-                    let key = "qual-\(operative.id.uuidString)-\(expiry.qualificationId.uuidString)"
-                    generated.append(Warning(
-                        resolutionKey: key,
-                        type: .qualificationExpiry,
-                        title: daysUntilExpiry < 0 ? "Qualification expired" : "Qualification expiry",
-                        message: message,
-                        severity: .low,
-                        occurrenceDate: expiryDate
-                    ))
-                }
-            }
+            generated.append(contentsOf: rows)
         }
 
         if let rows = unverifiedRows(input, reference: now) {
             generated.append(contentsOf: rows)
-        } else {
-            for operative in input.operatives {
-                if let operativeUser = input.users.first(where: {
-                    $0.emailLowercased == operative.emailLowercased && $0.isOperativeMode
-                }), !operativeUser.passwordSet {
-                    let daysSince = workingDaysBetween(operativeUser.createdAt, today, calendar: cal)
-                    if daysSince >= 3 {
-                        let key = "unverified-\(operative.id.uuidString)"
-                        generated.append(Warning(
-                            resolutionKey: key,
-                            type: .operativeNotVerified,
-                            title: "Unverified operative",
-                            message: "\(operative.name) has not verified their account",
-                            severity: .low,
-                            operativeEmail: operativeUser.emailLowercased
-                        ))
-                    }
-                }
-            }
         }
 
         var processedOpClash: Set<String> = []
@@ -926,27 +882,15 @@ enum WarningsComputation {
         return ordered
     }
 
-    /// A full-day "missing" row is wrong when this email's bookings already cover the
-    /// standard day. The script links accounts by email from the people rows Swift sends; this
-    /// guard stays for paid hours Swift knows about that are not in those rows.
-    nonisolated static func unbookedRowIsAlreadyCovered(
-        paidHours: Double,
-        missingHours: Double,
-        requiredHours: Double
-    ) -> Bool {
-        guard requiredHours > 0.08 else { return false }
-        guard paidHours + 0.08 >= requiredHours else { return false }
-        return missingHours + 0.2 >= requiredHours
-    }
-
     nonisolated private static func unbookedRows(
         _ input: WarningsComputationSnapshot,
         coverageStart: Date,
         coverageEnd: Date
     ) -> [Warning]? {
         let calendar = CanonicalBusinessEngine.businessCalendar
+        let rowEnd = input.unbookedCoverageEnd ?? coverageEnd
         var bookings: [[String: Any]] = []
-        for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
+        for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= rowEnd {
             bookings.append([
                 "personId": booking.operativeId.uuidString,
                 "dayKey": dayKeyString(booking.dayStart, calendar: calendar),
@@ -956,7 +900,7 @@ enum WarningsComputation {
                 "workEnd": booking.workEnd ?? "",
             ])
         }
-        for booking in input.managerSiteBookings where booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
+        for booking in input.managerSiteBookings where booking.dayStart >= coverageStart && booking.dayStart <= rowEnd {
             bookings.append([
                 "personId": booking.userId,
                 "dayKey": dayKeyString(booking.dayStart, calendar: calendar),
@@ -1006,51 +950,6 @@ enum WarningsComputation {
                 "approved": holiday.isApproved,
             ]
         }
-        var emailById: [String: String] = [:]
-        for user in input.users where !user.emailLowercased.isEmpty {
-            emailById[user.id] = user.emailLowercased
-            for alias in user.sameEmailUserIds where !alias.isEmpty {
-                emailById[alias] = user.emailLowercased
-            }
-        }
-        for operative in input.operatives where !operative.emailLowercased.isEmpty {
-            emailById[operative.id.uuidString] = operative.emailLowercased
-        }
-        var paidByEmailDay: [String: Double] = [:]
-        let standardDay = input.payrollTimePolicy.standardPaidHours
-        func notePaid(email: String, day: Date, hours: Double, coversStandardDay: Bool) {
-            guard !email.isEmpty else { return }
-            let key = "\(email)|\(dayKeyString(day, calendar: calendar))"
-            if coversStandardDay {
-                paidByEmailDay[key] = max(paidByEmailDay[key] ?? 0, standardDay)
-            } else if hours > 0 {
-                paidByEmailDay[key, default: 0] += hours
-            }
-        }
-        func legacyFullDay(_ slot: String, _ start: String?, _ end: String?) -> Bool {
-            let name = slot.trimmingCharacters(in: .whitespacesAndNewlines)
-            let startText = start?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let endText = end?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return name == "FULL DAY" && startText.isEmpty && endText.isEmpty
-        }
-        for booking in input.bookings where booking.isActiveStatus {
-            notePaid(
-                email: emailById[booking.operativeId.uuidString] ?? "",
-                day: booking.dayStart,
-                hours: booking.paidHours,
-                coversStandardDay: legacyFullDay(booking.timeSlot, booking.workStart, booking.workEnd)
-            )
-        }
-        for booking in input.managerSiteBookings {
-            notePaid(
-                email: emailById[booking.userId] ?? "",
-                day: booking.dayStart,
-                hours: booking.paidHours,
-                coversStandardDay: booking.isFullDaySlot
-                    && (booking.workStart ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    && (booking.workEnd ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            )
-        }
         let shared = shareCoverageAcrossEmail(bookings: bookings, holidays: holidays, people: people, operatives: operatives)
         let excluded = expandedExcludedUserIds(
             input.warningDetection.excludedUserIdsFromUnbookedWarnings,
@@ -1061,7 +960,7 @@ enum WarningsComputation {
             payload: [
                 "timeZone": "Europe/London",
                 "startDayKey": dayKeyString(coverageStart, calendar: calendar),
-                "endDayKey": dayKeyString(coverageEnd, calendar: calendar),
+                "endDayKey": dayKeyString(rowEnd, calendar: calendar),
                 "includeWeekends": input.warningDetection.includeWeekendsForUnbookedLabour,
                 "excludedUserIds": excluded,
                 "standardDayStart": input.payrollTimePolicy.standardDayStart,
@@ -1089,15 +988,6 @@ enum WarningsComputation {
             let name = row["operativeName"] as? String ?? ""
             let personKey = row["personKey"] as? String ?? ""
             let hours = (row["missingHours"] as? NSNumber)?.doubleValue ?? 0
-            let email = emailById[personKey] ?? ""
-            let paid = paidByEmailDay["\(email)|\(dayKey)"] ?? 0
-            if unbookedRowIsAlreadyCovered(
-                paidHours: paid,
-                missingHours: hours,
-                requiredHours: input.payrollTimePolicy.standardPaidHours
-            ) {
-                return nil
-            }
             return Warning(
                 resolutionKey: id,
                 type: .unbookedLabour,
@@ -1139,44 +1029,32 @@ enum WarningsComputation {
         for user in input.users {
             let email = user.emailLowercased
             let operativeIds = email.isEmpty ? [] : (operativeIdsByEmail[email] ?? [])
-            let personKey = email.isEmpty ? user.id : email
-            let entry = CanonicalLeavePerson(
-                personKey: personKey,
+            people.append(CanonicalLeavePerson(
+                personKey: user.id,
                 name: user.displayName,
                 userId: user.id,
                 operativeIds: operativeIds
-            )
-            people.append(entry)
+            ))
             if !email.isEmpty { claimedEmails.insert(email) }
             for alias in user.sameEmailUserIds where !alias.isEmpty && alias != user.id {
                 people.append(CanonicalLeavePerson(
-                    personKey: personKey,
+                    personKey: alias,
                     name: user.displayName,
                     userId: alias,
                     operativeIds: operativeIds
                 ))
             }
         }
-        var rosterByEmail: [String: [WarningsComputationSnapshot.OperativeSnapshot]] = [:]
-        for operative in input.operatives where operative.isActive && !operative.isPlaceholder {
+        for operative in input.operatives where !operative.isPlaceholder {
             let email = operative.emailLowercased
-            if email.isEmpty {
-                people.append(CanonicalLeavePerson(
-                    personKey: operative.id.uuidString,
-                    name: operative.name,
-                    userId: nil,
-                    operativeIds: [operative.id.uuidString]
-                ))
-            } else if !claimedEmails.contains(email) {
-                rosterByEmail[email, default: []].append(operative)
-            }
-        }
-        for (email, operatives) in rosterByEmail {
-            let ids = operatives.map(\.id.uuidString)
-            let name = operatives.max { $0.profileWeight < $1.profileWeight }?.name ?? operatives[0].name
+            if !email.isEmpty && claimedEmails.contains(email) { continue }
+            if !email.isEmpty { claimedEmails.insert(email) }
+            let ids = email.isEmpty
+                ? [operative.id.uuidString]
+                : (operativeIdsByEmail[email] ?? [operative.id.uuidString])
             people.append(CanonicalLeavePerson(
-                personKey: email,
-                name: name,
+                personKey: operative.id.uuidString,
+                name: operative.name,
                 userId: nil,
                 operativeIds: ids
             ))

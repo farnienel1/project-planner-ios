@@ -106,13 +106,15 @@ struct ManagersView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationBarBackButtonHidden(true)
             .sheet(item: $selectedUser) { user in
-                OperativeProfileView(user: user)
-                    .environmentObject(userStore)
-                    .environmentObject(bookingStore)
-                    .environmentObject(operativeStore)
-                    .environmentObject(holidayStore)
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(notificationService)
+                NavigationStack {
+                    EditUserView(user: user)
+                }
+                .environmentObject(userStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(holidayStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
             }
             .sheet(isPresented: $showingFilterOptions) {
                 ManagerFilterOptionsView(selectedFilter: $selectedFilterType, filterText: $filterText)

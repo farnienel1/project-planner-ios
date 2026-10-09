@@ -4,6 +4,7 @@ import XCTest
 @MainActor
 final class AnnualLeaveLogicTests: XCTestCase {
     private var calendar: Calendar { LogicFixtures.utc }
+    private var london: Calendar { CanonicalBusinessEngine.businessCalendar }
     private let userId = "user-1"
 
     func testCalendarYearLeaveWindow() {
@@ -15,12 +16,12 @@ final class AnnualLeaveLogicTests: XCTestCase {
         )
         let start = range?.start
         let end = range?.end
-        XCTAssertEqual(calendar.component(.day, from: start!), 1)
-        XCTAssertEqual(calendar.component(.month, from: start!), 1)
-        XCTAssertEqual(calendar.component(.year, from: start!), 2026)
-        XCTAssertEqual(calendar.component(.day, from: end!), 31)
-        XCTAssertEqual(calendar.component(.month, from: end!), 12)
-        XCTAssertEqual(calendar.component(.year, from: end!), 2026)
+        XCTAssertEqual(london.component(.day, from: start!), 1)
+        XCTAssertEqual(london.component(.month, from: start!), 1)
+        XCTAssertEqual(london.component(.year, from: start!), 2026)
+        XCTAssertEqual(london.component(.day, from: end!), 31)
+        XCTAssertEqual(london.component(.month, from: end!), 12)
+        XCTAssertEqual(london.component(.year, from: end!), 2026)
     }
 
     func testAprilToMarchRolloverBoundary() {
@@ -36,19 +37,19 @@ final class AnnualLeaveLogicTests: XCTestCase {
             endMonth: 3,
             calendar: calendar
         )
-        XCTAssertEqual(calendar.component(.year, from: before!.start), 2025)
-        XCTAssertEqual(calendar.component(.month, from: before!.start), 4)
-        XCTAssertEqual(calendar.component(.year, from: before!.end), 2026)
-        XCTAssertEqual(calendar.component(.month, from: before!.end), 3)
-        XCTAssertEqual(calendar.component(.day, from: before!.end), 31)
-        XCTAssertEqual(calendar.component(.year, from: after!.start), 2026)
-        XCTAssertEqual(calendar.component(.month, from: after!.start), 4)
+        XCTAssertEqual(london.component(.year, from: before!.start), 2025)
+        XCTAssertEqual(london.component(.month, from: before!.start), 4)
+        XCTAssertEqual(london.component(.year, from: before!.end), 2026)
+        XCTAssertEqual(london.component(.month, from: before!.end), 3)
+        XCTAssertEqual(london.component(.day, from: before!.end), 31)
+        XCTAssertEqual(london.component(.year, from: after!.start), 2026)
+        XCTAssertEqual(london.component(.month, from: after!.start), 4)
 
         let previous = AnnualLeavePolicy.previousLeaveYearRange(
             beforeCurrentYearStart: after!.start,
             startMonth: 4,
             endMonth: 3,
-            calendar: calendar
+            calendar: london
         )
         XCTAssertEqual(previous?.start, before?.start)
         XCTAssertEqual(previous?.end, before?.end)
@@ -80,7 +81,7 @@ final class AnnualLeaveLogicTests: XCTestCase {
         XCTAssertClose(summary.takenDays, 0)
         XCTAssertClose(summary.carryOverDays, 19.5, "25 − 0.5 − 5 unused from the previous leave year")
         XCTAssertClose(summary.entitlementDays, 44.5)
-        XCTAssertClose(summary.remainingDays, 44.5)
+        XCTAssertClose(summary.remainingDays ?? -1, 44.5)
     }
 
     func testBookingThatCrossesTheLeaveYearOnlyCountsDaysInsideIt() {
@@ -102,7 +103,7 @@ final class AnnualLeaveLogicTests: XCTestCase {
             statuses: [.approved],
             rangeStart: range.start,
             rangeEnd: range.end,
-            calendar: calendar
+            calendar: london
         )
         XCTAssertClose(consumed, 2, "30–31 Mar belong to the previous leave year")
     }
@@ -187,7 +188,7 @@ final class AnnualLeaveLogicTests: XCTestCase {
         )
         XCTAssertClose(summary.pendingDays, 1)
         XCTAssertClose(summary.takenDays, 0)
-        XCTAssertClose(summary.remainingDays, 24)
+        XCTAssertClose(summary.remainingDays ?? -1, 24)
     }
 
     func testMorningAndAfternoonOnTheSameDayConsumeOneDay() {

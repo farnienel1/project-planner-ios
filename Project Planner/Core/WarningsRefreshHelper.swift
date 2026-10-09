@@ -179,6 +179,12 @@ enum WarningsRefreshHelper {
         )
         let coverageStart = canonical.start
         let coverageEnd = canonical.end
+        let unbookedEnd = CanonicalBusinessEngine.unbookedLabourWindowEnd(
+            coverageEnd: coverageEnd,
+            clashLookaheadMode: warningDetection.clashLookaheadMode.rawValue,
+            includeWeekends: warningDetection.includeWeekendsForUnbookedLabour
+        )
+        let dataEnd = max(coverageEnd, unbookedEnd)
         let dayCount = max(1, (cal.dateComponents([.day], from: coverageStart, to: coverageEnd).day ?? 0) + 1)
         print("🔥🔥🔥 DEBUG: Warnings coverage mode=\(warningDetection.clashLookaheadMode.displayName) days=\(dayCount) \(coverageStart)…\(coverageEnd)")
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
@@ -196,16 +202,16 @@ enum WarningsRefreshHelper {
         // Pre-window to the detection horizon before WarningsService snapshot work.
         let liveBookings = bookingStore.bookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= coverageStart && day <= coverageEnd
+            return day >= coverageStart && day <= dataEnd
         }
         let liveManager = managerScheduleStore.managerSiteBookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= coverageStart && day <= coverageEnd
+            return day >= coverageStart && day <= dataEnd
         }
         let liveHolidays = holidayStore.bookings.filter { holiday in
             let start = cal.startOfDay(for: holiday.startDate)
             let end = cal.startOfDay(for: holiday.endDate)
-            return end >= coverageStart && start <= coverageEnd
+            return end >= coverageStart && start <= dataEnd
         }
         let dismissedQualificationKeys = await firebaseBackend.loadDismissedQualificationKeys(
             organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
@@ -229,9 +235,12 @@ enum WarningsRefreshHelper {
             invoicingSettings: invoicingSettings,
             labourCoverageStart: coverageStart,
             labourCoverageEnd: coverageEnd,
+            unbookedCoverageEnd: unbookedEnd,
             materialOrderCutOffEnabled: appSettings.settings.notifications.materialOrderCutOff,
-            materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
-            materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
+            materialCutOffOnSaturday: firebaseBackend.currentOrganization?.settings.materialCutOff?.materialCutOffOnSaturday
+                ?? appSettings.settings.notifications.materialCutOffOnSaturday,
+            materialCutOffOnSunday: firebaseBackend.currentOrganization?.settings.materialCutOff?.materialCutOffOnSunday
+                ?? appSettings.settings.notifications.materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsTomorrow,
             dismissedQualificationKeys: dismissedQualificationKeys,
             publishToLiveCache: true

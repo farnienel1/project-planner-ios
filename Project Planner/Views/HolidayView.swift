@@ -86,6 +86,7 @@ struct HolidayView: View {
     private var annualLeaveSummary: AnnualLeaveUsageSummary? {
         guard let u = holidayProfileUser else { return nil }
         let oid = currentOperative?.id
+        let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         return AnnualLeavePolicy.usageSummary(
             bookings: holidayStore.bookings,
             profileUserId: u.id,
@@ -96,12 +97,14 @@ struct HolidayView: View {
             endMonth: u.annualLeaveYearEndMonth,
             carriesOver: u.annualLeaveCarriesOver,
             referenceDate: Date(),
-            calendar: calendar
+            calendar: calendar,
+            annualLeaveEnabled: u.annualLeaveEnabled,
+            orgDaysPerYear: org.daysPerYear,
+            orgStartMonth: org.startMonth,
+            orgEndMonth: org.endMonth,
+            yearAllowance: u.annualLeaveYearAllowance,
+            yearAllowanceKey: u.annualLeaveYearAllowanceKey
         )
-    }
-
-    private var isAnnualLeaveAvailable: Bool {
-        holidayProfileUser?.annualLeaveEnabled ?? true
     }
 
     /// Managers/admins with self-book (or no line manager) book approved leave without a separate approver.
@@ -186,9 +189,7 @@ struct HolidayView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if !isAnnualLeaveAvailable {
-                    annualLeaveDisabledPlaceholder
-                } else if holidayStore.isLoading && holidayStore.bookings.isEmpty {
+                if holidayStore.isLoading && holidayStore.bookings.isEmpty {
                     VStack(spacing: 12) {
                         ProgressView("Loading…")
                         if let msg = holidayStore.errorMessage, !msg.isEmpty {
@@ -445,27 +446,6 @@ struct HolidayView: View {
                 onCancel: { halfDayBookingEditor = nil }
             )
         }
-    }
-
-    private var annualLeaveDisabledPlaceholder: some View {
-        VStack(spacing: 16) {
-            Spacer(minLength: 24)
-            Image(systemName: "calendar.badge.exclamationmark")
-                .font(.system(size: 44))
-                .foregroundStyle(HolidayChrome.muted)
-            Text("Annual leave is turned off")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(HolidayChrome.ink)
-                .multilineTextAlignment(.center)
-            Text("Your organisation has disabled annual leave for this account. Ask an administrator or your line manager to turn it back on in Manage users if that is a mistake.")
-                .font(.subheadline)
-                .foregroundStyle(HolidayChrome.muted)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 8)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(HolidayChrome.canvas)
     }
 
     private var selfServeBookedAnnualLeaveSheet: some View {
@@ -956,12 +936,21 @@ struct HolidayView: View {
             Spacer(minLength: 0)
             if let balance {
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text(AnnualLeavePolicy.formatAllowanceDays(balance.remaining))
-                        .font(.headline)
-                        .foregroundStyle(balance.remaining < -0.001 ? AnnualLeavePalette.red : AnnualLeavePalette.ink)
-                    Text("of \(AnnualLeavePolicy.formatAllowanceDays(balance.allowance)) left")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(AnnualLeavePalette.ink3)
+                    if balance.hasAllowance {
+                        Text(AnnualLeavePolicy.formatAllowanceDays(balance.remaining ?? 0))
+                            .font(.headline)
+                            .foregroundStyle((balance.remaining ?? 0) < -0.001 ? AnnualLeavePalette.red : AnnualLeavePalette.ink)
+                        Text("of \(AnnualLeavePolicy.formatAllowanceDays(balance.allowance)) left")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(AnnualLeavePalette.ink3)
+                    } else {
+                        Text(AnnualLeavePolicy.formatAllowanceDays(balance.used))
+                            .font(.headline)
+                            .foregroundStyle(AnnualLeavePalette.ink)
+                        Text("Days taken this leave year")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(AnnualLeavePalette.ink3)
+                    }
                 }
             }
             Image(systemName: "chevron.right")
@@ -1068,8 +1057,9 @@ struct HolidayView: View {
         }
     }
 
-    private func teamBalance(for person: AnnualLeavePerson) -> (remaining: Double, allowance: Double, taken: Double)? {
+    private func teamBalance(for person: AnnualLeavePerson) -> (remaining: Double?, allowance: Double, taken: Double, hasAllowance: Bool, used: Double)? {
         guard let user = teamUser(for: person) else { return nil }
+        let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         let summary = AnnualLeavePolicy.usageSummary(
             bookings: holidayStore.bookings,
             profileUserId: user.id,
@@ -1080,9 +1070,15 @@ struct HolidayView: View {
             endMonth: user.annualLeaveYearEndMonth,
             carriesOver: user.annualLeaveCarriesOver,
             referenceDate: Date(),
-            calendar: calendar
+            calendar: calendar,
+            annualLeaveEnabled: user.annualLeaveEnabled,
+            orgDaysPerYear: org.daysPerYear,
+            orgStartMonth: org.startMonth,
+            orgEndMonth: org.endMonth,
+            yearAllowance: user.annualLeaveYearAllowance,
+            yearAllowanceKey: user.annualLeaveYearAllowanceKey
         )
-        return (summary.remainingDays, summary.entitlementDays, summary.takenDays)
+        return (summary.remainingDays, summary.entitlementDays, summary.takenDays, summary.hasAllowance, summary.usedThisYear)
     }
 
     private func teamUser(for person: AnnualLeavePerson) -> AppUser? {
@@ -1097,7 +1093,7 @@ struct HolidayView: View {
     }
 
     private func remainingAfterNote(for request: HolidayBooking, person: AnnualLeavePerson?) -> String? {
-        guard let person, let balance = teamBalance(for: person) else { return nil }
+        guard let person, let balance = teamBalance(for: person), balance.hasAllowance else { return nil }
         let days = AnnualLeaveDateFormat.consumedDays(from: request.startDate, to: request.endDate, slot: request.timeSlot)
         let after = request.cancellationRequestedAt != nil
             ? balance.allowance - balance.taken + days
@@ -1194,32 +1190,45 @@ struct HolidayView: View {
             Text(summary.leaveYearLabel)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(HolidayChrome.ink)
-            HStack(alignment: .firstTextBaseline) {
+            if summary.hasAllowance {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Remaining")
+                            .font(.caption2)
+                            .foregroundStyle(HolidayChrome.muted)
+                        Text(formatLeaveDays(summary.remainingDays ?? 0))
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(HolidayChrome.ink)
+                    }
+                    Spacer(minLength: 12)
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text("Allowance")
+                            .font(.caption2)
+                            .foregroundStyle(HolidayChrome.muted)
+                        Text(formatLeaveDays(summary.entitlementDays))
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(HolidayChrome.accent)
+                    }
+                }
+            } else {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Remaining")
+                    Text("Days taken this leave year")
                         .font(.caption2)
                         .foregroundStyle(HolidayChrome.muted)
-                    Text(formatLeaveDays(summary.remainingDays))
+                    Text(formatLeaveDays(summary.usedThisYear))
                         .font(.title2.weight(.bold))
                         .foregroundStyle(HolidayChrome.ink)
-                }
-                Spacer(minLength: 12)
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("Allowance")
-                        .font(.caption2)
-                        .foregroundStyle(HolidayChrome.muted)
-                    Text(formatLeaveDays(summary.entitlementDays))
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(HolidayChrome.accent)
                 }
             }
             HStack(spacing: 0) {
                 heroMetric(title: "Taken", value: summary.takenDays, color: HolidayChrome.taken)
                 heroMetric(title: "Pending", value: summary.pendingDays, color: HolidayChrome.pendingMetric)
             }
-            ProgressView(value: usedPortion, total: 1)
-                .tint(HolidayChrome.accent)
-            if summary.carryOverDays > 0.001 {
+            if summary.hasAllowance {
+                ProgressView(value: usedPortion, total: 1)
+                    .tint(HolidayChrome.accent)
+            }
+            if summary.hasAllowance && summary.carryOverDays > 0.001 {
                 Text("Includes \(formatLeaveDays(summary.carryOverDays)) carried forward")
                     .font(.caption2)
                     .foregroundStyle(HolidayChrome.muted)
@@ -1657,6 +1666,7 @@ struct HolidayView: View {
     private var submitButton: some View {
         let sorted = selectedDates.sorted()
         let total = sorted.reduce(0.0) { $0 + (selectedDaySlots[$1] ?? .fullDay).dayValue }
+        let showsRemaining = annualLeaveSummary?.hasAllowance == true
         let remainingAfter = (annualLeaveSummary?.remainingDays ?? 0) - total
         return VStack(alignment: .leading, spacing: 12) {
             if !sorted.isEmpty {
@@ -1675,13 +1685,15 @@ struct HolidayView: View {
                     Text(AnnualLeaveDateFormat.dayCount(total))
                         .font(.headline)
                     Spacer()
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text("Remaining after")
-                            .font(.caption)
-                            .foregroundStyle(AnnualLeavePalette.ink3)
-                        Text(AnnualLeavePolicy.formatAllowanceDays(remainingAfter))
-                            .font(.headline)
-                            .foregroundStyle(remainingAfter < -0.001 ? AnnualLeavePalette.red : AnnualLeavePalette.ink)
+                    if showsRemaining {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("Remaining after")
+                                .font(.caption)
+                                .foregroundStyle(AnnualLeavePalette.ink3)
+                            Text(AnnualLeavePolicy.formatAllowanceDays(remainingAfter))
+                                .font(.headline)
+                                .foregroundStyle(remainingAfter < -0.001 ? AnnualLeavePalette.red : AnnualLeavePalette.ink)
+                        }
                     }
                 }
                 .padding(12)

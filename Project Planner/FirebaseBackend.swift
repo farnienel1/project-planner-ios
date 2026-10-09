@@ -976,26 +976,14 @@ class FirebaseBackend: ObservableObject {
             settings.workingHours.endTime = policy.standardDayEnd
             settings.workingHours.lunchBreak = policy.unpaidBreakMinutes
         }
-        let warningDict = data["warningDetection"] as? [String: Any]
-        if let warningDict {
-            settings.warningDetection = OrgWarningDetectionSettings.fromFirestore(warningDict)
-        }
-        // An empty top-level list must not hide ids stored on settings.warningDetection.
-        // Clearing the list writes the empty array in both places.
-        if settings.warningDetection.excludedUserIdsFromUnbookedWarnings.isEmpty {
-            if let settingsDict = data["settings"] as? [String: Any],
-               let nested = settingsDict["warningDetection"] as? [String: Any] {
-                let nestedIds = OrgWarningDetectionSettings.excludedUserIds(from: nested)
-                if !nestedIds.isEmpty {
-                    settings.warningDetection.excludedUserIdsFromUnbookedWarnings = nestedIds
-                }
-            }
-        }
-        if settings.warningDetection.excludedUserIdsFromUnbookedWarnings.isEmpty {
-            let siblingIds = OrgWarningDetectionSettings.excludedUserIds(from: data)
-            if !siblingIds.isEmpty {
-                settings.warningDetection.excludedUserIdsFromUnbookedWarnings = siblingIds
-            }
+        let nestedWarning = (data["settings"] as? [String: Any])?["warningDetection"] as? [String: Any]
+        let warningRaw = Self.resolveWarningDetectionRaw(
+            topLevel: data["warningDetection"] as? [String: Any],
+            nested: nestedWarning
+        )
+        if let parsed = CanonicalBusinessEngine.parseWarningDetection(warningRaw),
+           let detection = OrgWarningDetectionSettings(canonical: parsed) {
+            settings.warningDetection = detection
         }
         if let invoicingDict = data["invoicing"] as? [String: Any] {
             settings.invoicing = organizationInvoicingFromFirestore(invoicingDict)
@@ -1006,6 +994,10 @@ class FirebaseBackend: ObservableObject {
         if let settingsDict = data["settings"] as? [String: Any],
            let raw = settingsDict["myScheduleOptions"] as? [String: Any] {
             settings.myScheduleOptions = MyScheduleOptions.fromFirestore(raw)
+        }
+        if let settingsDict = data["settings"] as? [String: Any],
+           let raw = settingsDict["materialCutOff"] as? [String: Any] {
+            settings.materialCutOff = OrgMaterialCutOff.fromFirestore(raw)
         }
         if let settingsDict = data["settings"] as? [String: Any],
            let regionId = (settingsDict["bankHolidayRegionId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1078,7 +1070,151 @@ class FirebaseBackend: ObservableObject {
         )
     }
 
+    /// Top-level `warningDetection` wins. Nested `settings.warningDetection` supplies excluded ids only when that key was left out.
+    static func resolveWarningDetectionRaw(topLevel: [String: Any]?, nested: [String: Any]?) -> [String: Any]? {
+        guard topLevel != nil || nested != nil else { return nil }
+        guard var top = topLevel else { return nested.map(jsonReadyDictionary) }
+        let excluded = top["excludedUserIdsFromUnbookedWarnings"]
+        let keyMissing = excluded == nil || excluded is NSNull
+        if keyMissing,
+           let nestedIds = nested?["excludedUserIdsFromUnbookedWarnings"] as? [Any],
+           !nestedIds.isEmpty {
+            top["excludedUserIdsFromUnbookedWarnings"] = nested?["excludedUserIdsFromUnbookedWarnings"]
+        }
+        return jsonReadyDictionary(top)
+    }
+
+    private static func paymentRunDateRangesFromFirestore(_ data: [String: Any]) -> [PaymentRunDateRange] {
+        let rows = (data["paymentRunDateRanges"] as? [Any]) ?? []
+        let cleanRows: [[String: Any]] = rows.compactMap { entry in
+            guard let row = entry as? [String: Any] else { return nil }
+            var out: [String: Any] = [:]
+            for key in ["startDay", "endDay", "startDate", "endDate"] {
+                if let number = jsonReadyNumber(row[key]) {
+                    out[key] = number
+                }
+            }
+            return out
+        }
+        let parsed = CanonicalBusinessEngine.parsePaymentRunDateRanges(["paymentRunDateRanges": cleanRows]) ?? []
+        let ranges = parsed.compactMap { range -> PaymentRunDateRange? in
+            guard range.startDay >= 1, range.endDay >= 1 else { return nil }
+            return PaymentRunDateRange(startDay: range.startDay, endDay: range.endDay)
+        }
+        if ranges.isEmpty {
+            return OrganizationInvoicingSettings.default.paymentRunDateRanges
+        }
+        return ranges
+    }
+
+    private static func jsonReadyDictionary(_ data: [String: Any]) -> [String: Any] {
+        var out: [String: Any] = [:]
+        for (key, value) in data {
+            if let ready = jsonReadyValue(value) {
+                out[key] = ready
+            }
+        }
+        return out
+    }
+
+    private static func jsonReadyValue(_ value: Any) -> Any? {
+        if value is NSNull { return nil }
+        if let flag = value as? Bool { return flag }
+        if let number = jsonReadyNumber(value) { return number }
+        if let text = value as? String { return text }
+        if let rows = value as? [Any] {
+            return rows.compactMap(jsonReadyValue)
+        }
+        if let rows = value as? NSArray {
+            return rows.compactMap { jsonReadyValue($0) }
+        }
+        if let map = value as? [String: Any] {
+            return jsonReadyDictionary(map)
+        }
+        return nil
+    }
+
+    private static func jsonReadyNumber(_ value: Any?) -> Int? {
+        if let number = value as? Int { return number }
+        if let number = value as? Int64 { return Int(number) }
+        if let number = value as? Double { return Int(number) }
+        if let number = value as? NSNumber { return number.intValue }
+        if let text = value as? String, let number = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return number
+        }
+        return nil
+    }
+
+    static func warningDetectionFirestoreMap(_ settings: OrgWarningDetectionSettings) -> [String: Any] {
+        let canonical = CanonicalBusinessEngine.CanonicalWarningDetection(
+            detectClashes: settings.detectClashes,
+            clashLookaheadMode: settings.clashLookaheadMode.rawValue,
+            clashLookaheadDays: settings.clashLookaheadDays,
+            includeWeekendsForUnbookedLabour: settings.includeWeekendsForUnbookedLabour,
+            excludedUserIdsFromUnbookedWarnings: settings.excludedUserIdsFromUnbookedWarnings
+        )
+        return CanonicalBusinessEngine.warningDetectionToFirestore(canonical) ?? settings.asFirestoreDictionary()
+    }
+
+    static func invoicingFirestoreMap(_ settings: OrganizationInvoicingSettings) -> [String: Any] {
+        if let map = CanonicalBusinessEngine.invoicingToFirestore(settings.canonicalInvoicingSettings()) {
+            return map
+        }
+        return [
+            "paymentRunMode": settings.paymentRunMode.rawValue,
+            "paymentDateMode": settings.paymentDateMode.rawValue,
+            "paymentRunDateRanges": settings.paymentRunDateRanges.map { range in
+                [
+                    "startDay": range.startDay,
+                    "endDay": range.endDay,
+                    "startDate": range.startDay,
+                    "endDate": range.endDay,
+                ]
+            },
+            "paymentDates": settings.paymentDates,
+            "noteToUsers": settings.noteToUsers,
+            "recurringPaymentRunSummary": settings.recurringPaymentRunSummary,
+            "recurringRunStartDay": settings.recurringRunStartDay.rawValue,
+            "recurringRunEndDay": settings.recurringRunEndDay.rawValue,
+            "recurringPaymentDay": settings.recurringPaymentDay.rawValue,
+        ]
+    }
+
     private static func organizationInvoicingFromFirestore(_ data: [String: Any]) -> OrganizationInvoicingSettings {
+        if let parsed = CanonicalBusinessEngine.parseInvoicing(jsonReadyDictionary(data)),
+           let settings = invoicingSettings(from: parsed) {
+            return settings
+        }
+        return invoicingSettingsFallback(data)
+    }
+
+    private static func invoicingSettings(from parsed: CanonicalBusinessEngine.CanonicalInvoicingSettings) -> OrganizationInvoicingSettings? {
+        guard let paymentRunMode = PaymentRunConfigurationMode(rawValue: parsed.paymentRunMode),
+              let paymentDateMode = PaymentDateConfigurationMode(rawValue: parsed.paymentDateMode) else {
+            return nil
+        }
+        let ranges = parsed.paymentRunDateRanges.compactMap { range -> PaymentRunDateRange? in
+            guard range.startDay >= 1, range.endDay >= 1 else { return nil }
+            return PaymentRunDateRange(startDay: range.startDay, endDay: range.endDay)
+        }
+        let paymentDates = parsed.paymentDates.compactMap { Int($0) }.filter { (1...31).contains($0) }
+        let start = RecurringPaymentDay(rawValue: parsed.recurringRunStartDay) ?? .monday
+        let end = RecurringPaymentDay(rawValue: parsed.recurringRunEndDay) ?? .sunday
+        let pay = RecurringPaymentDay(rawValue: parsed.recurringPaymentDay) ?? .friday
+        return OrganizationInvoicingSettings(
+            paymentRunMode: paymentRunMode,
+            paymentDateMode: paymentDateMode,
+            paymentRunDateRanges: ranges.isEmpty ? OrganizationInvoicingSettings.default.paymentRunDateRanges : ranges,
+            paymentDates: paymentDates,
+            noteToUsers: parsed.noteToUsers,
+            recurringPaymentRunSummary: "In arrears: \(start.title) to \(end.title) (of the previous week)",
+            recurringRunStartDay: start,
+            recurringRunEndDay: end,
+            recurringPaymentDay: pay
+        )
+    }
+
+    private static func invoicingSettingsFallback(_ data: [String: Any]) -> OrganizationInvoicingSettings {
         let paymentRunMode = PaymentRunConfigurationMode(rawValue: (data["paymentRunMode"] as? String) ?? "")
             ?? .dateRanges
         let paymentDateMode = PaymentDateConfigurationMode(rawValue: (data["paymentDateMode"] as? String) ?? "")
@@ -1097,20 +1233,12 @@ class FirebaseBackend: ObservableObject {
             ?? (data["paymentDates"] as? [Int])
             ?? OrganizationInvoicingSettings.default.paymentDates
 
-        let ranges = ((data["paymentRunDateRanges"] as? [[String: Any]]) ?? [])
-            .compactMap { row -> PaymentRunDateRange? in
-                let start = (row["startDay"] as? NSNumber)?.intValue ?? (row["startDay"] as? Int)
-                guard let start else { return nil }
-                let end = (row["endDay"] as? NSNumber)?.intValue
-                    ?? (row["endDay"] as? Int)
-                    ?? PaymentRunDateRange.defaultEndDay(for: start)
-                return PaymentRunDateRange(startDay: start, endDay: end)
-            }
+        let ranges = paymentRunDateRangesFromFirestore(data)
 
         return OrganizationInvoicingSettings(
             paymentRunMode: paymentRunMode,
             paymentDateMode: paymentDateMode,
-            paymentRunDateRanges: ranges.isEmpty ? OrganizationInvoicingSettings.default.paymentRunDateRanges : ranges,
+            paymentRunDateRanges: ranges,
             paymentDates: paymentDates,
             noteToUsers: noteToUsers,
             recurringPaymentRunSummary: recurringPaymentRunSummary?.isEmpty == false
@@ -3682,19 +3810,18 @@ class FirebaseBackend: ObservableObject {
             return ids.filter { seen.insert($0).inserted }
         }()
         let dayRate = data["dayRate"] as? Double
-        var hourlyRate = data["hourlyRate"] as? Double
-        // Prefer day rate if both are present (legacy / misconfigured documents).
-        if let dr = dayRate, dr > 0, let hr = hourlyRate, hr > 0 {
-            hourlyRate = nil
-        }
+        let hourlyRate = data["hourlyRate"] as? Double
         let utp = (data["tradeTypePreset"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let utc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let profilePhotoRaw = (data["profilePhotoURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let lastSeenAt = (data["lastSeenAt"] as? Timestamp)?.dateValue()
         let employmentTypeRaw = (data["employmentType"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let employmentType = EmploymentType(rawValue: employmentTypeRaw ?? "") ?? .selfEmployed
+        let employmentType = EmploymentType.fromCanonical(employmentTypeRaw)
         let transitionFromRaw = (data["employmentTypeTransitionFrom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let employmentTypeTransitionFrom = EmploymentType(rawValue: transitionFromRaw ?? "")
+        let employmentTypeTransitionFrom = transitionFromRaw.flatMap { raw -> EmploymentType? in
+            guard !raw.isEmpty else { return nil }
+            return EmploymentType.fromCanonical(raw)
+        }
         let employmentTypeEffectiveAt = (data["employmentTypeEffectiveAt"] as? Timestamp)?.dateValue()
         let alDays = (data["annualLeaveDaysPerYear"] as? NSNumber)?.doubleValue
             ?? (data["annualLeaveDaysPerYear"] as? Double)
@@ -3706,6 +3833,9 @@ class FirebaseBackend: ObservableObject {
             ?? (data["annualLeaveYearEndMonth"] as? Int)
             ?? AnnualLeavePolicy.defaultEndMonth
         let alCarry = flag("annualLeaveCarriesOver", default: AnnualLeavePolicy.defaultCarriesOver)
+        let yearAllowance = (data["annualLeaveYearAllowance"] as? NSNumber)?.doubleValue
+            ?? (data["annualLeaveYearAllowance"] as? Double)
+        let yearAllowanceKey = (data["annualLeaveYearAllowanceKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let alEnabled = flag("annualLeaveEnabled", default: true)
         let hasNoLineManager = flag("hasNoLineManager", default: false)
         let timesheetsEnabledRaw = firestoreBool(data["timesheetsEnabled"]) ?? firestoreBool(nestedPermissions["timesheetsEnabled"])
@@ -3753,6 +3883,8 @@ class FirebaseBackend: ObservableObject {
             annualLeaveYearStartMonth: alStart,
             annualLeaveYearEndMonth: alEnd,
             annualLeaveCarriesOver: alCarry,
+            annualLeaveYearAllowance: yearAllowance,
+            annualLeaveYearAllowanceKey: (yearAllowanceKey?.isEmpty == false) ? yearAllowanceKey : nil,
             timesheetsEnabled: timesheetsEnabled,
             vatNumber: (vatRaw?.isEmpty == false) ? vatRaw : nil,
             utrNumber: (utrRaw?.isEmpty == false) ? utrRaw : nil
@@ -4241,29 +4373,14 @@ class FirebaseBackend: ObservableObject {
             payload["defaultLongitude"] = defaultLongitude
         }
         payload["payrollTimePolicy"] = OrgPayrollTimePolicy.default.asFirestoreDictionary()
-        payload["invoicing"] = [
-            "paymentRunMode": OrganizationInvoicingSettings.default.paymentRunMode.rawValue,
-            "paymentDateMode": OrganizationInvoicingSettings.default.paymentDateMode.rawValue,
-            "paymentRunDateRanges": OrganizationInvoicingSettings.default.paymentRunDateRanges.map { r in
-                [
-                    "startDay": r.startDay,
-                    "endDay": r.endDay,
-                ]
-            },
-            "paymentDates": OrganizationInvoicingSettings.default.paymentDates,
-            "noteToUsers": OrganizationInvoicingSettings.default.noteToUsers,
-            "recurringPaymentRunSummary": OrganizationInvoicingSettings.default.recurringPaymentRunSummary,
-            "recurringRunStartDay": OrganizationInvoicingSettings.default.recurringRunStartDay.rawValue,
-            "recurringRunEndDay": OrganizationInvoicingSettings.default.recurringRunEndDay.rawValue,
-            "recurringPaymentDay": OrganizationInvoicingSettings.default.recurringPaymentDay.rawValue,
-        ]
+        payload["invoicing"] = Self.invoicingFirestoreMap(OrganizationInvoicingSettings.default)
         payload["annualLeaveDefaults"] = [
             "daysPerYear": OrganizationAnnualLeaveDefaults.default.daysPerYear,
             "startMonth": OrganizationAnnualLeaveDefaults.default.startMonth,
             "endMonth": OrganizationAnnualLeaveDefaults.default.endMonth,
             "carriesOver": OrganizationAnnualLeaveDefaults.default.carriesOver,
         ]
-        payload["warningDetection"] = OrgWarningDetectionSettings.default.asFirestoreDictionary()
+        payload["warningDetection"] = Self.warningDetectionFirestoreMap(OrgWarningDetectionSettings.default)
         try await db.collection("organizations").document(id).setData(payload, merge: true)
     }
 
@@ -4276,9 +4393,9 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
             )
         }
-        // Dotted fields update this list without replacing other warningDetection keys the web app stores.
+        // Top-level map only. Nested settings.warningDetection is not the live document.
         var payload: [String: Any] = ["updatedAt": Timestamp(date: Date())]
-        for (key, value) in settings.asFirestoreDictionary() {
+        for (key, value) in Self.warningDetectionFirestoreMap(settings) {
             payload["warningDetection.\(key)"] = value
         }
         let orgRef = db.collection("organizations").document(orgId)
@@ -4287,7 +4404,7 @@ class FirebaseBackend: ObservableObject {
         } catch {
             try await orgRef.setData(
                 [
-                    "warningDetection": settings.asFirestoreDictionary(),
+                    "warningDetection": Self.warningDetectionFirestoreMap(settings),
                     "updatedAt": Timestamp(date: Date()),
                 ],
                 merge: true
@@ -4389,22 +4506,15 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
             )
         }
-        let payload: [String: Any] = [
-            "paymentRunMode": settings.paymentRunMode.rawValue,
-            "paymentDateMode": settings.paymentDateMode.rawValue,
-            "paymentRunDateRanges": settings.normalizedRanges.map { r in
-                [
-                    "startDay": r.startDay,
-                    "endDay": r.endDay,
-                ]
-            },
-            "paymentDates": settings.normalizedPaymentDates,
-            "noteToUsers": settings.normalizedUserNote,
-            "recurringPaymentRunSummary": settings.recurringPaymentRunSummary,
-            "recurringRunStartDay": settings.recurringRunStartDay.rawValue,
-            "recurringRunEndDay": settings.recurringRunEndDay.rawValue,
-            "recurringPaymentDay": settings.recurringPaymentDay.rawValue,
-        ]
+        let canonical = settings.canonicalInvoicingSettings()
+        if let message = CanonicalBusinessEngine.validateInvoicingSettings(canonical) {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
+        }
+        let payload = Self.invoicingFirestoreMap(settings)
         try await db.collection("organizations").document(orgId).setData(
             [
                 "invoicing": payload,
@@ -4550,6 +4660,28 @@ class FirebaseBackend: ObservableObject {
         )
         guard var org = currentOrganization else { return }
         org.settings.currencyCode = trimmed
+        org.updatedAt = Date()
+        currentOrganization = org
+        storeOrganizationLocally(org)
+    }
+
+    /// Company-wide material cut-off. The signed-in user's notification prefs are a copy, not the source.
+    func updateOrganizationMaterialCutOff(_ cutOff: OrgMaterialCutOff) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
+            )
+        }
+        try await db.collection("organizations").document(orgId).updateData(
+            [
+                "settings.materialCutOff": cutOff.asFirestoreDictionary(),
+                "updatedAt": Timestamp(date: Date()),
+            ]
+        )
+        guard var org = currentOrganization else { return }
+        org.settings.materialCutOff = cutOff
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
@@ -4770,6 +4902,23 @@ class FirebaseBackend: ObservableObject {
             "subContractors": user.permissions.subContractors,
             "siteAudit": operativeOnly ? user.permissions.siteAudit : true,
             "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory,
+            "permissions": [
+                "adminAccess": operativeOnly ? false : user.permissions.adminAccess,
+                "manager": operativeOnly ? false : user.permissions.manager,
+                "operatives": operativeOnly ? false : user.permissions.operatives,
+                "skills": false,
+                "qualifications": operativeOnly ? false : user.permissions.qualifications,
+                "materials": operativeOnly ? user.permissions.materials : true,
+                "projects": user.permissions.projects,
+                "smallWorks": user.permissions.smallWorks,
+                "operativeMode": user.permissions.operativeMode,
+                "siteAudit": operativeOnly ? user.permissions.siteAudit : true,
+                "subContractors": user.permissions.subContractors,
+                "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory,
+                "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
+                "weeklyReports": user.permissions.weeklyReports,
+                "dailyOverview": user.permissions.dailyOverview,
+            ] as [String: Bool],
             "isSuperAdmin": isSuperAdminToSave,
             "policyAccepted": user.policyAccepted,
             "employmentType": user.employmentType.rawValue,
@@ -4812,33 +4961,17 @@ class FirebaseBackend: ObservableObject {
             userData["assignedManagerUserIds"] = lineManagerIds
         }
         
-        if user.permissions.operativeMode || user.permissions.manager {
-            let dr = user.dayRate
-            let hr = user.hourlyRate
-            if let dr {
-                userData["dayRate"] = dr
-                userData["hourlyRate"] = FieldValue.delete()
-            } else if let hr {
-                userData["hourlyRate"] = hr
-                userData["dayRate"] = FieldValue.delete()
-            }
-            // When neither rate is set, omit both fields so merge preserves existing saved rates.
+        if let dr = user.dayRate {
+            userData["dayRate"] = dr
         }
-        
-        if user.permissions.operativeMode || user.permissions.manager {
-            if let p = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
-                userData["tradeTypePreset"] = p
-            } else {
-                userData["tradeTypePreset"] = FieldValue.delete()
-            }
-            if let c = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines), !c.isEmpty {
-                userData["tradeTypeCustom"] = c
-            } else {
-                userData["tradeTypeCustom"] = FieldValue.delete()
-            }
-        } else {
-            userData["tradeTypePreset"] = FieldValue.delete()
-            userData["tradeTypeCustom"] = FieldValue.delete()
+        if let hr = user.hourlyRate {
+            userData["hourlyRate"] = hr
+        }
+        if let p = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
+            userData["tradeTypePreset"] = p
+        }
+        if let c = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines), !c.isEmpty {
+            userData["tradeTypeCustom"] = c
         }
         
         if let photo = user.profilePhotoURL?.trimmingCharacters(in: .whitespacesAndNewlines), !photo.isEmpty {
@@ -4852,6 +4985,12 @@ class FirebaseBackend: ObservableObject {
         userData["annualLeaveYearEndMonth"] = AnnualLeavePolicy.clampMonth(user.annualLeaveYearEndMonth)
         userData["annualLeaveCarriesOver"] = user.annualLeaveCarriesOver
         userData["annualLeaveEnabled"] = user.annualLeaveEnabled
+        if let pot = user.annualLeaveYearAllowance {
+            userData["annualLeaveYearAllowance"] = pot
+        }
+        if let key = user.annualLeaveYearAllowanceKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
+            userData["annualLeaveYearAllowanceKey"] = key
+        }
         userData["hasNoLineManager"] = user.hasNoLineManager
         userData["timesheetsEnabled"] = user.timesheetsEnabled
         
@@ -4963,15 +5102,22 @@ class FirebaseBackend: ObservableObject {
         daysPerYear: Double,
         startMonth: Int,
         endMonth: Int,
-        carriesOver: Bool
+        carriesOver: Bool,
+        yearAllowance: Double? = nil,
+        yearAllowanceKey: String? = nil,
+        writeYearAllowance: Bool = false
     ) async throws {
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "annualLeaveDaysPerYear": AnnualLeavePolicy.clampDaysPerYear(daysPerYear),
             "annualLeaveYearStartMonth": AnnualLeavePolicy.clampMonth(startMonth),
             "annualLeaveYearEndMonth": AnnualLeavePolicy.clampMonth(endMonth),
             "annualLeaveCarriesOver": carriesOver,
             "updatedAt": Timestamp(date: Date()),
         ]
+        if writeYearAllowance, let yearAllowance, let yearAllowanceKey, !yearAllowanceKey.isEmpty {
+            payload["annualLeaveYearAllowance"] = yearAllowance
+            payload["annualLeaveYearAllowanceKey"] = yearAllowanceKey
+        }
         try await db.collection("users").document(userId).updateData(payload)
     }
 
@@ -5106,10 +5252,8 @@ class FirebaseBackend: ObservableObject {
         if updateDayRate {
             if let dayRate {
                 payload["dayRate"] = dayRate
-                payload["hourlyRate"] = FieldValue.delete()
             } else {
                 payload["dayRate"] = FieldValue.delete()
-                payload["hourlyRate"] = FieldValue.delete()
             }
         }
         try await db.collection("users").document(userId).updateData(payload)
@@ -5121,10 +5265,8 @@ class FirebaseBackend: ObservableObject {
         ]
         if let dayRate {
             payload["dayRate"] = dayRate
-            payload["hourlyRate"] = FieldValue.delete()
         } else {
             payload["dayRate"] = FieldValue.delete()
-            payload["hourlyRate"] = FieldValue.delete()
         }
         try await db.collection("users").document(userId).updateData(payload)
     }
@@ -5636,7 +5778,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, annualLeaveYearAllowance: Double? = nil, annualLeaveYearAllowanceKey: String? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         
         let emailLower = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5746,12 +5888,14 @@ class FirebaseBackend: ObservableObject {
         let resolvedAnnualLeaveEnd = annualLeaveYearEndMonth.map { AnnualLeavePolicy.clampMonth($0) } ?? orgDefaults.endMonth
         let resolvedAnnualLeaveCarry = annualLeaveCarriesOver ?? orgDefaults.carriesOver
         let resolvedAnnualLeaveEnabled = annualLeaveEnabled ?? true
-        if permissions.operativeMode || permissions.manager {
-            invitationData["annualLeaveDaysPerYear"] = resolvedAnnualLeaveDays
-            invitationData["annualLeaveYearStartMonth"] = resolvedAnnualLeaveStart
-            invitationData["annualLeaveYearEndMonth"] = resolvedAnnualLeaveEnd
-            invitationData["annualLeaveCarriesOver"] = resolvedAnnualLeaveCarry
-            invitationData["annualLeaveEnabled"] = resolvedAnnualLeaveEnabled
+        invitationData["annualLeaveDaysPerYear"] = resolvedAnnualLeaveDays
+        invitationData["annualLeaveYearStartMonth"] = resolvedAnnualLeaveStart
+        invitationData["annualLeaveYearEndMonth"] = resolvedAnnualLeaveEnd
+        invitationData["annualLeaveCarriesOver"] = resolvedAnnualLeaveCarry
+        invitationData["annualLeaveEnabled"] = resolvedAnnualLeaveEnabled
+        if let annualLeaveYearAllowance, let annualLeaveYearAllowanceKey, !annualLeaveYearAllowanceKey.isEmpty {
+            invitationData["annualLeaveYearAllowance"] = annualLeaveYearAllowance
+            invitationData["annualLeaveYearAllowanceKey"] = annualLeaveYearAllowanceKey
         }
 
         let resolvedTimesheetsEnabled = timesheetsEnabled ?? AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
@@ -5812,11 +5956,13 @@ class FirebaseBackend: ObservableObject {
                 tradeTypePreset: (permissions.operativeMode || permissions.manager) && inviteTp?.isEmpty == false ? inviteTp : nil,
                 tradeTypeCustom: (permissions.operativeMode || permissions.manager) && inviteTc?.isEmpty == false ? inviteTc : nil,
                 employmentType: employmentType,
-                annualLeaveEnabled: (permissions.operativeMode || permissions.manager) ? resolvedAnnualLeaveEnabled : true,
+                annualLeaveEnabled: resolvedAnnualLeaveEnabled,
                 annualLeaveDaysPerYear: resolvedAnnualLeaveDays,
                 annualLeaveYearStartMonth: resolvedAnnualLeaveStart,
                 annualLeaveYearEndMonth: resolvedAnnualLeaveEnd,
                 annualLeaveCarriesOver: resolvedAnnualLeaveCarry,
+                annualLeaveYearAllowance: annualLeaveYearAllowance,
+                annualLeaveYearAllowanceKey: annualLeaveYearAllowanceKey,
                 timesheetsEnabled: resolvedTimesheetsEnabled,
                 vatNumber: {
                     guard let raw = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
