@@ -91,6 +91,7 @@ struct ProjectDetailView: View {
     @State private var subcontractorEditBooking: SubcontractorBooking?
     @State private var expandedSchedulingDayKeys: Set<TimeInterval> = []
     @State private var showingScheduleSubcontractor = false
+    @State private var quickAddRequest: QuickAddRequest?
     @State private var showingEditProject = false
     @State private var showingMapOptions = false
     @State private var region: MKCoordinateRegion
@@ -235,6 +236,34 @@ struct ProjectDetailView: View {
             ScheduleSubcontractorView(project: project)
                 .environmentObject(subcontractorStore)
                 .preference(key: HideBottomMenuKey.self, value: true)
+        }
+        .sheet(item: $quickAddRequest) { request in
+            let policy = firebaseBackend.payrollPolicy(for: request.day)
+            ScheduleQuickAddSheet(
+                personName: request.person.name,
+                day: request.day,
+                policy: policy,
+                clocks: ScheduleWeekGrid.slotClocks(policy: policy),
+                existingPaidHours: ScheduleWeekGrid.paidHours(
+                    operativeIds: request.person.operativeIds,
+                    userIds: request.person.userIds,
+                    day: request.day,
+                    operativeBookings: bookingStore.bookings,
+                    managerBookings: managerScheduleStore.managerSiteBookings,
+                    policy: policy
+                ),
+                showsNotes: request.person.savesAsOperativeBooking,
+                onSave: { draft in
+                    await commitQuickAdd(request, draft: draft, policy: policy)
+                },
+                onCancel: { quickAddRequest = nil }
+            )
+            .environmentObject(bookingStore)
+            .environmentObject(managerScheduleStore)
+            .environmentObject(operativeStore)
+            .environmentObject(userStore)
+            .environmentObject(firebaseBackend)
+            .environmentObject(notificationService)
         }
         .sheet(item: $subcontractorEditBooking) { booking in
             SubcontractorBookingEditSheet(booking: booking) {
@@ -1053,22 +1082,36 @@ struct ProjectDetailView: View {
         let subcontractorBooking: SubcontractorBooking?
     }
 
+    private struct QuickAddRequest: Identifiable {
+        let id = UUID()
+        var person: ScheduleWeekPerson
+        var day: Date
+    }
+
     private struct SchedulingGridPersonRow: Identifiable {
         let id: String
         let name: String
         let initials: String
-        let avatarColor: Color
+        let role: ScheduleWeekAccountRole
+        let person: ScheduleWeekPerson
         let personKind: SchedulingGridPersonKind
         let days: [SchedulingGridDayCell]
     }
 
+    private var schedulingPersonColumnWidth: CGFloat { 92 }
+
     private var schedulingDayHeadcounts: [Int] {
-        weekDays.map { day in
-            var ids = Set<String>()
-            for b in bookingsForDate(day) { ids.insert("op-\(b.operativeId.uuidString)") }
-            for b in managerBookingsForDate(day) { ids.insert("mgr-\(b.userId)") }
-            for b in subcontractorBookingsForDate(day) { ids.insert("sub-\(b.subcontractorId.uuidString)") }
-            return ids.count
+        let rows = schedulingOpsAndManagersRows + schedulingSubcontractorRows
+        return (0..<weekDays.count).map { index in
+            rows.filter { row in
+                guard index < row.days.count else { return false }
+                switch row.days[index].kind {
+                case .empty, .annualLeave:
+                    return false
+                default:
+                    return true
+                }
+            }.count
         }
     }
 
@@ -1079,30 +1122,17 @@ struct ProjectDetailView: View {
             for b in bookingsForDate(day) { opIds.insert(b.operativeId) }
             for b in managerBookingsForDate(day) { mgrIds.insert(b.userId) }
         }
-        let buckets = StaffEmailIdentity.scheduleBuckets(
+        return ScheduleWeekGrid.staffRows(
             operativeIds: opIds,
             userIds: mgrIds,
             operatives: operativeStore.allOperatives,
             users: userStore.organizationUsers
-        )
-        return buckets.map { bucket in
-            let name = StaffEmailIdentity.bucketDisplayName(
-                bucket,
-                operatives: operativeStore.allOperatives,
-                users: userStore.organizationUsers
-            )
-            let kind: SchedulingGridPersonKind = bucket.operativeIds.isEmpty
-                ? .manager(bucket.userIds.first ?? bucket.key)
-                : .operative(bucket.operativeIds[0])
-            return makeSchedulingPersonRow(
-                id: bucket.key,
-                name: name,
-                kind: kind,
-                operativeIds: bucket.operativeIds,
-                userIds: bucket.userIds
-            )
+        ).map { person in
+            let kind: SchedulingGridPersonKind = person.role == .operative
+                ? .operative(person.saveOperativeId ?? person.operativeIds.first ?? UUID())
+                : .manager(person.saveUserId ?? person.id)
+            return makeSchedulingPersonRow(person: person, kind: kind)
         }
-        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private var schedulingSubcontractorRows: [SchedulingGridPersonRow] {
@@ -1110,15 +1140,14 @@ struct ProjectDetailView: View {
         for day in weekDays {
             for b in subcontractorBookingsForDate(day) { subIds.insert(b.subcontractorId) }
         }
-        return subIds.map { id in
-            let name = subcontractorStore.subcontractors.first(where: { $0.id == id })?.name ?? "Subcontractor"
-            return makeSchedulingPersonRow(
-                id: "sub-\(id.uuidString)",
-                name: name,
-                kind: .subcontractor(id)
+        return ScheduleWeekGrid.subcontractorRows(ids: subIds) { id in
+            subcontractorStore.subcontractors.first(where: { $0.id == id })?.name ?? "Subcontractor"
+        }.map { person in
+            makeSchedulingPersonRow(
+                person: person,
+                kind: .subcontractor(person.subcontractorId ?? UUID())
             )
         }
-        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private func schedulingCombinedDayCell(
@@ -1195,22 +1224,11 @@ struct ProjectDetailView: View {
     }
 
     private func makeSchedulingPersonRow(
-        id: String,
-        name: String,
-        kind: SchedulingGridPersonKind,
-        operativeIds: [UUID] = [],
-        userIds: [String] = []
+        person: ScheduleWeekPerson,
+        kind: SchedulingGridPersonKind
     ) -> SchedulingGridPersonRow {
-        let resolvedOperativeIds: [UUID] = {
-            if !operativeIds.isEmpty { return operativeIds }
-            if case .operative(let opId) = kind { return [opId] }
-            return []
-        }()
-        let resolvedUserIds: [String] = {
-            if !userIds.isEmpty { return userIds }
-            if case .manager(let userId) = kind { return [userId] }
-            return []
-        }()
+        let resolvedOperativeIds = person.operativeIds
+        let resolvedUserIds = person.userIds
         let days: [SchedulingGridDayCell] = weekDays.map { day in
             let dayId = Calendar.current.startOfDay(for: day).timeIntervalSince1970
             if !resolvedOperativeIds.isEmpty || !resolvedUserIds.isEmpty {
@@ -1304,10 +1322,11 @@ struct ProjectDetailView: View {
             )
         }
         return SchedulingGridPersonRow(
-            id: id,
-            name: name,
-            initials: PlannerUIInitials.from(name),
-            avatarColor: SchedulingV2AvatarColor.color(for: id),
+            id: person.id,
+            name: person.name,
+            initials: PlannerUIInitials.from(person.name),
+            role: person.role,
+            person: person,
             personKind: kind,
             days: days
         )
@@ -1338,7 +1357,7 @@ struct ProjectDetailView: View {
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(SchedulingV2Palette.softMuted)
                 .textCase(.uppercase)
-                .frame(width: 80, alignment: .leading)
+                .frame(width: schedulingPersonColumnWidth, alignment: .leading)
                 .padding(.bottom, 4)
             HStack(spacing: 3) {
                 ForEach(Array(weekDays.enumerated()), id: \.offset) { index, day in
@@ -1417,21 +1436,32 @@ struct ProjectDetailView: View {
 
     private func schedulingPersonGridRow(_ row: SchedulingGridPersonRow) -> some View {
         HStack(spacing: 0) {
-            HStack(spacing: 6) {
+            HStack(spacing: 4) {
                 Text(row.initials)
                     .font(.system(size: 9, weight: .heavy))
                     .foregroundStyle(.white)
-                    .frame(width: 28, height: 28)
-                    .background(row.avatarColor)
+                    .frame(width: 26, height: 26)
+                    .background(schedulingRoleColor(row.role))
                     .clipShape(Circle())
-                Text(row.name)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(SchedulingV2Palette.ink)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(row.name)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(SchedulingV2Palette.ink)
+                        .lineLimit(2)
+                    Text(row.role.badge)
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(schedulingRoleColor(row.role))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(schedulingRoleColor(row.role).opacity(0.14))
+                        .clipShape(Capsule())
+                        .accessibilityIdentifier("scheduling.badge.\(row.role.badge)")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(width: 80, alignment: .leading)
-            .padding(.trailing, 6)
+            .frame(width: schedulingPersonColumnWidth, alignment: .leading)
+            .padding(.trailing, 4)
+            .accessibilityIdentifier("scheduling.person.\(row.id)")
 
             HStack(spacing: 3) {
                 ForEach(Array(row.days.enumerated()), id: \.element.id) { index, day in
@@ -1479,7 +1509,10 @@ struct ProjectDetailView: View {
             subcontractorEditBooking = booking
             return
         }
-        // Empty / AL cells: same entry points as the action buttons (no new booking logic).
+        if day.kind == .empty, row.role != .subcontractor {
+            quickAddRequest = QuickAddRequest(person: row.person, day: day.date)
+            return
+        }
         switch row.personKind {
         case .operative, .manager:
             scheduleOperativeSeedBooking = nil
@@ -1488,6 +1521,76 @@ struct ProjectDetailView: View {
         case .subcontractor:
             showingScheduleSubcontractor = true
         }
+    }
+
+    private func schedulingRoleColor(_ role: ScheduleWeekAccountRole) -> Color {
+        switch role.tone {
+        case .blue: return ProjectWorksRevampColors.blue
+        case .green: return ProjectWorksRevampColors.activeGreen
+        case .purple: return SchedulingV2Palette.subsBtn
+        }
+    }
+
+    private func commitQuickAdd(
+        _ request: QuickAddRequest,
+        draft: ScheduleQuickAddDraft,
+        policy: OrgPayrollTimePolicy
+    ) async -> String? {
+        if let message = ScheduleWeekGrid.overlapMessage(
+            operativeIds: request.person.operativeIds,
+            userIds: request.person.userIds,
+            day: request.day,
+            timeSlot: draft.timeSlot,
+            workStart: draft.workStart,
+            workEnd: draft.workEnd,
+            operativeBookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            policy: policy
+        ) {
+            return message
+        }
+        guard let target = ScheduleWeekGrid.saveTarget(for: request.person, jobType: project.jobType) else {
+            return "This person cannot be booked from here."
+        }
+        switch target {
+        case .operativeBookings(let operativeId):
+            guard let operative = operativeStore.allOperatives.first(where: { $0.id == operativeId }) else {
+                return "No operative profile is linked to this person."
+            }
+            guard let bookedBy = firebaseBackend.currentUser?.uid else {
+                return "Not signed in."
+            }
+            await bookingStore.bookOperative(
+                operative,
+                on: request.day,
+                timeSlot: draft.timeSlot,
+                for: project,
+                bookedBy: bookedBy,
+                notes: draft.notes,
+                workStartTime: draft.workStart,
+                workEndTime: draft.workEnd
+            )
+            let bookedByName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
+            await notificationService.notifyBookedUsers(
+                projectName: project.siteName,
+                bookedBy: bookedByName,
+                recipients: [.init(operativeId: operative.id, dates: [request.day])]
+            )
+        case .managerSiteBookings(let userId, let locationType):
+            let booking = ManagerSiteBooking(
+                userId: userId,
+                date: request.day,
+                timeSlot: draft.managerTimeSlot,
+                locationType: locationType,
+                locationId: project.id,
+                workStartTime: draft.workStart,
+                workEndTime: draft.workEnd
+            )
+            await managerScheduleStore.saveBooking(booking)
+        }
+        ScheduleChangeNotifier.postBookingStoreDidChange()
+        quickAddRequest = nil
+        return nil
     }
 
     private var schedulingListWeekOverview: some View {
