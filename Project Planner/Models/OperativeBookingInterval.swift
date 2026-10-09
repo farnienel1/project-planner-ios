@@ -8,49 +8,33 @@
 import Foundation
 
 enum OperativeBookingInterval {
+    /// Clock interval for clash detection, in minutes from midnight.
+    /// A weekday AM or PM booking is the organisation half from the canonical script, even when
+    /// older clock times were stored on it, so bookings follow the live policy. Otherwise explicit
+    /// times win (an end before the start runs into the next morning), and a named slot without
+    /// times is the script's `slotInterval` for that day. FULL DAY is the whole standard day.
     static func clashInterval(for booking: Booking, policy: OrgPayrollTimePolicy) -> (Int, Int)? {
+        let dayInput = PayrollTimePolicyCatalog.canonicalDayInput(for: booking.date, policy: policy)
         if booking.timeSlot == .morning || booking.timeSlot == .afternoon,
            PayrollTimePolicyCatalog.isWeekday(booking.date),
-           let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy) {
-            return booking.timeSlot == .morning
-                ? (windows.morningStart, windows.morningEnd)
-                : (windows.afternoonStart, windows.afternoonEnd)
+           let dayInput,
+           let windows = CanonicalBusinessEngine.halfDayWindows(dayInput) {
+            return booking.timeSlot == .morning ? windows.am.tuple : windows.pm.tuple
         }
         if let s = booking.workStartTime, let e = booking.workEndTime,
            let span = ManagerScheduleInterval.clockSpanMinutes(start: s, end: e) {
             return span
         }
-        guard let dayStart = resolvedStandardWindowStart(for: booking, policy: policy),
-              let dayEnd = resolvedStandardWindowEnd(for: booking, policy: policy),
-              dayEnd > dayStart else {
+        guard let dayInput else {
             if booking.timeSlot == .fullDay { return (0, 24 * 60) }
             return nil
         }
-        switch booking.timeSlot {
-        case .fullDay:
-            return (dayStart, dayEnd)
-        case .morning:
-            if let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy) {
-                return (windows.morningStart, windows.morningEnd)
-            }
-            let mid = dayStart + (dayEnd - dayStart) / 2
-            return (dayStart, mid)
-        case .afternoon:
-            if let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy) {
-                return (windows.afternoonStart, windows.afternoonEnd)
-            }
-            let mid = dayStart + (dayEnd - dayStart) / 2
-            return (mid, dayEnd)
-        case .customHours:
-            return (dayStart, dayEnd)
-        case .evening:
-            let end = min(dayEnd + 240, 24 * 60)
-            return end > dayEnd ? (dayEnd, end) : nil
-        case .overtime:
-            let startOT = min(dayEnd + 240, 24 * 60)
-            let endOT = min(dayEnd + 360, 24 * 60)
-            return endOT > startOT ? (startOT, endOT) : nil
-        }
+        return CanonicalBusinessEngine.slotInterval(
+            timeSlot: booking.timeSlot.rawValue,
+            workStartTime: nil,
+            workEndTime: nil,
+            day: dayInput
+        )?.tuple
     }
 
     static func closedIntervalsOverlap(_ a: (Int, Int), _ b: (Int, Int)) -> Bool {
@@ -84,20 +68,6 @@ enum OperativeBookingInterval {
               let ws = timeline.standardWindowStartMinutes,
               let we = timeline.standardWindowEndMinutes else { return false }
         return iv.0 <= ws && iv.1 >= we
-    }
-
-    private static func resolvedStandardWindowStart(for booking: Booking, policy: OrgPayrollTimePolicy) -> Int? {
-        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy)
-        if timeline.allHoursAtMultiplier { return nil }
-        return timeline.standardWindowStartMinutes
-            ?? ManagerScheduleInterval.parseMinutes(policy.standardDayStart)
-    }
-
-    private static func resolvedStandardWindowEnd(for booking: Booking, policy: OrgPayrollTimePolicy) -> Int? {
-        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy)
-        if timeline.allHoursAtMultiplier { return nil }
-        return timeline.standardWindowEndMinutes
-            ?? ManagerScheduleInterval.parseMinutes(policy.standardDayEnd)
     }
 
     private static func legacyOperativeSlotClash(_ a: TimeSlot, _ b: TimeSlot) -> Bool {

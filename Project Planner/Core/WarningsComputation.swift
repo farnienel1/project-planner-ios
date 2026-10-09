@@ -884,7 +884,8 @@ enum WarningsComputation {
     }
 
     /// A full-day "missing" row is wrong when this email's bookings already cover the
-    /// standard day. The script looks up one account id and can miss the alias that holds the hours.
+    /// standard day. The script links accounts by email from the people rows Swift sends; this
+    /// guard stays for paid hours Swift knows about that are not in those rows.
     nonisolated static func unbookedRowIsAlreadyCovered(
         paidHours: Double,
         missingHours: Double,

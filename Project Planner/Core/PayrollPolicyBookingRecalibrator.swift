@@ -113,21 +113,22 @@ enum PayrollPolicyBookingRecalibrator {
                 isBreakRemoved: breakRemoved,
                 otMultiplierOverride: nil
             )
-        case .morning:
-            let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: newPolicy)
+        case .morning, .afternoon:
+            // The half comes from the canonical script. Without the script the booking keeps its times.
+            guard let windows = CanonicalBusinessEngine.halfDayWindows(CanonicalStandardDayInput(policy: newPolicy)) else {
+                return OperativeDayBookingChoice(
+                    timeSlot: booking.timeSlot,
+                    workStartTime: booking.workStartTime,
+                    workEndTime: booking.workEndTime,
+                    isBreakRemoved: booking.isBreakRemoved,
+                    otMultiplierOverride: booking.otMultiplierOverride
+                )
+            }
+            let half = booking.timeSlot == .morning ? windows.am : windows.pm
             return OperativeDayBookingChoice(
-                timeSlot: .morning,
-                workStartTime: windows?.morningStartLabel ?? ManagerScheduleInterval.formatMinutes(sMin),
-                workEndTime: windows?.morningEndLabel ?? ManagerScheduleInterval.formatMinutes(sMin + (eMin - sMin) / 2),
-                isBreakRemoved: true,
-                otMultiplierOverride: nil
-            )
-        case .afternoon:
-            let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: newPolicy)
-            return OperativeDayBookingChoice(
-                timeSlot: .afternoon,
-                workStartTime: windows?.afternoonStartLabel ?? ManagerScheduleInterval.formatMinutes(sMin + (eMin - sMin) / 2),
-                workEndTime: windows?.afternoonEndLabel ?? ManagerScheduleInterval.formatMinutes(eMin),
+                timeSlot: booking.timeSlot,
+                workStartTime: ManagerScheduleInterval.formatMinutes(half.start),
+                workEndTime: ManagerScheduleInterval.formatMinutes(half.end),
                 isBreakRemoved: true,
                 otMultiplierOverride: nil
             )
@@ -189,20 +190,15 @@ enum PayrollPolicyBookingRecalibrator {
         switch booking.timeSlot {
         case .fullDay, .customHours:
             return (.customHours, start, end, breakRemoved)
-        case .morning:
-            let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: newPolicy)
+        case .morning, .afternoon:
+            guard let windows = CanonicalBusinessEngine.halfDayWindows(CanonicalStandardDayInput(policy: newPolicy)) else {
+                return (booking.timeSlot, booking.workStartTime, booking.workEndTime, booking.isBreakRemoved)
+            }
+            let half = booking.timeSlot == .morning ? windows.am : windows.pm
             return (
-                .morning,
-                windows?.morningStartLabel ?? ManagerScheduleInterval.formatMinutes(sMin),
-                windows?.morningEndLabel ?? ManagerScheduleInterval.formatMinutes(sMin + (eMin - sMin) / 2),
-                true
-            )
-        case .afternoon:
-            let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: newPolicy)
-            return (
-                .afternoon,
-                windows?.afternoonStartLabel ?? ManagerScheduleInterval.formatMinutes(sMin + (eMin - sMin) / 2),
-                windows?.afternoonEndLabel ?? ManagerScheduleInterval.formatMinutes(eMin),
+                booking.timeSlot,
+                ManagerScheduleInterval.formatMinutes(half.start),
+                ManagerScheduleInterval.formatMinutes(half.end),
                 true
             )
         }

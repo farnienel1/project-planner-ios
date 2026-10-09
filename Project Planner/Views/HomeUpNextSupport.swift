@@ -34,23 +34,7 @@ enum HomeUpNextSupport {
         if let s = b.workStartTime, let mins = ManagerScheduleInterval.parseMinutes(s) {
             return calendar.date(byAdding: .minute, value: mins, to: day) ?? day
         }
-        guard let ds = ManagerScheduleInterval.parseMinutes(policy.standardDayStart),
-              let de = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd),
-              de > ds else {
-            switch b.timeSlot {
-            case .morning, .fullDay, .customHours:
-                return calendar.date(byAdding: .hour, value: 8, to: day) ?? day
-            case .afternoon:
-                return calendar.date(byAdding: .hour, value: 13, to: day) ?? day
-            }
-        }
-        let mid = ds + (de - ds) / 2
-        switch b.timeSlot {
-        case .morning, .fullDay, .customHours:
-            return calendar.date(byAdding: .minute, value: ds, to: day) ?? day
-        case .afternoon:
-            return calendar.date(byAdding: .minute, value: mid, to: day) ?? day
-        }
+        return calendar.date(byAdding: .minute, value: b.minutesSortKey(policy: policy), to: day) ?? day
     }
 
     static func project(forProjectId id: UUID, allProjects: [Project]) -> Project? {
