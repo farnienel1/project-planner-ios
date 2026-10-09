@@ -6405,6 +6405,60 @@ class FirebaseBackend: ObservableObject {
         try await db.collection("organizations").document(orgId).collection("holidayBookings").document(booking.id.uuidString).setData(data, merge: true)
     }
 
+    /// Document ids in `organizations/{orgId}/dismissedWarnings`. Empty when the read fails,
+    /// so a denied or offline read does not hide qualification rows.
+    func loadDismissedQualificationKeys(organizationId: String) async -> Set<String> {
+        let trimmed = organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        do {
+            let snapshot = try await db.collection("organizations").document(trimmed)
+                .collection("dismissedWarnings")
+                .getDocuments()
+            return Set(snapshot.documents.map(\.documentID))
+        } catch {
+            print("🔥🔥🔥 DEBUG: dismissedWarnings read failed for \(trimmed): \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    /// Records that an expired qualification warning was dismissed. The document id is the
+    /// script's `qualificationDismissKey`. Upcoming expiries must not be written here.
+    func dismissExpiredQualification(
+        operativeId: String,
+        qualificationId: String,
+        expiryDayKey: String,
+        dismissKey: String
+    ) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines),
+              !orgId.isEmpty else {
+            throw NSError(domain: "FirebaseBackend", code: 404, userInfo: [NSLocalizedDescriptionKey: "No organisation is open."])
+        }
+        guard let uid = auth.currentUser?.uid, !uid.isEmpty else {
+            throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "No user signed in"])
+        }
+        let key = dismissKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty,
+              key == CanonicalBusinessEngine.qualificationDismissKey(
+                operativeId: operativeId,
+                qualificationId: qualificationId,
+                expiryDayKey: expiryDayKey
+              ) else {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "This qualification warning cannot be dismissed."])
+        }
+        try await db.collection("organizations").document(orgId)
+            .collection("dismissedWarnings")
+            .document(key)
+            .setData([
+                "kind": "qualification_expired",
+                "dismissKey": key,
+                "operativeId": operativeId,
+                "qualificationId": qualificationId,
+                "expiryDayKey": expiryDayKey,
+                "dismissedAt": FieldValue.serverTimestamp(),
+                "dismissedByUserId": uid,
+            ], merge: true)
+    }
+
     func loadHolidayBookings(organizationId: String) async throws -> [HolidayBooking] {
         // Read path only — do not run writable-org repair (that can hang launch).
         let orgId = try await ensureReadableOrganization(organizationId)

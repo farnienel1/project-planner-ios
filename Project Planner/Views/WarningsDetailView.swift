@@ -397,7 +397,9 @@ struct WarningsDetailView: View {
             annualLeaveCard(warning)
         case .materialsCutoff:
             materialsCard(warning)
-        case .qualificationExpiry, .operativeNotVerified:
+        case .qualificationExpiry:
+            qualificationCard(warning)
+        case .operativeNotVerified:
             legacyCard(warning)
         }
     }
@@ -705,6 +707,75 @@ struct WarningsDetailView: View {
                 .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
         )
         .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+    }
+
+    private func qualificationCard(_ warning: Warning) -> some View {
+        let canDismiss = warning.qualificationExpiry?.canDismiss == true
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(warning.title)
+                    .font(.system(size: 17, weight: .heavy))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 8)
+                WarningPriorityBadge(severity: .low)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 15)
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.216, green: 0.255, blue: 0.318),
+                        Color(red: 0.290, green: 0.333, blue: 0.408)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+
+            Text(warning.message)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(WarningsUI.textBody)
+                .padding(16)
+
+            if canDismiss {
+                Button { dismissExpiredQualification(warning) } label: {
+                    Text("Dismiss")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.420, green: 0.447, blue: 0.502))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .accessibilityIdentifier("warnings.dismissQualification")
+                .buttonStyle(.plain)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 14)
+                .background(Color(red: 0.980, green: 0.980, blue: 0.980))
+            }
+        }
+        .background(ProjectWorksRevampColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+    }
+
+    private func dismissExpiredQualification(_ warning: Warning) {
+        guard let detail = warning.qualificationExpiry, detail.canDismiss else { return }
+        Task { @MainActor in
+            do {
+                try await firebaseBackend.dismissExpiredQualification(
+                    operativeId: detail.operativeId,
+                    qualificationId: detail.qualificationId,
+                    expiryDayKey: detail.expiryDayKey,
+                    dismissKey: detail.dismissKey
+                )
+                await refreshWarningsTodayOnly()
+            } catch {
+                refreshMessage = error.localizedDescription
+            }
+        }
     }
 
     private func legacyCard(_ warning: Warning) -> some View {

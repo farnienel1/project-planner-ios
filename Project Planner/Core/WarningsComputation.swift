@@ -28,6 +28,7 @@ struct WarningsComputationInput: @unchecked Sendable {
     let projectsWithTomorrowBookings: [Project]
     /// Material lines dated for tomorrow (loaded when computing warnings).
     let materialItemsForTomorrow: [MaterialItem]
+    var dismissedQualificationKeys: Set<String> = []
 }
 
 struct WarningsComputationSnapshot: Sendable {
@@ -163,6 +164,8 @@ struct WarningsComputationSnapshot: Sendable {
     let materialCutOffOnSunday: Bool
     let projectsWithTomorrowBookingIds: [UUID]
     let materialItemsForTomorrow: [MaterialItemSnapshot]
+    /// Document ids from `organizations/{orgId}/dismissedWarnings`.
+    var dismissedQualificationKeys: Set<String> = []
 }
 
 enum WarningsComputation {
@@ -352,7 +355,8 @@ enum WarningsComputation {
             materialCutOffOnSaturday: input.materialCutOffOnSaturday,
             materialCutOffOnSunday: input.materialCutOffOnSunday,
             projectsWithTomorrowBookingIds: input.projectsWithTomorrowBookings.map(\.id),
-            materialItemsForTomorrow: materialItemsForTomorrow
+            materialItemsForTomorrow: materialItemsForTomorrow,
+            dismissedQualificationKeys: input.dismissedQualificationKeys
         )
     }
 
@@ -415,7 +419,7 @@ enum WarningsComputation {
             approvedHolidays: input.holidayBookings.filter(\.isApproved)
         )
 
-        if let rows = qualificationRows(input, reference: now) {
+        if let rows = qualificationRows(input, reference: now, dismissedKeys: input.dismissedQualificationKeys) {
             for row in rows {
                 generated.append(row)
             }
@@ -643,7 +647,11 @@ enum WarningsComputation {
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 
-    nonisolated private static func qualificationRows(_ input: WarningsComputationSnapshot, reference: Date) -> [Warning]? {
+    nonisolated private static func qualificationRows(
+        _ input: WarningsComputationSnapshot,
+        reference: Date,
+        dismissedKeys: Set<String>
+    ) -> [Warning]? {
         let calendar = CanonicalBusinessEngine.businessCalendar
         let operatives: [[String: Any]] = input.operatives.map { operative in
             let expiries: [[String: Any]] = operative.qualificationExpiries.map { expiry in
@@ -670,7 +678,11 @@ enum WarningsComputation {
         ) else {
             return nil
         }
-        return rows.compactMap { row in
+        let visible = CanonicalBusinessEngine.withoutDismissedQualificationRows(
+            rows,
+            dismissedKeys: Array(dismissedKeys)
+        ) ?? rows
+        return visible.compactMap { row in
             guard let id = row["id"] as? String, !id.isEmpty,
                   let title = row["title"] as? String,
                   let message = row["message"] as? String,
@@ -678,13 +690,33 @@ enum WarningsComputation {
                   let date = CanonicalBusinessEngine.date(fromDayKey: dayKey, calendar: calendar) else {
                 return nil
             }
+            let operativeId = row["operativeId"] as? String ?? ""
+            let qualificationId = row["qualificationId"] as? String ?? ""
+            let daysUntilExpiry = (row["daysUntilExpiry"] as? NSNumber)?.intValue
+                ?? (row["daysUntilExpiry"] as? Int)
+                ?? 0
+            let storedKey = (row["dismissKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let dismissKey = storedKey.isEmpty
+                ? (CanonicalBusinessEngine.qualificationDismissKey(
+                    operativeId: operativeId,
+                    qualificationId: qualificationId,
+                    expiryDayKey: dayKey
+                ) ?? "")
+                : storedKey
             return Warning(
                 resolutionKey: id,
                 type: .qualificationExpiry,
                 title: title,
                 message: message,
                 severity: .low,
-                occurrenceDate: date
+                occurrenceDate: date,
+                qualificationExpiry: Warning.QualificationExpiryWarningDetails(
+                    operativeId: operativeId,
+                    qualificationId: qualificationId,
+                    expiryDayKey: dayKey,
+                    dismissKey: dismissKey,
+                    daysUntilExpiry: daysUntilExpiry
+                )
             )
         }
     }

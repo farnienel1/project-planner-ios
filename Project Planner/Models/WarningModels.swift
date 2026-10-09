@@ -22,6 +22,8 @@ nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
     var materialsCutoff: MaterialsCutoffWarningDetails?
     var bookingClashDetails: BookingClashDetails?
     var operativeEmail: String?
+    /// Set on qualification rows from the script, including the shared dismiss key.
+    var qualificationExpiry: QualificationExpiryWarningDetails? = nil
 
     enum WarningType: String, Hashable, Codable {
         case operativeBookingClash
@@ -234,6 +236,17 @@ nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
         /// Clock ranges still open on the working half, formatted `09:30–12:00`.
         var missingRanges: [String]
         var missingHours: Double
+    }
+
+    struct QualificationExpiryWarningDetails: Hashable, Codable, Sendable {
+        var operativeId: String
+        var qualificationId: String
+        var expiryDayKey: String
+        var dismissKey: String
+        var daysUntilExpiry: Int
+
+        /// Only an expiry that is already in the past can be dismissed. Upcoming rows stay.
+        var canDismiss: Bool { daysUntilExpiry < 0 }
     }
 
     struct UnbookedLabourWarningDetails: Hashable, Codable, Sendable {

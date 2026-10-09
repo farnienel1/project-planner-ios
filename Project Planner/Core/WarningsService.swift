@@ -301,7 +301,8 @@ class WarningsService: ObservableObject {
         materialCutOffOnSaturday: Bool = false,
         materialCutOffOnSunday: Bool = false,
         projectsWithTomorrowBookings: [Project] = [],
-        materialItemsForTomorrow: [MaterialItem] = []
+        materialItemsForTomorrow: [MaterialItem] = [],
+        dismissedQualificationKeys: Set<String> = []
     ) {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
         let resolvedWarningDetection = warningDetection ?? .default
@@ -326,6 +327,7 @@ class WarningsService: ObservableObject {
                 materialCutOffOnSunday: materialCutOffOnSunday,
                 projectsWithTomorrowBookings: projectsWithTomorrowBookings,
                 materialItemsForTomorrow: materialItemsForTomorrow,
+                dismissedQualificationKeys: dismissedQualificationKeys,
                 publishToLiveCache: true
             )
         }
@@ -349,6 +351,7 @@ class WarningsService: ObservableObject {
         materialCutOffOnSunday: Bool = false,
         projectsWithTomorrowBookings: [Project] = [],
         materialItemsForTomorrow: [MaterialItem] = [],
+        dismissedQualificationKeys: Set<String> = [],
         publishToLiveCache: Bool = true
     ) async {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
@@ -373,6 +376,7 @@ class WarningsService: ObservableObject {
             materialCutOffOnSunday: materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
             materialItemsForTomorrow: materialItemsForTomorrow,
+            dismissedQualificationKeys: dismissedQualificationKeys,
             publishToLiveCache: publishToLiveCache
         )
     }
@@ -394,6 +398,7 @@ class WarningsService: ObservableObject {
         materialCutOffOnSunday: Bool,
         projectsWithTomorrowBookings: [Project],
         materialItemsForTomorrow: [MaterialItem],
+        dismissedQualificationKeys: Set<String>,
         publishToLiveCache: Bool
     ) async {
         updateGeneration += 1
@@ -443,7 +448,8 @@ class WarningsService: ObservableObject {
             materialCutOffOnSaturday: materialCutOffOnSaturday,
             materialCutOffOnSunday: materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
-            materialItemsForTomorrow: materialItemsForTomorrow
+            materialItemsForTomorrow: materialItemsForTomorrow,
+            dismissedQualificationKeys: dismissedQualificationKeys
         )
         // Snapshot on MainActor (Swift 6 default isolation) over the *windowed* arrays.
         // Detach only generate. Extra yields stop Home quiet-expired jetsam.

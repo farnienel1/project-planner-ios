@@ -34,7 +34,7 @@ Clash, sort, and calendar export (`OperativeBookingInterval.clashInterval`, `Man
 
 ## Dismissed warnings
 
-`CanonicalBusinessEngine.qualificationDismissKey(operativeId:qualificationId:expiryDayKey:)` is the id both apps store a dismissed qualification warning under (`qual|operative|qualification|expiryDay`), and `withoutDismissedQualificationRows` drops only expired rows whose key is dismissed. `qualificationExpiryRows` already returns `dismissKey` on each row.
+`CanonicalBusinessEngine.qualificationDismissKey(operativeId:qualificationId:expiryDayKey:)` is the id both apps store a dismissed qualification warning under (`qual|operative|qualification|expiryDay`), and `withoutDismissedQualificationRows` drops only expired rows whose key is dismissed. `qualificationExpiryRows` already returns `dismissKey` on each row. The warnings screen shows Dismiss only when `daysUntilExpiry` is negative. That write is `organizations/{orgId}/dismissedWarnings/{dismissKey}` (`kind`, `dismissKey`, `operativeId`, `qualificationId`, `expiryDayKey`, `dismissedAt`, `dismissedByUserId`). The next warning read loads that collection and passes the ids into `withoutDismissedQualificationRows`. Upcoming expiry rows have no Dismiss button.
 
 ## Agent windows
 

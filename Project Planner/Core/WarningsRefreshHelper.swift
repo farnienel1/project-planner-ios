@@ -207,7 +207,10 @@ enum WarningsRefreshHelper {
             let end = cal.startOfDay(for: holiday.endDate)
             return end >= coverageStart && start <= coverageEnd
         }
-        print("🔥🔥🔥 DEBUG: Warnings helper pre-window \(coverageStart)…\(coverageEnd) bookings=\(liveBookings.count)/\(bookingStore.bookings.count) mgr=\(liveManager.count)/\(managerScheduleStore.managerSiteBookings.count)")
+        let dismissedQualificationKeys = await firebaseBackend.loadDismissedQualificationKeys(
+            organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
+        )
+        print("🔥🔥🔥 DEBUG: Warnings helper pre-window \(coverageStart)…\(coverageEnd) bookings=\(liveBookings.count)/\(bookingStore.bookings.count) mgr=\(liveManager.count)/\(managerScheduleStore.managerSiteBookings.count) dismissedQualifications=\(dismissedQualificationKeys.count)")
 
         await Task.yield()
         try? await Task.sleep(nanoseconds: 250_000_000)
@@ -230,6 +233,7 @@ enum WarningsRefreshHelper {
             materialCutOffOnSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
             materialCutOffOnSunday: appSettings.settings.notifications.materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsTomorrow,
+            dismissedQualificationKeys: dismissedQualificationKeys,
             publishToLiveCache: true
         )
         postWarningsCountDidChange()
