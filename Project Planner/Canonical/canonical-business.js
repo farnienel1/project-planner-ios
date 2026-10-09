@@ -22,15 +22,20 @@ var ProjectPlannerCanonical = (() => {
   var bundleEntry_exports = {};
   __export(bundleEntry_exports, {
     bookingBelongsToOrganization: () => bookingBelongsToOrganization,
+    canEditWorkCatalogue: () => canEditWorkCatalogue,
+    canViewStaffWarnings: () => canViewStaffWarnings,
     coverageWindow: () => coverageWindow,
     dayKeyInOrganizationZone: () => dayKeyInOrganizationZone,
     intervalsOverlap: () => intervalsOverlap,
     invoicingPeriod: () => invoicingPeriod,
+    isStaffAccount: () => isStaffAccount,
     organizationIdFromValue: () => organizationIdFromValue,
     organizationIdsMatch: () => organizationIdsMatch,
     organizationScopedKey: () => organizationScopedKey,
     paidHoursForNamedSlot: () => paidHoursForNamedSlot,
     qualificationExpiryRows: () => qualificationExpiryRows,
+    receivesJobNotification: () => receivesJobNotification,
+    seesEveryJob: () => seesEveryJob,
     standardDayCoverage: () => standardDayCoverage,
     unbookedLabourRows: () => unbookedLabourRows,
     unverifiedOperativeRows: () => unverifiedOperativeRows
@@ -38,27 +43,45 @@ var ProjectPlannerCanonical = (() => {
 
   // lib/orgTime/zoneTime.ts
   var LONDON_TIME_ZONE = "Europe/London";
+  var partsFormatters = /* @__PURE__ */ new Map();
+  var partsMemo = /* @__PURE__ */ new Map();
+  var PARTS_MEMO_LIMIT = 4096;
+  function partsFormatter(timeZone) {
+    let fmt = partsFormatters.get(timeZone);
+    if (!fmt) {
+      fmt = new Intl.DateTimeFormat("en-GB", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23"
+      });
+      partsFormatters.set(timeZone, fmt);
+    }
+    return fmt;
+  }
   function partsInZone(date, timeZone) {
-    const fmt = new Intl.DateTimeFormat("en-GB", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23"
-    });
+    const memoKey = `${timeZone}|${date.getTime()}`;
+    const cached = partsMemo.get(memoKey);
+    if (cached) return cached;
     const map = {};
-    for (const part of fmt.formatToParts(date)) {
+    for (const part of partsFormatter(timeZone).formatToParts(date)) {
       if (part.type !== "literal") map[part.type] = part.value;
     }
-    return {
+    const parts = {
       y: Number(map.year),
       m: Number(map.month),
       d: Number(map.day),
       h: Number(map.hour),
       min: Number(map.minute)
     };
+    if (partsMemo.size >= PARTS_MEMO_LIMIT) {
+      partsMemo.delete(partsMemo.keys().next().value);
+    }
+    partsMemo.set(memoKey, parts);
+    return parts;
   }
   function dayKeyInZone(date, timeZone) {
     const { y, m, d } = partsInZone(date, timeZone);
@@ -551,6 +574,14 @@ var ProjectPlannerCanonical = (() => {
         operativesByEmail.set(email, operative);
       }
     }
+    const userIdsByEmail = /* @__PURE__ */ new Map();
+    for (const person of input.people) {
+      const email = emailKey(person.email);
+      if (!email || !person.id) continue;
+      const ids = userIdsByEmail.get(email) || /* @__PURE__ */ new Set();
+      ids.add(person.id);
+      userIdsByEmail.set(email, ids);
+    }
     const slotsFor = (email, operativeId, userId, dayKey) => {
       const slots = [];
       const ids = /* @__PURE__ */ new Set();
@@ -558,17 +589,31 @@ var ProjectPlannerCanonical = (() => {
       const linked = operativeIdsByEmail.get(email);
       if (linked) for (const id of linked) ids.add(id);
       for (const id of ids) slots.push(...operativeBookings.get(`${id}|${dayKey}`) || []);
-      if (userId) slots.push(...managerBookings.get(`${userId}|${dayKey}`) || []);
+      const userIds = /* @__PURE__ */ new Set();
+      if (userId) userIds.add(userId);
+      const linkedUsers = userIdsByEmail.get(email);
+      if (linkedUsers) for (const id of linkedUsers) userIds.add(id);
+      for (const id of userIds) slots.push(...managerBookings.get(`${id}|${dayKey}`) || []);
       return slots;
     };
     const approvedHolidays = input.holidays.filter((holiday) => holiday.approved);
-    const holidayCovers = (dayKey, userId, operativeId) => approvedHolidays.some((holiday) => {
-      if (dayKey < holiday.startDayKey || dayKey > holiday.endDayKey) return false;
-      const holidayUser = String(holiday.userId || "").trim();
-      if (userId && holidayUser && holidayUser === userId) return true;
-      if (operativeId && holiday.operativeId && holiday.operativeId === operativeId) return true;
-      return false;
-    });
+    const holidayCovers = (dayKey, email, userId, operativeId) => {
+      const userIds = /* @__PURE__ */ new Set();
+      if (userId) userIds.add(userId);
+      const linkedUsers = userIdsByEmail.get(email);
+      if (linkedUsers) for (const id of linkedUsers) userIds.add(id);
+      const operativeIds = /* @__PURE__ */ new Set();
+      if (operativeId) operativeIds.add(operativeId);
+      const linkedOps = operativeIdsByEmail.get(email);
+      if (linkedOps) for (const id of linkedOps) operativeIds.add(id);
+      return approvedHolidays.some((holiday) => {
+        if (dayKey < holiday.startDayKey || dayKey > holiday.endDayKey) return false;
+        const holidayUser = String(holiday.userId || "").trim();
+        if (holidayUser && userIds.has(holidayUser)) return true;
+        if (holiday.operativeId && operativeIds.has(holiday.operativeId)) return true;
+        return false;
+      });
+    };
     const operativeUsers = dedupeFinishedPeople(input.people.filter(isOperativeModeOnly));
     const managerUsers = dedupeFinishedPeople(input.people.filter(isManagerOrAdmin));
     const managerAdminUserIds = new Set(
@@ -611,9 +656,9 @@ var ProjectPlannerCanonical = (() => {
       };
       for (const person of operativeUsers) {
         if (excluded.has(person.id)) continue;
-        const linked = operativesByEmail.get(emailKey(person.email));
-        if (holidayCovers(dayKey, person.id, linked?.id)) continue;
         const email = emailKey(person.email);
+        const linked = operativesByEmail.get(email);
+        if (holidayCovers(dayKey, email, person.id, linked?.id)) continue;
         append({
           personKey: person.id,
           name: person.name,
@@ -624,9 +669,9 @@ var ProjectPlannerCanonical = (() => {
       }
       for (const person of managerUsers) {
         if (excluded.has(person.id)) continue;
-        const linked = operativesByEmail.get(emailKey(person.email));
-        if (holidayCovers(dayKey, person.id, linked?.id)) continue;
         const email = emailKey(person.email);
+        const linked = operativesByEmail.get(email);
+        if (holidayCovers(dayKey, email, person.id, linked?.id)) continue;
         append({
           personKey: person.id,
           name: person.name,
@@ -642,7 +687,7 @@ var ProjectPlannerCanonical = (() => {
         if (!matched && email && input.people.some((person) => emailKey(person.email) === email)) continue;
         if (matched && managerAdminUserIds.has(matched.id)) continue;
         if (matched && excluded.has(matched.id)) continue;
-        if (holidayCovers(dayKey, matched?.id, operative.id)) continue;
+        if (holidayCovers(dayKey, email, matched?.id, operative.id)) continue;
         append({
           personKey: matched?.id || operative.id,
           name: matched?.name || operative.name,
@@ -656,6 +701,38 @@ var ProjectPlannerCanonical = (() => {
       if (a.dayKey !== b.dayKey) return a.dayKey < b.dayKey ? -1 : 1;
       return a.operativeName.localeCompare(b.operativeName, void 0, { sensitivity: "base" });
     });
+  }
+
+  // lib/canonical/staffAccess.ts
+  function isStaffAccount(role) {
+    if (role.isOperativeMode) return false;
+    return role.isSuperAdmin || role.isAdmin || role.isManager;
+  }
+  function seesEveryJob(role) {
+    return isStaffAccount(role);
+  }
+  function canViewStaffWarnings(role) {
+    return isStaffAccount(role);
+  }
+  function canEditWorkCatalogue(role, catalogue, toggles) {
+    if (role.isOperativeMode) return false;
+    if (role.isSuperAdmin) return true;
+    if (!role.isAdmin && !role.isManager) return false;
+    return catalogue === "projects" ? toggles.projects === true : toggles.smallWorks === true;
+  }
+  function normalizedId(value) {
+    return String(value ?? "").trim();
+  }
+  function receivesJobNotification(input) {
+    const userId = normalizedId(input.userId);
+    if (!userId) return false;
+    const role = input.role;
+    if (role.isOperativeMode) return false;
+    if (role.isSuperAdmin || role.isAdmin) return true;
+    const assigned = input.assignedManagerUserIds.map(normalizedId);
+    if (assigned.includes(userId)) return true;
+    const line = (input.lineManagerUserIds ?? []).map(normalizedId);
+    return line.includes(userId);
   }
   return __toCommonJS(bundleEntry_exports);
 })();
